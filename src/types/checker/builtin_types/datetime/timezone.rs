@@ -87,13 +87,10 @@ pub(super) fn datetime_zone_get_offset() -> ClassMethod {
 /// function (which performs the group/country filter), so this body only runs via reflection
 /// invocation, where filtering is best-effort.
 pub(super) fn datetime_zone_list_identifiers() -> ClassMethod {
-    let src = format!(
-        "<?php\nreturn [{}];\n",
-        super::timezone_ids::TIMEZONE_IDENTIFIERS_ARRAY
-    );
-    let tokens =
-        crate::lexer::tokenize(&src).expect("listIdentifiers body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("listIdentifiers body source must parse");
+    // Built straight from the identifier slice. This body used to be assembled as PHP text and
+    // handed back to the tokenizer and parser — 419 string literals formatted into a `return [];`
+    // only to be read back into the same array literal this builds directly.
+    let body = super::bodies::list_identifiers(super::timezone_ids::TIMEZONE_IDENTIFIERS);
     ClassMethod {
         name: "listIdentifiers".to_string(),
         visibility: Visibility::Public,
@@ -129,28 +126,14 @@ pub(super) fn datetime_zone_list_identifiers() -> ClassMethod {
     }
 }
 
-/// Parses a synthetic-method body from elephc-PHP source into statements. Used so
-/// the introspection methods return array literals directly — the only shape
-/// whose element type a synthetic method's inferred (`None`) return resolves to
-/// (a call to a prelude helper would infer as a scalar). Panics on a
-/// tokenize/parse failure, which is a compiler bug in the static source.
-pub(super) fn parse_tz_body(src: &str) -> Vec<Stmt> {
-    let tokens = crate::lexer::tokenize(src).expect("tz method body must tokenize");
-    crate::parser::parse_internal(&tokens).expect("tz method body must parse")
-}
-
-/// `DateTimeZone::getLocation(): array|false` — returns the zone's country code,
-/// latitude, longitude, and comments (or `false` for the few zones without a
-/// location). Calls the `elephc_tz` bridge directly and marshals the tab-joined
-/// result into an array literal so inference resolves the return shape. Only added
-/// to `DateTimeZone` when the introspection prelude is injected.
-pub(super) fn datetime_zone_get_location() -> ClassMethod {
-    method(
-        "getLocation",
-        Vec::new(),
-        Some(TypeExpr::Named(Name::unqualified("mixed"))),
-        parse_tz_body(
-            r#"<?php
+/// The PHP the introspection bodies used to be parsed from.
+///
+/// They return array literals directly, which is the only shape a synthetic method's inferred
+/// (`None`) return type resolves element types for — a call to a prelude helper would infer as a
+/// scalar. Test-only: the compilation path builds them with `bodies::tz_*`, and the oracle checks
+/// each build against the PHP below.
+#[cfg(test)]
+pub(super) const GET_LOCATION_SRC: &str = r#"<?php
 $raw = elephc_tz_location($this->name);
 if ($raw === "") {
     return false;
@@ -162,41 +145,11 @@ return [
     "longitude" => (float) $f[2],
     "comments" => $f[3],
 ];
-"#,
-        ),
-    )
-}
+"#;
 
-/// `DateTimeZone::getTransitions(int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): array|false`
-/// — returns the DST transition rows in the window. The defaults reproduce PHP's
-/// full no-arg list: the synthetic first row coincides with the bridge's row 0, so
-/// its precomputed `time` is reused rather than asking `gmdate` to format
-/// `PHP_INT_MIN`.
-pub(super) fn datetime_zone_get_transitions() -> ClassMethod {
-    // PHP's defaults are PHP_INT_MIN/PHP_INT_MAX. They are materialized as integer
-    // literals (a `ConstRef` default is not evaluated when the method is called
-    // with no args), and `i64::MIN` is exactly the bridge's row-0 timestamp, so the
-    // no-arg call reproduces the full transition list.
-    let int_literal = |v: i64| Expr::new(ExprKind::IntLiteral(v), dummy());
-    method(
-        "getTransitions",
-        vec![
-            (
-                "timestampBegin".to_string(),
-                Some(TypeExpr::Int),
-                Some(int_literal(i64::MIN)),
-                false,
-            ),
-            (
-                "timestampEnd".to_string(),
-                Some(TypeExpr::Int),
-                Some(int_literal(i64::MAX)),
-                false,
-            ),
-        ],
-        Some(TypeExpr::Named(Name::unqualified("mixed"))),
-        parse_tz_body(
-            r#"<?php
+/// Test-only: the compilation path builds this body; the oracle checks the two agree.
+#[cfg(test)]
+pub(super) const GET_TRANSITIONS_SRC: &str = r#"<?php
 $raw = elephc_tz_transitions($this->name);
 if ($raw === "") {
     return false;
@@ -259,8 +212,77 @@ for ($i = 0; $i < $n; $i++) {
     }
 }
 return $result;
-"#,
-        ),
+"#;
+
+/// Test-only: the compilation path builds this body; the oracle checks the two agree.
+#[cfg(test)]
+pub(super) const LIST_ABBREVIATIONS_SRC: &str = r#"<?php
+$raw = elephc_tz_abbreviations();
+$lines = explode("\n", $raw);
+$result = [];
+foreach ($lines as $line) {
+    $parts = explode("\t", $line);
+    $abbr = $parts[0];
+    $rows = explode(";", $parts[1]);
+    $arr = [];
+    foreach ($rows as $row) {
+        $c = explode(":", $row);
+        $id = $c[2];
+        $arr[] = [
+            "dst" => $c[0] === "1",
+            "offset" => (int) $c[1],
+            "timezone_id" => ($id === "NULL" ? null : $id),
+        ];
+    }
+    $result[$abbr] = $arr;
+}
+return $result;
+"#;
+
+
+/// `DateTimeZone::getLocation(): array|false` — returns the zone's country code,
+/// latitude, longitude, and comments (or `false` for the few zones without a
+/// location). Calls the `elephc_tz` bridge directly and marshals the tab-joined
+/// result into an array literal so inference resolves the return shape. Only added
+/// to `DateTimeZone` when the introspection prelude is injected.
+pub(super) fn datetime_zone_get_location() -> ClassMethod {
+    method(
+        "getLocation",
+        Vec::new(),
+        Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        super::bodies::tz_get_location(),
+    )
+}
+
+/// `DateTimeZone::getTransitions(int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): array|false`
+/// — returns the DST transition rows in the window. The defaults reproduce PHP's
+/// full no-arg list: the synthetic first row coincides with the bridge's row 0, so
+/// its precomputed `time` is reused rather than asking `gmdate` to format
+/// `PHP_INT_MIN`.
+pub(super) fn datetime_zone_get_transitions() -> ClassMethod {
+    // PHP's defaults are PHP_INT_MIN/PHP_INT_MAX. They are materialized as integer
+    // literals (a `ConstRef` default is not evaluated when the method is called
+    // with no args), and `i64::MIN` is exactly the bridge's row-0 timestamp, so the
+    // no-arg call reproduces the full transition list.
+    let int_literal = |v: i64| Expr::new(ExprKind::IntLiteral(v), dummy());
+    method(
+        "getTransitions",
+        vec![
+            (
+                "timestampBegin".to_string(),
+                Some(TypeExpr::Int),
+                Some(int_literal(i64::MIN)),
+                false,
+            ),
+            (
+                "timestampEnd".to_string(),
+                Some(TypeExpr::Int),
+                Some(int_literal(i64::MAX)),
+                false,
+            ),
+        ],
+        Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        super::bodies::tz_get_transitions(),
     )
 }
 
@@ -282,30 +304,7 @@ pub(super) fn datetime_zone_list_abbreviations() -> ClassMethod {
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
         by_ref_return: false,
-        body: parse_tz_body(
-            r#"<?php
-$raw = elephc_tz_abbreviations();
-$lines = explode("\n", $raw);
-$result = [];
-foreach ($lines as $line) {
-    $parts = explode("\t", $line);
-    $abbr = $parts[0];
-    $rows = explode(";", $parts[1]);
-    $arr = [];
-    foreach ($rows as $row) {
-        $c = explode(":", $row);
-        $id = $c[2];
-        $arr[] = [
-            "dst" => $c[0] === "1",
-            "offset" => (int) $c[1],
-            "timezone_id" => ($id === "NULL" ? null : $id),
-        ];
-    }
-    $result[$abbr] = $arr;
-}
-return $result;
-"#,
-        ),
+        body: super::bodies::tz_list_abbreviations(),
         span: dummy(),
         attributes: Vec::new(),
     }

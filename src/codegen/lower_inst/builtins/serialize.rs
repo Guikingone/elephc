@@ -10,8 +10,9 @@
 //!   tail-calls `__rt_serialize_value`; a Mixed argument is unboxed by
 //!   `__rt_serialize_mixed`. The result is a borrowed `_concat_buf` string slice that
 //!   `store_if_result` persists on store, like other string builtins.
-//! - `unserialize()` passes the source string to `__rt_unserialize_mixed` and boxes a
-//!   PHP `false` when the parser reports failure (a null result pointer).
+//! - `unserialize()` brackets parsing with begin/end helpers so reentrant hydration
+//!   hooks cannot replace the outer allowed-class policy or reference registry, then
+//!   boxes a PHP `false` when the parser reports failure (a null result pointer).
 //! - Array (`a:`) serialization is added in a later increment; until then a non-scalar
 //!   static argument type is rejected at lowering time rather than mis-serialized.
 
@@ -160,7 +161,9 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 ///
 /// The source string is parsed by `__rt_unserialize_mixed`; a null result pointer
 /// (parse error or unsupported wire form) is boxed as PHP `false`. The optional
-/// `$options` argument is accepted but currently ignored.
+/// `$options` is installed before parsing so the runtime can prevent blocked
+/// classes from instantiating or invoking hydration hooks. Begin/end delimit an
+/// owned runtime context so nested calls cannot corrupt the outer policy or refs.
 pub(crate) fn lower_unserialize(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -169,9 +172,56 @@ pub(crate) fn lower_unserialize(ctx: &mut FunctionContext<'_>, inst: &Instructio
         )));
     }
     let data = expect_operand(inst, 0)?;
+    let options = inst.operands.get(1).copied();
+    let options_raw_ty = options
+        .map(|value| ctx.raw_value_php_type(value))
+        .transpose()?;
+    let options_ty = options_raw_ty.clone().map(|ty| ty.codegen_repr());
+    if let Some(ty) = &options_ty {
+        if !matches!(
+            ty,
+            PhpType::Mixed
+                | PhpType::Union(_)
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+        ) {
+            super::super::exceptions::emit_type_error(
+                ctx,
+                &format!(
+                    "unserialize(): Argument #2 ($options) must be of type array, {} given",
+                    unserialize_static_type_name(
+                        options_raw_ty.as_ref().expect("an options type was resolved")
+                    )
+                ),
+            );
+            return Ok(());
+        }
+    }
     // Reset the per-call value registry so r:/R: back-references resolve against
-    // this unserialize() call's own pre-order value indices.
+    // this unserialize() call's own pre-order value indices. Static option types
+    // are rejected above so every emitted begin has a matching runtime end path.
     abi::emit_call_label(ctx.emitter, "__rt_unserialize_begin");
+    if let (Some(options), Some(options_ty)) = (options, options_ty) {
+        ctx.load_value_to_result(options)?;
+        match options_ty {
+            PhpType::Mixed | PhpType::Union(_) => {
+                // A dynamic Mixed is a tagged cell, not an associative-hash
+                // pointer. The runtime verifies tag 5 before dereferencing
+                // its payload and raises the PHP TypeError for every other tag.
+                abi::emit_call_label(ctx.emitter, "__rt_unserialize_set_options_mixed");
+            }
+            PhpType::Array(_) => {
+                // An indexed PHP array cannot contain the string key
+                // `allowed_classes`; it is nevertheless a valid empty/default
+                // options map and must not be passed to the hash helper.
+                abi::emit_call_label(ctx.emitter, "__rt_unserialize_set_options_indexed");
+            }
+            PhpType::AssocArray { .. } => {
+                abi::emit_call_label(ctx.emitter, "__rt_unserialize_set_options");
+            }
+            _ => unreachable!("invalid static unserialize options were rejected before begin"),
+        }
+    }
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     match ctx.value_php_type(data)?.codegen_repr() {
         PhpType::Str => {
@@ -189,8 +239,27 @@ pub(crate) fn lower_unserialize(ctx: &mut FunctionContext<'_>, inst: &Instructio
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_unserialize_mixed");
+    abi::emit_call_label(ctx.emitter, "__rt_unserialize_end");
     box_false_on_unserialize_failure(ctx);
     store_if_result(ctx, inst)
+}
+
+/// Returns PHP's diagnostic spelling for a statically rejected unserialize option.
+fn unserialize_static_type_name(ty: &PhpType) -> &str {
+    match ty {
+        PhpType::Int => "int",
+        PhpType::Float => "float",
+        PhpType::Str => "string",
+        PhpType::Bool | PhpType::False => "bool",
+        PhpType::Void | PhpType::Never => "null",
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array",
+        PhpType::Object(name) | PhpType::Packed(name) => name,
+        PhpType::Resource(_) => "resource",
+        PhpType::Callable => "Closure",
+        PhpType::Iterable => "object",
+        PhpType::Buffer(_) | PhpType::Pointer(_) => "resource",
+        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => "unknown",
+    }
 }
 
 /// Replaces a null `__rt_unserialize_mixed` result with a boxed PHP `false`.

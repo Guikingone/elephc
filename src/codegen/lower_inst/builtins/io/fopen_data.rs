@@ -37,11 +37,15 @@ pub(super) fn emit_php_filter_table_stamps(ctx: &mut FunctionContext<'_>, mode_b
             ctx.emitter.instruction("mov rcx, QWORD PTR [rax + 8]");            // load the descriptor payload from the boxed resource
             if mode_bits & 1 != 0 {
                 abi::emit_symbol_address(ctx.emitter, "r8", "_stream_read_filters"); // read-filter table base
-                ctx.emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", filter_id)); // attach the read filter to this descriptor
+                ctx.emitter.instruction(
+                    &format!("mov BYTE PTR [r8 + rcx], {}", filter_id)
+                );                                                              // attach the read filter to this descriptor
             }
             if mode_bits & 2 != 0 {
                 abi::emit_symbol_address(ctx.emitter, "r8", "_stream_write_filters"); // write-filter table base
-                ctx.emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", filter_id)); // attach the write filter to this descriptor
+                ctx.emitter.instruction(
+                    &format!("mov BYTE PTR [r8 + rcx], {}", filter_id)
+                );                                                              // attach the write filter to this descriptor
             }
             ctx.emitter.label(&done_label);
         }

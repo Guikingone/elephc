@@ -81,12 +81,17 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         let property_defaults =
             collect_property_defaults(ctx.module, &class_name, class_info, inst)?;
         let mut initialize_inherited_builtin_throwable = false;
-        let constructor_impl = if let Some(constructor) = class_info.methods.get(&constructor_key) {
-            let impl_class = class_info
-                .method_impl_classes
-                .get(&constructor_key)
-                .cloned()
-                .unwrap_or_else(|| class_name.clone());
+        // A private constructor is not inherited, so a descendant of a class that declares one
+        // carries no `__construct` entry of its own. PHP still instantiates it through that
+        // ancestor, so resolve the owner; it is the class itself for every other constructor.
+        let constructor_owner =
+            crate::types::constructor_owner(&ctx.module.class_infos, &class_name);
+        let constructor_impl = if let Some((owner_name, constructor)) = constructor_owner
+            .and_then(|(name, info)| info.methods.get(&constructor_key).map(|sig| (name, sig)))
+        {
+            let impl_class = constructor_owner
+                .and_then(|(_, info)| info.method_impl_classes.get(&constructor_key).cloned())
+                .unwrap_or_else(|| owner_name.to_string());
             if !class_method_already_emitted(ctx, &impl_class, &constructor_key, false) {
                 if super::super::is_throwable_like_class(ctx, &class_name)
                     && is_builtin_throwable_payload_class(&impl_class)
@@ -127,6 +132,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
                     param_types,
                     ref_params: constructor.ref_params.clone(),
                     sig: constructor.clone(),
+                    padding_thunk: None,
                 })
             }
         } else if !inst.operands.is_empty() {
@@ -180,6 +186,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             &constructor_key,
             &constructor.param_types,
             &constructor.ref_params,
+            None,
         )?;
     }
     Ok(())

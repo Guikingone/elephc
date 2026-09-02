@@ -279,7 +279,11 @@ pub unsafe extern "C" fn elephc_web_session_get_id() -> *const c_char {
 /// Called by the prelude's `session_id()` setter.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_web_session_set_id(ptr: *const c_char) -> i64 {
-    set_cstr(core::ptr::addr_of_mut!(SESSION_ID), &cstr_to_string(ptr));
+    let id = cstr_to_string(ptr);
+    if id.is_empty() {
+        return 0;
+    }
+    set_cstr(core::ptr::addr_of_mut!(SESSION_ID), &id);
     1
 }
 
@@ -1039,6 +1043,23 @@ mod tests {
             elephc_web_session_set_name(n.as_ptr());
             let got = std::ffi::CStr::from_ptr(elephc_web_session_get_name());
             assert_eq!(got.to_str().unwrap(), "MySession");
+        }
+    }
+
+    /// Verifies an empty generated identifier is rejected without replacing a
+    /// previously valid session ID, so entropy failure cannot start a session.
+    #[test]
+    fn empty_session_id_is_rejected_fail_closed() {
+        let _g = lock();
+        unsafe {
+            elephc_web_session_reset();
+            let trusted = std::ffi::CString::new("trusted-session-id").unwrap();
+            assert_eq!(elephc_web_session_set_id(trusted.as_ptr()), 1);
+
+            let empty = std::ffi::CString::new("").unwrap();
+            assert_eq!(elephc_web_session_set_id(empty.as_ptr()), 0);
+            let current = std::ffi::CStr::from_ptr(elephc_web_session_get_id());
+            assert_eq!(current.to_str().unwrap(), "trusted-session-id");
         }
     }
 

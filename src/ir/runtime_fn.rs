@@ -20,8 +20,41 @@ pub enum RuntimeFnBackendMapping {
 /// Supported-target availability declared by a runtime function descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeFnTargetSupport {
-    /// Implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
+    /// Implemented by the backend for all five supported targets; builtin semantics may narrow it.
     AllSupported,
+}
+
+/// A resource destructor `__rt_mixed_free_deep` runs at scope exit, beyond the plain
+/// `close()` every kind-1 stream descriptor gets.
+///
+/// `RuntimeFnId::resource_cleanup_kind` is the SINGLE authority for which of these a
+/// program can produce: the lowering stamps the kind from it, and the runtime emitter
+/// omits the ladder arm for every kind no lowered call declares. A new producer that
+/// does not declare itself here compiles and runs, and silently leaks its handle at
+/// scope exit — declare it in `resource_cleanup_kind` before stamping it.
+///
+/// Kind 0 (generic, no destructor), kind 2 (`HashContext`, stamped by the runtime helper
+/// `__rt_hash_init` rather than by a lowering) and kind 5 (the eval-owned inert handle,
+/// which must never gain an arm) are deliberately absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceCleanupKind {
+    /// Kind 1: a native stream descriptor closed with `close()`.
+    StreamFd,
+    /// Kind 3: a `popen()` pipe closed and reaped through `__rt_pclose`.
+    PopenPipe,
+    /// Kind 4: an `opendir()` stream released through `__rt_closedir`.
+    Directory,
+}
+
+impl ResourceCleanupKind {
+    /// Returns the value written into the Mixed high payload word for this kind.
+    pub const fn stamp(self) -> u64 {
+        match self {
+            Self::StreamFd => 1,
+            Self::PopenPipe => 3,
+            Self::Directory => 4,
+        }
+    }
 }
 
 /// Complete central descriptor for one typed EIR runtime function.
@@ -127,6 +160,7 @@ pub enum RuntimeFnId {
     FunctionExists,
     GetClass,
     GetDebugType,
+    GetObjectVars,
     GetDeclaredClasses,
     GetDeclaredInterfaces,
     GetDeclaredTraits,
@@ -431,6 +465,16 @@ pub enum RuntimeFnId {
     OpensslDecrypt,
     OpensslEncrypt,
     OpensslGetCipherMethods,
+    Iconv,
+    IconvGetEncoding,
+    IconvMimeDecode,
+    IconvMimeDecodeHeaders,
+    IconvMimeEncode,
+    IconvSetEncoding,
+    IconvStrlen,
+    IconvStrpos,
+    IconvStrrpos,
+    IconvSubstr,
     Htmlentities,
     Htmlspecialchars,
     Implode,
@@ -642,11 +686,19 @@ impl RuntimeFnId {
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
             },
+            // `fgetcsv()` answers `false` at end of file and `file()` answers `false` when the
+            // read fails, so their fallback type must carry that arm too: the checker declares
+            // the union, and a builtin whose EIR and checker types disagree miscompiles rather
+            // than failing to build. This is the authority that is easy to forget, because a
+            // SYNTHESIZED call has no call-site type to fall back on — leaving `fgetcsv()` here
+            // made `SplFileObject::fgetcsv()` read the boxed cell as a raw pointer.
+            RuntimeFnId::Fgetcsv | RuntimeFnId::File => PhpType::Union(vec![
+                PhpType::Array(Box::new(PhpType::Str)),
+                PhpType::False,
+            ]),
             RuntimeFnId::ClassAttributeNames
             | RuntimeFnId::BcDivmod
             | RuntimeFnId::Explode
-            | RuntimeFnId::Fgetcsv
-            | RuntimeFnId::File
             | RuntimeFnId::Glob
             | RuntimeFnId::Scandir
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
@@ -1014,6 +1066,12 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
+            RuntimeFnId::GetObjectVars => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
             RuntimeFnId::SplObjectHash => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
@@ -1028,7 +1086,11 @@ impl RuntimeFnId {
                         | crate::ir::Effects::ALLOC_HEAP.bits(),
                 )
             }
-            RuntimeFnId::Getenv | RuntimeFnId::Gethostname => {
+            RuntimeFnId::Getenv => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
+            RuntimeFnId::Gethostname => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
                         | crate::ir::Effects::ALLOC_HEAP.bits()
@@ -1067,13 +1129,53 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
             ),
-            RuntimeFnId::Sprintf | RuntimeFnId::Vsprintf => {
+            // A `%s` conversion can invoke arbitrary userland `__toString()` code. Keep the
+            // full externally observable call surface here so AST try/catch pruning retains
+            // handlers and propagation never treats state touched by that method as stable.
+            RuntimeFnId::Fprintf
+            | RuntimeFnId::Printf
+            | RuntimeFnId::Sprintf
+            | RuntimeFnId::Vfprintf
+            | RuntimeFnId::Vprintf
+            | RuntimeFnId::Vsprintf => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::WRITES_HEAP.bits()
+                        | crate::ir::Effects::READS_GLOBAL.bits()
+                        | crate::ir::Effects::WRITES_GLOBAL.bits()
+                        | crate::ir::Effects::READS_FS.bits()
+                        | crate::ir::Effects::WRITES_FS.bits()
+                        | crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::WRITES_PROCESS.bits()
+                        | crate::ir::Effects::OUTPUT.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits()
                         | crate::ir::Effects::ALLOC_CONCAT.bits()
+                        | crate::ir::Effects::MAY_THROW.bits()
+                        | crate::ir::Effects::MAY_FATAL.bits()
                         | crate::ir::Effects::MAY_WARN.bits(),
                 )
             }
+            // The iconv family reads string payloads, allocates its results, consults and
+            // updates the process-wide encoding trio, prints php-src's diagnostics, and can
+            // throw the out-of-range `$offset` ValueError.
+            RuntimeFnId::Iconv
+            | RuntimeFnId::IconvGetEncoding
+            | RuntimeFnId::IconvMimeDecode
+            | RuntimeFnId::IconvMimeDecodeHeaders
+            | RuntimeFnId::IconvMimeEncode
+            | RuntimeFnId::IconvSetEncoding
+            | RuntimeFnId::IconvStrlen
+            | RuntimeFnId::IconvStrpos
+            | RuntimeFnId::IconvStrrpos
+            | RuntimeFnId::IconvSubstr => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::OUTPUT.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
@@ -1170,6 +1272,19 @@ impl RuntimeFnId {
             | RuntimeFnId::OpensslGetCipherMethods => {
                 &[BuiltinRequirement::Bridge("elephc_crypto")]
             }
+            RuntimeFnId::Iconv
+            | RuntimeFnId::IconvGetEncoding
+            | RuntimeFnId::IconvMimeDecode
+            | RuntimeFnId::IconvMimeDecodeHeaders
+            | RuntimeFnId::IconvMimeEncode
+            | RuntimeFnId::IconvSetEncoding
+            | RuntimeFnId::IconvStrlen
+            | RuntimeFnId::IconvStrpos
+            | RuntimeFnId::IconvStrrpos
+            | RuntimeFnId::IconvSubstr => &[
+                BuiltinRequirement::Bridge("elephc_iconv"),
+                BuiltinRequirement::MacOsLibrary("iconv"),
+            ],
             RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
@@ -1274,6 +1389,24 @@ impl RuntimeFnId {
         matches!(self, RuntimeFnId::MbStrlen)
     }
 
+    /// Returns the scope-cleanup kind stamped into the resource this operation boxes.
+    ///
+    /// Read twice, and that is the point: the lowering stamps `Some(kind).stamp()` into the
+    /// Mixed high payload word, and `lowered_runtime_features` turns the same answer into the
+    /// runtime feature bit that decides whether `__rt_mixed_free_deep` emits the matching arm.
+    /// One table, so the producer and the destructor cannot drift apart.
+    ///
+    /// Only kinds with a destructor appear. Every other resource-boxing builtin — `fopen`,
+    /// `tmpfile`, `fsockopen`, the socket family — carries kind 1, whose `close()` is a raw
+    /// syscall on AArch64 and needs nothing gated.
+    pub const fn resource_cleanup_kind(self) -> Option<ResourceCleanupKind> {
+        match self {
+            RuntimeFnId::Popen => Some(ResourceCleanupKind::PopenPipe),
+            RuntimeFnId::Opendir => Some(ResourceCleanupKind::Directory),
+            _ => None,
+        }
+    }
+
     /// Returns whether this operation can publish PHAR bridge helper symbols.
     pub const fn publishes_phar_symbols(self) -> bool {
         matches!(
@@ -1352,9 +1485,29 @@ impl RuntimeFnId {
         // for `Strpos` and `Strtr` below.
         if matches!(
             self,
-            RuntimeFnId::IntvalBase | RuntimeFnId::BcComp | RuntimeFnId::BcScale
+            RuntimeFnId::IntvalBase
+                | RuntimeFnId::BcComp
+                | RuntimeFnId::BcScale
+                // `iconv_set_encoding()` answers with a bare boolean.
+                | RuntimeFnId::IconvSetEncoding
         ) {
             return BuiltinResultOwnership::NonHeap;
+        }
+        // Every other iconv entry point boxes a freshly built string, integer, or array,
+        // so its result never aliases an argument.
+        if matches!(
+            self,
+            RuntimeFnId::Iconv
+                | RuntimeFnId::IconvGetEncoding
+                | RuntimeFnId::IconvMimeDecode
+                | RuntimeFnId::IconvMimeDecodeHeaders
+                | RuntimeFnId::IconvMimeEncode
+                | RuntimeFnId::IconvStrlen
+                | RuntimeFnId::IconvStrpos
+                | RuntimeFnId::IconvStrrpos
+                | RuntimeFnId::IconvSubstr
+        ) {
+            return BuiltinResultOwnership::Fresh;
         }
         if matches!(
             self,
@@ -1430,6 +1583,10 @@ impl RuntimeFnId {
                 // back is independently owned and never aliases the source object's
                 // storage — the caller may release it like any other temporary.
                 | RuntimeFnId::ElephcObjectPropValue
+                // Both disk-space helpers box their float-or-false answer through
+                // `__rt_mixed_from_value`; the fresh cell cannot alias the directory string.
+                | RuntimeFnId::DiskFreeSpace
+                | RuntimeFnId::DiskTotalSpace
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
@@ -1441,9 +1598,12 @@ impl RuntimeFnId {
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
                 // Every form returns independent storage: unnamed lookups allocate a fresh
-                // hash, while named and dynamically nullable lookups box a copied string or
-                // that fresh hash. No returned cell borrows argument storage.
+                // hash, while named and dynamically nullable lookups box `false` or an owned
+                // copy made by `__rt_str_persist` in a fresh Mixed cell. No returned cell
+                // borrows argument storage, so retaining an owned name temporary would leak
+                // one block per call.
                 | RuntimeFnId::Getenv
+                | RuntimeFnId::GetObjectVars
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
@@ -1632,6 +1792,7 @@ impl RuntimeFnId {
             RuntimeFnId::FunctionExists => "function_exists",
             RuntimeFnId::GetClass => "get_class",
             RuntimeFnId::GetDebugType => "get_debug_type",
+            RuntimeFnId::GetObjectVars => "get_object_vars",
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
             RuntimeFnId::GetDeclaredTraits => "get_declared_traits",
@@ -1935,6 +2096,16 @@ impl RuntimeFnId {
             RuntimeFnId::OpensslDecrypt => "openssl_decrypt",
             RuntimeFnId::OpensslEncrypt => "openssl_encrypt",
             RuntimeFnId::OpensslGetCipherMethods => "openssl_get_cipher_methods",
+            RuntimeFnId::Iconv => "iconv",
+            RuntimeFnId::IconvGetEncoding => "iconv_get_encoding",
+            RuntimeFnId::IconvMimeDecode => "iconv_mime_decode",
+            RuntimeFnId::IconvMimeDecodeHeaders => "iconv_mime_decode_headers",
+            RuntimeFnId::IconvMimeEncode => "iconv_mime_encode",
+            RuntimeFnId::IconvSetEncoding => "iconv_set_encoding",
+            RuntimeFnId::IconvStrlen => "iconv_strlen",
+            RuntimeFnId::IconvStrpos => "iconv_strpos",
+            RuntimeFnId::IconvStrrpos => "iconv_strrpos",
+            RuntimeFnId::IconvSubstr => "iconv_substr",
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",

@@ -64,8 +64,11 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         macos_frameworks: &["CoreFoundation", "SystemConfiguration"],
         macos_libraries: &[],
         needs_libdl: true,
-        // The bridge exposes the core PDO database-access surface.
-        php_extension: Some("PDO"),
+        // The archive backs MORE THAN ONE PHP surface (PDO and mysqli), so the
+        // linked staticlib alone cannot identify a PHP extension. Reporting comes
+        // from the injected PHP surface(s) instead: `pipeline::compile` passes
+        // `linked_php_surfaces` ("PDO" / "mysqli") to the backend seeding.
+        php_extension: None,
     },
     BridgeStaticlib {
         lib_name: "elephc_crypto",
@@ -90,6 +93,18 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extension: Some("bcmath"),
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_iconv",
+        env_var: "ELEPHC_ICONV_LIB_DIR",
+        crate_name: "elephc-iconv",
+        flag_name: "iconv",
+        whole_archive: false,
+        macos_frameworks: &[],
+        macos_libraries: &[],
+        needs_libdl: true,
+        // The charset bridge implements PHP's procedural `iconv` extension.
+        php_extension: Some("iconv"),
     },
     BridgeStaticlib {
         lib_name: "elephc_phar",
@@ -126,6 +141,30 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The image codec/drawing surface maps to PHP's `gd` extension.
         php_extension: Some("gd"),
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_probe",
+        env_var: "ELEPHC_PROBE_LIB_DIR",
+        crate_name: "elephc-probe",
+        flag_name: "probe",
+        whole_archive: false,
+        macos_frameworks: &[],
+        macos_libraries: &[],
+        needs_libdl: true,
+        // The sampling probe is an elephc-native diagnostic, not a PHP extension.
+        php_extension: None,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_instr",
+        env_var: "ELEPHC_INSTR_LIB_DIR",
+        crate_name: "elephc-instr",
+        flag_name: "instrument",
+        whole_archive: false,
+        macos_frameworks: &[],
+        macos_libraries: &[],
+        needs_libdl: true,
+        // Exact per-function instrumentation is an elephc-native diagnostic.
+        php_extension: None,
     },
     BridgeStaticlib {
         lib_name: "elephc_web",
@@ -178,6 +217,20 @@ pub(super) fn crate_flag_names() -> Vec<&'static str> {
     BRIDGES.iter().map(|bridge| bridge.flag_name).collect()
 }
 
+/// Maps a `--with-<flag>` suffix to the archive filename it resolves to.
+///
+/// Exists so a shipped compiler can name the archives it needs without anyone
+/// writing that list down a second time: `--print-capabilities` reports this
+/// projection of the table, and the release probe checks the tarball against
+/// what the binary inside it says. A bridge added to `BRIDGES` is therefore
+/// carried into the packaging check by the same edit that declares it.
+pub(super) fn archive_filename_for_flag(flag: &str) -> Option<String> {
+    BRIDGES
+        .iter()
+        .find(|bridge| bridge.flag_name == flag)
+        .map(BridgeStaticlib::archive_filename)
+}
+
 /// Returns bridge library/flag pairs present in one planned named-library set.
 pub(super) fn bridges_in(
     link_libraries: &[String],
@@ -215,6 +268,7 @@ fn resolve_with<F>(
 where
     F: FnMut(&BridgeStaticlib) -> Result<PathBuf, LinkError>,
 {
+    let plan = plan.without_redundant_embedded_bridges();
     let mut located: HashMap<&'static str, PathBuf> = HashMap::new();
     let mut bridge_paths = Vec::new();
     let mut seen_paths = HashSet::new();
@@ -504,24 +558,29 @@ impl BridgeStaticlib {
 
     /// Finds the checkout this elephc was built from, if it was built from one.
     ///
-    /// The EXECUTABLE is asked first and the working directory only as a fallback, because
-    /// they answer different questions. `current_exe()` is a fact about which build produced
-    /// this compiler; the working directory is the user's PHP project, which has no reason to
-    /// sit inside elephc's source tree. Asking the project first meant that compiling from
-    /// anywhere else — every integration test runs from a temp directory — found no workspace
-    /// and silently gave up on rebuilding.
+    /// The compile-time manifest directory identifies the exact checkout that produced this
+    /// compiler, including worktrees whose Cargo target directory is shared with another
+    /// checkout. The working directory and executable ancestry remain fallbacks for relocated
+    /// or installed binaries where that original source tree no longer exists.
     ///
     /// An installed binary has neither, and correctly gets `None`: `/usr/local/bin/elephc` has
     /// no ancestor carrying elephc's crates, so nothing tries to run cargo on a user's machine.
     fn find_workspace(&self) -> Option<PathBuf> {
         let manifest = format!("crates/{}/Cargo.toml", self.crate_name);
+        let compiled_from = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if compiled_from.join(&manifest).exists() {
+            return Some(compiled_from);
+        }
+        let from_cwd = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| Self::ancestor_carrying(&cwd, &manifest));
+        if from_cwd.is_some() {
+            return from_cwd;
+        }
         let from_executable = std::env::current_exe()
             .ok()
             .and_then(|executable| Self::ancestor_carrying(&executable, &manifest));
-        from_executable.or_else(|| {
-            let cwd = std::env::current_dir().ok()?;
-            Self::ancestor_carrying(&cwd, &manifest)
-        })
+        from_executable
     }
 
     /// Returns the nearest ancestor of `start` that carries `manifest`.
@@ -556,6 +615,32 @@ impl BridgeStaticlib {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every bridge must be built and archived by CI, or its shards cannot link.
+    ///
+    /// A shard runs from a nextest archive with no source tree, so a bridge missing from
+    /// either list fails at link time on CI while passing locally, where the compiler
+    /// builds bridges on demand.
+    #[test]
+    fn every_bridge_is_built_and_archived_by_ci() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
+            .expect("read ci workflow");
+        let archive = std::fs::read_to_string(root.join(".config/nextest.toml"))
+            .expect("read nextest config");
+        for bridge in BRIDGES {
+            assert!(
+                workflow.contains(&format!("-p {}", bridge.crate_name)),
+                "{} is missing from BRIDGE_CRATES in .github/workflows/ci.yml",
+                bridge.crate_name
+            );
+            assert!(
+                archive.contains(&format!("debug/lib{}.a", bridge.lib_name)),
+                "lib{}.a is missing from the archive include list in .config/nextest.toml",
+                bridge.lib_name
+            );
+        }
+    }
 
     /// Creates an empty directory unique across parallel test threads.
     fn scratch(name: &str) -> PathBuf {
@@ -592,6 +677,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Verifies shared Cargo target directories cannot redirect bridge discovery to another worktree.
+    #[test]
+    fn bridge_workspace_prefers_the_compiler_manifest_checkout() {
+        let bridge = bridge_for_library("elephc_web").expect("web bridge");
+        assert_eq!(
+            bridge.find_workspace().as_deref(),
+            Some(Path::new(env!("CARGO_MANIFEST_DIR")))
+        );
+    }
+
     /// Staleness is decided by modification time, and a nested `target/` never counts.
     ///
     /// The `target/` exclusion is what keeps the check from seeing the bridge's own build
@@ -617,6 +712,164 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&output);
+    }
+
+    /// Every bridge crate must appear in the lists CI, the Docker scripts and the
+    /// release and nightly workflows build.
+    ///
+    /// The archives are produced by explicit `cargo build -p …` lists that live
+    /// outside Rust, and `cargo test` alone never emits a staticlib. So a bridge
+    /// added to the table above but not to those lists compiles fine, passes
+    /// review, and then fails only in CI with `required Elephc bridge X could not be
+    /// found` — which is exactly how `elephc-instr` and `elephc-probe` shipped
+    /// unbuildable. Deriving the expectation from the table is the point: the next
+    /// bridge is covered without anyone remembering this test exists.
+    ///
+    /// `release.yml` was the list nobody checked, and it is the one users meet:
+    /// it built eight of eleven, so every published tarball carried a compiler
+    /// that refused `--with-monitoring`. `nightly.yml` ships to users too, and
+    /// nobody watches an unattended 03:00 build, so it is held to the same list.
+    #[test]
+    fn every_bridge_crate_is_in_the_build_lists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let lists = [
+            ".github/workflows/ci.yml",
+            ".github/workflows/release.yml",
+            ".github/workflows/nightly.yml",
+            "scripts/test-linux-arm64.sh",
+            "scripts/test-linux-x86_64.sh",
+        ];
+        for rel in lists {
+            let path = root.join(rel);
+            let Ok(body) = std::fs::read_to_string(&path) else {
+                panic!("cannot read {rel}; the build lists moved");
+            };
+            for bridge in BRIDGES {
+                assert!(
+                    body.contains(&format!("-p {}", bridge.crate_name)),
+                    "{rel} never builds `{}`, so linking with --{} fails there",
+                    bridge.crate_name,
+                    bridge.flag_name
+                );
+            }
+        }
+    }
+
+    /// Every bridge's staticlib must also be listed in the nextest archive.
+    ///
+    /// Building a bridge and shipping it to the machine that runs the tests are
+    /// two different lists, and having the first without the second is the worse
+    /// half: the archive job goes green, and the failure lands in a sharded test
+    /// job as `required Elephc bridge X could not be found` — nowhere near the
+    /// file that forgot it. That is exactly how `elephc_instr` reached CI:
+    /// present in `BRIDGE_CRATES`, absent from the archive, so every shard that
+    /// compiled a monitored program failed on a platform-shaped error message
+    /// for a config-shaped mistake.
+    ///
+    /// Derived from `BRIDGES` rather than pinned, so a twelfth bridge cannot be
+    /// half-registered.
+    #[test]
+    fn every_bridge_staticlib_is_in_the_nextest_archive() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let rel = ".config/nextest.toml";
+        let Ok(body) = std::fs::read_to_string(root.join(rel)) else {
+            panic!("cannot read {rel}; the archive list moved");
+        };
+        for bridge in BRIDGES {
+            let entry = format!("debug/{}", bridge.archive_filename());
+            assert!(
+                body.contains(&entry),
+                "{rel} never archives `{}`, so a sharded run compiling with --{} \
+                 fails with `required Elephc bridge {} could not be found`",
+                bridge.archive_filename(),
+                bridge.flag_name,
+                bridge.lib_name
+            );
+        }
+    }
+
+    /// Every bridge's staticlib must be PACKED into both shipping channels.
+    ///
+    /// Building it and shipping it are two lists again, and here the second one
+    /// is what a user receives: the archive is resolved from the directory the
+    /// compiler lives in (or its sibling `lib/`, which is the Homebrew layout),
+    /// so an installed elephc finds only what was packed. Eight of eleven were —
+    /// `elephc_probe`, `elephc_instr` and `elephc_magician` were in none of the
+    /// three lists — so every published release answered `elephc
+    /// --with-monitoring app.php` with `required Elephc bridge elephc_instr could
+    /// not be found`: a whole feature that worked in every checkout and
+    /// throughout CI, and in no release at all. `elephc_magician` had been
+    /// missing since before v0.26.4.
+    ///
+    /// Nothing that runs inside this repository can notice that, because the
+    /// archives are always present in `target/`. Only the shipped artifact is
+    /// short, so the packing lists themselves are what have to be checked — and
+    /// checked SEPARATELY: the tarball and the Homebrew formula are two lists in
+    /// one file, and a name present in one reads as present to any test that
+    /// searches the whole file.
+    #[test]
+    fn every_bridge_staticlib_ships_in_the_release_tarball() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let rel = ".github/workflows/release.yml";
+        let Ok(body) = std::fs::read_to_string(root.join(rel)) else {
+            panic!("cannot read {rel}; the release packaging moved");
+        };
+        let marker = "Update Homebrew tap";
+        let split = body
+            .find(marker)
+            .unwrap_or_else(|| panic!("{rel} no longer has an `{marker}` step to split on"));
+        let (tarball, formula) = body.split_at(split);
+        for bridge in BRIDGES {
+            let archive = bridge.archive_filename();
+            assert!(
+                tarball.contains(&archive),
+                "{rel} never packs `{archive}` into the tarball, so an elephc \
+                 installed from a release fails --{} with `required Elephc bridge \
+                 {} could not be found`",
+                bridge.flag_name,
+                bridge.lib_name
+            );
+            assert!(
+                formula.contains(&format!("lib.install \"{archive}\"")),
+                "{rel} never installs `{archive}` in the Homebrew formula, so an \
+                 elephc installed with brew fails --{} with `required Elephc \
+                 bridge {} could not be found`",
+                bridge.flag_name,
+                bridge.lib_name
+            );
+        }
+    }
+
+    /// The workflows that publish an artifact must actually run the packaging probe.
+    ///
+    /// Every other packaging test here checks one list against the bridge
+    /// table, and all of them pass on a tarball nobody ever unpacks: they prove
+    /// the packing list NAMES each archive, not that the archive arrived beside
+    /// the binary. `scripts/verify-release-artifact.sh` is what closes that —
+    /// it unpacks the tarball, asks the compiler inside it for its capabilities
+    /// and holds it to them — and it closes nothing if the step that runs it is
+    /// dropped from the workflow that publishes.
+    #[test]
+    fn the_publishing_workflows_run_the_packaging_probe() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let probe = "scripts/verify-release-artifact.sh";
+        assert!(
+            root.join(probe).is_file(),
+            "{probe} is missing; the shipped artifact is checked by nothing"
+        );
+        for rel in [
+            ".github/workflows/release.yml",
+            ".github/workflows/nightly.yml",
+        ] {
+            let Ok(body) = std::fs::read_to_string(root.join(rel)) else {
+                panic!("cannot read {rel}; the publishing workflows moved");
+            };
+            assert!(
+                body.contains(probe),
+                "{rel} publishes an artifact without running {probe}, so a \
+                 bridge missing from the tarball ships unnoticed again"
+            );
+        }
     }
 
     /// Verifies every bridge flag maps back to the table's linker library name.
@@ -688,7 +941,9 @@ mod tests {
             vec![("elephc_tls", "tls"), ("elephc_magician", "eval")]
         );
         assert_eq!(php_extension_for_lib("elephc_tls"), Some("openssl"));
-        assert_eq!(php_extension_for_lib("elephc_pdo"), Some("PDO"));
+        // elephc_pdo backs two PHP surfaces (PDO, mysqli); reporting is
+        // surface-based via `linked_php_surfaces`, never archive-based.
+        assert_eq!(php_extension_for_lib("elephc_pdo"), None);
         assert_eq!(php_extension_for_lib("elephc_crypto"), Some("hash"));
         assert_eq!(php_extension_for_lib("elephc_bcmath"), Some("bcmath"));
         assert_eq!(php_extension_for_lib("elephc_phar"), Some("Phar"));
@@ -737,6 +992,36 @@ mod tests {
         .expect("exact Magician metadata must resolve");
 
         assert_eq!(resolution.macos_libraries, vec!["iconv".to_string()]);
+    }
+
+    /// Verifies bridge resolution keeps Magician as the sole provider of its embedded crates.
+    #[test]
+    fn magician_replaces_standalone_embedded_bridge_archives() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::named_runtime("elephc_crypto"),
+            LinkItem::named_runtime("elephc_phar"),
+            LinkItem::named_runtime("elephc_magician"),
+        ]);
+        let executable = std::env::current_exe().expect("test executable path");
+        let resolution = resolve_with(&plan, &[], |_| Ok(executable.clone()))
+            .expect("embedded bridge plan must resolve");
+        let bridge_names: Vec<&str> = resolution
+            .plan
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::StaticArchive {
+                    origin: LinkOrigin::Bridge { name },
+                    ..
+                } => Some(name.as_str()),
+                LinkItem::StaticArchive { .. }
+                | LinkItem::NamedLibrary { .. }
+                | LinkItem::SearchPath(_)
+                | LinkItem::Framework(_) => None,
+            })
+            .collect();
+
+        assert_eq!(bridge_names, vec!["elephc_magician"]);
     }
 
     /// Verifies a missing named bridge returns a structured error instead of a `-l` fallback.

@@ -8,6 +8,8 @@
 //!   function, method, closure, and generator body.
 //! - `crate::codegen::frame::emit_main_prologue()` and
 //!   `crate::codegen::frame::emit_web_entry_stub()` for the one-time floor measurement.
+//! - `crate::codegen_support::cdylib` from the host-called lifecycle entry and export
+//!   trampolines that lazily initialize the guard after preserving native arguments.
 //!
 //! Key details:
 //! - The check runs immediately after the frame has been reserved, so the compare already
@@ -35,12 +37,34 @@ const STACK_OVERFLOW_SYMBOL: &str = "__rt_stack_overflow";
 
 /// Emits the one-time call that measures the running stack and publishes the guard floor.
 ///
-/// Must be emitted after the process-entry prologue has already stored argc/argv, because
-/// the helper is an ordinary call and clobbers the C-ABI argument registers. Until it runs,
-/// `_stack_limit` is zero and every prologue check passes.
-pub(super) fn emit_stack_limit_init_call(emitter: &mut Emitter) {
+/// At process entry this must run after argc/argv have been stored; a cdylib calls it from
+/// argument-free `elephc_init()`. The helper is an ordinary call that clobbers C-ABI argument
+/// registers. Until it runs, `_stack_limit` is zero and every prologue check passes.
+pub(crate) fn emit_stack_limit_init_call(emitter: &mut Emitter) {
     emitter.comment("publish the call-stack overflow floor for this process");
     abi::emit_call_label(emitter, STACK_LIMIT_INIT_SYMBOL);
+}
+
+/// Lazily publishes the stack floor when a cdylib host skipped `elephc_init()`.
+///
+/// The wrapper must preserve every incoming C argument before calling this helper, because
+/// the runtime initializer is an ordinary call. A previously published non-zero limit skips
+/// remeasurement so an explicit init followed by an export remains idempotent.
+pub(crate) fn emit_lazy_stack_limit_init(emitter: &mut Emitter, ready_label: &str) {
+    emitter.comment("lazily arm the call-stack guard after preserving host arguments");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(emitter, "x9", STACK_LIMIT_SYMBOL, 0);
+            emitter.instruction(&format!("cbnz x9, {ready_label}"));            // preserve the floor already published by explicit initialization
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(emitter, "r10", STACK_LIMIT_SYMBOL, 0);
+            emitter.instruction("test r10, r10");                               // test whether explicit initialization already published a stack floor
+            emitter.instruction(&format!("jnz {ready_label}"));                 // avoid remeasuring the stack from a later export frame
+        }
+    }
+    emit_stack_limit_init_call(emitter);
+    emitter.label(ready_label);
 }
 
 /// Emits the prologue stack-depth check for one compiled function.
@@ -158,5 +182,29 @@ mod tests {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
         emit_stack_limit_init_call(&mut emitter);
         assert!(emitter.output().contains("call __rt_stack_limit_init"));
+    }
+
+    /// Every supported cdylib target skips lazy remeasurement when `_stack_limit` is already
+    /// non-zero and otherwise calls the existing runtime initializer.
+    #[test]
+    fn test_lazy_stack_limit_init_is_guarded_for_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            emit_lazy_stack_limit_init(&mut emitter, "L_test_stack_limit_ready");
+            let asm = emitter.output();
+            assert!(asm.contains(STACK_LIMIT_SYMBOL), "{target:?}: {asm}");
+            assert!(
+                asm.contains(STACK_LIMIT_INIT_SYMBOL),
+                "{target:?}: {asm}"
+            );
+            assert!(
+                asm.contains("L_test_stack_limit_ready"),
+                "{target:?}: {asm}"
+            );
+        }
     }
 }

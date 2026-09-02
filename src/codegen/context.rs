@@ -61,7 +61,11 @@ pub(crate) struct FunctionContext<'a> {
     try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
+    pub(super) exception_activation_offset: Option<usize>,
     pub(super) epilogue_emitted: bool,
+    /// `--instrument` id assigned to this function in its prologue, consumed by
+    /// its epilogue's `elephc_instr_exit(id)`. `None` outside `--instrument`.
+    pub(super) instr_id: Option<usize>,
     pub(super) is_main: bool,
     pub(super) web: bool,
     pub(super) gc_stats: bool,
@@ -87,12 +91,17 @@ impl<'a> FunctionContext<'a> {
         let callable_reachability = CallableReachabilityAnalysis::new(module, function);
         let function_fragment = label_fragment(&function.name);
         // Indexed by raw block id, matching `Function::block()`'s positional lookup.
+        // The platform-local prefix keeps every intra-function label out of the object's
+        // symbol table: without it, profilers name frames after the nearest block label
+        // (`_eir_hot_leaf_for_body_2`) instead of the PHP function DWARF describes.
+        let local_prefix = emitter.target.platform.local_label_prefix();
         let block_labels = function
             .blocks
             .iter()
             .map(|block| {
                 format!(
-                    "_eir_{}_{}_{}",
+                    "{}_eir_{}_{}_{}",
+                    local_prefix,
                     function_fragment,
                     label_fragment(&block.name),
                     shared.next_label_id()
@@ -117,7 +126,9 @@ impl<'a> FunctionContext<'a> {
             try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
+            exception_activation_offset: layout.exception_activation_offset,
             epilogue_emitted: false,
+            instr_id: None,
             is_main,
             web: false,
             gc_stats,
@@ -133,6 +144,21 @@ impl<'a> FunctionContext<'a> {
     /// every non-alphanumeric byte, so `a_b` and `aéb` share a readable prefix and only the id
     /// keeps their labels apart.
     pub(super) fn next_label(&mut self, prefix: &str) -> String {
+        format!(
+            "{}_eir_{}_{}_{}",
+            self.emitter.target.platform.local_label_prefix(),
+            label_fragment(&self.function.name),
+            label_fragment(prefix),
+            self.shared.next_label_id()
+        )
+    }
+
+    /// Returns a module-unique label for an emitted entry point that must stay a real
+    /// symbol: invokers and wrappers that are `.globl`-exported, cached across functions,
+    /// or referenced from callable descriptors. `next_label()`'s assembler-local prefix
+    /// would make `.globl` invalid ("non-local symbol required") and the cross-function
+    /// reference dangling.
+    pub(super) fn next_global_label(&mut self, prefix: &str) -> String {
         format!(
             "_eir_{}_{}_{}",
             label_fragment(&self.function.name),
@@ -182,10 +208,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select the aliased storage address after runtime promotion
+                        self.emitter.instruction(
+                            &format!("cbnz {}, {}", state_reg, ref_cell)
+                        );                                                      // select the aliased storage address after runtime promotion
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter.instruction(
+                            &format!("test {}, {}", state_reg, state_reg)
+                        );                                                      // test the slot's runtime representation flag
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select the aliased storage address after runtime promotion
                     }
@@ -496,10 +526,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell loading after a runtime promotion
+                        self.emitter.instruction(
+                            &format!("cbnz {}, {}", state_reg, ref_cell)
+                        );                                                      // select ref-cell loading after a runtime promotion
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter.instruction(
+                            &format!("test {}, {}", state_reg, state_reg)
+                        );                                                      // test the slot's runtime representation flag
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell loading after a runtime promotion
                     }
@@ -605,10 +639,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell storage after a runtime promotion
+                        self.emitter.instruction(
+                            &format!("cbnz {}, {}", state_reg, ref_cell)
+                        );                                                      // select ref-cell storage after a runtime promotion
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter.instruction(
+                            &format!("test {}, {}", state_reg, state_reg)
+                        );                                                      // test the slot's runtime representation flag
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }
@@ -803,10 +841,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell storage after a runtime promotion
+                        self.emitter.instruction(
+                            &format!("cbnz {}, {}", state_reg, ref_cell)
+                        );                                                      // select ref-cell storage after a runtime promotion
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter.instruction(
+                            &format!("test {}, {}", state_reg, state_reg)
+                        );                                                      // test the slot's runtime representation flag
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }

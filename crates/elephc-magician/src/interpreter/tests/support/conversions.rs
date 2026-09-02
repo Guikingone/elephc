@@ -73,9 +73,24 @@ impl FakeOps {
         }
     }
 
-    /// Converts one fake scalar cell to a numeric value for comparison tests.
-    pub(super) fn numeric(&self, handle: RuntimeCellHandle) -> Result<f64, EvalStatus> {
-        Ok(self.fake_numeric(&self.get(handle)))
+    /// Returns PHP scalar ordering and whether a numeric comparison was IEEE unordered.
+    pub(super) fn php_ordering(
+        &self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> (std::cmp::Ordering, bool) {
+        let left = self.get(left);
+        let right = self.get(right);
+        if matches!(left, FakeValue::Bool(_)) || matches!(right, FakeValue::Bool(_)) {
+            return (self.fake_truthy(&left).cmp(&self.fake_truthy(&right)), false);
+        }
+        if let (FakeValue::Int(left), FakeValue::Int(right)) = (&left, &right) {
+            return (left.cmp(right), false);
+        }
+        let Some(ordering) = self.fake_numeric(&left).partial_cmp(&self.fake_numeric(&right)) else {
+            return (std::cmp::Ordering::Greater, true);
+        };
+        (ordering, false)
     }
 
     /// Converts a fake value to the numeric scalar used by comparison tests.

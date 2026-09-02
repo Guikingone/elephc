@@ -12,28 +12,33 @@
 //! - Conversions go through the Julian Day Number (SDN). Multi-value cores return string-keyed
 //!   integer arrays (`["y"=>, "m"=>, "d"=>]`) to keep reads on the proven assoc-array path.
 //! - The Jewish calendar uses 64-bit halakim arithmetic directly (no 32-bit bit-splitting needed).
+//! - Bodies are BUILT, not parsed: `bodies` holds one statement-builder function per helper, so
+//!   no PHP is tokenized or parsed on the compilation path. The `*_SRC` constants survive under
+//!   `cfg(test)` as the oracle those builders are checked against.
 
-use crate::parser::ast::{ClassMethod, Expr, TypeExpr, Visibility};
+mod bodies;
+
+use crate::parser::ast::{ClassMethod, Expr, Stmt, TypeExpr, Visibility};
 
 /// Returns a dummy source span for synthetic AST nodes built by this module.
 fn dummy() -> crate::span::Span {
     crate::span::Span::dummy()
 }
 
-/// Tokenizes and parses a synthetic-PHP method body, returning a static `ClassMethod`.
+/// Wraps an already-built synthetic method body in a static `ClassMethod`.
 ///
 /// `params` is a list of `(name, type, default, by_ref)` tuples mirroring the helper's PHP
 /// signature. All calendar helpers are static and return `mixed` (an int, string, or array).
+///
+/// `body` arrives BUILT from `bodies`. It used to arrive as PHP text that this function
+/// tokenized and parsed on every compilation; the builders removed that work from the
+/// compilation path, and `built_bodies_match_the_php` keeps them honest.
 fn cal_method(
     name: &str,
     params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
     ret: TypeExpr,
-    src: &str,
+    body: Vec<Stmt>,
 ) -> ClassMethod {
-    let tokens = crate::lexer::tokenize(src)
-        .unwrap_or_else(|e| panic!("calendar helper {name} must tokenize: {e:?}"));
-    let body = crate::parser::parse_internal(&tokens)
-        .unwrap_or_else(|e| panic!("calendar helper {name} must parse: {e:?}"));
     ClassMethod {
         name: name.to_string(),
         visibility: Visibility::Public,
@@ -75,81 +80,81 @@ pub(super) fn calendar_methods() -> Vec<ClassMethod> {
         cal_method(
             "__elephc_greg_to_sdn",
             vec![int_param("iy"), int_param("im"), int_param("id")],
-            TypeExpr::Int, GREG_TO_SDN_SRC,
+            TypeExpr::Int, bodies::greg_to_sdn(),
         ),
-        cal_method("__elephc_sdn_to_greg", vec![int_param("sdn")], mixed_ret(), SDN_TO_GREG_SRC),
+        cal_method("__elephc_sdn_to_greg", vec![int_param("sdn")], mixed_ret(), bodies::sdn_to_greg()),
         // ---- Julian core ----
         cal_method(
             "__elephc_jul_to_sdn",
             vec![int_param("iy"), int_param("im"), int_param("id")],
-            TypeExpr::Int, JUL_TO_SDN_SRC,
+            TypeExpr::Int, bodies::jul_to_sdn(),
         ),
-        cal_method("__elephc_sdn_to_jul", vec![int_param("sdn")], mixed_ret(), SDN_TO_JUL_SRC),
+        cal_method("__elephc_sdn_to_jul", vec![int_param("sdn")], mixed_ret(), bodies::sdn_to_jul()),
         // ---- French Republican core ----
         cal_method(
             "__elephc_fr_to_sdn",
             vec![int_param("y"), int_param("m"), int_param("d")],
-            TypeExpr::Int, FR_TO_SDN_SRC,
+            TypeExpr::Int, bodies::fr_to_sdn(),
         ),
-        cal_method("__elephc_sdn_to_fr", vec![int_param("sdn")], mixed_ret(), SDN_TO_FR_SRC),
+        cal_method("__elephc_sdn_to_fr", vec![int_param("sdn")], mixed_ret(), bodies::sdn_to_fr()),
         // ---- Jewish core ----
         cal_method(
             "__elephc_jew_tishri1",
             vec![int_param("my"), int_param("moladDay"), int_param("moladHalakim")],
-            TypeExpr::Int, JEW_TISHRI1_SRC,
+            TypeExpr::Int, bodies::jew_tishri1(),
         ),
-        cal_method("__elephc_jew_molad_cycle", vec![int_param("mc")], mixed_ret(), JEW_MOLAD_CYCLE_SRC),
+        cal_method("__elephc_jew_molad_cycle", vec![int_param("mc")], mixed_ret(), bodies::jew_molad_cycle()),
         cal_method(
             "__elephc_jew_find_tishri_molad",
             vec![int_param("inputDay")],
-            mixed_ret(), JEW_FIND_TISHRI_MOLAD_SRC,
+            mixed_ret(), bodies::jew_find_tishri_molad(),
         ),
-        cal_method("__elephc_jew_find_start_year", vec![int_param("year")], mixed_ret(), JEW_FIND_START_YEAR_SRC),
+        cal_method("__elephc_jew_find_start_year", vec![int_param("year")], mixed_ret(), bodies::jew_find_start_year()),
         cal_method(
             "__elephc_jew_to_sdn",
             vec![int_param("year"), int_param("month"), int_param("day")],
-            TypeExpr::Int, JEW_TO_SDN_SRC,
+            TypeExpr::Int, bodies::jew_to_sdn(),
         ),
-        cal_method("__elephc_sdn_to_jew", vec![int_param("sdn")], mixed_ret(), SDN_TO_JEW_SRC),
+        cal_method("__elephc_sdn_to_jew", vec![int_param("sdn")], mixed_ret(), bodies::sdn_to_jew()),
         cal_method(
             "__elephc_jew_month_name",
             vec![int_param("year"), int_param("month")],
-            TypeExpr::Str, JEW_MONTH_NAME_SRC,
+            TypeExpr::Str, bodies::jew_month_name(),
         ),
         // ---- Easter / day-of-week ----
         cal_method(
             "__elephc_easter_calc",
             vec![int_param("year"), int_param("method"), int_param("gm")],
-            TypeExpr::Int, EASTER_CALC_SRC,
+            TypeExpr::Int, bodies::easter_calc(),
         ),
         // ---- Public procedural targets ----
         cal_method(
             "__elephc_cal_to_jd",
             vec![int_param("calendar"), int_param("month"), int_param("day"), int_param("year")],
-            TypeExpr::Int, CAL_TO_JD_SRC,
+            TypeExpr::Int, bodies::cal_to_jd(),
         ),
         cal_method(
             "__elephc_gregoriantojd",
             vec![int_param("month"), int_param("day"), int_param("year")],
-            TypeExpr::Int, GREGORIANTOJD_SRC,
+            TypeExpr::Int, bodies::gregoriantojd(),
         ),
-        cal_method("__elephc_jdtogregorian", vec![int_param("jd")], TypeExpr::Str, JDTOGREGORIAN_SRC),
+        cal_method("__elephc_jdtogregorian", vec![int_param("jd")], TypeExpr::Str, bodies::jdtogregorian()),
         cal_method(
             "__elephc_juliantojd",
             vec![int_param("month"), int_param("day"), int_param("year")],
-            TypeExpr::Int, JULIANTOJD_SRC,
+            TypeExpr::Int, bodies::juliantojd(),
         ),
-        cal_method("__elephc_jdtojulian", vec![int_param("jd")], TypeExpr::Str, JDTOJULIAN_SRC),
+        cal_method("__elephc_jdtojulian", vec![int_param("jd")], TypeExpr::Str, bodies::jdtojulian()),
         cal_method(
             "__elephc_frenchtojd",
             vec![int_param("month"), int_param("day"), int_param("year")],
-            TypeExpr::Int, FRENCHTOJD_SRC,
+            TypeExpr::Int, bodies::frenchtojd(),
         ),
-        cal_method("__elephc_jdtofrench", vec![int_param("jd")], TypeExpr::Str, JDTOFRENCH_SRC),
+        cal_method("__elephc_jdtofrench", vec![int_param("jd")], TypeExpr::Str, bodies::jdtofrench()),
         cal_method(
             "__elephc_jewishtojd",
             vec![int_param("month"), int_param("day"), int_param("year")],
-            TypeExpr::Int, JEWISHTOJD_SRC,
+            TypeExpr::Int, bodies::jewishtojd(),
         ),
         cal_method(
             "__elephc_jdtojewish",
@@ -158,7 +163,7 @@ pub(super) fn calendar_methods() -> Vec<ClassMethod> {
                 ("hebrew".to_string(), Some(TypeExpr::Bool), Some(bool_false()), false),
                 ("flags".to_string(), Some(TypeExpr::Int), Some(int_lit(0)), false),
             ],
-            TypeExpr::Str, JDTOJEWISH_SRC,
+            TypeExpr::Str, bodies::jdtojewish(),
         ),
         cal_method(
             "__elephc_easter_days",
@@ -166,7 +171,7 @@ pub(super) fn calendar_methods() -> Vec<ClassMethod> {
                 int_param("year"),
                 ("mode".to_string(), Some(TypeExpr::Int), Some(int_lit(0)), false),
             ],
-            TypeExpr::Int, EASTER_DAYS_SRC,
+            TypeExpr::Int, bodies::easter_days(),
         ),
         cal_method(
             "__elephc_easter_date",
@@ -174,33 +179,33 @@ pub(super) fn calendar_methods() -> Vec<ClassMethod> {
                 int_param("year"),
                 ("mode".to_string(), Some(TypeExpr::Int), Some(int_lit(0)), false),
             ],
-            TypeExpr::Int, EASTER_DATE_SRC,
+            TypeExpr::Int, bodies::easter_date(),
         ),
         cal_method(
             "__elephc_unixtojd",
             vec![("timestamp".to_string(), Some(TypeExpr::Int), Some(int_lit(0)), false)],
-            TypeExpr::Int, UNIXTOJD_SRC,
+            TypeExpr::Int, bodies::unixtojd(),
         ),
-        cal_method("__elephc_jdtounix", vec![int_param("jd")], TypeExpr::Int, JDTOUNIX_SRC),
+        cal_method("__elephc_jdtounix", vec![int_param("jd")], TypeExpr::Int, bodies::jdtounix()),
         cal_method(
             "__elephc_jddayofweek",
             vec![
                 int_param("jd"),
                 ("mode".to_string(), Some(TypeExpr::Int), Some(int_lit(0)), false),
             ],
-            mixed_ret(), JDDAYOFWEEK_SRC,
+            mixed_ret(), bodies::jddayofweek(),
         ),
-        cal_method("__elephc_jdmonthname", vec![int_param("jd"), int_param("mode")], TypeExpr::Str, JDMONTHNAME_SRC),
+        cal_method("__elephc_jdmonthname", vec![int_param("jd"), int_param("mode")], TypeExpr::Str, bodies::jdmonthname()),
         cal_method(
             "__elephc_cal_days_in_month",
             vec![int_param("calendar"), int_param("month"), int_param("year")],
-            TypeExpr::Int, CAL_DAYS_IN_MONTH_SRC,
+            TypeExpr::Int, bodies::cal_days_in_month(),
         ),
-        cal_method("__elephc_cal_from_jd", vec![int_param("jd"), int_param("calendar")], mixed_ret(), CAL_FROM_JD_SRC),
+        cal_method("__elephc_cal_from_jd", vec![int_param("jd"), int_param("calendar")], mixed_ret(), bodies::cal_from_jd()),
         cal_method(
             "__elephc_cal_info",
             vec![("calendar".to_string(), Some(TypeExpr::Int), Some(int_lit(-1)), false)],
-            mixed_ret(), CAL_INFO_SRC,
+            mixed_ret(), bodies::cal_info(),
         ),
     ]
 }
@@ -217,6 +222,7 @@ fn int_lit(value: i64) -> Expr {
 
 // ===================== Gregorian =====================
 
+#[cfg(test)]
 const GREG_TO_SDN_SRC: &str = r#"<?php
 if ($iy == 0 || $iy < -4714 || $im <= 0 || $im > 12 || $id <= 0 || $id > 31) { return 0; }
 if ($iy == -4714) { if ($im < 11) { return 0; } if ($im == 11 && $id < 25) { return 0; } }
@@ -225,6 +231,7 @@ if ($im > 2) { $month = $im - 3; } else { $month = $im + 9; $year = $year - 1; }
 return intdiv(intdiv($year, 100) * 146097, 4) + intdiv(($year % 100) * 1461, 4) + intdiv($month * 153 + 2, 5) + $id - 32045;
 "#;
 
+#[cfg(test)]
 const SDN_TO_GREG_SRC: &str = r#"<?php
 if ($sdn <= 0) { return ["y" => 0, "m" => 0, "d" => 0]; }
 $temp = ($sdn + 32045) * 4 - 1;
@@ -243,6 +250,7 @@ return ["y" => $year, "m" => $month, "d" => $day];
 
 // ===================== Julian =====================
 
+#[cfg(test)]
 const JUL_TO_SDN_SRC: &str = r#"<?php
 if ($iy == 0 || $iy < -4713 || $im <= 0 || $im > 12 || $id <= 0 || $id > 31) { return 0; }
 if ($iy == -4713) { if ($im == 1 && $id == 1) { return 0; } }
@@ -251,6 +259,7 @@ if ($im > 2) { $month = $im - 3; } else { $month = $im + 9; $year = $year - 1; }
 return intdiv($year * 1461, 4) + intdiv($month * 153 + 2, 5) + $id - 32083;
 "#;
 
+#[cfg(test)]
 const SDN_TO_JUL_SRC: &str = r#"<?php
 if ($sdn <= 0) { return ["y" => 0, "m" => 0, "d" => 0]; }
 $temp = $sdn * 4 + (32083 * 4 - 1);
@@ -267,11 +276,13 @@ return ["y" => $year, "m" => $month, "d" => $day];
 
 // ===================== French Republican =====================
 
+#[cfg(test)]
 const FR_TO_SDN_SRC: &str = r#"<?php
 if ($y < 1 || $y > 14 || $m < 1 || $m > 13 || $d < 1 || $d > 30) { return 0; }
 return intdiv($y * 1461, 4) + ($m - 1) * 30 + $d + 2375474;
 "#;
 
+#[cfg(test)]
 const SDN_TO_FR_SRC: &str = r#"<?php
 if ($sdn < 2375840 || $sdn > 2380952) { return ["y" => 0, "m" => 0, "d" => 0]; }
 $temp = ($sdn - 2375474) * 4 - 1;
@@ -284,6 +295,7 @@ return ["y" => $year, "m" => $month, "d" => $day];
 
 // ===================== Jewish =====================
 
+#[cfg(test)]
 const JEW_TISHRI1_SRC: &str = r#"<?php
 $tishri1 = $moladDay;
 $dow = $tishri1 % 7;
@@ -298,11 +310,13 @@ if ($dow == 3 || $dow == 5 || $dow == 0) { $tishri1 = $tishri1 + 1; }
 return $tishri1;
 "#;
 
+#[cfg(test)]
 const JEW_MOLAD_CYCLE_SRC: &str = r#"<?php
 $total = 31524 + $mc * 179876755;
 return ["md" => intdiv($total, 25920), "mh" => $total % 25920];
 "#;
 
+#[cfg(test)]
 const JEW_FIND_TISHRI_MOLAD_SRC: &str = r#"<?php
 $months = [12, 12, 13, 12, 12, 13, 12, 13, 12, 12, 13, 12, 12, 13, 12, 12, 13, 12, 13];
 $mc = intdiv($inputDay + 310, 6940);
@@ -326,6 +340,7 @@ while ($my < 18) {
 return ["mc" => $mc, "my" => $my, "md" => $md, "mh" => $mh];
 "#;
 
+#[cfg(test)]
 const JEW_FIND_START_YEAR_SRC: &str = r#"<?php
 $offsets = [0, 12, 24, 37, 49, 61, 74, 86, 99, 111, 123, 136, 148, 160, 173, 185, 197, 210, 222];
 $mc = intdiv($year - 1, 19);
@@ -340,6 +355,7 @@ $t1 = DateTime::__elephc_jew_tishri1($my, $md, $mh);
 return ["mc" => $mc, "my" => $my, "md" => $md, "mh" => $mh, "t1" => $t1];
 "#;
 
+#[cfg(test)]
 const JEW_TO_SDN_SRC: &str = r#"<?php
 if ($year <= 0 || $day <= 0 || $day > 30) { return 0; }
 $months = [12, 12, 13, 12, 12, 13, 12, 13, 12, 12, 13, 12, 12, 13, 12, 12, 13, 12, 13];
@@ -381,6 +397,7 @@ if ($month == 1 || $month == 2) {
 return $sdn + 347997;
 "#;
 
+#[cfg(test)]
 const SDN_TO_JEW_SRC: &str = r#"<?php
 if ($sdn <= 347997 || $sdn > 324542846) { return ["y" => 0, "m" => 0, "d" => 0]; }
 $months = [12, 12, 13, 12, 12, 13, 12, 13, 12, 12, 13, 12, 12, 13, 12, 12, 13, 12, 13];
@@ -447,6 +464,7 @@ if ($yl == 355 || $yl == 385) {
 return ["y" => $py, "m" => 3, "d" => $day];
 "#;
 
+#[cfg(test)]
 const JEW_MONTH_NAME_SRC: &str = r#"<?php
 $months = [12, 12, 13, 12, 12, 13, 12, 13, 12, 12, 13, 12, 12, 13, 12, 12, 13, 12, 13];
 $leapYear = ($months[($year - 1) % 19] == 13);
@@ -457,6 +475,7 @@ return $leapYear ? $leap[$month] : $reg[$month];
 
 // ===================== Easter =====================
 
+#[cfg(test)]
 const EASTER_CALC_SRC: &str = r#"<?php
 $golden = ($year % 19) + 1;
 if (($year <= 1582 && $method != 2) || ($year >= 1583 && $year <= 1752 && $method != 1 && $method != 2) || $method == 3) {
@@ -483,16 +502,19 @@ if ($gm != 0) {
 return $easter;
 "#;
 
+#[cfg(test)]
 const EASTER_DAYS_SRC: &str = r#"<?php
 return DateTime::__elephc_easter_calc($year, $mode, 0);
 "#;
 
+#[cfg(test)]
 const EASTER_DATE_SRC: &str = r#"<?php
 return DateTime::__elephc_easter_calc($year, $mode, 1);
 "#;
 
 // ===================== Public targets =====================
 
+#[cfg(test)]
 const CAL_TO_JD_SRC: &str = r#"<?php
 if ($calendar == 0) { return DateTime::__elephc_greg_to_sdn($year, $month, $day); }
 if ($calendar == 1) { return DateTime::__elephc_jul_to_sdn($year, $month, $day); }
@@ -501,42 +523,51 @@ if ($calendar == 3) { return DateTime::__elephc_fr_to_sdn($year, $month, $day); 
 return 0;
 "#;
 
+#[cfg(test)]
 const GREGORIANTOJD_SRC: &str = r#"<?php
 return DateTime::__elephc_greg_to_sdn($year, $month, $day);
 "#;
 
+#[cfg(test)]
 const JDTOGREGORIAN_SRC: &str = r#"<?php
 $r = DateTime::__elephc_sdn_to_greg($jd);
 return $r["m"] . "/" . $r["d"] . "/" . $r["y"];
 "#;
 
+#[cfg(test)]
 const JULIANTOJD_SRC: &str = r#"<?php
 return DateTime::__elephc_jul_to_sdn($year, $month, $day);
 "#;
 
+#[cfg(test)]
 const JDTOJULIAN_SRC: &str = r#"<?php
 $r = DateTime::__elephc_sdn_to_jul($jd);
 return $r["m"] . "/" . $r["d"] . "/" . $r["y"];
 "#;
 
+#[cfg(test)]
 const FRENCHTOJD_SRC: &str = r#"<?php
 return DateTime::__elephc_fr_to_sdn($year, $month, $day);
 "#;
 
+#[cfg(test)]
 const JDTOFRENCH_SRC: &str = r#"<?php
 $r = DateTime::__elephc_sdn_to_fr($jd);
 return $r["m"] . "/" . $r["d"] . "/" . $r["y"];
 "#;
 
+#[cfg(test)]
 const JEWISHTOJD_SRC: &str = r#"<?php
 return DateTime::__elephc_jew_to_sdn($year, $month, $day);
 "#;
 
+#[cfg(test)]
 const JDTOJEWISH_SRC: &str = r#"<?php
 $r = DateTime::__elephc_sdn_to_jew($jd);
 return $r["m"] . "/" . $r["d"] . "/" . $r["y"];
 "#;
 
+#[cfg(test)]
 const UNIXTOJD_SRC: &str = r#"<?php
 $y = intval(gmdate("Y", $timestamp));
 $m = intval(gmdate("n", $timestamp));
@@ -544,10 +575,12 @@ $d = intval(gmdate("j", $timestamp));
 return DateTime::__elephc_greg_to_sdn($y, $m, $d);
 "#;
 
+#[cfg(test)]
 const JDTOUNIX_SRC: &str = r#"<?php
 return ($jd - 2440588) * 86400;
 "#;
 
+#[cfg(test)]
 const JDDAYOFWEEK_SRC: &str = r#"<?php
 $d = ($jd % 7 + 8) % 7;
 $long = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -557,6 +590,7 @@ if ($mode == 2) { return $short[$d]; }
 return $d;
 "#;
 
+#[cfg(test)]
 const JDMONTHNAME_SRC: &str = r#"<?php
 $gregShort = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 $gregLong = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -570,6 +604,7 @@ $r = DateTime::__elephc_sdn_to_greg($jd);
 return $gregShort[$r["m"]];
 "#;
 
+#[cfg(test)]
 const CAL_DAYS_IN_MONTH_SRC: &str = r#"<?php
 $start = DateTime::__elephc_cal_to_jd($calendar, $month, 1, $year);
 $next = DateTime::__elephc_cal_to_jd($calendar, $month + 1, 1, $year);
@@ -584,6 +619,7 @@ if ($next == 0) {
 return $next - $start;
 "#;
 
+#[cfg(test)]
 const CAL_FROM_JD_SRC: &str = r#"<?php
 $gregShort = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 $gregLong = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -621,6 +657,7 @@ return [
 ];
 "#;
 
+#[cfg(test)]
 const CAL_INFO_SRC: &str = r#"<?php
 $greg = [
     "months" => [1 => "January", 2 => "February", 3 => "March", 4 => "April", 5 => "May", 6 => "June", 7 => "July", 8 => "August", 9 => "September", 10 => "October", 11 => "November", 12 => "December"],
@@ -656,3 +693,96 @@ if ($calendar == 2) { return $jew; }
 if ($calendar == 3) { return $fr; }
 return [0 => $greg, 1 => $jul, 2 => $jew, 3 => $fr];
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `(label, php, built)` triple the oracle sweeps.
+    fn cases() -> Vec<(&'static str, &'static str, Vec<Stmt>)> {
+        vec![
+            ("GREG_TO_SDN_SRC", GREG_TO_SDN_SRC, bodies::greg_to_sdn()),
+            ("SDN_TO_GREG_SRC", SDN_TO_GREG_SRC, bodies::sdn_to_greg()),
+            ("JUL_TO_SDN_SRC", JUL_TO_SDN_SRC, bodies::jul_to_sdn()),
+            ("SDN_TO_JUL_SRC", SDN_TO_JUL_SRC, bodies::sdn_to_jul()),
+            ("FR_TO_SDN_SRC", FR_TO_SDN_SRC, bodies::fr_to_sdn()),
+            ("SDN_TO_FR_SRC", SDN_TO_FR_SRC, bodies::sdn_to_fr()),
+            ("JEW_TISHRI1_SRC", JEW_TISHRI1_SRC, bodies::jew_tishri1()),
+            ("JEW_MOLAD_CYCLE_SRC", JEW_MOLAD_CYCLE_SRC, bodies::jew_molad_cycle()),
+            ("JEW_FIND_TISHRI_MOLAD_SRC", JEW_FIND_TISHRI_MOLAD_SRC, bodies::jew_find_tishri_molad()),
+            ("JEW_FIND_START_YEAR_SRC", JEW_FIND_START_YEAR_SRC, bodies::jew_find_start_year()),
+            ("JEW_TO_SDN_SRC", JEW_TO_SDN_SRC, bodies::jew_to_sdn()),
+            ("SDN_TO_JEW_SRC", SDN_TO_JEW_SRC, bodies::sdn_to_jew()),
+            ("JEW_MONTH_NAME_SRC", JEW_MONTH_NAME_SRC, bodies::jew_month_name()),
+            ("EASTER_CALC_SRC", EASTER_CALC_SRC, bodies::easter_calc()),
+            ("EASTER_DAYS_SRC", EASTER_DAYS_SRC, bodies::easter_days()),
+            ("EASTER_DATE_SRC", EASTER_DATE_SRC, bodies::easter_date()),
+            ("CAL_TO_JD_SRC", CAL_TO_JD_SRC, bodies::cal_to_jd()),
+            ("GREGORIANTOJD_SRC", GREGORIANTOJD_SRC, bodies::gregoriantojd()),
+            ("JDTOGREGORIAN_SRC", JDTOGREGORIAN_SRC, bodies::jdtogregorian()),
+            ("JULIANTOJD_SRC", JULIANTOJD_SRC, bodies::juliantojd()),
+            ("JDTOJULIAN_SRC", JDTOJULIAN_SRC, bodies::jdtojulian()),
+            ("FRENCHTOJD_SRC", FRENCHTOJD_SRC, bodies::frenchtojd()),
+            ("JDTOFRENCH_SRC", JDTOFRENCH_SRC, bodies::jdtofrench()),
+            ("JEWISHTOJD_SRC", JEWISHTOJD_SRC, bodies::jewishtojd()),
+            ("JDTOJEWISH_SRC", JDTOJEWISH_SRC, bodies::jdtojewish()),
+            ("UNIXTOJD_SRC", UNIXTOJD_SRC, bodies::unixtojd()),
+            ("JDTOUNIX_SRC", JDTOUNIX_SRC, bodies::jdtounix()),
+            ("JDDAYOFWEEK_SRC", JDDAYOFWEEK_SRC, bodies::jddayofweek()),
+            ("JDMONTHNAME_SRC", JDMONTHNAME_SRC, bodies::jdmonthname()),
+            ("CAL_DAYS_IN_MONTH_SRC", CAL_DAYS_IN_MONTH_SRC, bodies::cal_days_in_month()),
+            ("CAL_FROM_JD_SRC", CAL_FROM_JD_SRC, bodies::cal_from_jd()),
+            ("CAL_INFO_SRC", CAL_INFO_SRC, bodies::cal_info()),
+        ]
+    }
+
+    /// THE ORACLE FOR THE TRANSCRIPTION: each built body must equal the parse of the PHP it
+    /// replaced, statement by statement.
+    ///
+    /// The builders were generated by `synthetic_class::transcribe` and then reviewed by hand,
+    /// and neither step proves anything on its own — a transcription that drops a qualifier or
+    /// an argument still compiles and quietly means something else. This is what makes them
+    /// safe to rely on, and it is why the PHP stays in the file under `cfg(test)`.
+    ///
+    /// Spans are stripped because a built node has none and a parsed one does; everything else
+    /// — order, operators, nesting, name qualification — has to match exactly.
+    #[test]
+    fn built_bodies_match_the_php() {
+        for (label, php, built) in cases() {
+            let tokens = crate::lexer::tokenize(php)
+                .unwrap_or_else(|e| panic!("{label} must tokenize: {e:?}"));
+            let parsed = crate::parser::parse_internal(&tokens)
+                .unwrap_or_else(|e| panic!("{label} must parse: {e:?}"));
+
+            assert_eq!(
+                built.len(),
+                parsed.len(),
+                "{label}: statement COUNT differs — built {} vs parsed {}",
+                built.len(),
+                parsed.len()
+            );
+            for (index, (built_stmt, parsed_stmt)) in built.iter().zip(parsed.iter()).enumerate() {
+                assert_eq!(
+                    strip_spans(&format!("{built_stmt:?}")),
+                    strip_spans(&format!("{parsed_stmt:?}")),
+                    "{label}: statement {index} differs from its PHP"
+                );
+            }
+        }
+    }
+
+    /// Removes span payloads so a built node and a parsed node compare on structure alone.
+    fn strip_spans(rendered: &str) -> String {
+        let mut cleaned = String::with_capacity(rendered.len());
+        let mut rest = rendered;
+        while let Some(at) = rest.find("Span {") {
+            cleaned.push_str(&rest[..at]);
+            cleaned.push_str("Span");
+            let after = &rest[at..];
+            let close = after.find('}').map(|end| end + 1).unwrap_or(after.len());
+            rest = &after[close..];
+        }
+        cleaned.push_str(rest);
+        cleaned
+    }
+}

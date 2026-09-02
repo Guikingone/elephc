@@ -7,6 +7,8 @@ sidebar:
 
 ## Builtins
 
+Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Type](./builtins/type.md)
+
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`array_all()`](./builtins/array/array_all.md) | `(mixed $array, mixed $callback): bool` | `bool` | ✓ | — |
@@ -99,7 +101,7 @@ sidebar:
 | [`get_declared_classes()`](./builtins/class/get_declared_classes.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_interfaces()`](./builtins/class/get_declared_interfaces.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_traits()`](./builtins/class/get_declared_traits.md) | `(): array` | `array` | ✓ | ✓ |
-| [`get_object_vars()`](./builtins/class/get_object_vars.md) | `(mixed $object): mixed` | `mixed` | — | ✓ |
+| [`get_object_vars()`](./builtins/class/get_object_vars.md) | `(mixed $object): array` | `array` | ✓ | ✓ |
 | [`get_parent_class()`](./builtins/class/get_parent_class.md) | `(mixed $object_or_class = null): string` | `string` | ✓ | ✓ |
 | [`interface_exists()`](./builtins/class/interface_exists.md) | `(string $interface, bool $autoload = true): bool` | `bool` | ✓ | ✓ |
 | [`is_a()`](./builtins/class/is_a.md) | `(object $object_or_class, string $class, bool $allow_string = false): bool` | `bool` | ✓ | ✓ |
@@ -128,21 +130,21 @@ sidebar:
 | [`clearstatcache()`](./builtins/filesystem/clearstatcache.md) | `(bool $clear_realpath_cache = false, string $filename = ''): void` | `void` | ✓ | ✓ |
 | [`copy()`](./builtins/filesystem/copy.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
 | [`dirname()`](./builtins/filesystem/dirname.md) | `(string $path, int $levels = 1): string` | `string` | ✓ | ✓ |
-| [`disk_free_space()`](./builtins/filesystem/disk_free_space.md) | `(string $directory): float` | `float` | ✓ | ✓ |
-| [`disk_total_space()`](./builtins/filesystem/disk_total_space.md) | `(string $directory): float` | `float` | ✓ | ✓ |
+| [`disk_free_space()`](./builtins/filesystem/disk_free_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
+| [`disk_total_space()`](./builtins/filesystem/disk_total_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
 | [`file_exists()`](./builtins/filesystem/file_exists.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`fileatime()`](./builtins/filesystem/fileatime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filectime()`](./builtins/filesystem/filectime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filegroup()`](./builtins/filesystem/filegroup.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileinode()`](./builtins/filesystem/fileinode.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`filemtime()`](./builtins/filesystem/filemtime.md) | `(string $filename): int` | `int` | ✓ | ✓ |
+| [`filemtime()`](./builtins/filesystem/filemtime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileowner()`](./builtins/filesystem/fileowner.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileperms()`](./builtins/filesystem/fileperms.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`filesize()`](./builtins/filesystem/filesize.md) | `(string $filename): int` | `int` | ✓ | ✓ |
+| [`filesize()`](./builtins/filesystem/filesize.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filetype()`](./builtins/filesystem/filetype.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fnmatch()`](./builtins/filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./builtins/filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |
-| [`getenv()`](./builtins/filesystem/getenv.md) | `(string $name = null, bool $local_only = false): mixed` | `mixed` | ✓ | ✓ |
+| [`getenv()`](./builtins/filesystem/getenv.md) | `(string $name = null, bool $local_only = false): string|false` | `string|false` | ✓ | ✓ |
 | [`glob()`](./builtins/filesystem/glob.md) | `(string $pattern, int $flags = 0): array` | `array` | ✓ | ✓ |
 | [`is_dir()`](./builtins/filesystem/is_dir.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_executable()`](./builtins/filesystem/is_executable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
@@ -181,9 +183,9 @@ sidebar:
 | [`feof()`](./builtins/io/feof.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fflush()`](./builtins/io/fflush.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fgetc()`](./builtins/io/fgetc.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`fgetcsv()`](./builtins/io/fgetcsv.md) | `(resource $stream, int $length = null, string $separator = ','): array` | `array` | ✓ | ✓ |
+| [`fgetcsv()`](./builtins/io/fgetcsv.md) | `(resource $stream, int $length = null, string $separator = ','): mixed` | `mixed` | ✓ | ✓ |
 | [`fgets()`](./builtins/io/fgets.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`file()`](./builtins/io/file.md) | `(string $filename, int $flags = 0): array` | `array` | ✓ | ✓ |
+| [`file()`](./builtins/io/file.md) | `(string $filename, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`file_get_contents()`](./builtins/io/file_get_contents.md) | `(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed` | `mixed` | ✓ | ✓ |
 | [`file_put_contents()`](./builtins/io/file_put_contents.md) | `(string $filename, mixed $data, int $flags = 0, mixed $context = null): int` | `int` | ✓ | ✓ |
 | [`flock()`](./builtins/io/flock.md) | `(resource $stream, int $operation, bool $would_block = null): bool` | `bool` | ✓ | ✓ |
@@ -350,11 +352,11 @@ sidebar:
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` | ✓ | ✓ |
 | [`var_dump()`](./builtins/misc/var_dump.md) | `(mixed $value, ...$values): void` | `void` | ✓ | ✓ |
 | [`buffer_new()`](./builtins/pointer/buffer_new.md) | `(int $length): mixed` | `mixed` | ✓ | ✓ |
-| [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): mixed` | `mixed` | ✓ | ✓ |
+| [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): pointer` | `pointer` | ✓ | ✓ |
 | [`ptr_get()`](./builtins/pointer/ptr_get.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_is_null()`](./builtins/pointer/ptr_is_null.md) | `(pointer $pointer): bool` | `bool` | ✓ | ✓ |
-| [`ptr_null()`](./builtins/pointer/ptr_null.md) | `(): mixed` | `mixed` | ✓ | ✓ |
-| [`ptr_offset()`](./builtins/pointer/ptr_offset.md) | `(pointer $pointer, int $offset): mixed` | `mixed` | ✓ | ✓ |
+| [`ptr_null()`](./builtins/pointer/ptr_null.md) | `(): pointer` | `pointer` | ✓ | ✓ |
+| [`ptr_offset()`](./builtins/pointer/ptr_offset.md) | `(pointer $pointer, int $offset): pointer` | `pointer` | ✓ | ✓ |
 | [`ptr_read16()`](./builtins/pointer/ptr_read16.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_read32()`](./builtins/pointer/ptr_read32.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_read8()`](./builtins/pointer/ptr_read8.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
@@ -431,6 +433,16 @@ sidebar:
 | [`html_entity_decode()`](./builtins/string/html_entity_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`htmlentities()`](./builtins/string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
 | [`htmlspecialchars()`](./builtins/string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
+| [`iconv()`](./builtins/string/iconv.md) | `(string $from_encoding, string $to_encoding, string $string): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_get_encoding()`](./builtins/string/iconv_get_encoding.md) | `(string $type = 'all'): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_mime_decode()`](./builtins/string/iconv_mime_decode.md) | `(string $string, int $mode = 0, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_mime_decode_headers()`](./builtins/string/iconv_mime_decode_headers.md) | `(string $headers, int $mode = 0, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_mime_encode()`](./builtins/string/iconv_mime_encode.md) | `(string $field_name, string $field_value, mixed $options = []): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_set_encoding()`](./builtins/string/iconv_set_encoding.md) | `(string $type, string $encoding): bool` | `bool` | ✓ | ✓ |
+| [`iconv_strlen()`](./builtins/string/iconv_strlen.md) | `(string $string, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_strpos()`](./builtins/string/iconv_strpos.md) | `(string $haystack, string $needle, int $offset = 0, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_strrpos()`](./builtins/string/iconv_strrpos.md) | `(string $haystack, string $needle, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_substr()`](./builtins/string/iconv_substr.md) | `(string $string, int $offset, int $length = null, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
 | [`implode()`](./builtins/string/implode.md) | `(string $separator, array $array = null): string` | `string` | ✓ | ✓ |
 | [`inet_ntop()`](./builtins/string/inet_ntop.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`inet_pton()`](./builtins/string/inet_pton.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
@@ -476,6 +488,7 @@ sidebar:
 | [`strlen()`](./builtins/string/strlen.md) | `(string $string): int` | `int` | ✓ | ✓ |
 | [`strncasecmp()`](./builtins/string/strncasecmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | — |
 | [`strncmp()`](./builtins/string/strncmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | — |
+| [`strpbrk()`](./builtins/string/strpbrk.md) | `(string $string, string $characters): mixed` | `mixed` | ✓ | ✓ |
 | [`strpos()`](./builtins/string/strpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strrchr()`](./builtins/string/strrchr.md) | `(string $haystack, string $needle): mixed` | `mixed` | ✓ | ✓ |
 | [`strrev()`](./builtins/string/strrev.md) | `(string $string): string` | `string` | ✓ | ✓ |

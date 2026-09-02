@@ -9,6 +9,8 @@
 
 use super::*;
 
+use crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_array_values;
+
 /// Stack cleanup slots for split builtin string coercions that allocate owned temporaries.
 pub(super) struct SplitStringTempCleanups {
     delimiter_offset: Option<usize>,
@@ -454,11 +456,28 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         _ => {}
     }
     let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
+    let hash_copy = implode_hash_value_type(ctx, inst, array_index)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_implode_aarch64(ctx, inst, array_index)?,
         Arch::X86_64 => lower_implode_x86_64(ctx, inst, array_index)?,
     }
+    let Some(value_ty) = hash_copy else {
+        abi::emit_call_label(ctx.emitter, runtime_label);
+        return store_if_result(ctx, inst);
+    };
+    // The hash operand was copied into a fresh indexed array the caller owns. It has to
+    // outlive the join and then be released, and the join answers in the STRING result
+    // register PAIR — so the answer is stacked while the copy is released, rather than the
+    // copy being released first, which would free the payload the join just read.
+    let array_reg = implode_array_argument_reg(ctx);
+    abi::emit_push_reg(ctx.emitter, array_reg);
     abi::emit_call_label(ctx.emitter, runtime_label);
+    abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(value_ty)));
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     store_if_result(ctx, inst)
 }
 
@@ -697,18 +716,14 @@ fn lower_implode_assoc(
     store_if_result(ctx, inst)
 }
 
-/// Returns the runtime join helper matching one materialized values-array element layout.
-fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
-    match elem_ty.codegen_repr() {
-        PhpType::Bool => Ok("__rt_implode_bool"),
-        PhpType::Int => Ok("__rt_implode_int"),
-        PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => Ok("__rt_implode"),
-        other => Err(CodegenIrError::unsupported(format!(
-            "implode array element PHP type {:?}",
-            other
-        ))),
+/// The register the implode ABI leaves the array argument in, per target.
+fn implode_array_argument_reg(ctx: &FunctionContext<'_>) -> &'static str {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdx",
     }
 }
+
 /// Materializes delimiter/payload string pairs plus the optional `$limit` for `explode()`.
 pub(super) fn load_split_pair_args(
     ctx: &mut FunctionContext<'_>,
@@ -943,29 +958,52 @@ pub(super) fn implode_runtime_label(
 ) -> Result<&'static str> {
     let array = expect_operand(inst, array_index)?;
     match ctx.value_php_type(array)? {
-        PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
-            // PHP stringifies bool elements as "1"/"" — NOT as the "1"/"0" that
-            // `__rt_implode_int`'s `__rt_itoa` pass would produce — so bool arrays get their
-            // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
-            PhpType::Bool => Ok("__rt_implode_bool"),
-            PhpType::Int => Ok("__rt_implode_int"),
-            // An empty array literal carries an uninhabited element type (`Never`, or
-            // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
-            // dereference an element, so the generic string helper is the safe choice and
-            // keeps `implode("", [])` / `join([])` from being rejected at lowering time.
-            PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => {
-                Ok("__rt_implode")
-            }
-            other => Err(CodegenIrError::unsupported(format!(
-                "implode array element PHP type {:?}",
-                other
-            ))),
-        },
+        PhpType::Array(elem_ty) => implode_element_runtime_label(&elem_ty),
+        // PHP joins an associative array's VALUES and ignores its keys, so the renderer is
+        // chosen the same way; the values are copied into an indexed array first.
+        PhpType::AssocArray { value, .. } => implode_element_runtime_label(&value),
         PhpType::Mixed | PhpType::Union(_) => Ok("__rt_implode"),
         other => Err(CodegenIrError::unsupported(format!(
             "implode array PHP type {:?}",
             other
         ))),
+    }
+}
+
+/// Picks the `implode()` renderer for one element type.
+fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
+    match elem_ty.codegen_repr() {
+        // PHP stringifies bool elements as "1"/"" — NOT as the "1"/"0" that
+        // `__rt_implode_int`'s `__rt_itoa` pass would produce — so bool arrays get their
+        // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
+        PhpType::Bool => Ok("__rt_implode_bool"),
+        PhpType::Int => Ok("__rt_implode_int"),
+        // An empty array literal carries an uninhabited element type (`Never`, or
+        // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
+        // dereference an element, so the generic string helper is the safe choice and
+        // keeps `implode("", [])` / `join([])` from being rejected at lowering time.
+        PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => Ok("__rt_implode"),
+        other => Err(CodegenIrError::unsupported(format!(
+            "implode array element PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Returns the associative-array VALUE type when `implode()` must copy its values first.
+///
+/// The renderers walk a dense indexed payload, so a hash operand is converted through the
+/// same extraction `array_values()` uses. That copy is a fresh owned array, which is why the
+/// caller has to release it once the join has read it.
+fn implode_hash_value_type(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    array_index: usize,
+) -> Result<Option<PhpType>> {
+    let array = expect_operand(inst, array_index)?;
+    match ctx.value_php_type(array)? {
+        PhpType::AssocArray { value, .. } => Ok(Some(value.codegen_repr())),
+        _ => Ok(None),
     }
 }
 
@@ -1017,6 +1055,13 @@ pub(super) fn load_implode_array_aarch64(
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed array payload to implode()
             Ok(())
         }
+        // A hash has no dense payload for the renderers to walk, so its values are copied
+        // into a fresh indexed array first — the same extraction `array_values()` uses.
+        // `lower_implode` releases that copy once the join has read it.
+        PhpType::AssocArray { value, .. } => {
+            ctx.load_value_to_reg(array, "x0")?;
+            emit_loaded_assoc_array_values(ctx, &value.codegen_repr())
+        }
         _ => {
             ctx.load_value_to_reg(array, "x0")?;
             Ok(())
@@ -1035,6 +1080,11 @@ pub(super) fn load_implode_array_x86_64(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed array payload to implode()
             Ok(())
+        }
+        // See the AArch64 loader: a hash operand is copied into an indexed array first.
+        PhpType::AssocArray { value, .. } => {
+            ctx.load_value_to_reg(array, "rax")?;
+            emit_loaded_assoc_array_values(ctx, &value.codegen_repr())
         }
         _ => {
             ctx.load_value_to_reg(array, "rax")?;

@@ -9,6 +9,7 @@
 //! - Method bodies are synthetic PHP-like AST, so normal checker and EIR lowering own behavior.
 //! - Archive writes, deletion, and supported compression controls reuse existing
 //!   runtime `phar://` paths or focused internal bridge helpers.
+//! - Persisted metadata disables class hydration while retaining scalar and array values.
 
 use std::collections::HashMap;
 
@@ -371,7 +372,7 @@ fn phar_construct_body() -> Vec<crate::parser::ast::Stmt> {
                 property_assign_stmt(
                     this_expr(),
                     "metadata",
-                    function_call("unserialize", vec![var_expr("loadedMeta")]),
+                    persisted_metadata_unserialize_expr(var_expr("loadedMeta")),
                 ),
                 property_assign_stmt(this_expr(), "hasMetadata", bool_expr(true)),
             ],
@@ -435,6 +436,23 @@ fn phar_file_info_read_metadata_expr() -> Expr {
     )
 }
 
+/// Builds a persisted-metadata unserialize call that never hydrates application classes.
+///
+/// Scalars and arrays retain their ordinary PHP wire semantics, while serialized
+/// objects become `__PHP_Incomplete_Class` values and cannot run wakeup hooks.
+fn persisted_metadata_unserialize_expr(serialized: Expr) -> Expr {
+    function_call(
+        "unserialize",
+        vec![
+            serialized,
+            expr(ExprKind::ArrayLiteralAssoc(vec![(
+                string_expr("allowed_classes"),
+                bool_expr(false),
+            )])),
+        ],
+    )
+}
+
 /// Builds `PharFileInfo::setMetadata()` as a write-through to the entry's persisted
 /// per-file metadata (no object-local copy; reads go straight back to the archive).
 fn phar_file_info_set_metadata_body() -> Vec<crate::parser::ast::Stmt> {
@@ -457,7 +475,7 @@ fn phar_file_info_get_metadata_body() -> Vec<crate::parser::ast::Stmt> {
             vec![return_stmt(null_expr())],
             None,
         ),
-        return_stmt(function_call("unserialize", vec![var_expr("rawMeta")])),
+        return_stmt(persisted_metadata_unserialize_expr(var_expr("rawMeta"))),
     ]
 }
 
@@ -510,10 +528,22 @@ fn phar_set_zip_password_body() -> Vec<crate::parser::ast::Stmt> {
     ))]
 }
 
-/// Builds `getSignature()` returning `['hash' => <uppercase hex>, 'hash_type' => <name>]`
-/// read from the archive's signature trailer.
+/// Builds `getSignature()` from an authenticated archive signature, returning
+/// `false` when the bridge cannot verify or read both signature fields.
 fn phar_get_signature_body() -> Vec<crate::parser::ast::Stmt> {
     vec![
+        assign_stmt(
+            "sigType",
+            function_call(
+                "__elephc_phar_get_signature_type",
+                vec![property_access(this_expr(), "path")],
+            ),
+        ),
+        if_stmt(
+            binary_expr(var_expr("sigType"), BinOp::StrictEq, string_expr("")),
+            vec![return_stmt(bool_expr(false))],
+            None,
+        ),
         assign_stmt(
             "sigHash",
             function_call(
@@ -521,12 +551,10 @@ fn phar_get_signature_body() -> Vec<crate::parser::ast::Stmt> {
                 vec![property_access(this_expr(), "path")],
             ),
         ),
-        assign_stmt(
-            "sigType",
-            function_call(
-                "__elephc_phar_get_signature_type",
-                vec![property_access(this_expr(), "path")],
-            ),
+        if_stmt(
+            binary_expr(var_expr("sigHash"), BinOp::StrictEq, string_expr("")),
+            vec![return_stmt(bool_expr(false))],
+            None,
         ),
         return_stmt(expr(ExprKind::ArrayLiteralAssoc(vec![
             (string_expr("hash"), var_expr("sigHash")),

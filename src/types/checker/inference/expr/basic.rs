@@ -413,18 +413,29 @@ impl Checker {
                 }
             }
             ExprKind::Cast { target, expr } => {
-                let source_type = self.infer_type(expr, env)?;
+                let source_ty = self.infer_type(expr, env)?;
                 use crate::parser::ast::CastType;
                 Ok(match target {
                     CastType::Int => PhpType::Int,
                     CastType::Float => PhpType::Float,
                     CastType::String => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
-                    // A PHP array cast can produce an empty array, an indexed array containing
-                    // any scalar/object value, or preserve an existing hash. The EIR runtime
-                    // therefore uses its kind-dispatched `array<mixed>` representation.
+                    CastType::Array
+                        if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Str),
+                        value: Box::new(PhpType::Mixed),
+                    },
+                    CastType::Array
+                        if matches!(
+                            source_ty.codegen_repr(),
+                            PhpType::Mixed | PhpType::Union(_)
+                        ) => PhpType::Mixed,
+                    // A PHP array cast can otherwise produce an empty array, an indexed array
+                    // containing any scalar/object value, or preserve an existing hash. The EIR
+                    // runtime therefore uses its kind-dispatched `array<mixed>` representation.
                     CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
-                    CastType::Object if matches!(&source_type, PhpType::Object(_)) => source_type,
+                    CastType::Object if matches!(&source_ty, PhpType::Object(_)) => source_ty,
                     CastType::Object => PhpType::Object("stdClass".to_string()),
                 })
             }

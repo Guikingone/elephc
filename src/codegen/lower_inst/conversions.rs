@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction, IrType, ValueId};
+use crate::ir::{Immediate, Instruction, IrHeapKind, IrType, ValueId};
 use crate::names::{label_fragment, method_symbol};
 use crate::types::PhpType;
 
@@ -61,14 +61,36 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         IrType::I64 => lower_cast_to_int(ctx, inst),
         IrType::F64 => lower_cast_to_float(ctx, inst),
         IrType::Str => lower_cast_to_string(ctx, inst),
-        IrType::Heap(crate::ir::IrHeapKind::Array) => lower_cast_to_array(ctx, inst),
-        IrType::Heap(crate::ir::IrHeapKind::Hash) => lower_object_to_foreach_array(ctx, inst),
-        IrType::Heap(crate::ir::IrHeapKind::Object) => lower_cast_to_object(ctx, inst),
+        IrType::Heap(IrHeapKind::Array) => lower_cast_to_array(ctx, inst),
+        IrType::Heap(IrHeapKind::Hash) => lower_hash_cast(ctx, inst),
+        IrType::Heap(IrHeapKind::Object) => lower_cast_to_object(ctx, inst),
+        IrType::Heap(IrHeapKind::Mixed) if inst.result_php_type == PhpType::Mixed => {
+            lower_mixed_array_cast(ctx, inst)
+        }
         target => Err(CodegenIrError::unsupported(format!(
             "cast to EIR type {:?}",
             target
         ))),
     }
+}
+
+/// Routes a hash-producing cast to the projection its EIR producer asked for.
+///
+/// Two unrelated lowerings emit `Cast` with a `Heap(Hash)` target and an object operand, and
+/// they are NOT the same projection. `(array) $obj` mangles private and protected property
+/// names (`\0Class\0prop`, `\0*\0prop`); an in-scope `foreach ($this as $k => $v)` exposes the
+/// very same properties with BARE names. `ir_lower` keeps them apart through the declared
+/// result key type: the explicit cast declares `AssocArray { key: Str, .. }`
+/// (`expr::cast_php_type`), the `foreach` conversion `AssocArray { key: Mixed, .. }`
+/// (`stmt::typed_foreach`).
+fn lower_hash_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if matches!(
+        &inst.result_php_type,
+        PhpType::AssocArray { key, .. } if key.codegen_repr() == PhpType::Mixed
+    ) {
+        return lower_object_to_foreach_array(ctx, inst);
+    }
+    super::builtins::types::lower_object_array_cast(ctx, inst)
 }
 
 /// Converts a concrete object to a property hash with bare names for in-scope `foreach`.
@@ -185,6 +207,14 @@ fn lower_cast_to_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
             other
         ))),
     }
+}
+
+/// Lowers a runtime-typed PHP array cast through the tag-dispatch helper.
+fn lower_mixed_array_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_array");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers an explicit cast to PHP int for concrete scalar operands.
@@ -365,6 +395,11 @@ pub(in crate::codegen) enum MixedStringContextMode {
 }
 
 /// Handles PHP string contexts for boxed Mixed values with an object-aware branch.
+///
+/// The dispatch below carries one arm per class publishing `__toString`, so a program
+/// with several string contexts used to emit the same ladder once per site. When the
+/// module shares it, the site keeps only the load and calls the shared helper; the
+/// helper's own body takes the inline path, which is what terminates the recursion.
 fn emit_mixed_string_context(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -379,6 +414,9 @@ fn emit_mixed_string_context(
 }
 
 /// Emits the object-aware string dispatch for a boxed Mixed already in the result register.
+///
+/// Split out so the shared helper can emit the SAME arms rather than a reimplementation of
+/// them: what moves is where the ladder lives, not what it does.
 pub(in crate::codegen) fn emit_mixed_string_dispatch_from_result(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,

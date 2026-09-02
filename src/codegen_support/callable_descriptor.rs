@@ -639,10 +639,7 @@ mod tests {
                 "call",
             ),
         );
-        let asm = data.emit(Target {
-            platform: Platform::MacOS,
-            arch: Arch::AArch64,
-        });
+        let asm = data.emit(Target::new(Platform::MacOS, Arch::AArch64));
 
         assert!(asm.contains(&format!(".globl {}\n{}:\n", descriptor, descriptor)));
         assert!(asm.contains("    .quad _call_entry\n"));
@@ -683,10 +680,7 @@ mod tests {
             CallableDescriptorInvocation::named(CallableDescriptorShape::Function, "demo"),
             Some("_call_invoker"),
         );
-        let asm = data.emit(Target {
-            platform: Platform::MacOS,
-            arch: Arch::AArch64,
-        });
+        let asm = data.emit(Target::new(Platform::MacOS, Arch::AArch64));
 
         assert!(asm.contains(&format!(".globl {}\n{}:\n", descriptor, descriptor)));
         assert!(asm.contains("    .quad _call_entry\n"));

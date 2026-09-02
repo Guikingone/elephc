@@ -9,20 +9,16 @@
 
 use super::*;
 
-/// Parses a POSIX tar archive and returns a regular-file entry.
-pub(super) fn parse_tar_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
-    parse_tar_archive(data)?
-        .entries
-        .into_iter()
-        .find(|candidate| candidate.name == entry)
-        .map(|candidate| candidate.payload)
-}
-
 /// Parses a tar-based phar into regular entries plus its global metadata and stub.
 ///
 /// The reserved `.phar/stub.php` and `.phar/.metadata.bin` files become the stub and
-/// metadata; any other `.phar/*` control file is hidden from the entry listing.
-pub(super) fn parse_tar_archive(data: &[u8]) -> Option<Archive> {
+/// metadata; any other `.phar/*` control file is hidden from the entry listing. OpenSSL
+/// signatures are authenticated with `public_key` before any entry is exposed.
+pub(super) fn parse_tar_archive_with_public_key(
+    data: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Archive> {
+    verify_tar_phar_signature(data, public_key)?;
     let mut p = 0usize;
     let mut entries = Vec::new();
     let mut metadata = Vec::new();
@@ -44,6 +40,9 @@ pub(super) fn parse_tar_archive(data: &[u8]) -> Option<Archive> {
         }
         first_header = false;
         let size = parse_tar_octal(&header[124..136])?;
+        if size > MAX_PHAR_ENTRY_DECOMPRESSED_BYTES {
+            return None;
+        }
         let payload_start = p.checked_add(512)?;
         let payload_end = payload_start.checked_add(size)?;
         let payload = data.get(payload_start..payload_end)?;
@@ -78,6 +77,46 @@ pub(super) fn parse_tar_archive(data: &[u8]) -> Option<Archive> {
         metadata,
         stub,
     })
+}
+
+/// Authenticates and scans a tar PHAR while copying only `entry`.
+///
+/// The complete header chain remains validated so malformed trailing records are
+/// rejected, while unrelated payload bodies stay borrowed from the archive buffer.
+pub(super) fn parse_tar_entry_with_public_key(
+    data: &[u8],
+    entry: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Vec<u8>> {
+    verify_tar_phar_signature(data, public_key)?;
+    let mut p = 0usize;
+    let mut first_header = true;
+    let mut selected: Option<&[u8]> = None;
+    while p.checked_add(512)? <= data.len() {
+        let header = &data[p..p + 512];
+        if header.iter().all(|&byte| byte == 0) {
+            break;
+        }
+        if first_header && header.get(257..262) != Some(b"ustar") {
+            return None;
+        }
+        first_header = false;
+        let size = parse_tar_octal(&header[124..136])?;
+        if size > MAX_PHAR_ENTRY_DECOMPRESSED_BYTES {
+            return None;
+        }
+        let payload_start = p.checked_add(512)?;
+        let payload = data.get(payload_start..payload_start.checked_add(size)?)?;
+        let typeflag = header[156];
+        if selected.is_none() && (typeflag == 0 || typeflag == b'0') {
+            let name = tar_entry_name(header)?;
+            if name == entry && !is_phar_control_entry(&name) {
+                selected = Some(payload);
+            }
+        }
+        p = payload_start.checked_add(round_up_to_512(size)?)?;
+    }
+    selected.map(<[u8]>::to_vec)
 }
 
 /// If `name` is a `.phar/.metadata/<path>/.metadata.bin` side entry, returns the

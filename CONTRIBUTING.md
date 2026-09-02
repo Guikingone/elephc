@@ -100,7 +100,7 @@ following namespaces by hand:
 |---|---|---|
 | `type:*` | The intent of the change. Exactly one is assigned from the conventional PR title, falling back to the branch prefix. | `type:feature`, `type:fix`, `type:docs`, `type:refactor`, `type:chore`, `type:test`, `type:triage` |
 | `area:*` | The primary compiler or repository components affected by the changed paths. Up to three are assigned. | `area:lexer`, `area:parser`, `area:resolver`, `area:types`, `area:optimizer`, `area:eir`, `area:codegen`, `area:runtime`, `area:builtins`, `area:web`, `area:magician`, `area:platform`, `area:tooling-ci`, `area:docs`, `area:triage` |
-| `target:*` | A target explicitly affected by the title, branch, or changed paths. Target-neutral changes receive no target label. | `target:linux-x86_64`, `target:linux-aarch64`, `target:macos-aarch64`, `target:windows-x86_64`, `target:wasm32-wasi` |
+| `target:*` | A target explicitly affected by the title, branch, or changed paths. Target-neutral changes receive no target label. | `target:linux-x86_64`, `target:linux-aarch64`, `target:macos-aarch64`, `target:ios-arm64`, `target:ios-sim-arm64`, `target:windows-x86_64`, `target:wasm32-wasi` |
 | `size:*` | Review size derived from the number of changed files and total added plus deleted lines. Exactly one is assigned. | `size:xs`, `size:s`, `size:m`, `size:l`, `size:xl` |
 | `scope:*` | Additional review attention for unusually broad changes. | `scope:multi-area` |
 
@@ -427,8 +427,10 @@ The registry single-sources the semantic compiler contract. These implementation
 user-facing surfaces still need updates when relevant:
 
 - **The typed backend target** and any runtime routine it needs. Every target must
-  validate the operand/result contract and support macOS ARM64, Linux ARM64, and Linux
-  x86_64.
+  validate the operand/result contract and support macOS ARM64, iOS device ARM64,
+  iOS Simulator ARM64, Linux ARM64, and Linux x86_64. Use
+  `BuiltinTargetSupport::HostOnly` only for a builtin that is explicitly refused on
+  iOS with a target-specific diagnostic, such as the process-spawning family.
 - **The descriptor itself** when effects, ownership, requirements, argument lowering,
   or runtime-callable availability differ from the selected target's defaults. Never
   mark a call pure if it can read/write globals, files, the environment, heap state,
@@ -547,8 +549,9 @@ pass pointers + lengths for strings/buffers, return primitive status values. Nam
 exports `elephc_<name>_*` so they are easy to find and namespace-clean.
 
 Every supported target must build and link the crate: `macos-aarch64`,
-`linux-aarch64`, `linux-x86_64`. A bridge that only works on one target is not
-acceptable (see the supported-target policy in `CLAUDE.md`).
+`ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, and `linux-x86_64`. The iOS
+artifacts are libraries cross-compiled from macOS. A bridge that only works on
+one target is not acceptable (see the supported-target policy in `CLAUDE.md`).
 
 ### 3. Register the bridge in `BRIDGES` (`src/linker.rs`)
 

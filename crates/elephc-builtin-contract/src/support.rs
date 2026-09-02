@@ -197,7 +197,6 @@ fn is_eval_only_reflection(id: BuiltinId) -> bool {
         "get_called_class",
         "get_class_methods",
         "get_class_vars",
-        "get_object_vars",
     ]
     .into_iter()
     .any(|name| id == BuiltinId::from_canonical_name(name))
@@ -287,12 +286,15 @@ mod tests {
             }
         }
 
-        assert_eq!(eval_registry, 478);
+        // Recomputed for the merged catalog: main's BCMath and iconv contracts join this
+        // branch's promotions, so every one of these six is a merge result, not either side's
+        // number.
+        assert_eq!(eval_registry, 489);
         assert_eq!(eval_internal, 39);
         assert_eq!(eval_pending, 40);
-        assert_eq!(aot_registry, 543);
+        assert_eq!(aot_registry, 555);
         assert_eq!(aot_external, 10);
-        assert_eq!(aot_unsupported, 4);
+        assert_eq!(aot_unsupported, 3);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -304,7 +306,7 @@ mod tests {
         );
         assert_eq!(
             aot_support(lookup("get_object_vars").expect("get_object_vars contract")),
-            BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection)
+            BackendSupport::Implemented(BackendImplementation::Registry)
         );
         assert_eq!(
             eval_support(lookup("array_all").expect("array_all contract")),
@@ -338,7 +340,7 @@ mod tests {
 
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 457);
+        assert_eq!(interpreter_adapter, 468);
         assert_eq!(unsupported, 79);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),

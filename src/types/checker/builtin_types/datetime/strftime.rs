@@ -18,6 +18,7 @@ use super::*;
 /// locale-aware output would require a separate locale system, which is out of scope here);
 /// week-number `%U`/`%V`/`%W` are computed to match PHP; space-padded `%e`/`%k`/`%l` are space-padded
 /// from the non-padded `date()` specifier.
+#[cfg(test)]
 pub(super) const STRFTIME_SRC: &str = r#"<?php
 $out = "";
 $flen = strlen($format);
@@ -140,6 +141,7 @@ return date($out, $timestamp);
 /// 0 when absent. The dot must follow `:SS` so a `DD.MM.YYYY` separator is never
 /// mistaken for a fraction. `substr` (not `$s[$i]`) reads single chars to avoid a
 /// computed string-index miscompile.
+#[cfg(test)]
 pub(super) const EXTRACT_MICROS_SRC: &str = r#"<?php
 $__dot = strrpos($s, ".");
 if ($__dot !== false && $__dot >= 3 && substr($s, $__dot - 3, 1) === ":") {
@@ -164,6 +166,7 @@ return 0;
 /// returns a freshly allocated string (never the borrowed argument) so the constructor's
 /// `$datetime = __elephc_strip_micros($datetime)` self-reassignment cannot free-then-reuse
 /// an owned source string.
+#[cfg(test)]
 pub(super) const STRIP_MICROS_SRC: &str = r#"<?php
 $__dot = strrpos($s, ".");
 if ($__dot !== false && $__dot >= 3 && substr($s, $__dot - 3, 1) === ":") {
@@ -186,9 +189,7 @@ return $s . "";
 
 /// Builds the internal static `DateTime::__elephc_extract_micros(string $s): int`.
 pub(super) fn datetime_extract_micros() -> ClassMethod {
-    let tokens =
-        crate::lexer::tokenize(EXTRACT_MICROS_SRC).expect("extract_micros body must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("extract_micros body must parse");
+    let body = super::bodies::extract_micros();
     ClassMethod {
         name: "__elephc_extract_micros".to_string(),
         visibility: Visibility::Public,
@@ -212,6 +213,7 @@ pub(super) fn datetime_extract_micros() -> ClassMethod {
 /// PHP source for `DateTime::__elephc_extract_modify_micros($m)` — sums the
 /// microsecond deltas in a modify() string (each `<±N> microsecond[s]|usec[s]`
 /// clause), returning the total (which may exceed one second or be negative).
+#[cfg(test)]
 pub(super) const EXTRACT_MODIFY_MICROS_SRC: &str = r#"<?php
 $__toks = explode(" ", $m);
 $__n = count($__toks);
@@ -230,6 +232,7 @@ return $__sum;
 /// PHP source for `DateTime::__elephc_strip_modify_micros($m)` — returns the
 /// modify() string with every `<±N> microsecond[s]|usec[s]` clause removed, so the
 /// remainder can be parsed by strtotime().
+#[cfg(test)]
 pub(super) const STRIP_MODIFY_MICROS_SRC: &str = r#"<?php
 $__toks = explode(" ", $m);
 $__n = count($__toks);
@@ -256,9 +259,7 @@ return $__out;
 
 /// Builds the internal static `DateTime::__elephc_extract_modify_micros(string $m): int`.
 pub(super) fn datetime_extract_modify_micros() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(EXTRACT_MODIFY_MICROS_SRC)
-        .expect("extract_modify_micros body must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("extract_modify_micros body must parse");
+    let body = super::bodies::extract_modify_micros();
     ClassMethod {
         name: "__elephc_extract_modify_micros".to_string(),
         visibility: Visibility::Public,
@@ -281,9 +282,7 @@ pub(super) fn datetime_extract_modify_micros() -> ClassMethod {
 
 /// Builds the internal static `DateTime::__elephc_strip_modify_micros(string $m): string`.
 pub(super) fn datetime_strip_modify_micros() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(STRIP_MODIFY_MICROS_SRC)
-        .expect("strip_modify_micros body must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("strip_modify_micros body must parse");
+    let body = super::bodies::strip_modify_micros();
     ClassMethod {
         name: "__elephc_strip_modify_micros".to_string(),
         visibility: Visibility::Public,
@@ -306,9 +305,7 @@ pub(super) fn datetime_strip_modify_micros() -> ClassMethod {
 
 /// Builds the internal static `DateTime::__elephc_strip_micros(string $s): string`.
 pub(super) fn datetime_strip_micros() -> ClassMethod {
-    let tokens =
-        crate::lexer::tokenize(STRIP_MICROS_SRC).expect("strip_micros body must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("strip_micros body must parse");
+    let body = super::bodies::strip_micros();
     ClassMethod {
         name: "__elephc_strip_micros".to_string(),
         visibility: Visibility::Public,
@@ -334,9 +331,7 @@ pub(super) fn datetime_strip_micros() -> ClassMethod {
 /// calls to it, injecting `time()` for the default timestamp and the local/UTC flag). Self-contained
 /// parsed source.
 pub(super) fn datetime_strftime() -> ClassMethod {
-    let tokens =
-        crate::lexer::tokenize(STRFTIME_SRC).expect("strftime body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("strftime body source must parse");
+    let body = super::bodies::strftime();
     ClassMethod {
         name: "__elephc_strftime".to_string(),
         visibility: Visibility::Public,

@@ -2,7 +2,7 @@
 title: "__elephc_ptr_is_null() — internals"
 description: "Compiler internals for __elephc_ptr_is_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 554
+  order: 565
 ---
 
 ## `__elephc_ptr_is_null()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/__elephc_ptr_is_null.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/__elephc_ptr_is_null.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L543) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -29,7 +29,7 @@ sidebar:
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
-- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_ptr_is_null(mixed $pointer): bool
+function __elephc_ptr_is_null(pointer $pointer): bool
 ```
 
 ## What the type checker enforces

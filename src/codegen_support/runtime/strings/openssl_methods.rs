@@ -52,9 +52,9 @@ fn emit_openssl_cipher_iv_length(emitter: &mut Emitter) {
                 0,
             );
             emitter.instruction("test r11, r11");                               // check whether the bridge entry was published
-            emitter.instruction("jz __rt_openssl_iv_length_missing_linux_x86_64");
+            emitter.instruction("jz __rt_openssl_iv_length_missing_linux_x86_64"); // a missing bridge behaves like an unknown cipher
             abi::emit_call_reg(emitter, "r11");
-            emitter.instruction("jmp __rt_openssl_iv_length_done_linux_x86_64");
+            emitter.instruction("jmp __rt_openssl_iv_length_done_linux_x86_64"); // retain the bridge result in rax
             emitter.label("__rt_openssl_iv_length_missing_linux_x86_64");
             emitter.instruction("mov rax, -1");                                 // stable unknown-cipher status
             emitter.label("__rt_openssl_iv_length_done_linux_x86_64");
@@ -86,24 +86,24 @@ fn emit_openssl_get_cipher_methods(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_openssl_methods_empty");                  // missing bridge produces an empty supported list
     abi::emit_call_reg(emitter, "x9");
     emitter.instruction("cmp x0, #0");                                          // negative values are stable bridge failures
-    emitter.instruction("b.lt __rt_openssl_methods_empty");
+    emitter.instruction("b.lt __rt_openssl_methods_empty");                     // failed bridge yields the empty list
     emitter.instruction("str x0, [sp, #520]");                                  // retain method count across array allocation
     emitter.instruction("mov x1, #16");                                         // string array element size = ptr + len
     abi::emit_call_label(emitter, "__rt_array_new");
     emitter.instruction("str x0, [sp, #528]");                                  // save the result array across pushes
-    emitter.instruction("add x9, sp, #0");
+    emitter.instruction("add x9, sp, #0");                                      // packed-name buffer start
     emitter.instruction("str x9, [sp, #536]");                                  // initialize packed-name cursor
-    emitter.instruction("b __rt_openssl_methods_loop");
+    emitter.instruction("b __rt_openssl_methods_loop");                         // begin decoding packed names
 
     emitter.label("__rt_openssl_methods_empty");
     emitter.instruction("mov x0, #0");                                          // create an empty string array on bridge failure
-    emitter.instruction("mov x1, #16");
+    emitter.instruction("mov x1, #16");                                         // string array element size = ptr + len
     abi::emit_call_label(emitter, "__rt_array_new");
-    emitter.instruction("b __rt_openssl_methods_done");
+    emitter.instruction("b __rt_openssl_methods_done");                         // return the empty array
 
     emitter.label("__rt_openssl_methods_loop");
     emitter.instruction("ldr x9, [sp, #512]");                                  // remaining packed bytes
-    emitter.instruction("cbz x9, __rt_openssl_methods_finish");
+    emitter.instruction("cbz x9, __rt_openssl_methods_finish");                 // all packed names consumed
     emitter.instruction("ldr x10, [sp, #536]");                                 // current name start
     emitter.instruction("mov x11, x10");                                        // scanning cursor
     emitter.label("__rt_openssl_methods_scan");
@@ -118,7 +118,7 @@ fn emit_openssl_get_cipher_methods(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x10");                                         // name pointer
     abi::emit_call_label(emitter, "__rt_array_push_str");
     emitter.instruction("str x0, [sp, #528]");                                  // retain possibly-grown result array
-    emitter.instruction("b __rt_openssl_methods_loop");
+    emitter.instruction("b __rt_openssl_methods_loop");                         // decode the next packed name
 
     emitter.label("__rt_openssl_methods_finish");
     emitter.instruction("ldr x0, [sp, #528]");                                  // return completed method array
@@ -147,38 +147,38 @@ fn emit_openssl_get_cipher_methods_x86_64(emitter: &mut Emitter) {
         0,
     );
     emitter.instruction("test r11, r11");                                       // check whether the method bridge was published
-    emitter.instruction("jz __rt_openssl_methods_empty_linux_x86_64");
+    emitter.instruction("jz __rt_openssl_methods_empty_linux_x86_64");          // missing bridge produces an empty supported list
     abi::emit_call_reg(emitter, "r11");
     emitter.instruction("test rax, rax");                                       // negative values are stable bridge failures
-    emitter.instruction("js __rt_openssl_methods_empty_linux_x86_64");
+    emitter.instruction("js __rt_openssl_methods_empty_linux_x86_64");          // failed bridge yields the empty list
     emitter.instruction("mov edi, eax");                                        // initial array capacity = method count
     emitter.instruction("mov esi, 16");                                         // string array element size = ptr + len
     abi::emit_call_label(emitter, "__rt_array_new");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save result array across pushes
-    emitter.instruction("lea r10, [rbp - 544]");
+    emitter.instruction("lea r10, [rbp - 544]");                                // packed-name buffer start
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // initialize packed-name cursor
-    emitter.instruction("jmp __rt_openssl_methods_loop_linux_x86_64");
+    emitter.instruction("jmp __rt_openssl_methods_loop_linux_x86_64");          // begin decoding packed names
 
     emitter.label("__rt_openssl_methods_empty_linux_x86_64");
     emitter.instruction("xor edi, edi");                                        // create an empty string array on bridge failure
-    emitter.instruction("mov esi, 16");
+    emitter.instruction("mov esi, 16");                                         // string array element size = ptr + len
     abi::emit_call_label(emitter, "__rt_array_new");
-    emitter.instruction("jmp __rt_openssl_methods_done_linux_x86_64");
+    emitter.instruction("jmp __rt_openssl_methods_done_linux_x86_64");          // return the empty array
 
     emitter.label("__rt_openssl_methods_loop_linux_x86_64");
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // remaining packed bytes
-    emitter.instruction("test r9, r9");
-    emitter.instruction("jz __rt_openssl_methods_finish_linux_x86_64");
+    emitter.instruction("test r9, r9");                                         // any packed bytes left?
+    emitter.instruction("jz __rt_openssl_methods_finish_linux_x86_64");         // all packed names consumed
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // current name start
     emitter.instruction("mov r11, r10");                                        // scanning cursor
     emitter.label("__rt_openssl_methods_scan_linux_x86_64");
     emitter.instruction("movzx eax, BYTE PTR [r11]");                           // read one packed-name byte
     emitter.instruction("add r11, 1");                                          // advance scanning cursor
     emitter.instruction("sub r9, 1");                                           // consume one packed byte
-    emitter.instruction("test eax, eax");
+    emitter.instruction("test eax, eax");                                       // is this the trailing NUL?
     emitter.instruction("jnz __rt_openssl_methods_scan_linux_x86_64");          // stop at the trailing NUL
     emitter.instruction("mov rdx, r11");                                        // compute byte count including NUL
-    emitter.instruction("sub rdx, r10");
+    emitter.instruction("sub rdx, r10");                                        // end minus start = byte count
     emitter.instruction("sub rdx, 1");                                          // PHP string length excludes NUL
     emitter.instruction("mov QWORD PTR [rbp - 32], r9");                        // save remaining packed byte count
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // advance cursor to next name
@@ -186,7 +186,7 @@ fn emit_openssl_get_cipher_methods_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, r10");                                        // name pointer
     abi::emit_call_label(emitter, "__rt_array_push_str");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // retain possibly-grown result array
-    emitter.instruction("jmp __rt_openssl_methods_loop_linux_x86_64");
+    emitter.instruction("jmp __rt_openssl_methods_loop_linux_x86_64");          // decode the next packed name
 
     emitter.label("__rt_openssl_methods_finish_linux_x86_64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return completed method array

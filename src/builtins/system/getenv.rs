@@ -7,6 +7,11 @@
 //! Key details:
 //! - Calls without a name return the process environment as an associative string map.
 //! - Named calls return `string|false`; dynamically nullable names therefore use `Mixed` storage.
+//! - The EIR result carries that boxed union too. It used to be overridden to plain
+//!   `Str` "for present and missing variables alike", which is where the two
+//!   answers were collapsed: an unset variable came back as `""`, so
+//!   `getenv($x) !== false` — the idiom for "is this set" — was true for every
+//!   name, silently.
 
 use crate::builtins::semantics::{
     runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,

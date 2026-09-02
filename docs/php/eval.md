@@ -118,6 +118,13 @@ ABI. AOT literals without writes skip scope materialization when they need no
 caller values or can receive read-only values as direct EIR parameters. Known
 writes use the same core scope cells from an internal EIR function.
 
+Because a scope cell is always boxed `Mixed`, a local read or written inside
+`eval()` may change type freely — `eval('$a = 1; $a = "ciao"; echo $a;')`
+compiles and runs the same in every mode. This is unrelated to
+[`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode), which
+only tightens the AOT checker's monomorphic-local rule for ordinary compiled
+locals outside `eval()`; it has no effect on eval'd code.
+
 Inside closures, `use ($x)` captures synchronize only the closure's captured
 copy. `use (&$x)` captures write through the shared source variable, so eval
 writes are visible to the outer scope after the closure runs.

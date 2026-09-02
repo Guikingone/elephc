@@ -471,7 +471,9 @@ fn emit_store_result_to_scratch(ctx: &mut FunctionContext<'_>, offset: usize) {
     let result = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("str {}, [sp, #{}]", result, offset)); // stage the resolved integer in scratch
+            ctx.emitter.instruction(                                            // stage the resolved integer in scratch
+                &format!("str {}, [sp, #{}]", result, offset)
+            );
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -490,7 +492,7 @@ fn emit_load_scratch_to_arg_reg(ctx: &mut FunctionContext<'_>, index: usize, off
 fn emit_load_scratch_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, offset: usize) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset)); // load the staged integer into the target register
+            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));// load the staged integer into the target register
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -724,6 +726,12 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         return Ok(());
     }
     let Some(status) = inst.operands.first().copied() else {
+        if ctx.shared.instrument.is_on() {
+            // Shutdown output handlers are PHP calls and must finish inside the
+            // still-open exact stack before the termination hook closes it.
+            abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+            crate::codegen::frame::emit_instr_terminate(ctx);
+        }
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
@@ -738,6 +746,13 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 }
 
 /// Lowers environment enumeration and named lookups through target-aware runtime helpers.
+///
+/// A NAMED lookup boxes its result as string-or-false, which is what makes the two answers
+/// distinguishable. Without that boxing the result was a plain string, so a variable that is
+/// NOT SET came back as `""` — indistinguishable from one set to the empty string, and
+/// `getenv($x) !== false`, which is the idiom for "is this set", was true for every name.
+/// `__rt_getenv` reports "not set" as a null string pointer and every set value as an owned
+/// heap copy, so `box_owned_string_or_false_result` is the boxing that matches its contract.
 pub(crate) fn lower_getenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -756,13 +771,16 @@ pub(crate) fn lower_getenv(
         }
         _ => {
             lower_named_getenv(ctx, inst)?;
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            super::io::box_owned_string_or_false_result(ctx, "getenv");
         }
     }
     store_if_result(ctx, inst)
 }
 
-/// Lowers a statically non-null environment name and leaves a borrowed string result.
+/// Lowers a statically non-null environment name and leaves `__rt_getenv`'s raw string result.
+///
+/// The pointer is null when the variable is not set and an owned heap copy otherwise, so every
+/// caller must box it through `io::box_owned_string_or_false_result` rather than as a string.
 fn lower_named_getenv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     super::strings::load_string_arg_to_regs(ctx, inst, 0, "getenv name", ptr_reg, len_reg)?;
@@ -795,7 +813,7 @@ fn lower_dynamic_getenv(ctx: &mut FunctionContext<'_>, name: ValueId) -> Result<
         len_reg,
     )?;
     abi::emit_call_label(ctx.emitter, "__rt_getenv");
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    super::io::box_owned_string_or_false_result(ctx, "getenv_dynamic");
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&enumerate);
     abi::emit_call_label(ctx.emitter, "__rt_getenv_all");
@@ -940,10 +958,12 @@ fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
 
 /// Emits a process-exit sequence using the already-loaded integer result register.
 fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
+    abi::emit_cdylib_exit_escape(ctx.emitter);
     match (ctx.emitter.target.platform, ctx.emitter.target.arch) {
         (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
             ctx.emitter.instruction("mov x19, x0");                             // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain still-active output buffers to stdout before terminating
+            crate::codegen::frame::emit_instr_terminate(ctx);
             ctx.emitter.instruction("mov x0, x19");                             // restore the exit code into the syscall argument register
             ctx.emitter.syscall(1);
         }
@@ -951,6 +971,7 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rbx, rax");                            // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("and rsp, -16");                            // realign the stack for the flush call (this path never returns)
             ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers to stdout before terminating
+            crate::codegen::frame::emit_instr_terminate(ctx);
             ctx.emitter.instruction("mov rdi, rbx");                            // move the computed exit code into the SysV first-argument register
             ctx.emitter.instruction("mov eax, 60");                             // Linux x86_64 syscall 60 = exit
             ctx.emitter.instruction("syscall");                                 // terminate the process through the Linux x86_64 syscall ABI

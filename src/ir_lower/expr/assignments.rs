@@ -159,6 +159,10 @@ pub(in crate::ir_lower) fn lower_conditional_non_local_null_coalesce_assignment(
     else {
         return None;
     };
+    // `??=` reads its target the way `??` does — the whole point of the operator is that the
+    // target is allowed to be absent — so this must go through the suppressing read rather than
+    // a plain one. `$a[$k] ??= 5` on an absent key warned `Undefined array key`, which reference
+    // PHP does not, and `$o->p ??= 5` on an uninitialized typed property would fatal.
     let current = lower_null_coalesce_value(ctx, current);
     let is_null = ctx.emit_value(
         Op::IsNull,
@@ -193,9 +197,26 @@ pub(in crate::ir_lower) fn lower_conditional_non_local_null_coalesce_assignment(
     });
 
     ctx.builder.position_at_end(assign_block);
+    // NO release of `current` here, deliberately. Upstream released it on this path, paired with
+    // its own one-shot `take_owned_temp` result storage: under that design the pre-branch read
+    // owned a reference this path discards, and dropping the release leaked a block per
+    // execution. This branch replaced that storage with an ordinary retaining local (see the
+    // comment above `temp_name`), and under THAT design the read is not an owned temporary —
+    // adding the release over-releases it. Measured, not reasoned: with the release in place
+    // `return $box->name ??= 'fallback';` on a `?Box` receiver returned eight poison bytes
+    // (`codegen::objects::property_access::mutations::test_null_coalesce_assignment_on_nullable_object_receiver`),
+    // and removing it makes that test pass with the `runtime_gc` coalesce heap tests still clean.
     store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
     let temp_value = Expr::new(ExprKind::Variable(temp_name.clone()), expr.span);
-    lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
+    // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
+    // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
+    // load — the merge's — per execution.
+    //
+    // Narrowing this to element writes only was tried and MEASURED not to matter: the poison
+    // bytes the nullable-receiver test saw came from the release above, not from this scope.
+    ctx.with_borrowed_write_operand(|ctx| {
+        lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
+    });
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(keep_block);

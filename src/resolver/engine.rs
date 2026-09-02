@@ -456,7 +456,7 @@ pub(super) fn resolve_stmts(
                     state,
                     function_variants,
                 )?;
-                result.push(Stmt::new(
+                result.push(Stmt::with_attributes(
                     StmtKind::FunctionDecl {
                         name: name.clone(),
                         params: params.clone(),
@@ -469,6 +469,7 @@ pub(super) fn resolve_stmts(
                         body,
                     },
                     stmt.span,
+                    stmt.attributes.clone(),
                 ));
             }
             StmtKind::ClassDecl {

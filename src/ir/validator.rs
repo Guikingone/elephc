@@ -311,14 +311,18 @@ fn validate_instruction_immediate(
         | EvalStaticMethodCall
         | EnumBackingStringToInt
         | EnumBackingMixedToInt
+        | PackedFieldMixedToInt
+        | ReturnBoundaryMixedToInt
         | PropInitialized
+        | StaticPropInitialized
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),
-        LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
+        LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
+        | ReleaseLocalRefCell
         | ReleaseLocalSlot | BindRefCellPtr
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
@@ -335,12 +339,19 @@ fn validate_instruction_immediate(
         EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
-        ICmp | FCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
+        ICmp | FCmp | PhpRelCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
             matches!(imm, Imm::CmpPredicate(_))
         }),
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
             matches!(imm, Imm::MixedNumericOp(_))
         }),
+        ICheckedNumericChainToInt => {
+            require_immediate(inst_id, inst, "checked numeric chain", |imm| {
+                matches!(imm, Imm::CheckedNumericChain(chain) if !chain.operations().is_empty()
+                    && chain.operations().iter().copied()
+                        .all(crate::ir_passes::checked_numeric_chain::is_checked_chain_operation))
+            })
+        }
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
@@ -438,6 +449,7 @@ fn validate_opcode_rules(
         | ICheckedMulToInt | ICheckedPow => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
+        ICheckedNumericChainToInt => check_checked_numeric_chain(function, inst_id, inst),
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
@@ -457,6 +469,7 @@ fn validate_opcode_rules(
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
         ICmp => check_binary(function, inst_id, inst, IrType::I64, "I64"),
         FCmp => check_binary(function, inst_id, inst, IrType::F64, "F64"),
+        PhpRelCmp => check_count(inst_id, inst, 2, "2"),
         IToF => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         IToStr => check_unary_any(
             function,
@@ -496,7 +509,8 @@ fn validate_opcode_rules(
         | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
         ThrowError => check_count(inst_id, inst, 0, "0"),
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
-        UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell
+        UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell
+        | ReleaseLocalRefCell
         | ReleaseLocalSlot => {
             check_count(inst_id, inst, 0, "0")
         }
@@ -639,6 +653,27 @@ fn validate_opcode_rules(
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         _ => Ok(()),
     }
+}
+
+/// Validates the operand/operation correspondence of one fused checked numeric chain.
+fn check_checked_numeric_chain(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    let Some(Immediate::CheckedNumericChain(chain)) = inst.immediate.as_ref() else {
+        return Ok(());
+    };
+    check_count(
+        inst_id,
+        inst,
+        chain.operations().len() + 1,
+        "one more than its operation count",
+    )?;
+    for index in 0..inst.operands.len() {
+        check_operand_type(function, inst_id, inst, index, IrType::I64, "I64")?;
+    }
+    Ok(())
 }
 
 /// Validates operand and result storage types for typed runtime calls.

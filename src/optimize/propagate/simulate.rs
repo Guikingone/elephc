@@ -306,9 +306,21 @@ pub(crate) fn merge_try_constant_env_paths(
     }
 
     if block_may_throw(try_body) {
+        // A catch runs from an arbitrary point INSIDE the try body, so it starts
+        // with every variable that body may write unknown — not with the values
+        // they held before the `try`. Handing it `incoming_env` folded them back
+        // to those, and the merge then carried the wrong constant out past the
+        // whole statement: with a `try` that always throws, the catch path is
+        // the ONLY path, so its env became the exit env unopposed.
+        //
+        // The same reasoning, and the same set, as the env the catch bodies are
+        // propagated in; this is the second place that had to be told.
+        let mut catch_env = incoming_env.clone();
+        crate::optimize::propagate::invalidation::block_invalidation(try_body)
+            .apply(&mut catch_env);
         for catch in catches {
             if matches!(block_terminal_effect(&catch.body), TerminalEffect::FallsThrough) {
-                fallthrough_paths.push(simulate_catch_constant_env(catch, incoming_env.clone()));
+                fallthrough_paths.push(simulate_catch_constant_env(catch, catch_env.clone()));
             }
         }
     }

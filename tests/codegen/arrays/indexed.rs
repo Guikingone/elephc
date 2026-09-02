@@ -31,6 +31,8 @@ echo $operands[0], $operands[1], $result;
 mod aggregates;
 #[path = "indexed/heterogeneous.rs"]
 mod heterogeneous;
+#[path = "indexed/key_sort_nested_mixed.rs"]
+mod key_sort_nested_mixed;
 #[path = "indexed/pad_bounds.rs"]
 mod pad_bounds;
 #[path = "indexed/search_merge_union.rs"]

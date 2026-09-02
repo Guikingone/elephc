@@ -144,6 +144,9 @@ fn dummy_check_result() -> CheckResult {
         string_incdec_locals: Default::default(),
         by_ref_local_storage_types: HashMap::new(),
         dynamic_ref_local_types: HashMap::new(),
+        local_bind_kill_sites: Default::default(),
+        local_retype_sites: Default::default(),
+        mixed_storage_store_sites: Default::default(),
     }
 }
 
@@ -497,6 +500,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::StaticPropertyArrayPush { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), value: int(1) }),
         stmt(StmtKind::StaticPropertyArrayAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), index: int(0), value: int(1) }),
         stmt(StmtKind::StaticPropertyElementRefAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), index: int(0), source: Expr::new(ExprKind::ArrayAccess { array: Box::new(Expr::new(ExprKind::StaticPropertyAccess { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string() }, sp())), index: Box::new(int(1)) }, sp()) }),
+        stmt(StmtKind::DynamicStaticPropertyWrite { receiver: StaticReceiver::Named(name("C")), property: Box::new(str_lit("sp")), index: None, append: false, value: int(1) }),
         stmt(StmtKind::PropertyArrayPush { object: Box::new(object.clone()), property: "p".to_string(), value: int(1) }),
         stmt(StmtKind::PropertyArrayAssign { object: Box::new(object), property: "p".to_string(), index: int(0), value: int(1) }),
         stmt(StmtKind::ExternFunctionDecl { name: "ef".to_string(), params: vec![ExternParam { name: "x".to_string(), c_type: CType::Int }], return_type: CType::Int, library: Some("c".to_string()) }),

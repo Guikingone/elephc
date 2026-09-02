@@ -210,6 +210,16 @@ fn prune_reachable_globals_array_alias_keeps_runtime_receiver_method() {
     assert!(has_method(&program, "B", "foo"));
 }
 
+/// Verifies a dynamic `$GLOBALS` key widens receiver dispatch for every variable name.
+#[test]
+fn prune_dynamic_globals_array_alias_widens_all_receiver_names() {
+    let (program, _) = prune(
+        "<?php class A { public function foo(): string { return 'A'; } } class B extends A { public function foo(): string { return 'B'; } } function later(string $name): void { $GLOBALS[$name] = new B(); } $receiver = new A(); later('receiver'); echo $receiver->foo();",
+    );
+    assert!(has_method(&program, "A", "foo"));
+    assert!(has_method(&program, "B", "foo"));
+}
+
 /// Verifies an internally constructed dynamic `$GLOBALS` key widens every variable name.
 #[test]
 fn scan_synthetic_dynamic_globals_array_alias_widens_all_receiver_names() {
@@ -292,6 +302,48 @@ fn scan_records_builtin_callback_parameters() {
             "builtin callback target {expected} must be recorded"
         );
     }
+}
+
+/// Verifies a positive `is_array()` guard suppresses impossible Iterator dispatch.
+#[test]
+fn scan_array_guard_avoids_iterator_protocol_wildcard() {
+    let usage = scan_program(&parse(
+        "<?php function copy_values(mixed $source): array { $copy = []; if (is_array($source)) { foreach ($source as $value) { $copy[] = $value; } } return $copy; } copy_values([]);",
+    ));
+    assert!(!usage
+        .wildcard_methods
+        .contains(&(php_symbol_key("rewind"), false)));
+}
+
+/// Verifies an unguarded opaque foreach receiver still widens Iterator dispatch.
+#[test]
+fn scan_opaque_foreach_keeps_iterator_protocol_wildcard() {
+    let usage = scan_program(&parse(
+        "<?php function copy_values(mixed $source): array { $copy = []; foreach ($source as $value) { $copy[] = $value; } return $copy; }",
+    ));
+    assert!(usage
+        .wildcard_methods
+        .contains(&(php_symbol_key("rewind"), false)));
+}
+
+/// Verifies a reachable function keeps classes referenced only by parameter attributes.
+#[test]
+fn prune_scans_function_parameter_attributes() {
+    let (program, _) = prune(
+        "<?php #[Attribute] class FunctionParamTag { public function __construct(public string $name = '') {} } function tagged(#[FunctionParamTag('value')] int $value): int { return $value; } echo tagged(1);",
+    );
+    assert!(has_class(&program, "FunctionParamTag"));
+    assert!(has_method(&program, "FunctionParamTag", "__construct"));
+}
+
+/// Verifies a reachable method keeps classes referenced only by parameter attributes.
+#[test]
+fn prune_scans_method_parameter_attributes() {
+    let (program, _) = prune(
+        "<?php #[Attribute] class MethodParamTag { public function __construct(public string $name = '') {} } class TaggedTarget { public function run(#[MethodParamTag('value')] int $value): int { return $value; } } echo (new TaggedTarget())->run(1);",
+    );
+    assert!(has_class(&program, "MethodParamTag"));
+    assert!(has_method(&program, "MethodParamTag", "__construct"));
 }
 
 /// Verifies a user function's typed callable parameter retains a literal free-function target.
@@ -498,6 +550,52 @@ fn scan_literal_class_exists_is_a_reference_not_a_hazard() {
     assert!(!usage.hazards.dynamic_class);
 }
 
+/// Verifies reordered named class-probe arguments are normalized instead of widening hazards.
+#[test]
+fn scan_normalizes_named_class_exists_arguments() {
+    let usage = scan_program(&parse(
+        "<?php echo class_exists(autoload: true, class: 'Visible') ? 'y' : 'n';",
+    ));
+    assert!(usage.classes.contains(&php_symbol_key("Visible")));
+    assert!(!usage.hazards.dynamic_class);
+}
+
+/// Verifies a literal `property_exists` class target retains exact class metadata.
+#[test]
+fn scan_literal_property_exists_class_is_a_reference_not_a_hazard() {
+    let usage = scan_program(&parse(
+        "<?php echo property_exists('Visible', 'property') ? 'y' : 'n';",
+    ));
+    assert!(usage.classes.contains(&php_symbol_key("Visible")));
+    assert!(!usage.hazards.dynamic_class);
+}
+
+/// Verifies named `method_exists` arguments are mapped by signature rather than source order.
+#[test]
+fn scan_normalizes_named_method_exists_arguments() {
+    let usage = scan_program(&parse(
+        "<?php echo method_exists(method: 'hidden', object_or_class: 'Visible') ? 'y' : 'n';",
+    ));
+    assert!(usage.classes.contains(&php_symbol_key("Visible")));
+    assert!(usage.methods.contains(&(
+        php_symbol_key("Visible"),
+        php_symbol_key("hidden"),
+        false,
+    )));
+    assert!(!usage.hazards.dynamic_class);
+    assert!(!usage.hazards.dynamic_method);
+}
+
+/// Verifies a dynamic method probe still roots its literal target before widening methods.
+#[test]
+fn prune_dynamic_method_exists_keeps_literal_target_methods() {
+    let (program, _) = prune(
+        "<?php class Visible { public static function hidden(): int { return 1; } } $method = $argc > 0 ? 'hidden' : 'missing'; echo method_exists('Visible', $method) ? 'y' : 'n';",
+    );
+    assert!(has_class(&program, "Visible"));
+    assert!(has_method(&program, "Visible", "hidden"));
+}
+
 /// Verifies Reflection references conservatively widen functions, methods, and classes.
 #[test]
 fn scan_reflection_reference_widens_all_declaration_hazards() {
@@ -540,20 +638,47 @@ fn prune_drops_unused_function_and_keeps_called_one() {
 }
 
 /// Verifies pruning source declarations leaves checker-injected runtime class metadata intact.
+///
+/// Split in two because registration is now PAY-FOR-USE. The throwables below are seeded
+/// unconditionally — `ALWAYS_REGISTERED_THROWABLES` mirrors the codegen seeder, since a runtime
+/// helper can raise `DivisionByZeroError` or `JsonException` with no class reference in the
+/// source to hang an id off. Everything else, `ReflectionClass` and `DateTime` included, arrives
+/// only when the program can reach it, so a program that never mentions them has nothing to
+/// preserve and asserting otherwise would pin the absence of that gate rather than this pass.
+///
+/// What this test is about is unchanged: pruning SOURCE declarations must not take
+/// checker-injected metadata with it.
 #[test]
 fn prune_preserves_synthetic_checker_classes() {
     let (program, check) = prune(
         "<?php class UnusedSourceClass { public function unused(): int { return 1; } } echo 1;",
     );
     assert!(!has_class(&program, "UnusedSourceClass"));
-    for class in [
-        "Exception",
-        "Error",
-        "TypeError",
-        "ReflectionClass",
-        "DateTime",
-        "SplFixedArray",
-    ] {
+    for class in ["Exception", "Error", "TypeError"] {
+        assert!(
+            check
+                .classes
+                .keys()
+                .any(|candidate| php_symbol_key(candidate) == php_symbol_key(class)),
+            "unconditional throwable {class} must survive source declaration pruning"
+        );
+    }
+
+    // The gated half: mentioned by the program, so registered.
+    //
+    // `UnusedSourceClass` SURVIVES here, and that is not a weaker assertion — it is the pruner
+    // being right. `new ReflectionClass($name)` can name any class at run time, so a program
+    // holding one gives the pass nothing it may drop. Pinning the survival is what would catch a
+    // future pruner that got clever about reflection.
+    let (program, check) = prune(
+        "<?php class UnusedSourceClass { public function unused(): int { return 1; } } \
+         $r = new ReflectionClass(\"Exception\"); $d = new DateTime(); $f = new SplFixedArray(1); echo 1;",
+    );
+    assert!(
+        has_class(&program, "UnusedSourceClass"),
+        "a reflection construct must keep source classes reachable"
+    );
+    for class in ["ReflectionClass", "DateTime", "SplFixedArray"] {
         assert!(
             check
                 .classes
@@ -636,6 +761,32 @@ fn prune_keeps_inherited_magic_methods() {
     assert!(!has_method(&program, "ParentType", "unused"));
 }
 
+/// Verifies a private override remains as a descendant vtable hole after its metadata stops inheriting.
+#[test]
+fn prune_keeps_private_override_vtable_hole_on_descendant() {
+    let (_, check) = prune(
+        "<?php class SlotBase { public function __construct() {} public function later(): string { return 'later'; } } class SlotParent extends SlotBase { private function __construct() { parent::__construct(); } public static function build(): self { return new self(); } } class SlotChild extends SlotParent {} function through_base(SlotBase $value): string { return $value->later(); } class_exists('SlotChild'); echo through_base(SlotParent::build());",
+    );
+    let parent = check
+        .classes
+        .get("SlotParent")
+        .expect("private override metadata must survive");
+    let child = check
+        .classes
+        .get("SlotChild")
+        .expect("descendant metadata must survive");
+
+    assert!(!child.methods.contains_key("__construct"));
+    assert_eq!(
+        parent.vtable_slots.get("__construct"),
+        child.vtable_slots.get("__construct")
+    );
+    assert_eq!(
+        parent.vtable_slots.get("later"),
+        child.vtable_slots.get("later")
+    );
+}
+
 /// Verifies `parent::method()` retains a non-static parent implementation.
 #[test]
 fn prune_keeps_parent_scoped_instance_method() {
@@ -656,6 +807,160 @@ fn prune_parent_scoped_method_edge_is_class_specific() {
     assert!(has_method(&program, "ChildType", "read"));
     assert!(has_method(&program, "OtherType", "keep"));
     assert!(!has_method(&program, "OtherType", "value"));
+}
+
+/// Verifies a scoped parent edge keeps overriding descendant slots without widening to siblings.
+#[test]
+fn prune_parent_scoped_method_keeps_descendant_vtable_slots_aligned() {
+    let (program, check) = prune(
+        "<?php class SlotBase { public function shadowed(): string { return 'base'; } public function later(): string { return 'later'; } } class SlotChild extends SlotBase { public function shadowed(): string { return 'child'; } public function boot(): string { return parent::shadowed(); } } class SlotSibling { public function shadowed(): string { return 'sibling'; } public function keep(): string { return 'keep'; } } function through_base(SlotBase $value): string { return $value->later(); } $child = new SlotChild(); $child->boot(); echo through_base($child); echo (new SlotSibling())->keep();",
+    );
+    assert!(has_method(&program, "SlotBase", "shadowed"));
+    assert!(has_method(&program, "SlotChild", "shadowed"));
+    assert!(!has_method(&program, "SlotSibling", "shadowed"));
+
+    let parent = check
+        .classes
+        .get("SlotBase")
+        .expect("parent metadata must survive");
+    let child = check
+        .classes
+        .get("SlotChild")
+        .expect("child metadata must survive");
+    assert_eq!(
+        parent.vtable_slots.get("shadowed"),
+        child.vtable_slots.get("shadowed")
+    );
+    assert_eq!(
+        parent.vtable_slots.get("later"),
+        child.vtable_slots.get("later")
+    );
+}
+
+/// Verifies a mid-chain `parent::` edge cannot desynchronize the grandparent vtable.
+#[test]
+fn prune_parent_scoped_method_keeps_grandparent_vtable_slots_aligned() {
+    let (program, check) = prune(
+        "<?php class SlotRoot { public function shadowed(): string { return 'root'; } public function later(): string { return 'later'; } } class SlotMid extends SlotRoot { public function shadowed(): string { return 'mid'; } } class SlotLeaf extends SlotMid { public function boot(): string { return parent::shadowed(); } } function through_root(SlotRoot $value): string { return $value->later(); } $leaf = new SlotLeaf(); $leaf->boot(); echo through_root($leaf);",
+    );
+    assert!(has_method(&program, "SlotRoot", "shadowed"));
+    assert!(has_method(&program, "SlotMid", "shadowed"));
+    assert!(has_method(&program, "SlotLeaf", "boot"));
+
+    let root = check
+        .classes
+        .get("SlotRoot")
+        .expect("grandparent metadata must survive");
+    let mid = check
+        .classes
+        .get("SlotMid")
+        .expect("mid metadata must survive");
+    let leaf = check
+        .classes
+        .get("SlotLeaf")
+        .expect("leaf metadata must survive");
+    assert_eq!(
+        root.vtable_slots.get("shadowed"),
+        mid.vtable_slots.get("shadowed")
+    );
+    assert_eq!(
+        root.vtable_slots.get("later"),
+        mid.vtable_slots.get("later")
+    );
+    assert_eq!(
+        mid.vtable_slots.get("later"),
+        leaf.vtable_slots.get("later")
+    );
+}
+
+/// Verifies a mid-chain `parent::` edge cannot desynchronize an abstract grandparent vtable.
+#[test]
+fn prune_parent_scoped_method_keeps_abstract_grandparent_vtable_slots_aligned() {
+    let (program, check) = prune(
+        "<?php abstract class SlotRoot { abstract public function shadowed(): string; public function later(): string { return 'later'; } } class SlotMid extends SlotRoot { public function shadowed(): string { return 'mid'; } } class SlotLeaf extends SlotMid { public function boot(): string { return parent::shadowed(); } } function through_root(SlotRoot $value): string { return $value->later(); } $leaf = new SlotLeaf(); $leaf->boot(); echo through_root($leaf);",
+    );
+    assert!(has_method(&program, "SlotMid", "shadowed"));
+    assert!(has_method(&program, "SlotLeaf", "boot"));
+
+    let root = check
+        .classes
+        .get("SlotRoot")
+        .expect("abstract grandparent metadata must survive");
+    let mid = check
+        .classes
+        .get("SlotMid")
+        .expect("mid metadata must survive");
+    assert_eq!(
+        root.vtable_slots.get("shadowed"),
+        mid.vtable_slots.get("shadowed")
+    );
+    assert_eq!(
+        root.vtable_slots.get("later"),
+        mid.vtable_slots.get("later")
+    );
+}
+
+/// Verifies a mid-chain static `parent::` edge cannot desynchronize late-bound static slots.
+#[test]
+fn prune_parent_scoped_method_keeps_grandparent_static_vtable_slots_aligned() {
+    let (program, check) = prune(
+        "<?php class StaticSlotRoot { public static function shadowed(): string { return 'root'; } public static function dispatch(): string { return static::later(); } public static function later(): string { return 'later'; } } class StaticSlotMid extends StaticSlotRoot { public static function shadowed(): string { return 'mid'; } } class StaticSlotLeaf extends StaticSlotMid { public static function boot(): string { return parent::shadowed(); } } StaticSlotLeaf::boot(); echo StaticSlotLeaf::dispatch();",
+    );
+    assert!(has_method(&program, "StaticSlotRoot", "shadowed"));
+    assert!(has_method(&program, "StaticSlotMid", "shadowed"));
+    assert!(has_method(&program, "StaticSlotLeaf", "boot"));
+
+    let root = check
+        .classes
+        .get("StaticSlotRoot")
+        .expect("static grandparent metadata must survive");
+    let mid = check
+        .classes
+        .get("StaticSlotMid")
+        .expect("static mid metadata must survive");
+    let leaf = check
+        .classes
+        .get("StaticSlotLeaf")
+        .expect("static leaf metadata must survive");
+    assert_eq!(
+        root.static_vtable_slots.get("shadowed"),
+        mid.static_vtable_slots.get("shadowed")
+    );
+    assert_eq!(
+        root.static_vtable_slots.get("later"),
+        mid.static_vtable_slots.get("later")
+    );
+    assert_eq!(
+        mid.static_vtable_slots.get("later"),
+        leaf.static_vtable_slots.get("later")
+    );
+}
+
+/// Verifies scoped parent retention also preserves matching static-vtable entries on descendants.
+#[test]
+fn prune_parent_scoped_method_keeps_descendant_static_vtable_slots_aligned() {
+    let (program, check) = prune(
+        "<?php class StaticSlotBase { public static function shadowed(): string { return 'base'; } public static function dispatch(): string { return static::later(); } public static function later(): string { return 'later'; } } class StaticSlotChild extends StaticSlotBase { public static function shadowed(): string { return 'child'; } public static function boot(): string { return parent::shadowed(); } } StaticSlotChild::boot(); echo StaticSlotChild::dispatch();",
+    );
+    assert!(has_method(&program, "StaticSlotBase", "shadowed"));
+    assert!(has_method(&program, "StaticSlotChild", "shadowed"));
+
+    let parent = check
+        .classes
+        .get("StaticSlotBase")
+        .expect("static parent metadata must survive");
+    let child = check
+        .classes
+        .get("StaticSlotChild")
+        .expect("static child metadata must survive");
+    assert_eq!(
+        parent.static_vtable_slots.get("shadowed"),
+        child.static_vtable_slots.get("shadowed")
+    );
+    assert_eq!(
+        parent.static_vtable_slots.get("later"),
+        child.static_vtable_slots.get("later")
+    );
 }
 
 /// Verifies inherited dispatch follows the implementation owner recorded by the checker.
@@ -718,6 +1023,31 @@ fn prune_recomputes_builtin_required_libraries() {
     );
 }
 
+/// Verifies named builtin arguments preserve a live conditional bridge after dead-call pruning.
+#[test]
+fn prune_normalizes_builtin_arguments_before_recomputing_libraries() {
+    let (_, check) = prune(
+        "<?php function unused(): void { fopen('https://example.com/dead', 'rb'); } fopen(mode: 'rb', filename: 'https://example.com/live');",
+    );
+    assert!(
+        check
+            .required_libraries
+            .iter()
+            .any(|library| library == "elephc_tls"),
+        "the surviving named fopen call still requires the TLS bridge"
+    );
+}
+
+/// Verifies `new static` retains an overriding constructor on a runtime-selected subclass.
+#[test]
+fn prune_new_static_keeps_descendant_constructor() {
+    let (program, _) = prune(
+        "<?php class BaseFactory { public static function make(): static { return new static(); } } class ChildFactory extends BaseFactory { public function __construct() { echo 'child'; } } ChildFactory::make();",
+    );
+    assert!(has_class(&program, "ChildFactory"));
+    assert!(has_method(&program, "ChildFactory", "__construct"));
+}
+
 /// Verifies a dynamic method name retains every method on each live class.
 #[test]
 fn prune_keeps_all_methods_when_dynamic_method_hazard() {
@@ -748,6 +1078,32 @@ fn prune_propagates_dynamic_method_hazard_from_reachable_method() {
     assert!(has_method(&program, "T", "dispatch"));
     assert!(has_method(&program, "T", "target"));
     assert!(has_method(&program, "T", "sibling"));
+}
+
+/// Verifies a compiler-invoked protocol body still applies its dynamic-method hazard.
+#[test]
+fn prune_countable_protocol_body_propagates_dynamic_method_hazard() {
+    let (program, _) = prune(
+        "<?php class Items implements Countable { public function count(): int { $name = 'target'; $this->$name(); return 1; } public function target(): int { return 1; } public function unused(): int { return 2; } } echo count(new Items());",
+    );
+    assert!(has_method(&program, "Items", "count"));
+    assert!(
+        has_method(&program, "Items", "target"),
+        "count() lowering executes count(), so $this->$name() must keep target"
+    );
+}
+
+/// Verifies foreach-invoked Iterator methods still apply dynamic lookup in their bodies.
+#[test]
+fn prune_iterator_protocol_body_propagates_dynamic_method_hazard() {
+    let (program, _) = prune(
+        "<?php class Items implements Iterator { public function rewind(): void { $name = 'target'; $this->$name(); } public function current(): mixed { return 1; } public function key(): mixed { return 0; } public function next(): void {} public function valid(): bool { return false; } public function target(): void {} public function unused(): int { return 2; } } foreach (new Items() as $value) {}",
+    );
+    assert!(has_method(&program, "Items", "rewind"));
+    assert!(
+        has_method(&program, "Items", "target"),
+        "foreach lowering executes rewind(), so $this->$name() must keep target"
+    );
 }
 
 /// Verifies a live class retains methods required by compiler-injected interface contracts.

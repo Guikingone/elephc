@@ -12,11 +12,12 @@
 //!
 //! Key details:
 //! - Record tags match `__rt_sprintf`: int=0, string=1|(len<<8), float=2,
-//!   bool=3. Records are pushed in reverse element order so element 0 lands at
-//!   the lowest address (the first argument), as `__rt_sprintf` expects.
+//!   bool=3, deferred boxed Mixed=7. Records are pushed in reverse element order so element 0
+//!   lands at the lowest address (the first argument), as `__rt_sprintf` expects.
 //! - The arguments array is read by its runtime value_type (kind word at
 //!   `[arr-8]`, bits 8..14): a Mixed array (7) holds boxed-cell pointers that
-//!   are unboxed per element; typed arrays (int/float/bool = 8-byte slots,
+//!   are unboxed per element through `__rt_sprintf_pack_mixed`, which
+//!   `sprintf()` shares; typed arrays (int/float/bool = 8-byte slots,
 //!   string = 16-byte ptr+len slots) are read directly. The array is NOT
 //!   mutated — elements are only read.
 
@@ -24,9 +25,9 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits `__rt_vsprintf(array_ptr, fmt_ptr, fmt_len) -> string`.
 ///
-/// Inputs: x0 = array pointer, x1 = format pointer, x2 = format length
-/// (AArch64); rdi = array pointer, rax = format pointer, rdx = format length
-/// (x86_64). Output: the formatted string in the standard string-result
+/// Inputs: x0 = array pointer, x1 = format pointer, x2 = format length, x3 = optional eval
+/// context (AArch64); rdi = array pointer, rax = format pointer, rdx = format length,
+/// rsi = optional eval context (x86_64). Output: the formatted string in the standard string-result
 /// registers (x1/x2 on AArch64, rax/rdx on x86_64), via `__rt_sprintf`.
 pub fn emit_vsprintf(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -40,12 +41,13 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
 
     // Frame: 80 bytes. [x29+0..16] saved x29/x30; locals above: [x29+16] fmt
     //   ptr, [x29+24] fmt len, [x29+32] count, [x29+40] slot base, [x29+48]
-    //   value_type, [x29+56] slot size, [x29+64] loop index.
+    //   value_type, [x29+56] slot size, [x29+64] loop index, [x29+72] eval context.
     emitter.instruction("sub sp, sp, #80");                                     // helper frame
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // fixed frame pointer (sp moves while records are pushed)
     emitter.instruction("str x1, [x29, #16]");                                  // save the format pointer
     emitter.instruction("str x2, [x29, #24]");                                  // save the format length
+    emitter.instruction("str x3, [x29, #72]");                                  // preserve the optional eval context
 
     // -- read the array length and runtime value_type --
     emitter.instruction("cbz x0, __rt_vsprintf_empty");                         // null array → format with zero args
@@ -90,28 +92,20 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
     emitter.instruction("orr x17, x17, #1");                                    // tag 1 = string operand
     emitter.instruction("b __rt_vsprintf_push");                                // push the record
     emitter.label("__rt_vsprintf_mixed");
-    emitter.instruction("ldr x15, [x15]");                                      // boxed Mixed cell pointer
-    emitter.instruction("cbz x15, __rt_vsprintf_mixed_zero");                   // null cell → integer zero record
-    emitter.instruction("ldr x9, [x15]");                                       // cell runtime tag
-    emitter.instruction("ldr x16, [x15, #8]");                                  // cell low payload word
-    emitter.instruction("cmp x9, #1");                                          // string cell?
-    emitter.instruction("b.eq __rt_vsprintf_mixed_str");                        // build a string record from the cell
-    emitter.instruction("cmp x9, #2");                                          // float cell?
-    emitter.instruction("mov x17, #2");                                         // tag 2 = float operand
-    emitter.instruction("b.eq __rt_vsprintf_push");                             // float payload already in x16
-    emitter.instruction("cmp x9, #3");                                          // bool cell?
-    emitter.instruction("mov x17, #3");                                         // tag 3 = bool operand
-    emitter.instruction("b.eq __rt_vsprintf_push");                             // bool payload already in x16
-    emitter.instruction("mov x17, #0");                                         // anything else → integer operand
-    emitter.instruction("b __rt_vsprintf_push");                                // push the record
-    emitter.label("__rt_vsprintf_mixed_str");
-    emitter.instruction("ldr x9, [x15, #16]");                                  // cell high word = string length
-    emitter.instruction("lsl x17, x9, #8");                                     // pack the length into the metadata word
-    emitter.instruction("orr x17, x17, #1");                                    // tag 1 = string operand
-    emitter.instruction("b __rt_vsprintf_push");                                // push the record
-    emitter.label("__rt_vsprintf_mixed_zero");
-    emitter.instruction("mov x16, #0");                                         // zero payload for a null cell
-    emitter.instruction("mov x17, #0");                                         // integer-zero tag
+    // This ladder used to live here inline. It now lives once, in `__rt_sprintf_pack_mixed`,
+    // because `sprintf()` needs exactly the same conversion for a Mixed operand whose format
+    // string is not a compile-time literal — and a second hand-written copy of an assembly
+    // ladder is a copy that drifts. Loop state lives in memory off `x29`, and the helper owns
+    // its own ABI-aligned frame, so calling it from inside the loop is safe.
+    //
+    // One behaviour changes with the move: a cell holding PHP null now packs as a ZERO-LENGTH
+    // STRING rather than falling into the "anything else → integer" arm, which used to hand
+    // `__rt_sprintf` the null SENTINEL as a payload. That is why `vsprintf("%s", [null])`
+    // answered `9223372036854775806` instead of `""`.
+    emitter.instruction("ldr x0, [x15]");                                       // boxed Mixed cell pointer
+    emitter.instruction("bl __rt_sprintf_pack_mixed");                          // x0 = record payload, x1 = record tag
+    emitter.instruction("mov x16, x0");                                         // move the payload into the push register
+    emitter.instruction("mov x17, x1");                                         // move the tag into the push register
     emitter.label("__rt_vsprintf_push");
     emitter.instruction("sub sp, sp, #16");                                     // reserve one 16-byte tagged record
     emitter.instruction("str x16, [sp, #0]");                                   // store the payload word
@@ -128,6 +122,7 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x29, #32]");                                  // arg count
     emitter.instruction("ldr x1, [x29, #16]");                                  // format pointer
     emitter.instruction("ldr x2, [x29, #24]");                                  // format length
+    emitter.instruction("ldr x3, [x29, #72]");                                  // forward the optional eval context
     emitter.instruction("bl __rt_sprintf");                                     // format; pops the count*16 records, returns x1/x2
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame
@@ -141,12 +136,14 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_vsprintf");
 
     // Frame: [rbp-8] fmt ptr, [rbp-16] fmt len, [rbp-24] count, [rbp-32] slot
-    //   base, [rbp-40] value_type, [rbp-48] slot size, [rbp-56] loop index.
+    //   base, [rbp-40] value_type, [rbp-48] slot size, [rbp-56] loop index,
+    //   [rbp-64] eval context.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // fixed frame pointer (rsp moves while records are pushed)
     emitter.instruction("sub rsp, 64");                                         // reserve the helper locals
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the format pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the format length
+    emitter.instruction("mov QWORD PTR [rbp - 64], rsi");                       // preserve the optional eval context
 
     // -- read the array length and runtime value_type (array ptr in rdi) --
     emitter.instruction("test rdi, rdi");                                       // null array?
@@ -194,30 +191,14 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("or rcx, 1");                                           // tag 1 = string operand
     emitter.instruction("jmp __rt_vsprintf_push_x86");                          // push the record
     emitter.label("__rt_vsprintf_mixed_x86");
-    emitter.instruction("mov rax, QWORD PTR [rax]");                            // boxed Mixed cell pointer
-    emitter.instruction("test rax, rax");                                       // null cell?
-    emitter.instruction("jz __rt_vsprintf_mixed_zero_x86");                     // → integer zero record
-    emitter.instruction("mov r9, QWORD PTR [rax]");                             // cell runtime tag
-    emitter.instruction("mov rsi, QWORD PTR [rax + 8]");                        // cell low payload word
-    emitter.instruction("cmp r9, 1");                                           // string cell?
-    emitter.instruction("je __rt_vsprintf_mixed_str_x86");                      // build a string record from the cell
-    emitter.instruction("mov rcx, 2");                                          // tag 2 = float operand
-    emitter.instruction("cmp r9, 2");                                           // float cell?
-    emitter.instruction("je __rt_vsprintf_push_x86");                           // float payload already in rsi
-    emitter.instruction("mov rcx, 3");                                          // tag 3 = bool operand
-    emitter.instruction("cmp r9, 3");                                           // bool cell?
-    emitter.instruction("je __rt_vsprintf_push_x86");                           // bool payload already in rsi
-    emitter.instruction("xor ecx, ecx");                                        // anything else → integer operand
-    emitter.instruction("jmp __rt_vsprintf_push_x86");                          // push the record
-    emitter.label("__rt_vsprintf_mixed_str_x86");
-    emitter.instruction("mov r9, QWORD PTR [rax + 16]");                        // cell high word = string length
-    emitter.instruction("mov rcx, r9");                                         // length into the metadata word
-    emitter.instruction("shl rcx, 8");                                          // pack the length
-    emitter.instruction("or rcx, 1");                                           // tag 1 = string operand
-    emitter.instruction("jmp __rt_vsprintf_push_x86");                          // push the record
-    emitter.label("__rt_vsprintf_mixed_zero_x86");
-    emitter.instruction("xor esi, esi");                                        // zero payload for a null cell
-    emitter.instruction("xor ecx, ecx");                                        // integer-zero tag
+    // Shared with `sprintf()` — see the AArch64 half for why this ladder moved into
+    // `__rt_sprintf_pack_mixed`, and for the null-cell behaviour that changed with it. The loop's
+    // own state lives in memory off `rbp` and is reloaded after the push, so the only registers
+    // that must survive the call are the ones this arm sets immediately afterwards.
+    emitter.instruction("mov rdi, QWORD PTR [rax]");                            // boxed Mixed cell pointer → helper argument
+    emitter.instruction("call __rt_sprintf_pack_mixed");                        // rax = record payload, rdx = record tag
+    emitter.instruction("mov rsi, rax");                                        // move the payload into the push register
+    emitter.instruction("mov rcx, rdx");                                        // move the tag into the push register
     emitter.label("__rt_vsprintf_push_x86");
     emitter.instruction("sub rsp, 16");                                         // reserve one 16-byte tagged record
     emitter.instruction("mov QWORD PTR [rsp], rsi");                            // store the payload word
@@ -234,6 +215,7 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // arg count
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // format pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // format length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // forward the optional eval context
     emitter.instruction("call __rt_sprintf");                                   // format; pops the count*16 records, returns rax/rdx
     emitter.instruction("leave");                                               // restore rsp/rbp (records already discarded by __rt_sprintf)
     emitter.instruction("ret");                                                 // return the formatted string (rax/rdx)

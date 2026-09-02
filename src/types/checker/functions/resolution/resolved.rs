@@ -122,20 +122,24 @@ impl Checker {
                     .get(param_idx)
                     .copied()
                     .unwrap_or(false)
-                    && !self.is_by_ref_argument_lvalue(arg, caller_env)?
                 {
-                    let param_name = effective_sig
-                        .params
-                        .get(param_idx)
-                        .map(|(name, _)| name.as_str())
-                        .unwrap_or("arg");
-                    return Err(CompileError::new(
-                        arg.span,
-                        &format!(
-                            "Function '{}' parameter ${} must be passed a variable",
-                            name, param_name
-                        ),
-                    ));
+                    // The callee holds a reference to this local from here on, and it can
+                    // escape, so the local is never kill/retype eligible in this body.
+                    self.record_reference_alias_root(arg);
+                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                        let param_name = effective_sig
+                            .params
+                            .get(param_idx)
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or("arg");
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "Function '{}' parameter ${} must be passed a variable",
+                                name, param_name
+                            ),
+                        ));
+                    }
                 }
                 if let Some((param_name, expected_ty)) = effective_sig.params.get(param_idx) {
                     if effective_sig
@@ -184,31 +188,47 @@ impl Checker {
                         )?;
                     }
                 }
-            } else if let (Some(vname), Some(expected_ty)) =
-                (effective_sig.variadic.as_ref(), variadic_elem_ty.as_ref())
-            {
+            } else {
+                // An argument collected by a by-REFERENCE variadic (`&...$xs`) is bound by
+                // reference exactly like a regular by-ref parameter's. Its flag sits at
+                // `regular_param_count` in `ref_params` (the signature's last slot).
                 if effective_sig
-                    .declared_params
-                    .last()
+                    .ref_params
+                    .get(regular_param_count)
                     .copied()
                     .unwrap_or(false)
                 {
-                    self.require_bound_param_arg_type(
-                        expected_ty,
-                        &actual_ty,
-                        arg,
-                        caller_env,
-                        &format!("Function '{}' variadic parameter ${}", name, vname),
-                        None,
-                        effective_sig.ref_params.last().copied().unwrap_or(false),
-                    )?;
-                } else {
-                    self.require_compatible_arg_type(
-                        expected_ty,
-                        &actual_ty,
-                        arg.span,
-                        &format!("Function '{}' variadic parameter ${}", name, vname),
-                    )?;
+                    self.record_reference_alias_root(arg);
+                }
+                if let (Some(vname), Some(expected_ty)) =
+                    (effective_sig.variadic.as_ref(), variadic_elem_ty.as_ref())
+                {
+                    // Same split as a regular parameter: PHP's binding coercion applies only to a
+                    // DECLARED variadic type hint, so an inferred one keeps the plain
+                    // compatibility check.
+                    if effective_sig
+                        .declared_params
+                        .last()
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        self.require_bound_param_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg,
+                            caller_env,
+                            &format!("Function '{}' variadic parameter ${}", name, vname),
+                            None,
+                            effective_sig.ref_params.last().copied().unwrap_or(false),
+                        )?;
+                    } else {
+                        self.require_compatible_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("Function '{}' variadic parameter ${}", name, vname),
+                        )?;
+                    }
                 }
             }
             param_idx += 1;

@@ -37,7 +37,17 @@ pub(super) fn lower_compare(
         lhs = lhs_key;
         rhs = rhs_key;
     }
-    if matches!(op, BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq)
+    let uses_runtime_relational_compare = matches!(
+        op,
+        BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+    )
+        && (needs_runtime_ordering_dispatch(ctx, lhs.value)
+            || needs_runtime_ordering_dispatch(ctx, rhs.value));
+    // Operand shapes the dedicated runtime relational opcode does not claim, yet which no typed
+    // opcode can order either — a string against an int, an object against a scalar. Reduce those
+    // to PHP's `<=>` and compare its result against zero.
+    if !uses_runtime_relational_compare
+        && matches!(op, BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq)
         && ordered_compare_uses_php_runtime(lhs.ir_type, rhs.ir_type)
     {
         let comparison = ctx.emit_value(
@@ -69,6 +79,7 @@ pub(super) fn lower_compare(
         BinOp::Eq => Op::LooseEq,
         BinOp::NotEq => Op::LooseNotEq,
         BinOp::Spaceship => Op::Spaceship,
+        _ if uses_runtime_relational_compare => Op::PhpRelCmp,
         _ if lhs.ir_type == IrType::F64 || rhs.ir_type == IrType::F64 => Op::FCmp,
         _ if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 => Op::ICmp,
         _ if lhs.ir_type == IrType::Str && rhs.ir_type == IrType::Str => Op::StrCmp,
@@ -81,7 +92,7 @@ pub(super) fn lower_compare(
         lhs = coerce_to_int(ctx, lhs, left);
         rhs = coerce_to_int(ctx, rhs, right);
     }
-    let immediate = if matches!(opcode, Op::ICmp | Op::FCmp | Op::StrCmp) {
+    let immediate = if matches!(opcode, Op::ICmp | Op::FCmp | Op::StrCmp | Op::PhpRelCmp) {
         Some(Immediate::CmpPredicate(cmp_predicate(op)))
     } else {
         None
@@ -105,6 +116,14 @@ pub(super) fn lower_compare(
 /// Returns whether ordered operands need PHP's runtime comparison table rather than a typed opcode.
 fn ordered_compare_uses_php_runtime(lhs: IrType, rhs: IrType) -> bool {
     !matches!((lhs, rhs), (IrType::I64, IrType::I64) | (IrType::F64, IrType::F64) | (IrType::I64, IrType::F64) | (IrType::F64, IrType::I64) | (IrType::Str, IrType::Str))
+}
+
+/// Returns whether an operand carries a runtime tag that must select PHP's ordering rule.
+fn needs_runtime_ordering_dispatch(ctx: &LoweringContext<'_, '_>, value: ValueId) -> bool {
+    matches!(
+        ctx.builder.value_php_type(value).codegen_repr(),
+        PhpType::Mixed | PhpType::TaggedScalar
+    )
 }
 
 /// Releases an owning binary-operator operand once the consuming opcode has read it.

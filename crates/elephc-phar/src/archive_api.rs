@@ -19,26 +19,45 @@ pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
     let rest = url.strip_prefix(b"phar://")?;
     let (archive_path, entry) = split_archive_entry(rest)?;
     let archive_path = std::str::from_utf8(archive_path).ok()?;
-    let archive = std::fs::read(archive_path).ok()?;
-    extract_entry_bytes(&archive, entry)
+    let path = std::path::Path::new(archive_path);
+    let data = std::fs::read(path).ok()?;
+    let public_key = read_archive_public_key(path);
+    extract_archive_entry(&data, entry, public_key.as_ref())
 }
 
 /// Extracts `entry` from already-loaded archive bytes.
 ///
-/// Native PHAR is tried first because it has an explicit manifest and may have
-/// arbitrary stubs before the payload. Plain ZIP and TAR containers are then
-/// tried by signature/layout.
+/// Container-family dispatch follows ZIP/TAR magic before falling back to native
+/// PHAR. OpenSSL-signed archives are rejected because this byte-only API has no
+/// filesystem path from which to load `<archive>.pubkey`; use [`extract_url_bytes`]
+/// when signature authentication is required.
 pub fn extract_entry_bytes(archive: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
+    extract_archive_entry(archive, entry, None)
+}
+
+/// Extracts one entry after authenticating and dispatching the archive family.
+///
+/// Each container parser authenticates and scans archive structure globally but
+/// copies or decompresses only the requested payload.
+fn extract_archive_entry(
+    archive: &[u8],
+    entry: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Vec<u8>> {
     // Whole-archive gzip/bzip2 wrappers are decoded transparently before extraction.
     if archive.starts_with(b"\x1f\x8b") {
-        return extract_entry_bytes(&decompress_gzip_stream(archive)?, entry);
+        return extract_archive_entry(&decompress_gzip_stream(archive)?, entry, public_key);
     }
     if archive.starts_with(b"BZh") {
-        return extract_entry_bytes(&decompress_bzip2_stream(archive)?, entry);
+        return extract_archive_entry(&decompress_bzip2_stream(archive)?, entry, public_key);
     }
-    parse_native_phar_entry(archive, entry)
-        .or_else(|| parse_zip_entry(archive, entry))
-        .or_else(|| parse_tar_entry(archive, entry))
+    if archive.starts_with(b"PK\x03\x04") || archive.starts_with(b"PK\x05\x06") {
+        parse_zip_entry_with_public_key(archive, entry, public_key)
+    } else if archive.get(257..262) == Some(b"ustar") {
+        parse_tar_entry_with_public_key(archive, entry, public_key)
+    } else {
+        parse_native_phar_entry_with_public_key(archive, entry, public_key)
+    }
 }
 
 /// Serializes every supported entry name from an archive on disk.
@@ -48,8 +67,7 @@ pub fn extract_entry_bytes(archive: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
 /// code build a PHP string array without knowing the archive format.
 pub fn entry_names_bytes(archive_path: &[u8]) -> Option<Vec<u8>> {
     let archive_path = std::str::from_utf8(archive_path).ok()?;
-    let archive = std::fs::read(archive_path).ok()?;
-    let (entries, _) = parse_archive_entries(&archive)?;
+    let entries = parse_archive_path(std::path::Path::new(archive_path))?.entries;
     let mut out = Vec::new();
     for entry in entries {
         let name_len = u64::try_from(entry.name.len()).ok()?;
@@ -75,8 +93,7 @@ pub fn put_entry_bytes(
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
     let mut archive = if path.exists() {
-        let bytes = std::fs::read(path).ok()?;
-        parse_archive(&bytes)?
+        parse_archive_path(path)?
     } else {
         Archive {
             entries: Vec::new(),
@@ -113,8 +130,7 @@ pub fn delete_entry_bytes(archive_path: &[u8], entry_name: &[u8]) -> Option<()> 
     }
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
-    let bytes = std::fs::read(path).ok()?;
-    let mut archive = parse_archive(&bytes)?;
+    let mut archive = parse_archive_path(path)?;
     remove_entry(&mut archive.entries, entry_name)?;
     let out = build_archive_value(&archive)?;
     std::fs::write(path, out).ok()?;
@@ -138,8 +154,7 @@ pub fn set_archive_compression(archive_path: &[u8], compression_code: usize) -> 
     let compression = compression_from_php_constant(compression_code)?;
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
-    let bytes = std::fs::read(path).ok()?;
-    let mut archive = parse_archive(&bytes)?;
+    let mut archive = parse_archive_path(path)?;
     if matches!(archive.format, ArchiveFormat::Tar) {
         return None;
     }
@@ -159,15 +174,13 @@ pub fn set_archive_compression(archive_path: &[u8], compression_code: usize) -> 
 /// Reads an archive's serialized global metadata blob (empty when unset).
 pub(super) fn get_metadata_bytes(archive_path: &[u8]) -> Option<Vec<u8>> {
     let path = std::str::from_utf8(archive_path).ok()?;
-    let bytes = std::fs::read(path).ok()?;
-    Some(parse_archive(&bytes)?.metadata)
+    Some(parse_archive_path(std::path::Path::new(path))?.metadata)
 }
 
 /// Reads an archive's stub bytes (empty when unset / default).
 pub(super) fn get_stub_bytes(archive_path: &[u8]) -> Option<Vec<u8>> {
     let path = std::str::from_utf8(archive_path).ok()?;
-    let bytes = std::fs::read(path).ok()?;
-    Some(parse_archive(&bytes)?.stub)
+    Some(parse_archive_path(std::path::Path::new(path))?.stub)
 }
 
 /// Sets an archive's global metadata, preserving all entries and the stub.
@@ -201,7 +214,7 @@ pub(super) fn set_stub_bytes(archive_path: &[u8], stub: &[u8]) -> Option<()> {
 /// Parses an existing archive, or builds an empty one whose format follows the path.
 pub(super) fn read_or_new_archive(path: &std::path::Path) -> Option<Archive> {
     if path.exists() {
-        parse_archive(&std::fs::read(path).ok()?)
+        parse_archive_path(path)
     } else {
         Some(Archive {
             entries: Vec::new(),

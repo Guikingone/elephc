@@ -80,7 +80,10 @@ pub(in crate::interpreter) fn eval_user_wrapper_file_stat_scalar_from_stat(
     };
     match eval_user_wrapper_stat_int_field(stat, field, values)? {
         Some(value) => values.int(value),
-        None if name == "filemtime" => values.int(0),
+        // `filemtime` used to be carved out here to answer `int(0)`, alone among the eight names
+        // this function serves. PHP returns `false` from every one of them when the field cannot
+        // be read, so the carve-out was a divergence, and it was invisible from the compiled side
+        // where the same call now yields `false`.
         None => values.bool_value(false),
     }
 }

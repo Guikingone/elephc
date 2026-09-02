@@ -36,9 +36,12 @@ use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
+mod key_sort;
+
 use super::{
-    call_signature, lower_expr, lower_function_call, lower_non_local_assignment_write,
-    normalize_value_php_type, source_prefers_extension_builtin, static_property_result_type,
+    call_signature, is_spread_arg, lower_expr, lower_function_call,
+    lower_non_local_assignment_write, normalize_value_php_type, source_prefers_extension_builtin,
+    static_property_result_type,
 };
 
 /// One by-reference argument rewritten into a hidden temporary.
@@ -67,6 +70,10 @@ pub(super) fn lower_ref_place_function_call(
     let canonical = name.as_str();
     let prefer_extension = source_prefers_extension_builtin(canonical);
     let sig = call_signature(ctx, canonical, prefer_extension)?;
+    if let Some(result) = key_sort::lower_key_sort_ref_place_call(ctx, canonical, &sig, args, expr)
+    {
+        return Some(result);
+    }
     let (call_args, plans) = prepare_ref_place_args(ctx, &sig, args)?;
     let result = lower_function_call(ctx, name, &call_args, expr);
     write_back_ref_place_args(ctx, plans);
@@ -84,6 +91,11 @@ pub(super) fn prepare_ref_place_args(
     args: &[Expr],
 ) -> Option<(Vec<Expr>, Vec<RefPlacePlan>)> {
     if !sig.ref_params.iter().any(|is_ref| *is_ref) {
+        return None;
+    }
+    if args.iter().any(is_spread_arg) {
+        // A spread cannot be split into per-parameter places here; PHP also rejects spreading
+        // into a by-reference parameter, and the checker already reports that.
         return None;
     }
     let rewrite_indices: Vec<usize> = args
@@ -239,6 +251,19 @@ fn ref_param_binding<'a>(
         return None;
     }
     Some((param_index, place))
+}
+
+/// Returns just the by-reference place bound to one argument position.
+///
+/// `ref_param_binding` also hands back the resolved PARAMETER index, which the adapter decision
+/// needs; the key-sort specializations only ever ask about parameter 0's place, so this keeps
+/// their call sites reading as the question they are actually asking.
+pub(super) fn ref_param_place<'a>(
+    sig: &FunctionSig,
+    index: usize,
+    arg: &'a Expr,
+) -> Option<&'a Expr> {
+    ref_param_binding(sig, index, arg).map(|(_, place)| place)
 }
 
 /// Returns whether a boxed caller local needs a concrete temporary for this declared ref param.

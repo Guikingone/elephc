@@ -16,6 +16,7 @@ use super::*;
 /// `rc` is 0 (sun crosses the altitude), +1 (always above), or -1 (always below); `hr`/`hs` are the
 /// rise/set hours UT (valid only when `rc==0`); `ts` is the south-transit hour UT. All angles are in
 /// degrees, matching the original; `M_PI` provides the exact conversion factor PHP's C code uses.
+#[cfg(test)]
 pub(super) const SUN_RS_SRC: &str = r#"<?php
 $j2000 = $t_utc_sse / 86400.0 + 2440587.5 - 2451545.0;
 $d = $j2000 + 2 - $lon / 360.0;
@@ -68,6 +69,7 @@ return ["rc" => $rc, "hr" => $hr, "hs" => $hs, "ts" => $tsouth];
 /// precomputed Unix timestamp `$tsval`. The `: mixed` return keeps each branch's runtime type tag
 /// (`bool` vs `int`) intact when the result is boxed into the result array; computing the selection
 /// inline as a ternary would unify the branches to `int` and coerce `true`/`false` to `1`/`0`.
+#[cfg(test)]
 pub(super) const SUN_VAL_SRC: &str = r#"<?php
 if ($rc == 1) {
     return true;
@@ -84,6 +86,7 @@ return $tsval;
 /// astronomical twilight), and assembles PHP's nine-key array. Each rise/set key is an `int` Unix
 /// timestamp when the sun crosses that altitude, `true` when the sun stays above it all day, or
 /// `false` when it stays below; `transit` is always the south-transit timestamp.
+#[cfg(test)]
 pub(super) const SUN_INFO_SRC: &str = r#"<?php
 $y = intval(gmdate("Y", $timestamp));
 $mo = intval(gmdate("n", $timestamp));
@@ -126,6 +129,7 @@ return [
 /// altitude; otherwise the Unix timestamp, an `"HH:MM"` string (with `$utcOffset` hours applied), or
 /// the hour-of-day float. Negative `$latitude`/`$longitude`/`$zenith` sentinels select PHP's ini
 /// defaults (latitude 31.7667, longitude 35.2333, zenith 90+50/60).
+#[cfg(test)]
 pub(super) const SUNFUNC_SRC: &str = r#"<?php
 $lat = ($latitude <= -999.0) ? 31.7667 : $latitude;
 $lon = ($longitude <= -999.0) ? 35.2333 : $longitude;
@@ -170,6 +174,7 @@ return sprintf("%02d:%02d", $hh, $mm);
 /// the full abbreviation table (built on demand via `timezone_abbreviations_list()`) is not
 /// released between calls and exhausts the runtime heap when built repeatedly. The abbreviation's
 /// default zone is returned. The lookup is case-insensitive.
+#[cfg(test)]
 pub(super) const TZ_NAME_FROM_ABBR_SRC: &str = r#"<?php
 $key = strtoupper($abbr);
 $map = [
@@ -206,9 +211,7 @@ return false;
 /// Builds the internal static `__elephc_timezone_name_from_abbr(...)` method on `DateTime` backing
 /// the `timezone_name_from_abbr()` procedural function. See `TZ_NAME_FROM_ABBR_SRC`.
 pub(super) fn datetime_tz_name_from_abbr() -> ClassMethod {
-    let tokens =
-        crate::lexer::tokenize(TZ_NAME_FROM_ABBR_SRC).expect("tz_name_from_abbr must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("tz_name_from_abbr must parse");
+    let body = super::bodies::tz_name_from_abbr();
     ClassMethod {
         name: "__elephc_timezone_name_from_abbr".to_string(),
         visibility: Visibility::Public,

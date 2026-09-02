@@ -150,12 +150,22 @@ echo empty($map["text"]) ? "1" : "0";
 // --- unset ---
 
 /// Tests that `unset` marks a variable as undefined so `is_null` returns true.
+///
+/// The `unset` is written inside a branch on purpose. A straight-line `unset($x)` now KILLS the
+/// binding (see `.plans/local-retype-and-strict-locals.md`): the name leaves the type
+/// environment, so `is_null($x)` after it is an `Undefined variable` diagnostic rather than a
+/// read of a nulled slot — that half of the contract is pinned by
+/// `tests/error_tests/type_system.rs::test_read_after_unset_is_undefined`. A conditional `unset`
+/// is not kill-eligible (the branch may not run), so it keeps the null-store behaviour this test
+/// exercises. `$argc` is 1 under the harness, so the branch does run.
 #[test]
 fn test_unset_variable() {
     let out = compile_and_run(
         r#"<?php
 $x = 42;
-unset($x);
+if ($argc > 0) {
+    unset($x);
+}
 echo is_null($x);
 "#,
     );

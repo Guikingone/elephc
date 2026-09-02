@@ -32,7 +32,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Reinterprets a closure / first-class callable as its raw descriptor pointer.",
         examples: &[
@@ -448,7 +448,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Callable,
         by_ref_return: false,
         summary: "Normalizes a PHP callable into an owned runtime descriptor.",
         examples: &[
@@ -600,7 +600,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Returns the address of the shared __rt_pdo_* callback adapter for a kind.",
         examples: &[
@@ -1159,7 +1159,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -1187,7 +1187,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -1221,7 +1221,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -5224,7 +5224,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Float,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Returns available space on filesystem or disk partition.",
         examples: &[
@@ -5252,7 +5252,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Float,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Returns the total size of a filesystem or disk partition.",
         examples: &[
@@ -5980,7 +5980,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Gets file modification time.",
         examples: &[
@@ -6064,7 +6064,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Gets file size.",
         examples: &[
@@ -6884,6 +6884,35 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         examples: &[
         ],
         php_manual: Some("function.get-loaded-extensions"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("get_object_vars"),
+        name: "get_object_vars",
+        area: Area::Callables,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "object",
+                ty: TypeSpec::Mixed,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Mixed,
+        by_ref_return: false,
+        summary: "Returns the accessible non-static properties of an object.",
+        examples: &[
+            "// Full example: examples/get-object-vars/main.php\n$vars = get_object_vars($object);\necho $vars['name'];",
+        ],
+        php_manual: Some("function.get-object-vars"),
         deprecation: None,
         extension: false,
         internal: false,
@@ -8048,6 +8077,394 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.hypot.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("iconv"),
+        name: "iconv",
+        area: Area::String,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "from_encoding",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "to_encoding",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "string",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Mixed,
+        by_ref_return: false,
+        summary: "Converts a string from one character encoding to another.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.iconv.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("iconv_get_encoding"),
+        name: "iconv_get_encoding",
+        area: Area::String,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "type",
+                ty: TypeSpec::Str,
+                default: Some(DefaultSpec::Str("all")),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Mixed,
+        by_ref_return: false,
+        summary: "Reports the configured input, output, or internal character encoding.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.iconv-get-encoding.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("iconv_mime_decode"),
+        name: "iconv_mime_decode",
+        area: Area::String,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "string",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "mode",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "encoding",
+                ty: TypeSpec::Str,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Mixed,
+        by_ref_return: false,
+        summary: "Decodes one MIME header field into the requested character encoding.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.iconv-mime-decode.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("iconv_mime_decode_headers"),
+        name: "iconv_mime_decode_headers",
+        area: Area::String,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "headers",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "mode",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "encoding",
+                ty: TypeSpec::Str,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Mixed,
+        by_ref_return: false,
+        summary: "Decodes a block of MIME header fields into an associative array.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.iconv-mime-decode-headers.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("iconv_mime_encode"),
+        name: "iconv_mime_encode",
+        area: Area::String,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "field_name",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "field_value",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "options",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Mixed,
+        by_ref_return: false,
+        summary: "Encodes one header field as RFC 2047 encoded-words.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.iconv-mime-encode.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("iconv_set_encoding"),
+        name: "iconv_set_encoding",
+        area: Area::String,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "type",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "encoding",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Bool,
+        by_ref_return: false,
+        summary: "Sets the input, output, or internal character encoding.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.iconv-set-encoding.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("iconv_strlen"),
+        name: "iconv_strlen",
+        area: Area::String,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "string",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "encoding",
+                ty: TypeSpec::Str,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Mixed,
+        by_ref_return: false,
+        summary: "Returns the character count of a string in the requested encoding.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.iconv-strlen.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("iconv_strpos"),
+        name: "iconv_strpos",
+        area: Area::String,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "haystack",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "needle",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "offset",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "encoding",
+                ty: TypeSpec::Str,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Mixed,
+        by_ref_return: false,
+        summary: "Finds the first character position of a needle in a string.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.iconv-strpos.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("iconv_strrpos"),
+        name: "iconv_strrpos",
+        area: Area::String,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "haystack",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "needle",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "encoding",
+                ty: TypeSpec::Str,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Mixed,
+        by_ref_return: false,
+        summary: "Finds the last character position of a needle in a string.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.iconv-strrpos.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("iconv_substr"),
+        name: "iconv_substr",
+        area: Area::String,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "string",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "offset",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "length",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "encoding",
+                ty: TypeSpec::Str,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Mixed,
+        by_ref_return: false,
+        summary: "Extracts a character-indexed slice of a string.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.iconv-substr.php"),
         deprecation: None,
         extension: false,
         internal: false,
@@ -9472,9 +9889,9 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "Sorts an array by key in descending order.",
+        summary: "Sorts an array by key in descending SORT_REGULAR order; PHP sort flags are not yet supported.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.krsort.php"),
@@ -9508,7 +9925,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "Sorts an array by key in ascending order.",
+        summary: "Sorts an array by key in ascending SORT_REGULAR order; PHP sort flags are not yet supported.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.ksort.php"),
@@ -11752,7 +12169,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Returns a raw pointer to the given variable.",
         examples: &[
@@ -11771,7 +12188,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11799,7 +12216,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11830,7 +12247,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: Some("ptr_null() takes 0 arguments"),
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Returns a null raw pointer.",
         examples: &[
@@ -11849,7 +12266,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11864,7 +12281,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Returns a new pointer offset from the given pointer by the given byte count.",
         examples: &[
@@ -11883,7 +12300,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11911,7 +12328,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11939,7 +12356,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11967,7 +12384,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -12001,7 +12418,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -12063,7 +12480,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -12097,7 +12514,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -12131,7 +12548,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -12165,7 +12582,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -17169,7 +17586,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "zval",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -17206,7 +17623,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Packs an elephc runtime value into a heap-allocated PHP zval pointer.",
         examples: &[
@@ -17225,7 +17642,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "zval",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -17253,7 +17670,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "zval",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },

@@ -141,13 +141,13 @@ pub(super) fn emit_packed_field_load(
                         ctx.emitter.instruction(&format!(
                             "add {}, {}, #{}",
                             int_reg, base_reg, slot.offset
-                        )); // compute the nested packed field address
+                        ));                                                     // compute the nested packed field address
                     }
                     Arch::X86_64 => {
                         ctx.emitter.instruction(&format!(
                             "lea {}, [{} + {}]",
                             int_reg, base_reg, slot.offset
-                        )); // compute the nested packed field address
+                        ));                                                     // compute the nested packed field address
                     }
                 }
             }

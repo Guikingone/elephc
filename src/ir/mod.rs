@@ -28,7 +28,8 @@ mod tests;
 
 pub use block::{BasicBlock, BlockId, SwitchCase, Terminator};
 pub use runtime_fn::{
-    RuntimeFnBackendMapping, RuntimeFnDescriptor, RuntimeFnId, RuntimeFnTargetSupport,
+    ResourceCleanupKind, RuntimeFnBackendMapping, RuntimeFnDescriptor, RuntimeFnId,
+    RuntimeFnTargetSupport,
 };
 pub use builder::Builder;
 pub use effects::Effects;
@@ -37,15 +38,17 @@ pub use function::{
     LocalSlotId,
 };
 pub use instr::{
-    BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp,
-    NominalObjectBoundary, Op, PassOrigin, PhpTypePredicate, RuntimeId,
+    BuiltinId, CheckedNumericChainImmediate, CmpPredicate, Immediate, InstId, Instruction,
+    MixedNumericOp, NominalObjectBoundary, Op, PassOrigin, PhpTypePredicate, RuntimeId,
 };
 pub use module::{
     ClassTable, ConstScalar, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
     Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use print::{print_function, print_module};
-pub use runtime_call::{RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime};
+pub use runtime_call::{
+    ArrayKeySort, RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime,
+};
 pub use types::{IrHeapKind, IrType};
 pub use validator::{validate_function, validate_module, ValidationError};
 pub use function_variants::{

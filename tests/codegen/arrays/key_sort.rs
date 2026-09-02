@@ -12,6 +12,8 @@
 //! - Sorting only relinks `prev`/`next`/`head`/`tail`, so the fixtures also assert that key
 //!   association, later key lookups, later inserts and copy-on-write all still hold, and
 //!   one fixture re-checks the heap under `--heap-debug`.
+//! - A large reverse-order fixture guards the merge-sort path against accidentally
+//!   reintroducing quadratic insertion behavior.
 //! - PHP's key ordering is `zend_compare`, not a byte-wise order: `10` sorts before
 //!   `'Banana'` and `'0.5'` before `2`, which the mixed-key fixture pins.
 
@@ -235,6 +237,22 @@ foreach ($b as $k => $v) { echo $k; }
     assert_eq!(out, "abc|cba");
 }
 
+/// A large packed array exercises several bottom-up merge passes and the packed-to-hash
+/// promotion used by descending key order. The first, second, and last keys pin the full
+/// relink without making the assertion depend on timing.
+#[test]
+fn test_krsort_scales_to_large_reverse_key_order() {
+    let out = compile_and_run(
+        r#"<?php
+$a = range(0, 2047);
+krsort($a);
+$keys = array_keys($a);
+echo count($keys), ":", $keys[0], ":", $keys[1], ":", $keys[2047];
+"#,
+    );
+    assert_eq!(out, "2048:2047:2046:0");
+}
+
 /// `ksort()` on an indexed array stays a no-op: its keys are the slot positions `0..n-1`,
 /// which are already in ascending key order, and the values keep their slots.
 #[test]
@@ -307,6 +325,21 @@ foreach ($box->items["event"] as $key => $value) {
 "#,
     );
     assert_eq!(out, "2:c;1:b;0:a;");
+}
+
+/// `krsort()` promotes non-empty indexed storage, returns true, and preserves direct lookup
+/// while exposing descending integer keys through iteration.
+#[test]
+fn test_krsort_on_indexed_array_returns_true_and_preserves_lookup() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+echo krsort($a) ? "true:" : "false:";
+echo $a[0], ":";
+foreach ($a as $key => $value) { echo $key, "=", $value, ";"; }
+"#,
+    );
+    assert_eq!(out, "true:1:2=3;1=2;0=1;");
 }
 
 /// `krsort()` on a statically empty indexed array stays accepted, because an empty receiver

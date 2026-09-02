@@ -41,6 +41,8 @@ pub mod exports;
 pub mod filter_var_prelude;
 /// PHP variadic-argument introspection (`func_num_args`/`func_get_args`/`func_get_arg`) desugaring.
 pub mod func_args;
+/// The program-wide set of names some body declares `global`, shared by the checker and lowering.
+pub(crate) mod global_decls;
 /// `$GLOBALS` literal-key aliasing onto ordinary global storage.
 pub mod globals_array;
 mod progress;
@@ -83,9 +85,13 @@ pub mod parser;
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
+/// mysqli (MySQL / MariaDB over the elephc_pdo bridge) prelude injection.
+pub mod mysqli_prelude;
 
 /// PHP language-profile selection and profile-dependence analysis.
 pub mod php_profile;
+/// Reachability pruning of injected prelude declarations.
+pub(crate) mod prelude_prune;
 /// Resolution of includes.
 pub mod resolver;
 /// Physical source-file classification and per-file language profiles.
@@ -97,6 +103,8 @@ pub mod strict_php;
 mod string_bytes;
 /// Canonical HTTP-request superglobal set and shared type helper.
 pub mod superglobals;
+/// Rust builder for the synthetic PHP class surfaces the compiler injects itself.
+pub mod synthetic_class;
 /// Termination and exit handling.
 pub mod termination;
 /// Type system and checking.

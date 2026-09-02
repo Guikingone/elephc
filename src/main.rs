@@ -14,6 +14,7 @@ mod array_reduce_prelude;
 mod assert_prelude;
 mod ast_usage;
 mod backend_gap_prelude;
+mod brand;
 mod builtins;
 mod cli;
 mod codegen;
@@ -25,6 +26,7 @@ mod eval_aot;
 mod exports;
 mod filter_var_prelude;
 mod func_args;
+mod global_decls;
 mod globals_array;
 mod hash_prelude;
 mod image_prelude;
@@ -49,10 +51,17 @@ mod names;
 mod opcache;
 mod opcache_prelude;
 mod optimize;
+mod otlp;
 mod parser;
 mod php_version;
+mod mysqli_prelude;
 mod pdo_prelude;
+mod monitor;
+mod call_graph;
 mod php_profile;
+mod pprof_encode;
+mod prelude_prune;
+mod probe_key;
 mod pipeline;
 mod progress;
 mod resolver;
@@ -64,6 +73,8 @@ mod span;
 mod strict_php;
 mod string_bytes;
 mod superglobals;
+#[allow(dead_code)]
+mod synthetic_class;
 mod termination;
 mod timings;
 mod types;
@@ -101,6 +112,7 @@ fn main() {
             run_compile_with_stack(config);
         }
         cli::Command::Native(command) => run_native(command),
+        cli::Command::Monitor(command) => std::process::exit(monitor::run(command)),
     }
 }
 

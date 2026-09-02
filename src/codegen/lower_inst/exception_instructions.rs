@@ -8,6 +8,9 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
+};
 
 /// Lowers expression-form `throw` through the same runtime path as throw terminators.
 pub(super) fn lower_throw_exception(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {

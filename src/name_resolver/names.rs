@@ -416,6 +416,8 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "LC_NUMERIC"
                 | "SIGUSR1"
                 | "SIGUSR2"
+                | "ICONV_IMPL"
+                | "ICONV_VERSION"
         ) {
             return true;
         }
@@ -434,6 +436,7 @@ fn is_builtin_global_constant(name: &str) -> bool {
         .chain(crate::types::ent_constants::ENT_INT_CONSTANTS.iter())
         .chain(crate::types::string_constants::STRING_INT_CONSTANTS.iter())
         .chain(crate::types::standard_constants::STANDARD_INT_CONSTANTS.iter())
+        .chain(crate::types::iconv_constants::ICONV_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name);
     predefined_integer
         || crate::types::token_constants::TOKEN_INT_CONSTANTS

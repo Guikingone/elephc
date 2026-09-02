@@ -1,23 +1,20 @@
 //! Purpose:
-//! Emits the `__rt_buffer_len`, `__rt_buffer_use_after_free` runtime helper assembly for buffer length reads.
-//! Keeps compiler buffer extension checks and fatal paths aligned with generated pointer operations.
+//! Emits the generation-safe `__rt_buffer_len` helper for Buffer length reads.
+//! Public Buffer values are scalar handles and must be resolved before metadata access.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::buffers`.
+//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `buffers`.
 //!
 //! Key details:
-//! - Buffer helpers enforce extension ownership rules, including live headers, bounds checks, and fatal paths before unsafe access.
+//! - `__rt_buffer_resolve` validates index, generation, and activity before offset-eight access.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Emits the `__rt_buffer_len` runtime helper.
-///
-/// On entry, `x0` holds the buffer pointer. On exit, `x0` holds the logical element count.
-///
-/// Falls through to `__rt_buffer_use_after_free` when the buffer pointer is null
-/// (indicating the buffer has been freed). The ARM64 path checks `cbz x0, ...`;
-/// the x86_64 path checks `test rax, rax` / `jz ...`.
+/// Emits `__rt_buffer_len` for the active target.
+/// Accepts a scalar Buffer handle in the integer result register and returns the
+/// logical element count from the validated descriptor's offset-eight field.
 pub fn emit_buffer_len(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_buffer_len_linux_x86_64(emitter);
@@ -27,22 +24,24 @@ pub fn emit_buffer_len(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_len ---");
     emitter.label_global("__rt_buffer_len");
-    emitter.instruction("cbnz x0, __rt_buffer_len_ok");                         // live buffer pointer → read the header
-    emitter.instruction("b __rt_buffer_use_after_free");                        // null after buffer_free(): abort (uncond → cross-atom safe)
-    emitter.label("__rt_buffer_len_ok");
-    emitter.instruction("ldr x0, [x0]");                                        // load the logical element count from the buffer header
+    emitter.instruction("sub sp, sp, #16");                                     // reserve aligned storage for the caller return address across resolution
+    emitter.instruction("str x30, [sp]");                                       // preserve caller return address before resolver branch-and-link overwrites it
+    abi::emit_call_label(emitter, "__rt_buffer_resolve");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // return logical element count from the validated descriptor
+    emitter.instruction("ldr x30, [sp]");                                       // restore original caller return address after descriptor lookup
+    emitter.instruction("add sp, sp, #16");                                     // release aligned temporary storage before returning
     emitter.instruction("ret");                                                 // return length in x0
 }
 
-/// Emits `__rt_buffer_len` for the x86_64 Linux target.
-/// Identical behavior to the ARM64 variant but uses x86_64 syscalls instead of ARM64 instructions.
-/// On entry rax holds the buffer pointer; on exit rax holds the logical element count.
+/// Emits the Linux x86_64 `__rt_buffer_len` variant.
+/// Preserves `rbp` solely to satisfy the System V nested-call stack alignment.
 fn emit_buffer_len_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_len ---");
     emitter.label_global("__rt_buffer_len");
-    emitter.instruction("test rax, rax");                                       // abort deterministically when buffer_len() is called after buffer_free() nulled the local slot
-    emitter.instruction("jz __rt_buffer_use_after_free");                       // jump to the shared fatal helper when the buffer header pointer is null
-    emitter.instruction("mov rax, QWORD PTR [rax]");                            // load the logical element count from the buffer header
-    emitter.instruction("ret");                                                 // return the logical length in rax
+    emitter.instruction("push rbp");                                            // preserve callee-saved frame pointer and align the nested resolver call
+    abi::emit_call_label(emitter, "__rt_buffer_resolve");
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // return logical element count from the validated descriptor
+    emitter.instruction("pop rbp");                                             // restore callee-saved frame pointer before returning to generated code
+    emitter.instruction("ret");                                                 // return length in rax
 }

@@ -31,7 +31,9 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&loop_label);
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the wrapper fd for EOF probing
             abi::emit_call_label(ctx.emitter, "__rt_feof");
-            ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper_done_label)); // stop streaming when stream_eof reports EOF
+            ctx.emitter.instruction(
+                &format!("cbnz x0, {}", wrapper_done_label)
+            );                                                                  // stop streaming when stream_eof reports EOF
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the wrapper fd for reading
             ctx.emitter.instruction("mov x1, #4096");                           // request a bounded wrapper read chunk
             abi::emit_call_label(ctx.emitter, "__rt_fread");

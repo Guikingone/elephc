@@ -273,7 +273,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction(&format!(
                 "mov x9, #{}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
-            )); // load static exception message length
+            ));                                                                 // load static exception message length
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store static exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
@@ -288,7 +288,9 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction(
+                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter
@@ -300,7 +302,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction(&format!(
                 "mov QWORD PTR [rax + 16], {}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
-            )); // store static exception message length
+            ));                                                                 // store static exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null

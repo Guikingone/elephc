@@ -16,7 +16,9 @@ use super::*;
 /// - `subject` is pruned before analysis.
 /// - Cases and default branch are normalized and pruned.
 /// - Returns the execution path for a known subject value, or the original switch if
-///   level-sensitive exits prevent safe rewriting, or if the subject is not scalar.
+///   level-sensitive exits prevent safe rewriting, if the subject is not scalar, or if the
+///   single-case rewrite would clone a node carrying a checker local-binding decision (see
+///   `single_case_rewrite_would_clone_a_decision`).
 pub(crate) fn prune_switch_stmt(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -63,7 +65,9 @@ pub(crate) fn prune_switch_stmt(
     }
 
     let Some(subject_value) = scalar_value(&subject) else {
-        if cases.len() == 1 {
+        if cases.len() == 1
+            && !single_case_rewrite_would_clone_a_decision(&subject, &cases, &default)
+        {
             let (patterns, _) = &cases[0];
             if let Some(condition) = build_switch_match_condition(&subject, patterns) {
                 let then_body = materialize_switch_execution(&cases, &default, Some(0));
@@ -113,6 +117,43 @@ pub(crate) fn prune_switch_stmt(
     } else {
         Vec::new()
     }
+}
+
+/// Returns whether rewriting this single-case switch into an `if` would put a node the CHECKER
+/// filed a local-binding decision against at TWO syntactic positions.
+///
+/// The decisions are keyed BY SPAN and a clone carries the original's span, so one decision would
+/// then name two statements — the invariant `checker::binding_decision_ambiguity` certified on the
+/// ORIGINAL program, and the one EIR lowering consults the maps under. This rewrite is the second
+/// pass that can break it (DCE tail-sinking is the other, guarded by the same walker); it runs in
+/// the normalize/prune phases, which is why `optimize::PostTypecheckOptimizer::prune` and
+/// `::normalize` install the decision spans as well.
+///
+/// Two things the rewrite writes twice:
+/// - the DEFAULT body — `materialize_switch_execution` appends it to the `then` branch when the
+///   single case falls through, and emits it AGAIN as the whole `else` branch. It is the only body
+///   that can be duplicated: the case body is materialized into `then` alone. It is checked
+///   WHETHER OR NOT the case actually falls through into it, because deciding that here would mean
+///   re-deriving `materialize_switch_execution`'s stop rule — and a rewrite this pass declines is
+///   cheaper than a stop rule that drifts out of step with it.
+/// - the SUBJECT expression — `build_switch_match_condition` clones it once per case pattern, so
+///   more than one pattern means more than one copy. (Kill sites are filed against an EXPRESSION
+///   span, which is why the subject is checked at all.)
+///
+/// A `true` answer costs the optimization on that one switch and nothing else.
+fn single_case_rewrite_would_clone_a_decision(
+    subject: &Expr,
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: &Option<Vec<Stmt>>,
+) -> bool {
+    let default_body_carries_a_decision = default
+        .as_ref()
+        .is_some_and(|body| stmts_carry_local_binding_decision(body));
+    let subject_is_cloned = cases
+        .first()
+        .is_some_and(|(patterns, _)| patterns.len() > 1);
+    default_body_carries_a_decision
+        || (subject_is_cloned && expr_carries_local_binding_decision(subject))
 }
 
 /// Optimizes a `match` expression by folding a known scalar subject value into the arms.

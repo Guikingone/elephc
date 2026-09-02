@@ -26,6 +26,30 @@ eGMK12chOVcx41RxYctqsOlEKCIt011yGsV2/Mdm9ljTXeyXvNXCVOVcnHaf1v5w\n\
 rNiobfy8sSb6iw==\n\
 -----END PRIVATE KEY-----\n";
 
+/// Derives the public half of the static test RSA key.
+fn test_rsa_public_key() -> rsa::RsaPublicKey {
+    use rsa::pkcs8::DecodePrivateKey;
+
+    let private = rsa::RsaPrivateKey::from_pkcs8_pem(TEST_RSA_KEY_PEM).unwrap();
+    rsa::RsaPublicKey::from(&private)
+}
+
+/// Writes the static test public key to PHP's `<archive>.pubkey` sidecar path.
+fn write_test_public_key(path: &std::path::Path) {
+    use rsa::pkcs8::{EncodePublicKey, LineEnding};
+
+    let pem = test_rsa_public_key()
+        .to_public_key_pem(LineEnding::LF)
+        .unwrap();
+    std::fs::write(archive_public_key_path(path), pem).unwrap();
+}
+
+/// Removes an archive fixture and its optional public-key sidecar.
+fn remove_signed_fixture(path: &std::path::Path) {
+    std::fs::remove_file(path).ok();
+    std::fs::remove_file(archive_public_key_path(path)).ok();
+}
+
 /// OpenSSL signing replaces the native PHAR's SHA1 trailer with an RSA-SHA1
 /// signature trailer, the signature is deterministic and verifies against the
 /// derived public key, and the signature metadata reads back as OpenSSL.
@@ -44,6 +68,15 @@ pub(super) fn native_phar_openssl_signature_round_trip() {
     );
 
     let signed = std::fs::read(&path).unwrap();
+    assert!(
+        parse_archive(&signed).is_none(),
+        "byte-only parsing must reject an OpenSSL signature without a key"
+    );
+    assert!(
+        read_signature_info(pb.as_bytes()).is_none(),
+        "path reads must reject an OpenSSL signature without its sidecar key"
+    );
+    write_test_public_key(&path);
     let n = signed.len();
     assert_eq!(&signed[n - 4..], b"GBMB");
     assert_eq!(
@@ -77,7 +110,7 @@ pub(super) fn native_phar_openssl_signature_round_trip() {
     pubkey
         .verify(Pkcs1v15Sign::new::<Sha1>(), &hashed, &sig)
         .expect("signature verifies");
-    std::fs::remove_file(&path).ok();
+    remove_signed_fixture(&path);
 }
 
 /// Hash-based signing rewrites the native PHAR trailer with the requested digest
@@ -94,6 +127,90 @@ pub(super) fn native_phar_hash_signature_round_trip() {
     assert_eq!(digest.len(), 32);
     assert_eq!(signature_type_name(pb.as_bytes()).as_deref(), Some(&b"SHA-256"[..]));
     std::fs::remove_file(&path).ok();
+}
+
+/// Verifies a signed native PHAR is rejected when its entry payload is
+/// modified without recomputing the recorded SHA-256 signature.
+#[test]
+pub(super) fn native_phar_rejects_tampered_signed_payload() {
+    let path = std::env::temp_dir().join(format!(
+        "elephc_phar_tampered_signature_{}.phar",
+        std::process::id()
+    ));
+    let pb = path.to_string_lossy();
+    assert_eq!(put_entry_bytes(pb.as_bytes(), b"a.txt", b"alpha"), Some(5));
+    assert_eq!(sign_archive_hash(pb.as_bytes(), 3), Some(()));
+
+    let mut data = std::fs::read(&path).unwrap();
+    let payload = data
+        .windows(b"alpha".len())
+        .position(|window| window == b"alpha")
+        .expect("signed fixture contains its payload");
+    data[payload] ^= 0x01;
+
+    assert!(
+        parse_archive(&data).is_none(),
+        "a payload whose signature no longer verifies must be rejected"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+/// Verifies signed tar and ZIP PHARs authenticate their payload while being
+/// opened, rather than merely exposing unverified signature metadata.
+#[test]
+pub(super) fn tar_and_zip_phars_reject_tampered_signed_payloads() {
+    const PAYLOAD: &[u8] = b"authenticated archive payload";
+    for extension in ["tar", "zip"] {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-phar-tamper-{}-{extension}.{extension}",
+            std::process::id()
+        ));
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"payload.txt", PAYLOAD),
+            Some(PAYLOAD.len())
+        );
+        assert_eq!(sign_archive_hash(path_bytes.as_bytes(), 3), Some(()));
+
+        let mut archive = std::fs::read(&path).expect("read signed PHAR fixture");
+        let offset = archive
+            .windows(PAYLOAD.len())
+            .position(|window| window == PAYLOAD)
+            .expect("locate stored payload bytes");
+        archive[offset] ^= 0x01;
+        assert!(
+            parse_archive(&archive).is_none(),
+            "tampered signed {extension} PHAR must fail authentication"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+}
+
+/// Verifies a tar PHAR cannot authenticate a valid prefix and then expose an
+/// unsigned entry appended after its signature control record.
+#[test]
+pub(super) fn tar_phar_rejects_entries_appended_after_signature() {
+    let path = std::env::temp_dir().join(format!(
+        "elephc-phar-appended-after-signature-{}.tar",
+        std::process::id()
+    ));
+    let path_bytes = path.to_string_lossy();
+    assert_eq!(
+        put_entry_bytes(path_bytes.as_bytes(), b"signed.txt", b"signed"),
+        Some(6)
+    );
+    assert_eq!(sign_archive_hash(path_bytes.as_bytes(), 3), Some(()));
+
+    let mut archive = std::fs::read(&path).unwrap();
+    archive.truncate(archive.len() - 1024);
+    write_tar_entry(&mut archive, b"unsigned.txt", b"appended").unwrap();
+    archive.extend_from_slice(&[0u8; 1024]);
+
+    assert!(
+        parse_archive(&archive).is_none(),
+        "entries after the authenticated tar prefix must be rejected"
+    );
+    std::fs::remove_file(path).ok();
 }
 
 /// Reconstructs the byte range a tar/zip phar signature is computed over from a
@@ -177,19 +294,28 @@ pub(super) fn check_tar_zip_openssl_signature(ext: &str) {
         Some(())
     );
     let data = std::fs::read(&path).unwrap();
+    assert!(
+        parse_archive(&data).is_none(),
+        "byte-only parsing must reject an OpenSSL signature without a key"
+    );
+    assert!(
+        read_signature_info(pb.as_bytes()).is_none(),
+        "path reads must reject an OpenSSL signature without its sidecar key"
+    );
+    write_test_public_key(&path);
     let (flag, sig) = read_signature_info(pb.as_bytes()).unwrap();
     assert_eq!(flag, PHAR_OPENSSL_SIGNATURE_TYPE);
     assert_eq!(sig.len(), 128, "1024-bit RSA signature is 128 bytes");
     assert_eq!(signature_type_name(pb.as_bytes()).as_deref(), Some(&b"OpenSSL"[..]));
     // The signature verifies against the public key over the signed range.
-    let arch = parse_archive(&data).unwrap();
+    let arch = parse_archive_with_public_key(&data, Some(&test_rsa_public_key())).unwrap();
     let key = RsaPrivateKey::from_pkcs8_pem(TEST_RSA_KEY_PEM).unwrap();
     let pubkey = RsaPublicKey::from(&key);
     let hashed = Sha1::digest(tar_zip_signed_range(&arch));
     pubkey
         .verify(Pkcs1v15Sign::new::<Sha1>(), &hashed, &sig)
         .expect("tar/zip OpenSSL signature verifies");
-    std::fs::remove_file(&path).ok();
+    remove_signed_fixture(&path);
 }
 
 /// OpenSSL signing a tar phar verifies against the derived public key.
@@ -202,4 +328,52 @@ pub(super) fn tar_phar_openssl_signature_round_trip() {
 #[test]
 pub(super) fn zip_phar_openssl_signature_round_trip() {
     check_tar_zip_openssl_signature("zip");
+}
+
+/// Verifies native, tar, and ZIP OpenSSL signatures fail closed after signed
+/// payload bytes are modified, even when the expected public key is present.
+#[test]
+pub(super) fn openssl_signed_phars_reject_tampered_payloads() {
+    const PAYLOAD: &[u8] = b"authenticated OpenSSL payload";
+    for extension in ["phar", "tar", "zip"] {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-phar-openssl-tamper-{}-{extension}.{extension}",
+            std::process::id()
+        ));
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"payload.txt", PAYLOAD),
+            Some(PAYLOAD.len())
+        );
+        assert_eq!(
+            sign_archive_openssl(path_bytes.as_bytes(), TEST_RSA_KEY_PEM.as_bytes()),
+            Some(())
+        );
+        write_test_public_key(&path);
+
+        let url = format!("phar://{}/payload.txt", path.display());
+        assert_eq!(
+            extract_url_bytes(url.as_bytes()).as_deref(),
+            Some(PAYLOAD),
+            "valid signed {extension} fixture must authenticate"
+        );
+
+        let mut archive = std::fs::read(&path).unwrap();
+        let offset = archive
+            .windows(PAYLOAD.len())
+            .position(|window| window == PAYLOAD)
+            .expect("locate signed payload bytes");
+        archive[offset] ^= 0x01;
+        std::fs::write(&path, archive).unwrap();
+
+        assert!(
+            extract_url_bytes(url.as_bytes()).is_none(),
+            "tampered OpenSSL-signed {extension} PHAR must not expose payloads"
+        );
+        assert!(
+            read_signature_info(path_bytes.as_bytes()).is_none(),
+            "tampered OpenSSL-signed {extension} PHAR must not expose signature metadata"
+        );
+        remove_signed_fixture(&path);
+    }
 }

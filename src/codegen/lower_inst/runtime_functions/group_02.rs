@@ -10,7 +10,7 @@
 
 use crate::codegen::context::FunctionContext;
 use crate::codegen::Result;
-use crate::ir::{RuntimeFnId, Instruction};
+use crate::ir::{Instruction, RuntimeFnId};
 
 /// Lowers a target owned by bounded dispatch group 02, or returns `None`.
 pub(super) fn lower(
@@ -24,6 +24,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::GetDebugType => Some({
             crate::codegen::lower_inst::builtins::lower_get_debug_type(ctx, inst)
+        }),
+        RuntimeFnId::GetObjectVars => Some({
+            crate::codegen::lower_inst::builtins::types::lower_get_object_vars(ctx, inst)
         }),
         RuntimeFnId::GetDeclaredClasses => Some({
             crate::codegen::lower_inst::builtins::types::lower_get_declared_names(

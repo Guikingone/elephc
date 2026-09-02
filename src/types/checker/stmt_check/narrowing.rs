@@ -600,14 +600,21 @@ fn is_guard_receiver_shape(kind: &ExprKind) -> bool {
     )
 }
 
-/// Returns the stable place compared by a strict guard, including a simple local assignment.
+/// Returns the place a guard narrows, seeing through an assignment made inside the guard.
 ///
-/// PHP commonly binds a fallible result inside the comparison (`false === $value = call()`).
-/// Once the condition has been inferred, the environment already contains the assigned type, so
-/// the comparison can narrow that local exactly like a following `false === $value` guard. Keep
-/// synthetic/non-local assignment forms excluded because their expression result may use a
-/// stabilized temporary rather than the written place.
-fn strict_guard_receiver(expr: &Expr) -> Option<&Expr> {
+/// `while (($row = fgetcsv($h)) !== false)` is the shape the PHP manual uses for every
+/// `T|false` reader, and it narrows exactly like `$row !== false` would: the assignment
+/// completes before the comparison, so the compared value IS the variable's new value.
+/// Without this the union survives into the loop body and `count($row)` stops compiling —
+/// which is what made converting those builtins to a union look like a bad trade. The same
+/// shape appears written the other way round (`false === $value = call()`), which is why both
+/// operands are offered to this.
+///
+/// The SYNTHETIC assignment forms are excluded on purpose: a `result_target`, a lowering
+/// `prelude` or a `conditional_value_temp` means the expression's result may be a stabilized
+/// temporary rather than the written place, so narrowing the place would narrow something the
+/// comparison never looked at.
+fn guard_receiver_place(expr: &Expr) -> Option<&Expr> {
     if is_guard_receiver_shape(&expr.kind) {
         return Some(expr);
     }
@@ -621,8 +628,8 @@ fn strict_guard_receiver(expr: &Expr) -> Option<&Expr> {
     else {
         return None;
     };
-    if prelude.is_empty() && matches!(target.kind, ExprKind::Variable(_)) {
-        Some(target)
+    if prelude.is_empty() && is_guard_receiver_shape(&target.kind) {
+        Some(target.as_ref())
     } else {
         None
     }
@@ -752,15 +759,13 @@ fn guard_receiver_and_target<'a>(
             right,
         } => {
             let negates = matches!(op, BinOp::StrictNotEq);
-            // `strict_guard_receiver` accepts ordinary property places and a simple local bound
-            // by the comparison itself, while retaining the static-property singleton shape
-            // `if (self::$inst === null) { self::$inst = new S(); }`.
-            let (receiver, lit) = if let Some(receiver) = strict_guard_receiver(left) {
-                (receiver, &right.kind)
-            } else if let Some(receiver) = strict_guard_receiver(right) {
-                (receiver, &left.kind)
-            } else {
-                return None;
+            // `guard_receiver_place` rather than an inline `Variable | PropertyAccess` match:
+            // it also accepts a static property — which is what lets the singleton shape
+            // `if (self::$inst === null) { self::$inst = new S(); }` narrow — and a place bound
+            // by the comparison itself (`false === $value = call()`).
+            let (receiver, lit) = match guard_receiver_place(left) {
+                Some(place) => (place, &right.kind),
+                None => (guard_receiver_place(right)?, &left.kind),
             };
             match lit {
                 ExprKind::BoolLiteral(false) => {

@@ -404,3 +404,39 @@ fn generator_functions_are_all_spilled() {
     assert_eq!(allocation.register_of(ValueId::from_raw(0)), None);
     assert!(allocation.used_callee_saved().is_empty());
 }
+
+/// Verifies a straight-line scalar range inside a function that installs an
+/// exception handler remains register-eligible instead of forcing all values
+/// in the entire function to spill.
+#[test]
+fn exception_handler_function_keeps_safe_scalar_ranges_in_registers() {
+    let mut function = Function::new("guarded".to_string(), IrType::I64, PhpType::Int);
+    let result = {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.emit(
+            Op::TryPushHandler,
+            vec![],
+            Some(Immediate::I64(0)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        let left = builder.emit_const_i64(20);
+        let right = builder.emit_const_i64(22);
+        let result = builder.emit_iadd(left, right);
+        builder.terminate(Terminator::Return {
+            value: Some(result),
+        });
+        result
+    };
+
+    let allocation = allocate_registers(&function, aarch64());
+
+    assert!(
+        allocation.register_of(result).is_some(),
+        "a handler marker must not force a safe straight-line scalar result to spill"
+    );
+}

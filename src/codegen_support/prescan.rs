@@ -23,6 +23,7 @@ use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::iconv_constants::{iconv_impl, ICONV_INT_CONSTANTS, ICONV_VERSION};
 use crate::types::standard_constants::STANDARD_INT_CONSTANTS;
 use crate::types::string_constants::STRING_INT_CONSTANTS;
 use crate::types::token_constants::{token_int_constant_value, TOKEN_INT_CONSTANTS};
@@ -231,6 +232,12 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in ICONV_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
     for (name, value) in JSON_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
@@ -420,6 +427,20 @@ pub(crate) fn collect_constants(
         (
             ExprKind::FloatLiteral(std::f64::consts::LOG10_E),
             PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "ICONV_IMPL".to_string(),
+        (
+            ExprKind::StringLiteral(iconv_impl(target_platform == Platform::MacOS).to_string()),
+            PhpType::Str,
+        ),
+    );
+    constants.insert(
+        "ICONV_VERSION".to_string(),
+        (
+            ExprKind::StringLiteral(ICONV_VERSION.to_string()),
+            PhpType::Str,
         ),
     );
     constants.insert(

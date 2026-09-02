@@ -10,12 +10,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::platform::Platform;
+use crate::codegen::platform::Target;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STRING_CONSTANTS};
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::filter_constants::FILTER_INT_CONSTANTS;
+use crate::types::iconv_constants::ICONV_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
@@ -40,12 +41,12 @@ impl Checker {
     /// classes, interfaces, enums, etc.) are initialized empty.
     ///
     /// # Arguments
-    /// * `target_platform` - The compilation target platform, stored for use in platform-specific
-    ///   type checks and library requirements.
+    /// * `target` - The compilation target (platform + architecture), stored for use in
+    ///   platform-specific type checks and library requirements.
     ///
     /// # Returns
     /// A `Checker` instance ready for the program to be loaded into.
-    pub(crate) fn new(target_platform: Platform) -> Self {
+    pub(crate) fn new(target: Target) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
         constants.insert("PHP_OS_FAMILY".to_string(), PhpType::Str);
@@ -103,6 +104,11 @@ impl Checker {
         for (name, _value) in ARRAY_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in ICONV_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        constants.insert("ICONV_IMPL".to_string(), PhpType::Str);
+        constants.insert("ICONV_VERSION".to_string(), PhpType::Str);
         for (name, _value) in JSON_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
@@ -170,7 +176,7 @@ impl Checker {
         }
 
         Self {
-            target_platform,
+            target,
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
@@ -202,6 +208,7 @@ impl Checker {
             declared_trait_constants: HashMap::new(),
             current_class: None,
             current_method: None,
+            current_function: None,
             current_method_is_static: false,
             current_by_ref_return: false,
             closure_depth: 0,
@@ -213,6 +220,10 @@ impl Checker {
             top_level_env: HashMap::new(),
             active_ref_params: HashSet::new(),
             active_globals: HashSet::new(),
+            // Filled by `check_types_impl` from the whole program before the first walk; an empty
+            // set here just means "no `global` declaration is known", which is the safe default
+            // for the handful of tests that build a `Checker` directly.
+            program_global_names: HashSet::new(),
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             eval_barrier_active: false,
@@ -234,6 +245,20 @@ impl Checker {
             by_ref_local_storage_types: HashMap::new(),
             string_suffix_locals: HashMap::new(),
             dynamic_ref_local_types: HashMap::new(),
+            strict_locals: false,
+            local_conditional_depth: 0,
+            local_binding_depth: HashMap::new(),
+            ref_aliased_locals: HashSet::new(),
+            static_local_names: HashSet::new(),
+            typed_local_names: HashSet::new(),
+            local_bind_kill_sites: HashMap::new(),
+            local_retype_sites: HashMap::new(),
+            statement_position_expr: None,
+            body_contains_eval: false,
+            mixed_storage_locals: HashSet::new(),
+            mixed_storage_store_sites: HashMap::new(),
+            binding_decision_warnings: HashMap::new(),
+            retired_mixed_storage_store_sites: HashSet::new(),
         }
     }
 }

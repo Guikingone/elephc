@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/pclose.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/pclose.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L543) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

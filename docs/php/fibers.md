@@ -7,7 +7,7 @@ sidebar:
 
 A `Fiber` is a cooperative coroutine: a callable that owns its own call stack and can suspend execution at arbitrary depth. Control alternates explicitly between the caller and the fiber — there is no preemption.
 
-elephc supports Fibers on the supported native target matrix: macOS ARM64, Linux ARM64, and Linux x86_64.
+elephc supports Fibers on the three executable/release hosts: macOS ARM64, Linux ARM64, and Linux x86_64. The iOS compile targets are library-only and do not run Fibers.
 
 ## Class summary
 
@@ -25,7 +25,7 @@ elephc supports Fibers on the supported native target matrix: macOS ARM64, Linux
 | `Fiber::suspend` | `static suspend(mixed $value = null): mixed` | (Called from inside a fiber.) Yield the value to the resumer and pause; resumes with the value the next `resume()` delivers. |
 | `Fiber::getCurrent` | `static getCurrent(): ?Fiber` | The currently executing fiber, or null when called from the main thread. Internally this is represented as a boxed `mixed` value. |
 
-`FiberError` is modeled as an `Error` subclass, matching PHP. `catch (FiberError $e)`, `catch (Error $e)`, and `catch (Throwable $e)` all apply; `catch (Exception $e)` does not.
+`FiberError` is modeled as an `Error` subclass, matching PHP. `catch (FiberError $e)`, `catch (Error $e)`, and `catch (Throwable $e)` all apply; `catch (Exception $e)` does not. As in reference PHP, the class is reserved for the engine: `new FiberError(...)` is refused — elephc reports it at compile time where PHP raises `Error: The "FiberError" class is reserved for internal use and cannot be manually instantiated` at run time.
 
 ## Lifecycle states
 

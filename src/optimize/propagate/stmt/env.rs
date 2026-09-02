@@ -29,6 +29,29 @@ pub(super) fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &
         env.remove(name);
         return env;
     }
+    // A local the checker compiled as boxed `mixed` storage is bound `mixed` for its WHOLE frame,
+    // and EIR lowering stores and reads it through that one type. A propagated fact would be
+    // TRUE — the constant really is the value here — but substituting it at a read replaces a
+    // boxed-slot load with a literal of a CONCRETE type, which is a type the checker never
+    // approved for the name. `if (…) { $a = 42; } else { $a = "hello"; } $a = 99; echo strlen($a);`
+    // then reached `strlen`'s checked fast path with an `Int` operand and PANICKED the compiler
+    // ("strlen cannot lower checked operand type Int"); the `strtoupper` variant failed EIR
+    // validation with an `OperandTypeMismatch` instead.
+    //
+    // Refusing the FACT rather than the substitution is what makes this airtight. A name blocked
+    // here cannot leak a concrete type anywhere downstream — including through the `$b = $a` copy
+    // arm below, which would otherwise hand the constant to an unmarked name and substitute it
+    // there.
+    //
+    // This is not literally the only place a fact is recorded — `env_after_list_unpack` records
+    // one per unpacked variable — but it is the only one a MARKED name can reach: the
+    // mixed-storage pre-scan disqualifies every `ListUnpack` target outright
+    // (`checker::mixed_storage_scan`'s `StmtKind::ListUnpack` arm), so a name that got here
+    // marked is never a name that arm can record.
+    if crate::optimize::binding_decisions::local_has_mixed_storage(name) {
+        env.remove(name);
+        return env;
+    }
     if let Some(value) = assigned_scalar_value(value) {
         env.insert(name.to_string(), PropagatedValue::Scalar(value));
     } else if let Some(fact) = assigned_array_fact(value) {

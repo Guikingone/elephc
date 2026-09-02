@@ -54,6 +54,14 @@ pub(super) fn discover_include(
     state: &mut ResolveState,
     output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
+    if include_chain.len() >= super::super::MAX_INCLUDE_DEPTH {
+        return Err(CompileError::new(
+            span,
+            "maximum include depth exceeded",
+        ));
+    }
+    // A path only the RUNTIME can know (a variable, a call) is not a discovery failure:
+    // discovery skips it and the include stays dynamic, instead of failing the compile.
     let path_str = match fold_include_path(path, state) {
         Ok(path) => path,
         Err(_) if is_runtime_dynamic_include_path(path) => return Ok(()),

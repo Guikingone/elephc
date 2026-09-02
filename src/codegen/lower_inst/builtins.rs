@@ -42,6 +42,7 @@ pub(crate) mod debug;
 pub(crate) mod eval;
 mod eval_facade;
 mod filter;
+pub(crate) mod iconv;
 pub(crate) mod io;
 mod isset;
 mod count_empty;

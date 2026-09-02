@@ -251,7 +251,7 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
         array_merge_runtime_helper(&merged_element_type)
     };
     emit_array_merge_pair(ctx, inst.operands[0], inst.operands[1], helper)?;
-    stamp_array_merge_result(ctx, helper, &merged_element_type);
+    stamp_array_merge_result(ctx, &merged_element_type);
 
     if inst.operands.len() > 2 {
         abi::emit_reserve_temporary_stack(ctx.emitter, 16);                     // preserve the old and replacement owned merge results across each fold step
@@ -268,7 +268,7 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 }
             }
             abi::emit_call_label(ctx.emitter, helper);
-            stamp_array_merge_result(ctx, helper, &merged_element_type);
+            stamp_array_merge_result(ctx, &merged_element_type);
             abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
             abi::emit_load_temporary_stack_slot(
                 ctx.emitter,
@@ -308,12 +308,16 @@ fn emit_array_merge_pair(
     Ok(())
 }
 
-/// Stamps refcounted merge results so later indexed reads decode their payloads correctly.
-fn stamp_array_merge_result(ctx: &mut FunctionContext<'_>, helper: &str, elem_ty: &PhpType) {
-    if helper == "__rt_array_merge_refcounted" {
-        let result = abi::int_result_reg(ctx.emitter);
-        crate::codegen::emit_array_value_type_stamp(ctx.emitter, result, elem_ty);
-    }
+/// Stamps a merge result so later indexed reads decode its payloads correctly.
+///
+/// Every merge helper allocates its result through the shared array constructor, which leaves
+/// the value_type lane empty. Unstamped, every reader treats the merged slots as raw words:
+/// merging two heterogeneous arrays produced the right COUNT and printed ADDRESSES. The stamp
+/// is a no-op for element types that carry no runtime value_type tag (`Int`, `Never`, …), so it
+/// is applied for every helper rather than only the refcounted one.
+fn stamp_array_merge_result(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) {
+    let result = abi::int_result_reg(ctx.emitter);
+    crate::codegen::emit_array_value_type_stamp(ctx.emitter, result, elem_ty);
 }
 
 /// Returns the indexed-array element representation, or `None` for another container kind.

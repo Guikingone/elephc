@@ -26,6 +26,7 @@ use crate::ir::{DataPool, Function, Module};
 
 use super::branch_simplify::BranchSimplify;
 use super::checked_int_sink::CheckedIntSink;
+use super::checked_numeric_chain::CheckedNumericChain;
 use super::const_fold::ConstFold;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
@@ -72,15 +73,16 @@ pub trait IrPass {
 
 /// Builds the ordered set of transformation passes run on every function:
 /// identity arithmetic folding, peephole rewrites, immutable-local discovery,
-/// checked-arithmetic int-sink specialization, constant folding, common-subexpression
-/// elimination, loop-invariant code motion, dead instruction elimination, dead store
-/// elimination, and branch simplification.
+/// checked-arithmetic int-sink specialization, boxed numeric-chain fusion, constant folding,
+/// common-subexpression elimination, loop-invariant code motion, dead instruction elimination,
+/// dead store elimination, and branch simplification.
 /// The cross-function small-function inliner is not a member here; it runs as a
 /// module-level phase in `optimize_module`, interleaved with these passes.
 ///
 /// Constant folding runs after peephole and the two issue-623 passes: immutable
 /// scalar local loads become pure operands, and checked operations observed only
-/// through integer sinks become allocation-free `IChecked*ToInt` computations.
+/// through integer sinks become allocation-free `IChecked*ToInt` computations or fused
+/// `ICheckedNumericChainToInt` regions.
 /// CSE can then deduplicate those computations using canonical immutable loads,
 /// while LICM can move both the loads and their dependent arithmetic into loop
 /// preheaders. The redundant or relocated instructions these leave behind are
@@ -92,6 +94,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(Peephole),
         Box::new(ImmutableLocalLoads),
         Box::new(CheckedIntSink),
+        Box::new(CheckedNumericChain),
         Box::new(ConstFold),
         Box::new(Cse),
         Box::new(Licm),
@@ -110,8 +113,18 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
 /// inliner and the function passes feed each other: inlined bodies expose new
 /// constants/dead code, and the simplified functions expose new (smaller) inline
 /// candidates. The first round reproduces the prior "inline once, then optimize"
-/// behavior; later rounds only optimize further, never changing semantics, so the
-/// result is identical with `--ir-opt` on or off except for performance.
+/// behavior; later rounds only optimize further.
+///
+/// Producing the same answer with `--ir-opt` on and off is the CONTRACT here,
+/// not a proven property, and `--ir-opt=off` is the way to find out which of the
+/// two a program is getting. It has been broken: dead-store elimination treated
+/// a block that throws out of the middle of a `try` as reaching only the block
+/// its `br` named, so stores the catch could still observe were neutralized and
+/// the handler read a slot nothing had written — a different answer every run,
+/// and only with the passes on. The rule that a `may_throw` instruction and a
+/// `throw` terminator both reach the handler lives in `dead_store`; any future
+/// pass whose analysis walks `cfg::successors` inherits the same blind spot,
+/// because that CFG is built from terminators and has no exception edges at all.
 ///
 /// Inside each round the module is destructured so the function tables and the
 /// shared literal `data` pool are borrowed disjointly. The combined process

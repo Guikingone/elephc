@@ -2,7 +2,7 @@
 title: "ctype_space()"
 description: "Checks if all characters in the string are whitespace characters."
 sidebar:
-  order: 494
+  order: 505
 ---
 
 ## ctype_space()

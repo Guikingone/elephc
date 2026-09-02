@@ -131,8 +131,10 @@ pub enum BuiltinTargetStrategy {
 /// Declares which supported compiler targets implement the builtin semantics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuiltinTargetSupport {
-    /// The semantic strategy is valid on macOS AArch64, Linux AArch64, and Linux x86_64.
+    /// The semantic strategy is valid on all five supported compiler targets.
     All,
+    /// The builtin is valid on the three executable hosts but explicitly refused on iOS.
+    HostOnly,
 }
 
 /// Runtime functions that a backend-neutral lowering may emit.
@@ -161,6 +163,8 @@ pub enum BuiltinArgumentLowering {
     PositionalRegex,
     /// Preserve by-reference array storage while lowering user-comparator sorts.
     UserValueSort,
+    /// Promote a packed by-reference array before reverse key sorting preserves its keys.
+    ReverseKeySort,
     /// Promote the by-reference OpenSSL tag target before ordinary argument planning.
     OpensslEncrypt,
     /// Promote a typed `array_splice()` receiver whose `$replacement` changes the element type.
@@ -434,6 +438,13 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
         },
         lowering: BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)),
     }
+}
+
+/// Builds runtime-call semantics for a builtin that is explicitly unavailable on iOS.
+pub const fn host_only_runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(target);
+    semantics.target_support = BuiltinTargetSupport::HostOnly;
+    semantics
 }
 
 /// Builds the complete shared descriptor for one PHP internal-array-pointer builtin.

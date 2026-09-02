@@ -175,20 +175,20 @@ pub(super) fn emit_static_callback_dynamic_call(ctx: &mut FunctionContext<'_>, s
     ctx.emitter.instruction(&format!(
         "mov {}, {}",
         class_id_scratch, hidden_called_class_reg
-    )); // preserve the forwarded called-class id across static-vtable address materialization
+    ));                                                                         // preserve the forwarded called-class id across static-vtable address materialization
     abi::emit_symbol_address(ctx.emitter, dispatch_scratch, "_class_static_vtable_ptrs");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!(
                 "ldr {}, [{}, {}, lsl #3]",
                 dispatch_scratch, dispatch_scratch, class_id_scratch
-            )); // load the class-specific static-vtable pointer from the global table
+            ));                                                                 // load the class-specific static-vtable pointer from the global table
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!(
                 "mov {}, QWORD PTR [{} + {} * 8]",
                 dispatch_scratch, dispatch_scratch, class_id_scratch
-            )); // load the class-specific static-vtable pointer from the global table
+            ));                                                                 // load the class-specific static-vtable pointer from the global table
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_scratch, dispatch_scratch, slot * 8);

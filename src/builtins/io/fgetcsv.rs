@@ -21,7 +21,12 @@ builtin! {
     ),
 }
 
-/// Validates the stream argument is a stream resource and returns `Array<Str>`.
+/// Validates the stream argument is a stream resource and returns `Array<Str>|bool`.
+///
+/// The union is what makes the manual's own read loop terminate: `fgetcsv()` answers
+/// `false` at end of file, and while the declared type was `Array<Str>` the runtime
+/// returned an empty array instead — never `!== false`, so
+/// `while (($row = fgetcsv($h)) !== false)` looped forever.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -29,5 +34,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    Ok(PhpType::Array(Box::new(PhpType::Str)))
+    // `False`, not `Bool`: the guard narrowing strips an exact `False` member, so
+    // `while (($row = fgetcsv($h)) !== false)` leaves `$row` an array in the body —
+    // with `Bool` the union survives the guard and `count($row)` stops compiling.
+    Ok(cx
+        .checker
+        .normalize_union_type(vec![PhpType::Array(Box::new(PhpType::Str)), PhpType::False]))
 }

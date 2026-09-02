@@ -13,6 +13,7 @@ use super::*;
 /// array; elephc tracks only whether the last `createFromFormat()` on this class failed
 /// (`error_count` 0/1, no warnings), which covers the common
 /// `if (DateTime::getLastErrors()['error_count'])` check after a parse.
+#[cfg(test)]
 pub(super) const GET_LAST_ERRORS_SRC: &str = r#"<?php
 $ec = __GLE_CLASS__::$lastErrorCount;
 $errs = [];
@@ -23,9 +24,7 @@ return ["warning_count" => 0, "warnings" => [], "error_count" => $ec, "errors" =
 /// Builds the static `getLastErrors(): array` method for `class_name`, reading the per-class
 /// `lastErrorCount` static that `createFromFormat()` sets (1 on entry, cleared to 0 on success).
 pub(super) fn datetime_get_last_errors(class_name: &str) -> ClassMethod {
-    let src = GET_LAST_ERRORS_SRC.replace("__GLE_CLASS__", class_name);
-    let tokens = crate::lexer::tokenize(&src).expect("getLastErrors body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("getLastErrors body source must parse");
+    let body = super::bodies::get_last_errors(class_name);
     ClassMethod {
         name: "getLastErrors".to_string(),
         visibility: Visibility::Public,
@@ -50,6 +49,7 @@ pub(super) fn datetime_get_last_errors(class_name: &str) -> ClassMethod {
 /// `createFromImmutable`, `createFromMutable`): copy the source object's instant and display
 /// timezone into a fresh instance of the target class. `__TARGET__` is substituted with the
 /// target class name.
+#[cfg(test)]
 pub(super) const CREATE_FROM_OBJECT_SRC: &str = r#"<?php
 $d = new __TARGET__();
 $d = $d->setTimestamp($object->getTimestamp());
@@ -64,10 +64,7 @@ return $d;
 /// methods; the return type is declared explicitly as `target_class` since synthetic builtin
 /// methods do not get body-driven return-type inference.
 pub(super) fn datetime_create_from_object(method_name: &str, target_class: &str) -> ClassMethod {
-    let src = CREATE_FROM_OBJECT_SRC.replace("__TARGET__", target_class);
-    let tokens =
-        crate::lexer::tokenize(&src).expect("createFrom* body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("createFrom* body source must parse");
+    let body = super::bodies::create_from_object(target_class);
     ClassMethod {
         name: method_name.to_string(),
         visibility: Visibility::Public,
@@ -95,6 +92,7 @@ pub(super) fn datetime_create_from_object(method_name: &str, target_class: &str)
 
 /// PHP source backing `createFromTimestamp(int|float $timestamp): static` (PHP 8.4): build a fresh
 /// instance set to the given UNIX timestamp. `__CFT_CLASS__` is substituted with the class name.
+#[cfg(test)]
 pub(super) const CREATE_FROM_TIMESTAMP_SRC: &str = r#"<?php
 $d = new __CFT_CLASS__();
 $secs = intval(floor($timestamp));
@@ -109,10 +107,7 @@ return $d;
 /// via `setMicrosecond()`. Self-contained parsed source; the return type is declared as `class_name`
 /// since synthetic builtin methods get no body-driven return inference.
 pub(super) fn datetime_create_from_timestamp(class_name: &str) -> ClassMethod {
-    let src = CREATE_FROM_TIMESTAMP_SRC.replace("__CFT_CLASS__", class_name);
-    let tokens =
-        crate::lexer::tokenize(&src).expect("createFromTimestamp body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("createFromTimestamp body source must parse");
+    let body = super::bodies::create_from_timestamp(class_name);
     ClassMethod {
         name: "createFromTimestamp".to_string(),
         visibility: Visibility::Public,
@@ -144,6 +139,7 @@ pub(super) fn datetime_create_from_timestamp(class_name: &str) -> ClassMethod {
 /// that plus `(week - 1) * 7 + (dayOfWeek - 1)`, fed to `mktime()` which normalizes overflow
 /// (e.g. week 53 of a 52-week year rolls into the next year). Delegates to `$this->setTimestamp()`
 /// so the mutable/immutable result and timezone handling are shared with the other setters.
+#[cfg(test)]
 pub(super) const SET_ISODATE_SRC: &str = r#"<?php
 $h = (int)date("H", $this->timestamp);
 $mi = (int)date("i", $this->timestamp);
@@ -158,9 +154,7 @@ return $this->setTimestamp(__elephc_mktime_raw($h, $mi, $se, 1, $day, $year));
 /// week date, keeping the time-of-day. The body is the parsed `SET_ISODATE_SRC`; the return type
 /// is declared as `class_name` since synthetic methods do not get body-driven return inference.
 pub(super) fn datetime_set_isodate(class_name: &str) -> ClassMethod {
-    let tokens =
-        crate::lexer::tokenize(SET_ISODATE_SRC).expect("setISODate body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("setISODate body source must parse");
+    let body = super::bodies::set_isodate();
     ClassMethod {
         name: "setISODate".to_string(),
         visibility: Visibility::Public,

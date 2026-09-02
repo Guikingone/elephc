@@ -18,6 +18,7 @@ Selects the kind of artifact to produce.
 ```bash
 elephc --emit executable app.php   # default: a native binary
 elephc --emit cdylib lib.php       # a C-ABI shared library
+elephc --emit staticlib lib.php    # a C-ABI static archive
 ```
 
 Accepted values and aliases:
@@ -26,9 +27,12 @@ Accepted values and aliases:
 |---|---|---|
 | `executable` | `exe`, `bin` | A standalone native binary. |
 | `cdylib` | `dylib`, `shared` | A C-ABI shared library (`.dylib`/`.so`). |
+| `staticlib` | `static`, `lib` | A C-ABI static archive (`.a`). |
 
-The inline form `--emit=cdylib` also works. For exporting C-ABI functions from a
-`cdylib`, see [Shared Libraries (cdylib)](../beyond-php/cdylib.md).
+The inline forms such as `--emit=cdylib` also work. `--emit lib` is an alias of
+`staticlib`, not `cdylib`. Both library kinds emit the same C-ABI exports and
+generated header; see [Shared Libraries (cdylib)](../beyond-php/cdylib.md) for
+the boundary contract and the static-linking distinction.
 
 ### `--emit-asm`
 
@@ -56,9 +60,11 @@ See [The EIR Design](../internals/the-ir.md) for how to read the output.
 
 ### `--check`
 
-Runs the front end — lexing, parsing, name resolution, type checking — and
-reports errors and warnings without writing any assembly or binary. This is the
-fastest way to validate a file.
+Runs lexing, parsing, name resolution, and type checking, then reports errors
+and warnings without writing assembly or a binary. When the source contains
+`#[Export]`, it additionally lowers EIR and runs the cdylib call-graph safety
+validator, so `--check` cannot report a false success for a library whose
+export reaches a fatal or opaque path.
 
 ```bash
 elephc --check hello.php
@@ -100,6 +106,16 @@ the phase finishes, elephc keeps its action-oriented label with a checkmark and
 elapsed time, then starts the next phase on a new line. Non-interactive output
 and `--quiet` keep the compact plain output without progress lines.
 
+### `--quiet` / `-q`
+
+Disables live and completed progress lines and forces unstyled plain output. It
+does not suppress compiler errors, warnings, or the final success line. Timing
+tables requested with `--timings` still print, using ASCII borders.
+
+```bash
+elephc --quiet hello.php
+```
+
 ### `--timings`
 
 Prints a bordered timing table to stderr in addition to the interactive
@@ -127,6 +143,15 @@ Compiler timings
 └────────────────────────────────┴───────────┴────────┘
 ```
 
+### `--mascotte`
+
+Prints elephc's built-in ASCII mascot and one randomly selected quote before
+normal help, diagnostic, or compilation output.
+
+```bash
+elephc --mascotte hello.php
+```
+
 ## Runtime diagnostics
 
 These flags instrument the **compiled program**, not the compiler.
@@ -142,8 +167,12 @@ elephc --gc-stats heavy.php
 ```
 
 Combined with `--web`, the server never reaches the process-exit report, so the
-counters are printed to stderr after every handled request instead — a growing
-`allocs - frees` gap across requests indicates a per-request leak.
+counters are printed to stderr after every handled request instead. In default
+`worker` isolation, a growing `allocs - frees` gap across requests handled by the
+same worker indicates a per-request leak. In `pool`, the counters belong to each
+persistent handler child and lines from several children may interleave. In
+`request`, each disposable child exits after one response, so compare the
+single-request result rather than looking for a cross-request trend.
 
 ### `--heap-debug`
 

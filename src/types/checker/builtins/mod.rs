@@ -54,19 +54,60 @@ impl Checker {
     /// No-op on non-macOS targets. Used for libraries that live in libc on
     /// Linux (glibc/musl) but need explicit linkage on macOS — e.g. `iconv`.
     pub(crate) fn require_macos_builtin_library(&mut self, library: &str) {
-        if self.target_platform == crate::codegen::platform::Platform::MacOS
+        if self.target.platform == crate::codegen::platform::Platform::MacOS
             && !self.required_libraries.iter().any(|lib| lib == library)
         {
             self.required_libraries.push(library.to_string());
         }
     }
 
+    /// Records the link requirements of a builtin reached through first-class callable syntax.
+    ///
+    /// A direct call records them while checking its arguments, but `iconv_strlen(...)`
+    /// never takes that path even though the emitted callable wrapper references the same
+    /// bridge entry points. A first-class callable has no arguments to inspect, so a
+    /// source-dependent resolver is asked with an empty argument list, which is exactly
+    /// the conservative branch every resolver already answers for a non-literal argument.
+    pub(crate) fn require_first_class_callable_builtin_libraries(&mut self, name: &str) {
+        let Some(def) = crate::builtins::registry::lookup(name) else {
+            return;
+        };
+        let requirements = match def.spec.semantics.requirements {
+            crate::builtins::semantics::BuiltinRequirements::Static(requirements) => {
+                requirements.to_vec()
+            }
+            crate::builtins::semantics::BuiltinRequirements::Shared(resolve) => {
+                resolve(&crate::builtins::semantics::BuiltinRequirementInput { args: &[] })
+            }
+        };
+        for requirement in requirements {
+            match requirement {
+                crate::builtins::semantics::BuiltinRequirement::Bridge(library)
+                | crate::builtins::semantics::BuiltinRequirement::SystemLibrary(library) => {
+                    self.require_builtin_library(library);
+                }
+                crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
+                    self.require_macos_builtin_library(library);
+                }
+                crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
+            }
+        }
+    }
+
     /// Validates writable storage for every fixed or variadic by-reference builtin argument.
+    ///
+    /// One authority for every builtin that declares a by-reference parameter. Several
+    /// builtins used to hand-roll this check, which is a catalogue: the ones nobody
+    /// wrote it for silently accepted a literal and ran, where PHP raises an Error.
+    ///
+    /// An argument past the fixed parameters maps onto the variadic entry, which carries
+    /// the shared contract's own passing mode — `sscanf("12", "%d", "not writable")` has
+    /// no storage behind its third argument either.
     fn validate_registry_by_ref_args(
         &mut self,
         def: &crate::builtins::registry::BuiltinDef,
+        name: &str,
         args: &[Expr],
-        env: &TypeEnv,
     ) -> Result<(), CompileError> {
         let regular_param_count = def
             .params
@@ -83,34 +124,43 @@ impl Checker {
             if !def.ref_params.get(param_index).copied().unwrap_or(false) {
                 continue;
             }
+            // `sort($a)`, `preg_match(..., $m)` and friends reach this local through its
+            // storage, so the local is never kill/retype eligible in this body.
+            //
+            // Recorded BEFORE the spread bail-out below, not after it. `sort(...$args)` hands
+            // the callee the very same by-reference parameter, so `$args` is aliased just as
+            // surely; only the LVALUE-SHAPE diagnostic underneath has nothing to say about a
+            // spread, which is what that bail-out is for.
+            self.record_reference_alias_root(arg);
+            if matches!(arg.kind, ExprKind::Spread(_)) {
+                continue;
+            }
+            if self.is_builtin_by_ref_argument_lvalue(arg) {
+                continue;
+            }
             let param_name = def
                 .params
                 .get(param_index)
-                .map(|(name, _)| name.as_str())
+                .map(|(param_name, _)| param_name.as_str())
                 .unwrap_or("arg");
-            if matches!(arg.kind, ExprKind::Spread(_)) {
+            if param_index >= regular_param_count {
                 return Err(CompileError::new(
                     arg.span,
                     &format!(
-                        "{}() cannot unpack into by-reference parameter ${}",
+                        "{}() variadic parameter ${} must be passed a variable",
                         def.name, param_name
                     ),
                 ));
             }
-            if !self.is_by_ref_argument_lvalue(arg, env)? {
-                let parameter_kind = if param_index >= regular_param_count {
-                    "variadic parameter"
-                } else {
-                    "parameter"
-                };
-                return Err(CompileError::new(
-                    arg.span,
-                    &format!(
-                        "{}() {} ${} must be passed a variable",
-                        def.name, parameter_kind, param_name
-                    ),
-                ));
-            }
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{}(): Argument #{} (${}) could not be passed by reference",
+                    name,
+                    arg_index + 1,
+                    param_name
+                ),
+            ));
         }
         Ok(())
     }
@@ -172,7 +222,7 @@ impl Checker {
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
-            self.validate_registry_by_ref_args(def, args, env)?;
+            self.validate_registry_by_ref_args(def, name, args)?;
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };

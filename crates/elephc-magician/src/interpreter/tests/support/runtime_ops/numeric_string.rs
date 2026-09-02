@@ -141,6 +141,14 @@ macro_rules! impl_fake_numeric_string_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_spaceship(left, right)
     }
+    /// Compares fake normalized array keys with PHP regular ordering.
+    fn regular_key_compare(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<i64, EvalStatus> {
+        self.runtime_regular_key_compare(left, right)
+    }
     /// Appends fake echo output for interpreter tests.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         self.runtime_echo(value)

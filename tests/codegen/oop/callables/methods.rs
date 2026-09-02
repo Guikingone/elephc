@@ -777,7 +777,8 @@ class RuntimeWalker {
 $left = new RuntimeWalker(10);
 $right = new RuntimeWalker(20);
 $use_left = false;
-array_walk([1, 2], $use_left ? $left->show(...) : $right->show(...));
+$items = [1, 2];
+array_walk($items, $use_left ? $left->show(...) : $right->show(...));
 "#,
     );
     assert_eq!(out, "21,22,");
@@ -797,7 +798,8 @@ class Walker {
 }
 
 $walker = new Walker();
-array_walk([1, 2], $walker->show(...));
+$items = [1, 2];
+array_walk($items, $walker->show(...));
 "#,
     );
     assert_eq!(out, "6:7:");
@@ -961,7 +963,8 @@ class BaseCallbacks {
     public static function run() {
         echo array_reduce([1, 2], static::add(...), 0);
         echo ":";
-        array_walk([1, 2], static::show(...));
+        $walked = [1, 2];
+        array_walk($walked, static::show(...));
         echo ":";
 
         $usorted = [1, 3, 2];
@@ -1204,7 +1207,8 @@ foreach ($filtered as $value) {
 echo ":";
 echo array_reduce([1, 2], $reduce, 0);
 echo ":";
-array_walk([1, 2], $walk);
+$walked = [1, 2];
+array_walk($walked, $walk);
 echo ":";
 
 $usorted = [1, 3, 2];

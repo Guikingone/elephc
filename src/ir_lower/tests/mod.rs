@@ -55,6 +55,14 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::dom_prelude::inject(ast);
     let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
     let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    // Same injection order as `pipeline::compile`: mysqli after PDO, so the
+    // shared `elephc_pdo` externs are merged in exactly once.
+    let ast = crate::mysqli_prelude::inject_if_used(
+        ast,
+        false,
+        crate::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
     let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
@@ -75,10 +83,17 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::optimize::fold_constants(ast);
     let mut check_result =
         crate::types::check_with_target(&ast, target).expect("type check failed");
-    let ast = crate::optimize::propagate_constants(ast);
-    let ast = crate::optimize::prune_constant_control_flow(ast);
-    let ast = crate::optimize::normalize_control_flow(ast);
-    let ast = crate::optimize::eliminate_dead_code(ast);
+    let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
+    let ast = crate::optimize::prune_constant_control_flow(
+        ast,
+        check_result.local_binding_decision_spans(),
+    );
+    let ast = crate::optimize::normalize_control_flow(
+        ast,
+        check_result.local_binding_decision_spans(),
+    );
+    let ast =
+        crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     let empty_roots = HashSet::new();
     let ast = crate::optimize::prune_unreachable_declarations(
         ast,
@@ -298,10 +313,19 @@ fn unary_string_builtin_coerces_mixed_operand_before_runtime_call() {
 }
 
 /// Verifies descriptor result contracts override checker precision when runtime layouts differ.
+///
+/// Both directions are covered, because the descriptor wins either way and only
+/// one of them is safe to get wrong quietly. `readline` is the narrowing case:
+/// the checker says `string|false`, the backend hands back a plain string, and
+/// the descriptor says so. `getenv` used to be the example here — it no longer
+/// is, because narrowing it was a BUG rather than a layout fact: it made a
+/// variable that is not set indistinguishable from one set to `""`, and
+/// `getenv($x) !== false` true for every name. It now carries the union, and
+/// that is asserted here so the old override cannot come back unnoticed.
 #[test]
 fn builtin_runtime_calls_use_descriptor_result_representations() {
     let module = lower_source(
-        "<?php $encoded = json_encode(INF); $environment = getenv('HOME'); echo $encoded === false; echo strlen($environment);",
+        "<?php $encoded = json_encode(INF); $typed = readline(); $environment = getenv('HOME'); echo $encoded === false; echo strlen($typed); echo $environment === false;",
     );
     let text = print_module(&module);
     assert!(
@@ -312,9 +336,15 @@ fn builtin_runtime_calls_use_descriptor_result_representations() {
     );
     assert!(
         text.lines().any(|line| {
-            line.contains("Str php=string") && line.contains("runtime.getenv")
+            line.contains("Str php=string") && line.contains("runtime.readline")
         }),
-        "getenv must retain the backend's concrete string EIR result: {text}"
+        "readline must retain the backend's concrete string EIR result: {text}"
+    );
+    assert!(
+        text.lines().any(|line| {
+            line.contains("php=string|false") && line.contains("runtime.getenv")
+        }),
+        "getenv must carry string|false: narrowing it hides an unset variable: {text}"
     );
 }
 

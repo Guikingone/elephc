@@ -242,8 +242,12 @@ pub(super) fn lower_property_array_assign(
         );
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-        let index = lower_expr(ctx, index);
-        let value = lower_expr(ctx, value);
+        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+        // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
+        // rule; sharing the helper is what keeps the two from answering differently for
+        // the same source line.
+        let (index, value) =
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         let value = coerce_indexed_array_set_value(ctx, &property_ty, value, Some(span));
         if index.ir_type == IrType::Str {
             let assoc_ty = promoted_assoc_array_type(
@@ -342,8 +346,12 @@ pub(super) fn lower_property_array_assign(
         );
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-        let index = lower_expr(ctx, index);
-        let value = lower_expr(ctx, value);
+        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+        // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
+        // rule; sharing the helper is what keeps the two from answering differently for
+        // the same source line.
+        let (index, value) =
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         ctx.emit_void(
             Op::HashSet,
             vec![property_value.value, index.value, value.value],
@@ -380,8 +388,12 @@ pub(super) fn lower_property_array_assign(
             Op::PropGet.default_effects(),
             Some(span),
         );
-        let index = lower_expr(ctx, index);
-        let value = lower_expr(ctx, value);
+        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+        // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
+        // rule; sharing the helper is what keeps the two from answering differently for
+        // the same source line.
+        let (index, value) =
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, index.value, value.value],
@@ -406,8 +418,10 @@ pub(super) fn lower_property_array_assign(
         );
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-        let index = lower_expr(ctx, index);
-        let value = lower_expr(ctx, value);
+        // Same store-time index rule as every other element write: share the helper so this
+        // path cannot answer differently for the same source line.
+        let (index, value) =
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, index.value, value.value],
@@ -443,8 +457,12 @@ pub(super) fn lower_property_array_assign(
         return;
     }
 
-    let index = lower_expr(ctx, index);
-    let value = lower_expr(ctx, value);
+    // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+    // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
+    // rule; sharing the helper is what keeps the two from answering differently for
+    // the same source line.
+    let (index, value) =
+        crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
     let data = ctx.intern_string(property);
     ctx.emit_void(
         Op::RuntimeCall,

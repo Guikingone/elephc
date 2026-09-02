@@ -54,7 +54,15 @@ pub(in crate::interpreter) fn eval_builtin_filesize(
     eval_filesize_result(filename, context, values)
 }
 
-/// Returns one local file or supported wrapper size in bytes, or zero on failure.
+/// Returns one local file or supported wrapper size in bytes, or `false` on failure.
+///
+/// Every failure here used to answer `int(0)` — and said so in this very doc comment. `0` is a
+/// legitimate size for an empty file, so a caller could not tell a missing path from an empty
+/// one, and `=== false` never matched. PHP returns `false`, as do the seven scalar stat getters
+/// this function sits beside.
+///
+/// The distinction that matters: a file that genuinely reads as zero bytes still answers
+/// `int(0)`. Only the paths that could not be measured at all answer `false`.
 pub(in crate::interpreter) fn eval_filesize_result(
     filename: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -62,17 +70,21 @@ pub(in crate::interpreter) fn eval_filesize_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
     if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
-        let size = eval_user_wrapper_stat_int_field(stat, "size", values)?.unwrap_or(0);
-        return values.int(size);
+        // A matched wrapper that reports no readable `size` field has failed to stat, which is
+        // not the same as reporting a size of zero.
+        return match eval_user_wrapper_stat_int_field(stat, "size", values)? {
+            Some(size) => values.int(size),
+            None => values.bool_value(false),
+        };
     }
     if let Ok(bytes) = super::file_get_contents::eval_read_path_or_wrapper_bytes(&path) {
         return values.int(i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?);
     }
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
-        return values.int(0);
+        return values.bool_value(false);
     };
-    let len = std::fs::metadata(path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    values.int(i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?)
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return values.bool_value(false);
+    };
+    values.int(i64::try_from(metadata.len()).map_err(|_| EvalStatus::RuntimeFatal)?)
 }

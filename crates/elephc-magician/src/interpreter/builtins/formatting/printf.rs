@@ -28,19 +28,20 @@ pub(in crate::interpreter) fn eval_builtin_printf(
     for arg in args {
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_printf_result(&evaluated_args, values)
+    eval_printf_result(&evaluated_args, context, values)
 }
 
 /// Formats `printf()` arguments, echoes the result, and returns its byte count.
 pub(in crate::interpreter) fn eval_printf_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some((format, format_args)) = evaluated_args.split_first() else {
         return Err(EvalStatus::RuntimeFatal);
     };
     let format = values.string_bytes(*format)?;
-    let output = super::sprintf::eval_sprintf_bytes(&format, format_args, values)?;
+    let output = super::sprintf::eval_sprintf_bytes(&format, format_args, context, values)?;
     let len = i64::try_from(output.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
     let output = values.string_bytes_value(&output)?;
     values.echo(output)?;

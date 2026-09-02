@@ -229,12 +229,58 @@ pub(super) fn propagate_try_stmt(
     env: ConstantEnv,
 ) -> (Stmt, ConstantEnv) {
     let (try_body, _) = propagate_block(try_body, env.clone());
+    // A catch is entered from an arbitrary point INSIDE the try body, not from
+    // its start and not from its end. So a variable the body may write holds an
+    // unknown value here, and specifically NOT the one it held before the `try`
+    // — which is what the catch used to be given.
+    //
+    // What that cost was a silently wrong answer in an everyday idiom:
+    //
+    //     $t = 0;
+    //     try { $t = 5; throw new RuntimeException('x'); }
+    //     catch (RuntimeException $e) { }
+    //     return $t;              // PHP says 5; this folded it to 0
+    //
+    // Both halves of that are this env: `$t` read as 0 inside the catch, and the
+    // merged exit env carried the same 0 out to the `return`. `finally` already
+    // started from nothing for exactly this reason, which is the shape of the
+    // answer; the whole body's invalidation set is the precise version of it, so
+    // a variable the try body cannot touch still folds.
+    let catch_env = {
+        let mut catch_env = env.clone();
+        crate::optimize::propagate::invalidation::block_invalidation(&try_body).apply(&mut catch_env);
+        catch_env
+    };
     let catches: Vec<_> = catches
         .into_iter()
-        .map(|catch| crate::parser::ast::CatchClause {
-            exception_types: catch.exception_types,
-            variable: catch.variable,
-            body: propagate_block(catch.body, env.clone()).0,
+        .map(|catch| {
+            // The caught exception SHADOWS whatever the name held before, and it
+            // holds it from the first statement of the handler. A try body that
+            // never writes that name leaves the incoming value in the shared env
+            // above, and the handler then read the Throwable as that value:
+            //
+            // ```text
+            // $e = 'stale';
+            // try { throw new RuntimeException('fresh'); }
+            // catch (RuntimeException $e) { return $e->getMessage(); }
+            // ```
+            //
+            // substituted the string and stopped the compile at `method call
+            // receiver for PHP type Str`, where PHP answers `fresh`. Per catch
+            // and not shared, because each clause binds its own name.
+            //
+            // `simulate_catch_constant_env` has always removed it for the exit
+            // path. Two walks over the same block that disagree about what is
+            // live in it can only be wrong in one of them.
+            let mut body_env = catch_env.clone();
+            if let Some(name) = &catch.variable {
+                body_env.remove(name);
+            }
+            crate::parser::ast::CatchClause {
+                exception_types: catch.exception_types,
+                variable: catch.variable,
+                body: propagate_block(catch.body, body_env).0,
+            }
         })
         .collect();
     let finally_body = finally_body.map(|body| propagate_block(body, HashMap::new()).0);
@@ -309,12 +355,23 @@ pub(super) fn propagate_if_stmt(
         None => (None, Some(base_env.clone())),
     };
 
-    let next_env = match scalar_value(&condition) {
-        Some(value) if value.truthy() => then_env,
-        Some(_) => else_env.unwrap_or_default(),
-        None => {
+    // A statically FALSE condition selects the else branch only when there is nothing between
+    // it and the else: every `elseif` clause is still live, and taking `else_env` there
+    // discarded whatever those clauses assigned. `$n = 5; $r = "?"; if ($n >= 10) { $r = "A"; }
+    // elseif ($n >= 3) { $r = "B"; } echo $r;` folded the echo back to "?" — the branch ran, its
+    // store was emitted, and the read had already been rewritten to the pre-if constant.
+    // `else if` spelled as two words is a nested `If` in the else body and was never affected,
+    // which is what made this look like an `elseif` parsing problem rather than a merge one.
+    let condition_value = scalar_value(&condition);
+    let then_taken = condition_value.as_ref().map(|value| value.truthy());
+    let next_env = match then_taken {
+        Some(true) => then_env,
+        Some(false) if propagated_elseifs.is_empty() => else_env.unwrap_or_default(),
+        then_taken => {
             let mut paths = Vec::new();
-            if matches!(block_terminal_effect(&then_body), TerminalEffect::FallsThrough) {
+            if then_taken != Some(false)
+                && matches!(block_terminal_effect(&then_body), TerminalEffect::FallsThrough)
+            {
                 paths.push(then_env);
             }
             paths.extend(elseif_envs);

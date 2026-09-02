@@ -28,12 +28,13 @@ pub(in crate::interpreter) fn eval_builtin_vsprintf(
     for arg in args {
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_vsprintf_result(&evaluated_args, values)
+    eval_vsprintf_result(&evaluated_args, context, values)
 }
 
 /// Formats `vsprintf()` array arguments and returns the resulting PHP string.
 pub(in crate::interpreter) fn eval_vsprintf_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [format, array] = evaluated_args else {
@@ -41,7 +42,7 @@ pub(in crate::interpreter) fn eval_vsprintf_result(
     };
     let format = values.string_bytes(*format)?;
     let format_args = eval_sprintf_argument_array_values(*array, values)?;
-    let output = super::sprintf::eval_sprintf_bytes(&format, &format_args, values)?;
+    let output = super::sprintf::eval_sprintf_bytes(&format, &format_args, context, values)?;
     values.string_bytes_value(&output)
 }
 

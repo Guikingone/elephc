@@ -34,6 +34,7 @@ pub(super) use locals::{
 pub(crate) use postfix::{
     assignment_target_append_stmt, assignment_target_store_stmt,
     can_replay_assignment_target,
+    lower_postfix_incdec_assignment,
 };
 pub(crate) use compound::is_valid_reference_source;
 pub(super) use postfix::{

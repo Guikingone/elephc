@@ -101,28 +101,18 @@ fn extract_quoted(line: &str, key: &str) -> Option<String> {
 
 /// Returns the byte offsets of every occurrence of `needle` in `haystack`.
 fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
-    let mut out = Vec::new();
     if needle.is_empty() {
-        return out;
+        return Vec::new();
     }
-    let mut i = 0;
-    while i + needle.len() <= haystack.len() {
-        if &haystack[i..i + needle.len()] == needle {
-            out.push(i);
-            i += needle.len();
-        } else {
-            i += 1;
-        }
-    }
-    out
+    memchr::memmem::find_iter(haystack, needle).collect()
 }
 
 /// Returns the byte offset of the first occurrence of `needle` in `haystack`.
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
+    if needle.is_empty() {
         return None;
     }
-    (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
+    memchr::memmem::find(haystack, needle)
 }
 
 /// Removes a leading `prefix` from `data` if present.
@@ -159,5 +149,17 @@ mod tests {
     #[test]
     fn non_multipart_is_empty() {
         assert!(parse(b"x=1", "application/x-www-form-urlencoded").is_empty());
+    }
+
+    /// Guards against reintroducing the adversarial `O(body × boundary)` scan
+    /// while functional multipart fixtures continue to pin parser semantics.
+    #[test]
+    fn multipart_boundary_search_uses_a_linear_time_primitive() {
+        let source = include_str!("multipart.rs");
+        let forbidden = ["&haystack[i..i + ", "needle.len()] == needle"].concat();
+        assert!(
+            !source.contains(&forbidden),
+            "multipart boundary search must use a linear-time byte-search primitive"
+        );
     }
 }

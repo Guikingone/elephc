@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **486 / 2030** (24%).
+Overall builtin coverage: **497 / 2030** (24%).
 
 ## Builtin coverage by PHP module
 
@@ -19,7 +19,7 @@ Overall builtin coverage: **486 / 2030** (24%).
 | `bcmath` | 14 / 14 | 100% | 14 | 14 |
 | `bz2` | 0 / 10 | 0% | 0 | 0 |
 | `calendar`† | 0 / 18 | 0% | 0 | 0 |
-| `core` | 32 / 59 | 54% | 28 | 30 |
+| `core` | 32 / 59 | 54% | 29 | 30 |
 | `ctype` | 4 / 11 | 36% | 4 | 4 |
 | `curl` | 0 / 33 | 0% | 0 | 0 |
 | `date`† | 11 / 48 | 23% | 11 | 11 |
@@ -33,13 +33,13 @@ Overall builtin coverage: **486 / 2030** (24%).
 | `gettext` | 0 / 10 | 0% | 0 | 0 |
 | `gmp` | 0 / 51 | 0% | 0 | 0 |
 | `hash` | 9 / 15 | 60% | 9 | 9 |
-| `iconv` | 0 / 10 | 0% | 0 | 0 |
+| `iconv`† | 10 / 10 | 100% | 10 | 10 |
 | `intl` | 0 / 183 | 0% | 0 | 0 |
 | `json` | 5 / 5 | 100% | 5 | 5 |
 | `ldap` | 0 / 55 | 0% | 0 | 0 |
 | `libxml` | 0 / 8 | 0% | 0 | 0 |
 | `mbstring` | 2 / 65 | 3% | 2 | 2 |
-| `mysqli` | 0 / 106 | 0% | 0 | 0 |
+| `mysqli`† | 0 / 106 | 0% | 0 | 0 |
 | `openssl` | 4 / 66 | 6% | 4 | 4 |
 | `pcntl` | 0 / 25 | 0% | 0 | 0 |
 | `pcre` | 7 / 11 | 64% | 7 | 6 |
@@ -55,7 +55,7 @@ Overall builtin coverage: **486 / 2030** (24%).
 | `sockets` | 0 / 37 | 0% | 0 | 0 |
 | `sodium` | 0 / 110 | 0% | 0 | 0 |
 | `spl` | 15 / 15 | 100% | 15 | 15 |
-| `standard` | 374 / 542 | 69% | 374 | 342 |
+| `standard` | 375 / 542 | 69% | 375 | 343 |
 | `sysvmsg` | 0 / 7 | 0% | 0 | 0 |
 | `sysvsem` | 0 / 4 | 0% | 0 | 0 |
 | `sysvshm` | 0 / 7 | 0% | 0 | 0 |
@@ -105,12 +105,14 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 | Feature | Status | Notes |
 |---|---|---|
 | [PDO](./pdo.md) ([PHP](https://www.php.net/manual/en/book.pdo.php)) | ✅ Supported | Driver matrix documented on the PDO page |
+| [mysqli](./mysqli.md) ([PHP](https://www.php.net/manual/en/book.mysqli.php)) | 🟡 Partial | Locked v1 subset over the elephc-pdo bridge; divergences on the mysqli page |
 | [Sessions](./sessions.md) ([PHP](https://www.php.net/manual/en/book.session.php)) | ✅ Supported | In --web binaries |
 | [Streams](./streams.md) ([PHP](https://www.php.net/manual/en/book.stream.php)) | 🟡 Partial |  |
 | [SPL](./spl.md) ([PHP](https://www.php.net/manual/en/book.spl.php)) | 🟡 Partial |  |
 | [Reflection](./classes.md) ([PHP](https://www.php.net/manual/en/book.reflection.php)) | 🟡 Partial |  |
 | [DateTime](./datetime.md) ([PHP](https://www.php.net/manual/en/book.datetime.php)) | 🟡 Partial |  |
 | [Calendar](./calendar.md) ([PHP](https://www.php.net/manual/en/book.calendar.php)) | ✅ Supported |  |
+| [iconv](./iconv.md) ([PHP](https://www.php.net/manual/en/book.iconv.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |
@@ -157,4 +159,4 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 
 **Coverage measured against a pinned baseline.** Builtin percentages are computed against the vendored PHP CLI snapshot (version and extension set recorded in the page header). PHP modules outside that snapshot are not counted.
 
-**Three native targets.** Binaries target macOS ARM64, Linux ARM64, and Linux x86_64; PHP itself runs on many more platforms.
+**Five native compile targets.** Standalone binaries target macOS ARM64, Linux ARM64, and Linux x86_64; macOS also cross-compiles libraries for iOS ARM64 devices and the iOS ARM64 Simulator. PHP itself runs on many more platforms.

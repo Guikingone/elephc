@@ -218,6 +218,31 @@ impl Checker {
         Ok(is_writable_call_place(arg))
     }
 
+    /// Returns whether an argument can be bound to a BUILTIN's by-reference parameter.
+    ///
+    /// Deliberately separate from `is_by_ref_argument_lvalue`, which answers the same question
+    /// for a USER function and must stay narrower: that path writes its result back to a LOCAL
+    /// SLOT (`RefArgWriteback::source_slot`), and a property has no slot, so widening the shared
+    /// predicate would let the checker accept what the backend cannot lower — the exact
+    /// "checker accepts, backend refuses" trade this codebase treats as a false win.
+    ///
+    /// Builtins reach their by-reference argument through the storage itself, which is why
+    /// `array_push($this->items, 9)` already compiles and runs today. What PHP refuses, and
+    /// what this rejects, is an argument with NO storage to write back to: a literal, an array
+    /// literal, or a call result.
+    pub(crate) fn is_builtin_by_ref_argument_lvalue(&self, arg: &Expr) -> bool {
+        matches!(
+            arg.kind,
+            ExprKind::Variable(_)
+                | ExprKind::ArrayAccess { .. }
+                | ExprKind::PropertyAccess { .. }
+                | ExprKind::DynamicPropertyAccess { .. }
+                | ExprKind::NullsafePropertyAccess { .. }
+                | ExprKind::NullsafeDynamicPropertyAccess { .. }
+                | ExprKind::StaticPropertyAccess { .. }
+        )
+    }
+
     /// Normalizes arguments for a user-defined function call, allowing unknown named arguments
     /// to be collected into the variadic parameter.
     ///
@@ -581,22 +606,26 @@ impl Checker {
                     .copied()
                     .unwrap_or(false)
                     || is_injected_declared_default(sig, param_idx, arg);
-                if sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                    && !omitted_default
-                    && !self.is_by_ref_argument_lvalue(arg, caller_env)?
-                {
-                    let param_name = sig
-                        .params
-                        .get(param_idx)
-                        .map(|(name, _)| name.as_str())
-                        .unwrap_or("arg");
-                    return Err(CompileError::new(
-                        arg.span,
-                        &format!(
-                            "{} parameter ${} must be passed a variable",
-                            callee_desc, param_name
-                        ),
-                    ));
+                if sig.ref_params.get(param_idx).copied().unwrap_or(false) {
+                    // The callee holds a reference to this local from here on, and it can
+                    // escape, so the local is never kill/retype eligible in this body.
+                    self.record_reference_alias_root(arg);
+                    // An omitted trailing default the planner materialized is not a caller
+                    // expression at all, so the l-value shape has nothing to say about it.
+                    if !omitted_default && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                        let param_name = sig
+                            .params
+                            .get(param_idx)
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or("arg");
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "{} parameter ${} must be passed a variable",
+                                callee_desc, param_name
+                            ),
+                        ));
+                    }
                 }
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
                     if sig.declared_params.get(param_idx).copied().unwrap_or(false)
@@ -660,50 +689,65 @@ impl Checker {
                         }
                     }
                 }
-            } else if let Some(vname) = sig.variadic.as_ref() {
-                let variadic_by_ref = sig.ref_params.last().copied().unwrap_or(false);
-                if variadic_by_ref && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
-                    return Err(CompileError::new(
-                        arg.span,
-                        &format!(
-                            "{} variadic parameter ${} must be passed a variable",
-                            callee_desc, vname
-                        ),
-                    ));
+            } else {
+                // An argument collected by a by-REFERENCE variadic (`&...$xs`) is bound by
+                // reference exactly like a regular by-ref parameter's, so the local it names is
+                // aliased for the rest of the body. The variadic's flag sits at
+                // `regular_param_count` in `ref_params` (it is the signature's last slot).
+                // Recorded outside the element-type check below because that one only runs when
+                // the element type is a known array, which has nothing to do with aliasing.
+                let variadic_by_ref = sig
+                    .ref_params
+                    .get(regular_param_count)
+                    .copied()
+                    .unwrap_or(false);
+                if variadic_by_ref {
+                    self.record_reference_alias_root(arg);
                 }
-                let Some(expected_ty) = variadic_elem_ty.as_ref() else {
-                    param_idx += 1;
-                    continue;
-                };
-                // The variadic occupies the last `declared_params` slot, so gating on it keeps
-                // the strict rejection off builtin variadics, whose registry-derived parameter
-                // types the checker does not otherwise consume.
-                let declared_variadic = sig.declared_params.last().copied().unwrap_or(false);
-                if coercive_param_binding && declared_variadic {
-                    self.require_bound_param_arg_type(
-                        expected_ty,
-                        &actual_ty,
-                        arg,
-                        caller_env,
-                        &format!("{} variadic parameter ${}", callee_desc, vname),
-                        None,
-                        variadic_by_ref,
-                    )?;
-                } else {
-                    if declared_variadic {
-                        self.require_strict_types_param_binding(
+                if let Some(vname) = sig.variadic.as_ref() {
+                    if variadic_by_ref && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "{} variadic parameter ${} must be passed a variable",
+                                callee_desc, vname
+                            ),
+                        ));
+                    }
+                    let Some(expected_ty) = variadic_elem_ty.as_ref() else {
+                        param_idx += 1;
+                        continue;
+                    };
+                    // The variadic occupies the last `declared_params` slot, so gating on it keeps
+                    // the strict rejection off builtin variadics, whose registry-derived parameter
+                    // types the checker does not otherwise consume.
+                    let declared_variadic = sig.declared_params.last().copied().unwrap_or(false);
+                    if coercive_param_binding && declared_variadic {
+                        self.require_bound_param_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg,
+                            caller_env,
+                            &format!("{} variadic parameter ${}", callee_desc, vname),
+                            None,
+                            variadic_by_ref,
+                        )?;
+                    } else {
+                        if declared_variadic {
+                            self.require_strict_types_param_binding(
+                                expected_ty,
+                                &actual_ty,
+                                arg.span,
+                                &format!("{} variadic parameter ${}", callee_desc, vname),
+                            )?;
+                        }
+                        self.require_compatible_arg_type(
                             expected_ty,
                             &actual_ty,
                             arg.span,
                             &format!("{} variadic parameter ${}", callee_desc, vname),
                         )?;
                     }
-                    self.require_compatible_arg_type(
-                        expected_ty,
-                        &actual_ty,
-                        arg.span,
-                        &format!("{} variadic parameter ${}", callee_desc, vname),
-                    )?;
                 }
             }
             param_idx += 1;

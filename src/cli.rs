@@ -14,15 +14,31 @@ use std::path::PathBuf;
 use std::process;
 
 pub(crate) use crate::codegen::Emit;
+use crate::codegen::WebIsolation;
 use crate::codegen::platform::Target;
 use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativeParseOutcome};
 
-/// Non-bridge runtime capabilities accepted by `--with-<name>`.
-const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex"];
+/// The bridge crates `--with-monitoring` turns on.
+///
+/// They are also the two the `--with-<name>` surface must not offer by name.
+/// Both are ordinary bridges, so the accepted set — derived from the bridge
+/// table — would list `instrument` and `probe` for free, and the error text for
+/// a mistyped capability would advertise the two names this whole flag exists to
+/// retire. Naming them once here keeps the flag and its exclusion from drifting
+/// apart.
+const MONITORING_BRIDGES: [&str; 2] = ["instrument", "probe"];
+
+/// Non-bridge runtime capabilities accepted by `--with-<name>`. `mysqli` is not
+/// a bridge of its own: it force-injects the mysqli prelude, which links the
+/// shared `elephc_pdo` archive (and never injects the PDO classes).
+const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex", "mysqli"];
 
 /// Short usage line shown after every parameter error, alongside the `--help` hint.
 /// The full categorized reference lives in `HELP`.
 pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source-file>";
+
+/// Compiler package version embedded into the binary by Cargo.
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// ASCII mascot printed by `--mascotte`, embedded at compile time (not read
 /// from a filesystem path — the original source file lives outside this
@@ -77,28 +93,55 @@ fn wants_help(args: &[String]) -> bool {
     args.iter().any(|a| a == "-h" || a == "--help")
 }
 
+/// Returns true if `-V` or `--version` appears anywhere in the argument list.
+fn wants_version(args: &[String]) -> bool {
+    args.iter().any(|a| a == "-V" || a == "--version")
+}
+
+/// Returns true if `--print-capabilities` appears anywhere in the argument list.
+fn wants_capabilities(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--print-capabilities")
+}
+
 /// Full `--help` reference text, categorized by section. Printed to stdout
 /// with exit code 0 — this is a successful, requested action, not an error.
-pub(crate) const HELP: &str = "Usage: elephc [OPTIONS] <source-file>
+///
+/// `{CAPABILITIES}` is substituted by `help_text()` from the capability tables
+/// rather than written out here. The list used to be literal, and it was wrong:
+/// it never gained `iconv`, so `--help` advertised a smaller compiler than the
+/// one the user had, while the typo error beside it — derived from the table —
+/// listed it correctly. Print this const directly and that comes back.
+pub(crate) const HELP: &str = concat!("Usage: elephc [OPTIONS] <source-file>
 
 A PHP-to-native AOT compiler
+Version: ", env!("CARGO_PKG_VERSION"), "
 
 Arguments:
   <source-file>           Tagged .php or tagless .lfc source file to compile
 
+Subcommands:
+  native <COMMAND>        Native dependency management (see `elephc native --help`)
+  monitor <TARGET>        Profile a program built with --with-monitoring: a .php
+                          source, a binary, or a running service's address
+                          (see `elephc monitor --help`)
+
 Modes:
   --web                   Compile as a prefork HTTP server
+  --web-isolation MODE    worker (default) | pool | request; requires --web
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
+  --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
 
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
   --emit-asm              Emit assembly (.s) instead of linking
-  --emit KIND             Output kind: executable (default) | cdylib
+  --emit KIND             Output kind: executable (default) | cdylib | staticlib
+                          Aliases: exe/bin | dylib/shared | static/lib (`lib` is staticlib)
   --output-dir DIR        Write all generated artifacts beneath DIR
 
 Target:
-  --target TARGET         macos-aarch64 | linux-aarch64 | linux-x86_64 (default: host)
+  --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
+                          linux-aarch64 | linux-x86_64 (default: host)
   --php-version VERSION   8.2 | 8.3 | 8.4 | 8.5 (default: 8.5)
 
 Codegen:
@@ -107,6 +150,17 @@ Codegen:
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
   --gc-stats              Print GC statistics at exit
+  --counters              Embed per-function call counters (BSS) and print exact call
+                          counts to stderr at exit
+  --with-monitoring       Embed the profiling capability, dormant until `elephc monitor`
+                          asks. Local/--exact captures report exact wall time,
+                          allocations, retained objects, DB queries/wait and calls,
+                          rooted at {main}; file I/O is not measured. A service's
+                          default answer is sampled CPU time. Inlined functions
+                          fold into their caller (as with --counters).
+  --with-monitoring=NAMES Embed it for the named functions only (comma list; trailing
+                          `*` matches by prefix; name `{main}` for the top-level root;
+                          or use @file with one name per line)
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
   --ini KEY=VALUE         Bake an INI directive override (repeatable; opcache.* honored)
@@ -116,18 +170,22 @@ Linking:
   --link LIB, -l LIB      Extra library to link
   --link-path DIR, -L DIR Extra library search path
   --framework NAME        macOS framework to link
-  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, web, eval, regex)
+  --with-NAME             Force an optional capability ({CAPABILITIES})
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
+  --keep-symbols          Keep the symbol table (stripped by default; for profilers)
 
 Other:
   -h, --help              Print this help and exit
+  -V, --version           Print version and exit
+  --print-capabilities    List the optional capabilities this binary can link, and
+                          the bridge archives each needs, as tab-separated lines
   --mascotte              Print an ASCII mascot and a random quote before output
-";
+");
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -135,6 +193,12 @@ pub(crate) struct CliConfig {
     pub(crate) filename: String,
     pub(crate) heap_size: usize,
     pub(crate) gc_stats: bool,
+    /// Embed per-function call counters and print exact counts to stderr at exit.
+    pub(crate) counters: bool,
+    /// Embed exact per-function instrumentation (enter/exit timing + edges);
+    /// prints an exact profile to stderr at exit. Inlined functions fold into
+    /// their caller, exactly as with `--counters`.
+    pub(crate) instrument: crate::codegen::Instrumentation,
     pub(crate) heap_debug: bool,
     /// Opt-in: make the one documented OPcache divergence (D5) LOUD instead of silent.
     ///
@@ -153,6 +217,8 @@ pub(crate) struct CliConfig {
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
     pub(crate) emit_debug_info: bool,
+    /// Keep the symbol table in the linked executable; it is stripped by default.
+    pub(crate) keep_symbols: bool,
     pub(crate) regalloc_linear: bool,
     pub(crate) ir_opt: bool,
     pub(crate) target: Target,
@@ -169,7 +235,12 @@ pub(crate) struct CliConfig {
     /// Accept only PHP-compatible constructs: elephc extensions (`ptr`, `buffer<T>`,
     /// `packed class`, `extern`, `ifdef`, extension builtins) become compile errors.
     pub(crate) strict_php: bool,
+    /// Make an incompatible local retype (e.g. a variable assigned `int` then
+    /// later `string`) a compile error instead of a warning.
+    pub(crate) strict_locals: bool,
     pub(crate) web: bool,
+    /// Process-isolation architecture baked into a `--web` executable.
+    pub(crate) web_isolation: WebIsolation,
     /// Optional capabilities the user force-enabled with `--with-<name>` (short
     /// names such as `"pdo"` or `"regex"`). Bridge names force-link their
     /// staticlib; runtime capabilities enable their helper/native requirements.
@@ -195,10 +266,21 @@ pub(crate) enum Command {
     Compile(CliConfig),
     /// One validated `elephc native` subcommand.
     Native(NativeCommand),
+    /// One validated `elephc monitor` sampling invocation.
+    Monitor(crate::monitor::MonitorCommand),
 }
 
 /// Parses the exact top-level `native` selector before falling back to legacy compilation.
 pub(crate) fn parse_args(args: &[String]) -> Command {
+    if args.get(1).map(String::as_str) == Some("monitor") {
+        return match crate::monitor::parse_monitor_args(&args[2..]) {
+            Ok(command) => Command::Monitor(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::monitor::MONITOR_USAGE);
+                process::exit(1);
+            }
+        };
+    }
     if args.get(1).map(String::as_str) != Some("native") {
         return Command::Compile(parse_compile_args(args));
     }
@@ -222,12 +304,22 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         fail("no source file given");
     }
     if wants_help(args) {
-        println!("{HELP}");
+        println!("{}", help_text());
+        process::exit(0);
+    }
+    if wants_version(args) {
+        println!("elephc {VERSION}");
+        process::exit(0);
+    }
+    if wants_capabilities(args) {
+        print!("{}", capability_report());
         process::exit(0);
     }
 
     let mut heap_size: usize = 8_388_608; // 8MB default
     let mut gc_stats = false;
+    let mut counters = false;
+    let mut instrument = crate::codegen::Instrumentation::Off;
     let mut heap_debug = false;
     let mut strict_opcache = false;
     let mut emit_ir = false;
@@ -238,6 +330,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut emit_timings = false;
     let mut emit_source_map = false;
     let mut emit_debug_info = false;
+    let mut keep_symbols = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
     let mut php_version = crate::web_prelude::PhpVersion::default();
@@ -247,7 +340,10 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut extra_frameworks: Vec<String> = Vec::new();
     let mut defines: HashSet<String> = HashSet::new();
     let mut strict_php = false;
+    let mut strict_locals = false;
     let mut web = false;
+    let mut web_isolation = WebIsolation::default();
+    let mut web_isolation_explicit = false;
     let mut quiet = false;
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
@@ -290,6 +386,35 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             php_version_provenance = crate::php_profile::Provenance::Flag;
         } else if arg == "--gc-stats" {
             gc_stats = true;
+        } else if arg == "--counters" {
+            counters = true;
+        } else if let Some(spec) = arg.strip_prefix("--with-monitoring=") {
+            // Selective instrumentation: exactness where it was asked for, full
+            // speed everywhere else. `@file` reads one name per line, because a
+            // useful set outgrows a command line quickly — and a set produced by
+            // a previous sampled run is exactly how you would build one.
+            let names = match spec.strip_prefix('@') {
+                Some(path) => match std::fs::read_to_string(path) {
+                    Ok(text) => text
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>(),
+                    Err(error) => fail(&format!("--with-monitoring=@{path}: {error}")),
+                },
+                None => spec
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>(),
+            };
+            if names.is_empty() {
+                fail("--with-monitoring=<names> needs at least one function name");
+            }
+            instrument = crate::codegen::Instrumentation::Only(names);
+            with_crates.extend(MONITORING_BRIDGES.iter().map(|s| s.to_string()));
         } else if arg == "--heap-debug" {
             heap_debug = true;
         } else if arg == "--strict-opcache" {
@@ -323,6 +448,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             emit_source_map = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
+        } else if arg == "--keep-symbols" {
+            keep_symbols = true;
         } else if arg == "--quiet" || arg == "-q" {
             quiet = true;
         } else if arg == "--mascotte" {
@@ -384,8 +511,21 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             ));
         } else if arg == "--strict-php" {
             strict_php = true;
+        } else if arg == "--strict-locals" {
+            strict_locals = true;
         } else if arg == "--web" {
             web = true;
+        } else if arg == "--web-isolation" {
+            i += 1;
+            web_isolation = parse_web_isolation(&required_value(
+                args,
+                i,
+                "Missing mode after --web-isolation (expected: worker, pool, request)",
+            ));
+            web_isolation_explicit = true;
+        } else if let Some(value) = arg.strip_prefix("--web-isolation=") {
+            web_isolation = parse_web_isolation(value);
+            web_isolation_explicit = true;
         } else if let Some(name) = arg.strip_prefix("--with-") {
             // `--with-web` aliases the full `--web` mode (it owns the program
             // entry point); every other known bridge or runtime capability is
@@ -393,6 +533,15 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             // so a typo never silently no-ops.
             if name == "web" {
                 web = true;
+            } else if name == "monitoring" {
+                // One flag for the whole capability. `--probe` and `--instrument`
+                // used to be two ways to ask a related question, and the answer to
+                // "which one do I want" was always "it depends where I am running"
+                // — which is exactly the distinction this removes. The binary
+                // carries both mechanisms and stays dormant; `monitor` decides at
+                // run time what to collect.
+                instrument = crate::codegen::Instrumentation::All;
+                with_crates.extend(MONITORING_BRIDGES.iter().map(|s| s.to_string()));
             } else if with_flag_is_known(name) {
                 with_crates.insert(name.to_string());
             } else {
@@ -418,17 +567,37 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if output_modes > 1 {
         fail("--emit-ir, --emit-asm, and --check are mutually exclusive");
     }
+    if let Err(message) = validate_target_output(target, emit, check_only, emit_ir) {
+        fail(message);
+    }
     if web && check_only {
         fail("--web cannot be combined with --check");
     }
-    if web && matches!(emit, Emit::Cdylib) {
-        fail("--web cannot be combined with --emit cdylib");
+    // --web restructures the process entry point, which a library artifact does
+    // not have: both library kinds are incompatible with it for the same reason.
+    if web && emit.is_library() {
+        fail("--web cannot be combined with a library --emit kind (cdylib, staticlib)");
+    }
+    // A library has no `main`, and `main` is where the profiling runtimes are
+    // initialized. Accepting this produced a library carrying an enter/exit hook
+    // at every call site with nothing able to arm them — the cost of the
+    // capability without the capability. Turning a library on would need an
+    // initialization ABI the host calls, which does not exist.
+    if emit.is_library() && !matches!(instrument, crate::codegen::Instrumentation::Off) {
+        fail(
+            "--with-monitoring cannot be combined with a library --emit kind: a library has no \
+             main, so the profiling runtime is never initialized and the hooks it \
+             embeds can never be activated",
+        );
     }
     if web && emit_asm {
         fail("--web cannot be combined with --emit-asm");
     }
     if web && emit_ir {
         fail("--web cannot be combined with --emit-ir");
+    }
+    if web_isolation_explicit && !web {
+        fail("--web-isolation requires --web (or --with-web)");
     }
 
     // With no explicit `--php-version`, take the profile the project already declares. Every
@@ -450,6 +619,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         filename,
         heap_size,
         gc_stats,
+        counters,
+        instrument,
         heap_debug,
         strict_opcache,
         emit_ir,
@@ -461,6 +632,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         emit_timings,
         emit_source_map,
         emit_debug_info,
+        keep_symbols,
         regalloc_linear,
         ir_opt,
         target,
@@ -471,7 +643,9 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         extra_frameworks,
         defines,
         strict_php,
+        strict_locals,
         web,
+        web_isolation,
         with_crates,
         quiet,
         ini_overrides,
@@ -479,7 +653,13 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
 }
 
 /// Returns whether a `--with-<name>` suffix selects a bridge or runtime capability.
+///
+/// The monitoring bridges are excluded: they are how `--with-monitoring` is
+/// built, not something to ask for by mechanism.
 fn with_flag_is_known(name: &str) -> bool {
+    if MONITORING_BRIDGES.contains(&name) {
+        return false;
+    }
     crate::linker::bridge_lib_for_flag(name).is_some()
         || RUNTIME_CAPABILITY_FLAGS.contains(&name)
 }
@@ -488,8 +668,59 @@ fn with_flag_is_known(name: &str) -> bool {
 fn with_flag_names() -> Vec<&'static str> {
     crate::linker::crate_flag_names()
         .into_iter()
+        .filter(|name| !MONITORING_BRIDGES.contains(name))
         .chain(RUNTIME_CAPABILITY_FLAGS.iter().copied())
+        .chain(std::iter::once("monitoring"))
         .collect()
+}
+
+/// Renders `HELP` with the accepted `--with-<name>` list substituted in.
+pub(crate) fn help_text() -> String {
+    HELP.replace("{CAPABILITIES}", &with_flag_names().join(", "))
+}
+
+/// Reports every optional capability this binary accepts, and the bridge
+/// archives each one needs, as tab-separated lines on stdout.
+///
+/// This exists so an INSTALLED compiler can be asked what it can do, rather
+/// than the question being answered by a list kept somewhere else. A bridge is
+/// resolved from the directory the binary lives in (or its sibling `lib/`), so
+/// a compiler can advertise a capability whose archive was never packed beside
+/// it — which is how released tarballs shipped without `libelephc_magician.a`
+/// from 0.26.3 to 0.26.5, refusing `--with-eval` and any `eval()` the compiler
+/// could not fold. Nothing inside a checkout can see that, because `target/`
+/// always holds every archive; only the shipped artifact is short.
+///
+/// The release probe unpacks a tarball, asks the binary inside it this
+/// question, and holds it to the answer. Every field is a projection of
+/// `BRIDGES`, `RUNTIME_CAPABILITY_FLAGS` and `MONITORING_BRIDGES`, so a
+/// thirteenth bridge is carried into that check by the edit that declares it
+/// and there is no second list for anyone to forget.
+///
+/// Each line is `<kind>\t<name>[\t<archive>...]`: `bridge` for a capability
+/// backed by one archive of its own, `capability` for one that is not — either
+/// because it needs no archive (`regex`, whose provider is a managed native
+/// package) or because it is built out of several (`monitoring`). A capability
+/// listed with no archive is still a capability the binary must be able to
+/// link; the archives are what can be checked without compiling anything.
+pub(crate) fn capability_report() -> String {
+    let mut report = String::new();
+    for name in with_flag_names() {
+        if let Some(archive) = crate::linker::archive_filename_for_flag(name) {
+            report.push_str(&format!("bridge\t{name}\t{archive}\n"));
+            continue;
+        }
+        report.push_str(&format!("capability\t{name}"));
+        if name == "monitoring" {
+            for mechanism in MONITORING_BRIDGES {
+                if let Some(archive) = crate::linker::archive_filename_for_flag(mechanism) {
+                    report.push_str(&format!("\t{archive}"));
+                }
+            }
+        }
+        report.push('\n');
+    }
+    report
 }
 
 /// Parses a single `--ini KEY=VALUE` assignment into a `(key, value)` pair, splitting on the
@@ -536,7 +767,7 @@ fn parse_required_emit(args: &[String], index: usize) -> Emit {
     if index < args.len() {
         parse_emit(&args[index])
     } else {
-        fail("Missing emit kind after --emit (expected: executable, cdylib)")
+        fail("Missing emit kind after --emit (expected: executable, cdylib, staticlib)")
     }
 }
 
@@ -545,8 +776,9 @@ fn parse_emit(value: &str) -> Emit {
     match value {
         "executable" | "exe" | "bin" => Emit::Executable,
         "cdylib" | "dylib" | "shared" => Emit::Cdylib,
+        "staticlib" | "static" | "lib" => Emit::Staticlib,
         other => fail(&format!(
-            "Invalid --emit kind '{}': expected one of: executable, cdylib",
+            "Invalid --emit kind '{}': expected one of: executable, cdylib, staticlib",
             other
         )),
     }
@@ -596,12 +828,45 @@ fn parse_ir_opt(value: &str) -> bool {
     }
 }
 
+/// Parses the compile-time web process-isolation model.
+fn parse_web_isolation(value: &str) -> WebIsolation {
+    match value {
+        "worker" => WebIsolation::Worker,
+        "pool" => WebIsolation::Pool,
+        "request" => WebIsolation::Request,
+        other => fail(&format!(
+            "Unknown --web-isolation value: {} (expected worker|pool|request)",
+            other
+        )),
+    }
+}
+
 /// Parse a target string to a Target enum, or fail with an error message.
 fn parse_target(value: &str) -> Target {
     match Target::parse(value) {
         Ok(target) => target,
         Err(err) => fail(&err),
     }
+}
+
+/// Validates artifact kinds that depend on the selected target.
+///
+/// iOS source can still be checked or lowered to EIR with the default emit kind,
+/// but actual code generation must use a library boundary: an Elephc executable
+/// is a CLI process, not a complete signed iOS application bundle.
+fn validate_target_output(
+    target: Target,
+    emit: Emit,
+    check_only: bool,
+    emit_ir: bool,
+) -> Result<(), &'static str> {
+    if target.is_ios() && emit == Emit::Executable && !check_only && !emit_ir {
+        return Err(
+            "iOS targets do not emit standalone executables; use --emit staticlib (or --emit \
+             cdylib) and link the library into an iOS app host",
+        );
+    }
+    Ok(())
 }
 
 /// Retrieve a required argument at index, or fail with the given message.
@@ -643,7 +908,38 @@ fn fail(message: &str) -> ! {
 
 #[cfg(test)]
 mod tests {
+    /// `--with-<name>` must not offer the two mechanism names by another door.
+    ///
+    /// `instrument` and `probe` are ordinary bridges, and the accepted set is
+    /// derived from the bridge table — so without an explicit exclusion the CLI
+    /// keeps accepting `--with-instrument` and, worse, *advertises* both names in
+    /// the error text every user sees after a typo. That is the surface the
+    /// single `--with-monitoring` flag exists to replace, reachable by a route
+    /// nobody thought to check.
+    #[test]
+    fn the_with_surface_offers_the_capability_not_its_mechanisms() {
+        let names = super::with_flag_names();
+        for hidden in super::MONITORING_BRIDGES {
+            assert!(
+                !names.contains(&hidden),
+                "--with-{hidden} is still offered; the accepted set is what the \
+                 error text advertises"
+            );
+            assert!(
+                !super::with_flag_is_known(hidden),
+                "--with-{hidden} is still accepted"
+            );
+        }
+        assert!(
+            names.contains(&"monitoring"),
+            "the capability that replaced them must be listed"
+        );
+        // The exclusion must be surgical: every other bridge stays offered.
+        assert!(names.contains(&"pdo") && names.contains(&"tls"));
+    }
+
     use super::*;
+    use crate::codegen::platform::{AppleVariant, Arch, Platform};
 
     /// Extracts the compile configuration returned for a legacy invocation.
     fn compile_config(args: &[String]) -> CliConfig {
@@ -651,6 +947,56 @@ mod tests {
             panic!("expected compile command");
         };
         config
+    }
+
+    /// Verifies the symbol table is stripped unless the invocation asks to keep it.
+    ///
+    /// The default is the load-bearing part: stripping removes about a quarter of every linked
+    /// executable, so a regression that silently flipped this back would cost that on every build
+    /// while breaking nothing a test would otherwise notice.
+    #[test]
+    fn symbols_are_stripped_unless_kept() {
+        let default = compile_config(&["elephc".to_string(), "app.php".to_string()]);
+        assert!(!default.keep_symbols, "stripping is the default");
+
+        let kept = compile_config(&[
+            "elephc".to_string(),
+            "--keep-symbols".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(kept.keep_symbols, "--keep-symbols must keep the symbol table");
+    }
+
+    /// Verifies `--debug-info` and `--keep-symbols` are independent flags.
+    ///
+    /// They are consumed together at link time — either one keeps the names — but each must parse
+    /// on its own, so that reading one out of the config cannot be mistaken for the other.
+    #[test]
+    fn debug_info_and_keep_symbols_parse_independently() {
+        let debug = compile_config(&[
+            "elephc".to_string(),
+            "--debug-info".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(debug.emit_debug_info);
+        assert!(!debug.keep_symbols, "--debug-info is not --keep-symbols");
+
+        let both = compile_config(&[
+            "elephc".to_string(),
+            "--debug-info".to_string(),
+            "--keep-symbols".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(both.emit_debug_info && both.keep_symbols);
+    }
+
+    /// Verifies `--keep-symbols` appears in the help text.
+    ///
+    /// `docs/compiling/cli-reference.md` is authoritative and must stay in sync with this file; a
+    /// flag missing from `--help` is the first way those two drift apart.
+    #[test]
+    fn keep_symbols_is_documented_in_help() {
+        assert!(HELP.contains("--keep-symbols"));
     }
 
     /// Verifies an empty `--define` symbol is rejected, matching the `--define=` form,
@@ -671,6 +1017,7 @@ mod tests {
     fn emit_kind_parses_canonical_spellings() {
         assert_eq!(parse_emit("executable"), Emit::Executable);
         assert_eq!(parse_emit("cdylib"), Emit::Cdylib);
+        assert_eq!(parse_emit("staticlib"), Emit::Staticlib);
     }
 
     /// Verifies the accepted aliases map to their canonical variants so users coming
@@ -681,6 +1028,40 @@ mod tests {
         assert_eq!(parse_emit("bin"), Emit::Executable);
         assert_eq!(parse_emit("dylib"), Emit::Cdylib);
         assert_eq!(parse_emit("shared"), Emit::Cdylib);
+        assert_eq!(parse_emit("static"), Emit::Staticlib);
+        assert_eq!(parse_emit("lib"), Emit::Staticlib);
+    }
+
+    /// Verifies `lib` is advertised as a static-library alias rather than being
+    /// mistaken for the dynamic-library family.
+    #[test]
+    fn help_identifies_lib_as_a_staticlib_alias() {
+        assert!(HELP.contains("static/lib (`lib` is staticlib)"));
+    }
+
+    /// Verifies iOS code generation produces host-consumable libraries rather
+    /// than a CLI executable that cannot be installed as an iOS application.
+    #[test]
+    fn ios_rejects_executable_artifacts_but_allows_analysis_and_libraries() {
+        for target in [
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+        ] {
+            assert!(validate_target_output(target, Emit::Executable, false, false).is_err());
+            assert!(validate_target_output(target, Emit::Staticlib, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Cdylib, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Executable, true, false).is_ok());
+            assert!(validate_target_output(target, Emit::Executable, false, true).is_ok());
+        }
+        assert!(
+            validate_target_output(
+                Target::new(Platform::MacOS, Arch::AArch64),
+                Emit::Executable,
+                false,
+                false,
+            )
+            .is_ok()
+        );
     }
 
     /// Verifies the canonical `--ir-opt=` spellings toggle the EIR optimization
@@ -704,6 +1085,38 @@ mod tests {
         let args = vec!["elephc".into(), "--web".into(), "app.php".into()];
         let config = compile_config(&args);
         assert!(config.web);
+        assert_eq!(config.web_isolation, WebIsolation::Worker);
+    }
+
+    /// Verifies all explicit web-isolation spellings select their compile-time model.
+    #[test]
+    fn web_isolation_parses_all_modes() {
+        for (value, expected) in [
+            ("worker", WebIsolation::Worker),
+            ("pool", WebIsolation::Pool),
+            ("request", WebIsolation::Request),
+        ] {
+            let args = vec![
+                "elephc".into(),
+                "--web".into(),
+                format!("--web-isolation={value}"),
+                "app.php".into(),
+            ];
+            assert_eq!(compile_config(&args).web_isolation, expected);
+        }
+    }
+
+    /// Verifies the split spelling selects the same mode as the equals spelling.
+    #[test]
+    fn web_isolation_accepts_split_form() {
+        let args = vec![
+            "elephc".into(),
+            "--web".into(),
+            "--web-isolation".into(),
+            "pool".into(),
+            "app.php".into(),
+        ];
+        assert_eq!(compile_config(&args).web_isolation, WebIsolation::Pool);
     }
 
     /// Verifies the absence of `--web` leaves the web flag off.
@@ -712,6 +1125,7 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = compile_config(&args);
         assert!(!config.web);
+        assert_eq!(config.web_isolation, WebIsolation::Worker);
     }
 
     /// Verifies every maintained PHP minor maps to its exact compatibility profile.
@@ -762,6 +1176,15 @@ mod tests {
         assert!(!config.web);
     }
 
+    /// Verifies `--with-iconv` records the charset bridge for force-linking.
+    #[test]
+    fn with_iconv_records_forced_crate() {
+        let args = vec!["elephc".into(), "--with-iconv".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("iconv"));
+        assert!(!config.web);
+    }
+
     /// Verifies `--with-regex` records the dynamic-code regex capability without web mode.
     #[test]
     fn with_regex_records_runtime_capability() {
@@ -772,6 +1195,21 @@ mod tests {
         ];
         let config = compile_config(&args);
         assert!(config.with_crates.contains("regex"));
+        assert!(!config.web);
+    }
+
+    /// Verifies `--with-mysqli` records the runtime capability that force-injects
+    /// the mysqli prelude (which links the shared `elephc_pdo` archive), without
+    /// touching web mode.
+    #[test]
+    fn with_mysqli_records_runtime_capability() {
+        let args = vec![
+            "elephc".into(),
+            "--with-mysqli".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("mysqli"));
         assert!(!config.web);
     }
 
@@ -884,6 +1322,22 @@ mod tests {
         assert!(config.defines.contains("FEATURE"));
     }
 
+    /// Verifies `--strict-locals` sets the strict_locals flag on the parsed config.
+    #[test]
+    fn strict_locals_flag_sets_strict_locals() {
+        let args = vec!["elephc".into(), "--strict-locals".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.strict_locals);
+    }
+
+    /// Verifies the absence of `--strict-locals` defaults to permissive local retyping.
+    #[test]
+    fn no_strict_locals_flag_defaults_off() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(!config.strict_locals);
+    }
+
     /// Verifies `--quiet` sets the quiet flag.
     #[test]
     fn quiet_flag_sets_quiet() {
@@ -932,6 +1386,97 @@ mod tests {
     fn wants_help_false_without_help_flag() {
         let args = vec!["elephc".into(), "app.php".into()];
         assert!(!wants_help(&args));
+    }
+
+    /// Verifies `--version` is detected anywhere in the argument list.
+    #[test]
+    fn wants_version_detects_long_flag_anywhere() {
+        let args = vec![
+            "elephc".into(),
+            "--check".into(),
+            "--version".into(),
+            "app.php".into(),
+        ];
+        assert!(wants_version(&args));
+    }
+
+    /// Verifies `-V` is detected as the short alias for `--version`.
+    #[test]
+    fn wants_version_detects_short_flag() {
+        let args = vec!["elephc".into(), "-V".into()];
+        assert!(wants_version(&args));
+    }
+
+    /// Verifies normal arguments are not mistaken for a version request.
+    #[test]
+    fn wants_version_false_without_version_flag() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        assert!(!wants_version(&args));
+    }
+
+    /// The report a release probe reads must name every bridge in the table.
+    ///
+    /// This is the whole mechanism: the probe unpacks a tarball and asks the
+    /// binary inside it which archives it needs, so a bridge the report omits
+    /// is a bridge the probe cannot check was packed — silently, and only in
+    /// the shipped artifact, which is the one place no in-repo test can look.
+    /// Derived from `crate_flag_names()` so the next bridge is covered by the
+    /// edit that declares it rather than by anyone remembering this test.
+    #[test]
+    fn the_capability_report_names_every_bridge_archive() {
+        let report = super::capability_report();
+        for flag in crate::linker::crate_flag_names() {
+            let archive = crate::linker::archive_filename_for_flag(flag)
+                .expect("every bridge flag resolves to an archive");
+            assert!(
+                report.contains(&archive),
+                "--print-capabilities never names `{archive}`, so the release \
+                 probe cannot check that it was packed beside the binary"
+            );
+        }
+    }
+
+    /// Every accepted `--with-<name>` must be advertised on the `--help` line.
+    ///
+    /// The list was literal once and drifted: `iconv` was accepted by the
+    /// parser and absent from `--help`, so the reference text described a
+    /// smaller compiler than the binary printing it.
+    #[test]
+    fn help_advertises_every_accepted_capability() {
+        let help = super::help_text();
+        assert!(
+            !help.contains("{CAPABILITIES}"),
+            "the capability placeholder reached the user unsubstituted"
+        );
+        let line = help
+            .lines()
+            .find(|line| line.contains("--with-NAME"))
+            .expect("--help documents --with-NAME");
+        for name in super::with_flag_names() {
+            assert!(
+                line.contains(name),
+                "--help never advertises --with-{name}, which the parser accepts"
+            );
+        }
+    }
+
+    /// Verifies `--print-capabilities` is detected anywhere in the argument list.
+    #[test]
+    fn wants_capabilities_detects_the_flag_anywhere() {
+        let args = vec![
+            "elephc".into(),
+            "app.php".into(),
+            "--print-capabilities".into(),
+        ];
+        assert!(super::wants_capabilities(&args));
+        assert!(!super::wants_capabilities(&["elephc".into(), "app.php".into()]));
+    }
+
+    /// Verifies help exposes both the current compiler version and its version flags.
+    #[test]
+    fn help_includes_version_and_version_flags() {
+        assert!(HELP.contains(&format!("Version: {VERSION}")));
+        assert!(HELP.contains("-V, --version"));
     }
 
     /// Verifies `--mascotte` is detected anywhere in the argument list.

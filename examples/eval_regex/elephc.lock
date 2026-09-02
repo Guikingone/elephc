@@ -20,6 +20,18 @@ system_libraries = []
 frameworks = []
 
 [[package.target]]
+name = "ios-arm64"
+archives = ["lib/libelephc_pcre2_shim.a", "lib/libpcre2-posix.a", "lib/libpcre2-8.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "ios-sim-arm64"
+archives = ["lib/libelephc_pcre2_shim.a", "lib/libpcre2-posix.a", "lib/libpcre2-8.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
 name = "linux-aarch64"
 archives = ["lib/libelephc_pcre2_shim.a", "lib/libpcre2-posix.a", "lib/libpcre2-8.a"]
 system_libraries = []

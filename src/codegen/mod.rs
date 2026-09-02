@@ -11,7 +11,7 @@
 
 mod aarch64_relax;
 mod block_emit;
-mod callable_reachability;
+pub(crate) mod callable_reachability;
 pub(crate) mod context;
 mod enum_singletons;
 mod eval_callable_helpers;
@@ -32,12 +32,13 @@ pub(crate) mod lower_inst;
 mod lower_term;
 mod runtime_callable_invoker;
 mod runtime_metadata;
+mod shared_count_guard;
 mod shared_helper;
-mod shared_reflection;
 mod shared_mixed_callable;
 mod shared_mixed_string;
+mod shared_reflection;
 mod shared_state;
-mod stack_guard;
+pub(crate) mod stack_guard;
 pub mod value_placement;
 mod web;
 use runtime_metadata::*;
@@ -50,7 +51,8 @@ pub(crate) use crate::codegen_support::sentinels::{
 };
 pub(crate) use crate::codegen_support::{
     abi, bcmath, callable_descriptor, callable_dispatch, callable_invoker_args, cdylib,
-    data_section, emit, hash_crypto, interface_wrappers, phar_stream, reflection, runtime,
+    data_section, emit, hash_crypto, iconv_bridge, interface_wrappers, phar_stream, reflection,
+    runtime,
     sentinels, stream_filters,
     tls, visibility,
 };
@@ -65,9 +67,9 @@ pub(crate) use crate::codegen_support::{
 };
 #[allow(unused_imports)]
 pub use crate::codegen_support::{
-    generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
-    link_requirements_for_runtime_features, runtime_features_for_program_and_classes,
-    LinkRequirement, RuntimeFeatures,
+    generate_runtime, generate_runtime_with_features, generate_runtime_with_features_mode,
+    generate_runtime_with_features_pic, link_requirements_for_runtime_features,
+    runtime_features_for_program_and_classes, LinkRequirement, RuntimeFeatures,
 };
 pub use crate::codegen_support::{
     prepare_declared_name_order, set_autoload_rule_count, set_compile_profile,
@@ -80,21 +82,117 @@ use std::fmt;
 
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::{Arch, Platform};
+use crate::codegen::platform::Arch;
 use crate::exports::ExportedFunction;
 use crate::ir::Module;
 use crate::names::php_symbol_key;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
+/// Which PHP functions carry `--instrument` hooks.
+///
+/// Instrumenting everything is exact but costs two clock reads and a bookkeeping
+/// update on every call, which is why it is a dev-build tool. Instrumenting a
+/// chosen few keeps that exactness where it was asked for and leaves the rest of
+/// the program at full speed — the shape production tracers use.
+///
+/// The trade is real and is reported rather than hidden: with a partial set, an
+/// uninstrumented callee's time lands in its instrumented caller's SELF, so self
+/// values stop partitioning the root's inclusive. The runtime is told, and says so.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Instrumentation {
+    /// No hooks at all.
+    #[default]
+    Off,
+    /// The `{main}` root and every non-synthetic PHP function.
+    All,
+    /// Only the named functions. `{main}` selects the top-level root; a trailing
+    /// `*` matches by prefix, so `PDOStatement::*` covers a class.
+    Only(Vec<String>),
+}
+
+impl Instrumentation {
+    /// Whether any hook is emitted at all.
+    pub fn is_on(&self) -> bool {
+        !matches!(self, Instrumentation::Off)
+    }
+
+    /// Whether this function should carry hooks.
+    pub fn covers(&self, name: &str) -> bool {
+        match self {
+            Instrumentation::Off => false,
+            Instrumentation::All => true,
+            Instrumentation::Only(names) => names.iter().any(|pattern| {
+                match pattern.strip_suffix('*') {
+                    Some(prefix) => name.starts_with(prefix),
+                    None => name == pattern,
+                }
+            }),
+        }
+    }
+
+    /// Whether the set is a subset, which is what makes the numbers need a caveat.
+    pub fn is_partial(&self) -> bool {
+        matches!(self, Instrumentation::Only(_))
+    }
+}
+
+
+
 /// Output artifact kind selected by the compiler's `--emit` flag.
 ///
 /// `Executable` produces a standalone native binary with a process entry point.
 /// `Cdylib` produces a position-independent shared library with exported lifecycle hooks.
+/// `Staticlib` produces an `ar` archive of the same exported surface, for a host
+/// that links elephc into its own binary — an Xcode project, say — instead of
+/// loading it at run time.
+///
+/// `Staticlib` is *not* PIC. `Emitter::new_pic` exists for dynamic loading,
+/// where the loader must resolve cross-object references at `dlopen` time; its
+/// GOT indirection is unrelated to position independence as such. An archive is
+/// merged once into the host's final binary by the host's own linker, exactly
+/// like the executable path, whose non-PIC output is already PC-relative and
+/// already yields PIE binaries.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Emit {
     Executable,
     Cdylib,
+    Staticlib,
+}
+
+impl Emit {
+    /// Returns whether this artifact is a library exposing `#[Export]`
+    /// trampolines and lifecycle symbols rather than a process entry point.
+    pub fn is_library(self) -> bool {
+        matches!(self, Emit::Cdylib | Emit::Staticlib)
+    }
+}
+
+/// Compile-time process-isolation model selected for a `--web` executable.
+///
+/// This value is consumed while emitting the process-entry symbol, so the
+/// entry stub references only the requested server entry and does not branch
+/// on the isolation model while serving requests.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum WebIsolation {
+    /// Run PHP synchronously inside each prefork worker, matching the original server.
+    #[default]
+    Worker,
+    /// Dispatch requests to a persistent supervised pool of handler processes.
+    Pool,
+    /// Fork one disposable handler process for every request.
+    Request,
+}
+
+impl WebIsolation {
+    /// Returns the bridge C symbol embedded in the generated process-entry stub.
+    pub(crate) const fn bridge_symbol(self) -> &'static str {
+        match self {
+            Self::Worker => "elephc_web_run",
+            Self::Pool => "elephc_web_run_pool",
+            Self::Request => "elephc_web_run_request",
+        }
+    }
 }
 
 /// Error returned by the Phase 04 IR backend while a required lowering path is missing.
@@ -172,12 +270,16 @@ pub fn generate_user_asm_from_ir(
     generate_user_asm_from_ir_with_options(
         module,
         gc_stats,
+        false, // counters
+        Instrumentation::Off, // instrument
+        false, // probe
         heap_debug,
         false,
         Emit::Executable,
         &exported_functions,
         true,
         false,
+        WebIsolation::Worker,
     )
 }
 
@@ -188,21 +290,29 @@ pub fn generate_user_asm_from_ir(
 ///
 /// `web` restructures the process entry for `--web`: the top-level body becomes
 /// the C-callable `_elephc_web_handler` and the real entry point becomes a thin
-/// stub that calls `elephc_web_run`. When false the entry is byte-for-byte the
-/// normal exit-based main.
+/// stub that calls the bridge symbol selected by `web_isolation`. When false
+/// the entry is byte-for-byte the normal exit-based main.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_user_asm_from_ir_with_options(
     module: &Module,
     gc_stats: bool,
+    counters: bool,
+    instrument: Instrumentation,
+    probe: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
     emit: Emit,
     exported_functions: &HashMap<String, ExportedFunction>,
     regalloc_linear: bool,
     web: bool,
+    web_isolation: WebIsolation,
 ) -> Result<String> {
     let mut emitter = match emit {
-        Emit::Cdylib => Emitter::new_pic(module.target),
+        Emit::Cdylib => Emitter::new_cdylib(module.target),
+        // A staticlib joins the executable path: it is linked once into the host
+        // binary, so it needs no GOT indirection, but it still exposes the same
+        // recoverable host boundary as a cdylib.
+        Emit::Staticlib => Emitter::new_staticlib(module.target),
         Emit::Executable => Emitter::new(module.target),
     };
     if module.target.arch == Arch::X86_64 {
@@ -214,11 +324,15 @@ pub fn generate_user_asm_from_ir_with_options(
         &mut emitter,
         &mut data,
         gc_stats,
+        counters,
+        instrument,
+        probe,
         heap_debug,
         requires_elephc_tls,
         emit,
         regalloc_linear,
         web,
+        web_isolation,
     )?;
     Ok(finalize_user_asm(
         module,
@@ -226,6 +340,7 @@ pub fn generate_user_asm_from_ir_with_options(
         data,
         emit,
         exported_functions,
+        heap_debug,
     ))
 }
 
@@ -236,6 +351,7 @@ fn finalize_user_asm(
     mut data: DataSection,
     emit: Emit,
     exported_functions: &HashMap<String, ExportedFunction>,
+    heap_debug: bool,
 ) -> String {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     let emit_eval_reflection_metadata =
@@ -277,13 +393,15 @@ fn finalize_user_asm(
         eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
         eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
     }
-    let data_output = data.emit(module.target);
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
     let user_functions = runtime_user_function_sigs(module);
     let function_variant_groups = runtime_function_variant_groups(module);
     let mut allowed_class_names = runtime_referenced_class_names(module);
-    if module_uses_dynamic_callable_lookup(module) || module.required_runtime_features.eval_bridge {
+    if module_uses_dynamic_callable_lookup(module)
+        || module_uses_unserialize(module)
+        || module.required_runtime_features.eval_bridge
+    {
         allowed_class_names.extend(module.class_infos.keys().cloned());
     }
     let runtime_interfaces = runtime_referenced_interfaces(module, &allowed_class_names);
@@ -295,10 +413,16 @@ fn finalize_user_asm(
         Some(&allowed_class_names),
     );
     emit_intrinsic_method_wrappers(module, &mut emitter);
-    if matches!(emit, Emit::Cdylib) {
+    if emit.is_library() {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
-        sorted_exports.sort_by(|a, b| a.name.cmp(&b.name));
-        crate::codegen::cdylib::emit_cdylib_exports(&mut emitter, module.target, &sorted_exports);
+        sorted_exports.sort_by(|a, b| a.c_name.cmp(&b.c_name));
+        crate::codegen::cdylib::emit_cdylib_exports(
+            &mut emitter,
+            &mut data,
+            module.target,
+            &sorted_exports,
+            heap_debug,
+        );
     }
     let user_data = runtime::emit_runtime_data_user(
         &empty_globals,
@@ -324,6 +448,7 @@ fn finalize_user_asm(
         module.target,
     );
 
+    let data_output = data.emit(module.target);
     let mut user_asm = emitter.output();
     if !data_output.is_empty() {
         user_asm.push('\n');
@@ -377,22 +502,92 @@ fn finalize_user_asm(
         user_asm.push_str(&runtime::emit_member_exists_registry_data(module));
     }
     let user_asm = aarch64_relax::relax_conditional_branches(user_asm, module.target);
-    if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
-        let mut exported: HashSet<String> = exported_functions
-            .values()
-            .map(|export| module.target.extern_symbol(&export.name))
-            .collect();
-        for lifecycle in [
-            "elephc_init",
-            "elephc_shutdown",
-            "elephc_last_error",
-            "elephc_free",
-        ] {
-            exported.insert(module.target.extern_symbol(lifecycle));
+    let mut exported: HashSet<String> = exported_functions
+        .values()
+        .map(|export| module.target.extern_symbol(&export.c_name))
+        .collect();
+    match emit {
+        Emit::Cdylib | Emit::Staticlib => {
+            for lifecycle in [
+                "elephc_abi_version",
+                "elephc_init",
+                "elephc_shutdown",
+                "elephc_last_status",
+                "elephc_last_error",
+                "elephc_free",
+            ] {
+                exported.insert(module.target.extern_symbol(lifecycle));
+            }
         }
-        return crate::codegen::visibility::append_hidden_directives(&user_asm, &exported);
+        // An executable exports only its entry point. Everything else is `.globl` purely so the
+        // two objects can find each other, and a `.globl` is an export — hence a dead-strip root,
+        // which is why unreferenced per-class machinery survived stripping.
+        Emit::Executable => {
+            exported.insert(module.target.extern_symbol("main"));
+        }
     }
-    user_asm
+    // The GCC driver contributes the ELF CRT `_init`/`_fini` definitions after
+    // assembly. Hidden undefined declarations here propagate local visibility
+    // to those definitions in the final shared object.
+    let additional_internal: &[&str] = if matches!(emit, Emit::Cdylib)
+        && module.target.platform == platform::Platform::Linux
+    {
+        &["_init", "_fini"]
+    } else {
+        &[]
+    };
+    crate::codegen::visibility::append_hidden_directives_with_extras(
+        &user_asm,
+        &exported,
+        module.target.platform,
+        additional_internal,
+    )
+}
+
+#[cfg(test)]
+mod instrumentation_tests {
+    use super::Instrumentation;
+
+    /// Selection decides who pays the per-call cost, so a pattern matching too much
+    /// silently reinstates the overhead the flag exists to avoid — and one matching
+    /// too little leaves a hole in the profile with nothing to show for it.
+    #[test]
+    fn selection_matches_exactly_or_by_prefix() {
+        let only = Instrumentation::Only(vec![
+            "process_order".to_string(),
+            "PDOStatement::*".to_string(),
+        ]);
+        assert!(only.covers("process_order"));
+        assert!(only.covers("PDOStatement::execute"));
+        assert!(only.covers("PDOStatement::"), "the bare prefix still matches");
+        // A name that merely CONTAINS a pattern is not a match: substring matching
+        // would sweep in unrelated functions and quietly restore the full cost.
+        assert!(!only.covers("run_process_order"));
+        assert!(!only.covers("PDO::execute"));
+        assert!(!only.covers("format_money"));
+
+        let main_only = Instrumentation::Only(vec!["{main}".to_string()]);
+        assert!(main_only.covers("{main}"));
+        assert!(!main_only.covers("main"), "the display-root spelling is explicit");
+
+        assert!(Instrumentation::All.covers("anything"));
+        assert!(!Instrumentation::Off.covers("anything"));
+    }
+
+    /// Only a subset changes what "self" means, so only a subset carries the caveat.
+    #[test]
+    fn partiality_is_what_triggers_the_caveat() {
+        assert!(!Instrumentation::Off.is_partial());
+        assert!(
+            !Instrumentation::All.is_partial(),
+            "full coverage needs no caveat"
+        );
+        assert!(Instrumentation::Only(vec!["a".to_string()]).is_partial());
+
+        assert!(!Instrumentation::Off.is_on());
+        assert!(Instrumentation::All.is_on());
+        assert!(Instrumentation::Only(vec!["a".to_string()]).is_on());
+    }
 }
 
 /// Builds the deterministic scalar subset used by runtime constant lookup.

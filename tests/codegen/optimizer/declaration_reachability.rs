@@ -48,6 +48,36 @@ fn test_unused_user_function_program_still_runs() {
     assert_eq!(out, "1");
 }
 
+/// Verifies exception-aware DCE removes a disjoint catch before declaration reachability scans it.
+#[test]
+fn test_exception_dce_exposes_catch_only_function_to_reachability() {
+    let dir = make_cli_test_dir("elephc_decl_reach_exception_dce");
+    let (user_asm, _, _) = compile_source_to_asm_with_options(
+        "<?php
+        class A extends Exception {}
+        class B extends Exception {}
+        function catchOnly(): int { return 9; }
+        try {
+            throw new A('a');
+        } catch (B $error) {
+            echo catchOnly();
+        } catch (A $error) {
+            echo 'ok';
+        }
+        ",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let catch_only = elephc::names::function_symbol("catchOnly");
+    assert!(
+        !user_asm.contains(&format!(".globl {catch_only}\n")),
+        "a function referenced only by a disjoint catch must be pruned: {user_asm}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies an entirely unused class does not leave a method body in user assembly.
 #[test]
 fn test_unused_user_class_is_absent_from_assembly() {
@@ -104,6 +134,30 @@ fn test_method_exists_literal_keeps_static_method() {
         "<?php
         class StaticProbe { public static function hidden(): int { return 1; } }
         echo method_exists('StaticProbe', 'hidden') ? 'y' : 'n';
+        ",
+    );
+    assert_eq!(out, "y");
+}
+
+/// Verifies reordered named arguments retain the class and method probed by `method_exists`.
+#[test]
+fn test_method_exists_named_arguments_keep_static_method() {
+    let out = compile_and_run(
+        "<?php
+        class NamedMethodProbe { public static function hidden(): int { return 1; } }
+        echo method_exists(method: 'hidden', object_or_class: 'NamedMethodProbe') ? 'y' : 'n';
+        ",
+    );
+    assert_eq!(out, "y");
+}
+
+/// Verifies a class-string property probe retains otherwise unreachable class metadata.
+#[test]
+fn test_property_exists_class_string_keeps_class_metadata() {
+    let out = compile_and_run(
+        "<?php
+        class PropertyProbe { public int $hidden = 1; }
+        echo property_exists('PropertyProbe', 'hidden') ? 'y' : 'n';
         ",
     );
     assert_eq!(out, "y");
@@ -279,6 +333,46 @@ fn test_by_ref_constructor_parameter_keeps_runtime_receiver_method_body() {
     assert_eq!(out, "B");
 }
 
+/// Verifies late-static construction retains and invokes an overriding child constructor.
+#[test]
+fn test_new_static_keeps_runtime_subclass_constructor() {
+    let out = compile_and_run(
+        "<?php
+        class BaseFactory {
+            public static function make(): static { return new static(); }
+        }
+        class ChildFactory extends BaseFactory {
+            public function __construct() { echo 'child'; }
+        }
+        ChildFactory::make();
+        ",
+    );
+    assert_eq!(out, "child");
+}
+
+/// Verifies descendant constructor signatures invalidate late-static by-ref arguments.
+#[test]
+fn test_new_static_uses_runtime_subclass_constructor_signature() {
+    let out = compile_and_run(
+        "<?php
+        class A { public function value(): string { return 'A'; } }
+        class B extends A { public function value(): string { return 'B'; } }
+        class BaseFactory {
+            public function __construct(A $slot) {}
+            public static function make(A $slot): string {
+                new static(slot: $slot);
+                return $slot->value();
+            }
+        }
+        class ChildFactory extends BaseFactory {
+            public function __construct(A &$slot) { $slot = new B(); }
+        }
+        echo ChildFactory::make(new A());
+        ",
+    );
+    assert_eq!(out, "B");
+}
+
 /// Verifies interface contracts and `parent::` dispatch retain the inherited implementation.
 #[test]
 fn test_parent_dispatch_and_interface_contract_still_run() {
@@ -314,6 +408,161 @@ fn test_parent_dispatch_bypasses_child_override_after_pruning() {
         ",
     );
     assert_eq!(out, "42");
+}
+
+/// Verifies a `parent::` call cannot desynchronize parent and child instance-vtable slots.
+#[test]
+fn test_parent_scoped_call_keeps_instance_slots_aligned_across_the_chain() {
+    let out = compile_and_run(
+        "<?php
+        class SlotBase {
+            public function shadowed(): string { return 'base'; }
+            public function later(): string { return 'later'; }
+        }
+        class SlotChild extends SlotBase {
+            public function shadowed(): string { return 'child'; }
+            public function boot(): string { return parent::shadowed(); }
+        }
+        function through_base(SlotBase $value): string { return $value->later(); }
+        $child = new SlotChild();
+        $child->boot();
+        echo through_base($child);
+        ",
+    );
+    assert_eq!(out, "later");
+}
+
+/// Verifies scoped parent retention cannot desynchronize late-bound static-vtable slots.
+#[test]
+fn test_parent_scoped_call_keeps_static_slots_aligned_across_the_chain() {
+    let out = compile_and_run(
+        "<?php
+        class StaticSlotBase {
+            public static function shadowed(): string { return 'base'; }
+            public static function dispatch(): string { return static::later(); }
+            public static function later(): string { return 'later'; }
+        }
+        class StaticSlotChild extends StaticSlotBase {
+            public static function shadowed(): string { return 'child'; }
+            public static function boot(): string { return parent::shadowed(); }
+        }
+        StaticSlotChild::boot();
+        echo StaticSlotChild::dispatch();
+        ",
+    );
+    assert_eq!(out, "later");
+}
+
+/// Verifies `count()` still executes a dynamic method inside Countable::count after pruning.
+#[test]
+fn test_countable_protocol_body_keeps_dynamic_method_target() {
+    let out = compile_and_run(
+        "<?php
+        class Items implements Countable {
+            public function count(): int {
+                $name = 'target';
+                $this->$name();
+                return 1;
+            }
+            public function target(): void { echo 'hit'; }
+        }
+        echo count(new Items());
+        ",
+    );
+    assert_eq!(out, "hit1");
+}
+
+/// Verifies foreach still executes a dynamic method inside Iterator::rewind after pruning.
+#[test]
+fn test_iterator_protocol_body_keeps_dynamic_method_target() {
+    let out = compile_and_run(
+        "<?php
+        class Items implements Iterator {
+            public function rewind(): void {
+                $name = 'target';
+                $this->$name();
+            }
+            public function current(): mixed { return 1; }
+            public function key(): mixed { return 0; }
+            public function next(): void {}
+            public function valid(): bool { return false; }
+            public function target(): void { echo 'hit'; }
+        }
+        foreach (new Items() as $value) {}
+        ",
+    );
+    assert_eq!(out, "hit");
+}
+
+/// Verifies a mid-chain `parent::` call cannot desynchronize the grandparent instance vtable.
+#[test]
+fn test_parent_scoped_call_keeps_grandparent_instance_slots_aligned() {
+    let out = compile_and_run(
+        "<?php
+        class SlotRoot {
+            public function shadowed(): string { return 'root'; }
+            public function later(): string { return 'later'; }
+        }
+        class SlotMid extends SlotRoot {
+            public function shadowed(): string { return 'mid'; }
+        }
+        class SlotLeaf extends SlotMid {
+            public function boot(): string { return parent::shadowed(); }
+        }
+        function through_root(SlotRoot $value): string { return $value->later(); }
+        $leaf = new SlotLeaf();
+        $leaf->boot();
+        echo through_root($leaf);
+        ",
+    );
+    assert_eq!(out, "later");
+}
+
+/// Verifies a mid-chain `parent::` call cannot desynchronize an abstract grandparent vtable.
+#[test]
+fn test_parent_scoped_call_keeps_abstract_grandparent_slots_aligned() {
+    let out = compile_and_run(
+        "<?php
+        abstract class SlotRoot {
+            abstract public function shadowed(): string;
+            public function later(): string { return 'later'; }
+        }
+        class SlotMid extends SlotRoot {
+            public function shadowed(): string { return 'mid'; }
+        }
+        class SlotLeaf extends SlotMid {
+            public function boot(): string { return parent::shadowed(); }
+        }
+        function through_root(SlotRoot $value): string { return $value->later(); }
+        $leaf = new SlotLeaf();
+        $leaf->boot();
+        echo through_root($leaf);
+        ",
+    );
+    assert_eq!(out, "later");
+}
+
+/// Verifies a mid-chain static `parent::` call cannot desynchronize late-bound static slots.
+#[test]
+fn test_parent_scoped_call_keeps_grandparent_static_slots_aligned() {
+    let out = compile_and_run(
+        "<?php
+        class StaticSlotRoot {
+            public static function shadowed(): string { return 'root'; }
+            public static function dispatch(): string { return static::later(); }
+            public static function later(): string { return 'later'; }
+        }
+        class StaticSlotMid extends StaticSlotRoot {
+            public static function shadowed(): string { return 'mid'; }
+        }
+        class StaticSlotLeaf extends StaticSlotMid {
+            public static function boot(): string { return parent::shadowed(); }
+        }
+        StaticSlotLeaf::boot();
+        echo StaticSlotLeaf::dispatch();
+        ",
+    );
+    assert_eq!(out, "later");
 }
 
 /// Verifies a runtime-generated TypeError retains its checker-injected class metadata after pruning.

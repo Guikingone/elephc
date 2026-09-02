@@ -135,7 +135,7 @@ pub(super) fn collect_literal_eval_aot_function_candidates(
 }
 
 /// Returns the string payload from an `EvalLiteralCall` instruction.
-pub(super) fn eval_literal_fragment_from_inst(
+pub(crate) fn eval_literal_fragment_from_inst(
     module: &Module,
     inst: &crate::ir::Instruction,
 ) -> Option<String> {

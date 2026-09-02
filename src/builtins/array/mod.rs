@@ -69,6 +69,7 @@ pub mod extract;
 pub mod in_array;
 pub mod internal_pointer;
 pub mod key;
+mod key_sort;
 pub mod krsort;
 pub mod ksort;
 pub mod natcasesort;

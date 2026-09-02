@@ -901,7 +901,11 @@ var_dump(isset($row->id));  // true
 ```
 
 `isset()` on a typed property that was never initialized (or was unset) answers
-`false` without raising the uninitialized-read error, matching PHP.
+`false` without raising the uninitialized-read error, matching PHP. The same
+suppression applies to `empty()`, `??`, and `??=`: `$row->id ?? "none"` answers
+the default instead of raising, on instance and static typed properties alike,
+including reads through a nullable receiver (`?Row $r` → `$r->id ?? "none"`). A
+plain read still raises the catchable `Error`.
 
 ### `unset()` on a dynamic property
 

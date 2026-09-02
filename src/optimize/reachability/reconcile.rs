@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - Synthetic checker-only classes are preserved unless backed by a pruned source declaration.
-//! - Vtable slot layout stays ABI-stable across abstract parents and concrete descendants.
+//! - Vtable survivor order is stable and slots are compacted from zero.
+//! - Shared virtual methods retain identical slots along every live inheritance lineage.
 
 use std::collections::{HashMap, HashSet};
 
@@ -104,6 +105,8 @@ fn retain_class_metadata(
             prune_class_methods(&key, class_info, reachability);
         }
     }
+    #[cfg(debug_assertions)]
+    assert_inherited_vtable_slots_aligned(&check.classes);
     check.interfaces.retain(|name, _| {
         let key = php_symbol_key(name);
         !matches!(
@@ -124,7 +127,40 @@ fn retain_class_metadata(
     });
 }
 
-/// Filters every instance/static method map while preserving inherited vtable slot layout.
+/// Asserts shared virtual methods retain one slot number across each live inheritance edge.
+#[cfg(debug_assertions)]
+fn assert_inherited_vtable_slots_aligned(classes: &HashMap<String, ClassInfo>) {
+    let by_key: HashMap<_, _> = classes
+        .iter()
+        .map(|(name, info)| (php_symbol_key(name), info))
+        .collect();
+    for (class_name, child) in classes {
+        let Some(parent_name) = child.parent.as_deref() else {
+            continue;
+        };
+        let Some(parent) = by_key.get(&php_symbol_key(parent_name)).copied() else {
+            continue;
+        };
+        for (method, parent_slot) in &parent.vtable_slots {
+            if let Some(child_slot) = child.vtable_slots.get(method) {
+                debug_assert_eq!(
+                    child_slot, parent_slot,
+                    "instance vtable slot for {class_name}::{method} diverged from {parent_name}",
+                );
+            }
+        }
+        for (method, parent_slot) in &parent.static_vtable_slots {
+            if let Some(child_slot) = child.static_vtable_slots.get(method) {
+                debug_assert_eq!(
+                    child_slot, parent_slot,
+                    "static vtable slot for {class_name}::{method} diverged from {parent_name}",
+                );
+            }
+        }
+    }
+}
+
+/// Filters every instance/static method map and rebuilds stable compact vtable slots.
 fn prune_class_methods(
     class_key: &str,
     info: &mut ClassInfo,
@@ -164,6 +200,23 @@ fn prune_class_methods(
         })
         .cloned()
         .collect();
+    // A private override can remain as an inherited vtable slot marker even though
+    // descendants do not inherit its method metadata. Preserve graph-selected
+    // markers independently so compacting a descendant cannot shift later slots.
+    let reachable_instance_slots: HashSet<&str> = reachability
+        .methods
+        .iter()
+        .filter_map(|(class, method, is_static)| {
+            (class == class_key && !*is_static).then_some(method.as_str())
+        })
+        .collect();
+    let reachable_static_slots: HashSet<&str> = reachability
+        .methods
+        .iter()
+        .filter_map(|(class, method, is_static)| {
+            (class == class_key && *is_static).then_some(method.as_str())
+        })
+        .collect();
     let keep_any: HashSet<String> = keep_instance.union(&keep_static).cloned().collect();
 
     info.method_decls.retain(|method| {
@@ -195,11 +248,14 @@ fn prune_class_methods(
     info.method_attribute_args
         .retain(|key, _| keep_any.contains(key));
 
-    // A class vtable is an ABI shared by every descendant. In particular, an abstract parent can
-    // expose an interface method with no local body while a concrete child supplies it. Dropping
-    // an otherwise unreachable abstract slot from only the parent renumbers a method call lowered
-    // in that parent, but leaves the child's physical table unchanged. Keep the declared slot
-    // vectors and their maps intact; codegen emits a null pointer for any pruned implementation.
+    info.vtable_methods.retain(|key| {
+        keep_instance.contains(key) || reachable_instance_slots.contains(key.as_str())
+    });
+    info.vtable_slots = compact_slots(&info.vtable_methods);
+    info.static_vtable_methods.retain(|key| {
+        keep_static.contains(key) || reachable_static_slots.contains(key.as_str())
+    });
+    info.static_vtable_slots = compact_slots(&info.static_vtable_methods);
 }
 
 /// Returns whether a method is reachable through its visible, implementing, or declaring class.
@@ -235,6 +291,15 @@ fn method_is_live(
 /// Retains string-keyed map entries selected by one canonical method keep-set.
 fn retain_keys<T>(map: &mut HashMap<String, T>, keep: &HashSet<String>) {
     map.retain(|key, _| keep.contains(key));
+}
+
+/// Rebuilds vtable slots from survivor order without sorting or leaving gaps.
+fn compact_slots(methods: &[String]) -> HashMap<String, usize> {
+    methods
+        .iter()
+        .enumerate()
+        .map(|(slot, method)| (method.clone(), slot))
+        .collect()
 }
 
 /// Removes pruned FFI function/class schemas while leaving globals conservative.

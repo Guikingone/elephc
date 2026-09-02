@@ -16,38 +16,76 @@ use super::*;
 /// scan would mistake them for native PHARs. ZIP starts with `PK\x03\x04` (or
 /// `PK\x05\x06` when empty); TAR carries the ustar magic at offset 257; everything
 /// else (a `<?php` stub) is a native PHAR.
+#[cfg(test)]
 pub(super) fn parse_archive(data: &[u8]) -> Option<Archive> {
+    parse_archive_with_public_key(data, None)
+}
+
+/// Parses archive bytes while authenticating an OpenSSL signature with `public_key`.
+///
+/// The key is threaded through whole-archive compression so a `.tar.gz` or
+/// `.tar.bz2` archive authenticates the inner PHAR before exposing entries.
+pub(super) fn parse_archive_with_public_key(
+    data: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Archive> {
     // A whole-archive gzip/bzip2 wrapper (e.g. `.tar.gz` / `.tar.bz2`) is decoded
     // transparently, then the inner archive is parsed normally.
     if data.starts_with(b"\x1f\x8b") {
-        return parse_archive(&decompress_gzip_stream(data)?);
+        return parse_archive_with_public_key(&decompress_gzip_stream(data)?, public_key);
     }
     if data.starts_with(b"BZh") {
-        return parse_archive(&decompress_bzip2_stream(data)?);
+        return parse_archive_with_public_key(&decompress_bzip2_stream(data)?, public_key);
     }
     if data.starts_with(b"PK\x03\x04") || data.starts_with(b"PK\x05\x06") {
-        parse_zip_archive(data)
+        parse_zip_archive_with_public_key(data, public_key)
     } else if data.get(257..262) == Some(b"ustar") {
-        parse_tar_archive(data)
+        parse_tar_archive_with_public_key(data, public_key)
     } else {
-        parse_native_phar_archive(data)
+        parse_native_phar_archive_with_public_key(data, public_key)
     }
+}
+
+/// Reads an archive from `path` and authenticates OpenSSL signatures with the
+/// PEM public key stored at PHP's conventional `<archive>.pubkey` sidecar path.
+pub(super) fn parse_archive_path(path: &std::path::Path) -> Option<Archive> {
+    read_verified_archive(path).map(|(_, archive)| archive)
+}
+
+/// Reads and authenticates one filesystem snapshot of an archive.
+///
+/// Returning the verified bytes with the decoded archive prevents callers that
+/// need both forms from validating one file snapshot and then consuming another.
+pub(super) fn read_verified_archive(path: &std::path::Path) -> Option<(Vec<u8>, Archive)> {
+    let data = std::fs::read(path).ok()?;
+    let public_key = read_archive_public_key(path);
+    let archive = parse_archive_with_public_key(&data, public_key.as_ref())?;
+    Some((data, archive))
 }
 
 /// Decompresses a whole gzip (`.gz`) stream into its plain bytes.
 pub(super) fn decompress_gzip_stream(data: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
     let mut decoder = flate2::read::GzDecoder::new(data);
-    std::io::Read::read_to_end(&mut decoder, &mut out).ok()?;
-    Some(out)
+    read_bounded_archive_stream(&mut decoder, data.len())
 }
 
 /// Decompresses a whole bzip2 (`.bz2`) stream into its plain bytes.
 pub(super) fn decompress_bzip2_stream(data: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
     let mut decoder = bzip2_rs::DecoderReader::new(data);
-    std::io::Read::read_to_end(&mut decoder, &mut out).ok()?;
-    Some(out)
+    read_bounded_archive_stream(&mut decoder, data.len())
+}
+
+/// Reads a whole-archive compression stream without allowing an input bomb to
+/// allocate beyond both a fixed ceiling and the PHAR expansion-ratio ceiling.
+fn read_bounded_archive_stream(reader: &mut impl Read, compressed_len: usize) -> Option<Vec<u8>> {
+    let ratio_ceiling = compressed_len.checked_mul(MAX_PHAR_DECOMPRESSION_RATIO)?;
+    let ceiling = ratio_ceiling.min(MAX_PHAR_ARCHIVE_DECOMPRESSED_BYTES);
+    let mut out = Vec::new();
+    reader
+        .take(u64::try_from(ceiling.checked_add(1)?).ok()?)
+        .read_to_end(&mut out)
+        .ok()?;
+    (out.len() <= ceiling).then_some(out)
 }
 
 /// Returns the plain (uncompressed) archive bytes, stripping a whole-archive gzip or
@@ -76,24 +114,49 @@ pub(super) fn compression_dest_path(src: &[u8], new_ext: &str) -> Option<Vec<u8>
 /// Reads `src`, gzip-wraps its plain archive bytes, writes them to `<base>.gz`, and
 /// returns that destination path (PHP `PharData::compress(Phar::GZ)`).
 pub(super) fn gzip_archive(src: &[u8]) -> Option<Vec<u8>> {
-    let plain = uncompressed_archive_bytes(&read_path(src)?)?;
+    let src_path = std::path::Path::new(std::str::from_utf8(src).ok()?);
+    let (raw, _) = read_verified_archive(src_path)?;
+    let plain = uncompressed_archive_bytes(&raw)?;
     let mut encoder =
         flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     std::io::Write::write_all(&mut encoder, &plain).ok()?;
     let dest = compression_dest_path(src, "gz")?;
     write_path(&dest, &encoder.finish().ok()?)?;
+    copy_archive_public_key(src_path, std::path::Path::new(std::str::from_utf8(&dest).ok()?))?;
     Some(dest)
 }
 
 /// Reads `src`, bzip2-wraps its plain archive bytes, writes them to `<base>.bz2`, and
 /// returns that destination path (PHP `PharData::compress(Phar::BZ2)`).
 pub(super) fn bzip2_archive(src: &[u8]) -> Option<Vec<u8>> {
-    let plain = uncompressed_archive_bytes(&read_path(src)?)?;
+    let src_path = std::path::Path::new(std::str::from_utf8(src).ok()?);
+    let (raw, _) = read_verified_archive(src_path)?;
+    let plain = uncompressed_archive_bytes(&raw)?;
     let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
     std::io::Write::write_all(&mut encoder, &plain).ok()?;
     let dest = compression_dest_path(src, "bz2")?;
     write_path(&dest, &encoder.finish().ok()?)?;
+    copy_archive_public_key(src_path, std::path::Path::new(std::str::from_utf8(&dest).ok()?))?;
     Some(dest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies whole-archive readers stop after the shared expansion ceiling
+    /// instead of draining an unbounded decompression stream.
+    #[test]
+    fn whole_archive_stream_reader_rejects_output_beyond_ratio_ceiling() {
+        let mut hostile = std::io::repeat(b'A').take(
+            u64::try_from(MAX_PHAR_DECOMPRESSION_RATIO + 1)
+                .expect("PHAR ratio ceiling fits u64"),
+        );
+        assert!(
+            read_bounded_archive_stream(&mut hostile, 1).is_none(),
+            "whole-archive readers must reject output beyond compressed_len * ratio"
+        );
+    }
 }
 
 /// Reads a whole-archive-compressed `src` (a `.gz`/`.bz2` path), writes its plain
@@ -101,12 +164,15 @@ pub(super) fn bzip2_archive(src: &[u8]) -> Option<Vec<u8>> {
 /// (PHP `PharData::decompress()`). Fails when `src` carries no compression suffix.
 pub(super) fn decompress_archive(src: &[u8]) -> Option<Vec<u8>> {
     let s = std::str::from_utf8(src).ok()?;
+    let src_path = std::path::Path::new(s);
+    let (raw, _) = read_verified_archive(src_path)?;
     let dest = s
         .strip_suffix(".gz")
         .or_else(|| s.strip_suffix(".bz2"))?
         .as_bytes()
         .to_vec();
-    write_path(&dest, &uncompressed_archive_bytes(&read_path(src)?)?)?;
+    write_path(&dest, &uncompressed_archive_bytes(&raw)?)?;
+    copy_archive_public_key(src_path, std::path::Path::new(std::str::from_utf8(&dest).ok()?))?;
     Some(dest)
 }
 

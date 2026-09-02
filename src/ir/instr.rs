@@ -171,11 +171,31 @@ pub enum Immediate {
     MixedTag(u8),
     TypePredicate(PhpTypePredicate),
     MixedNumericOp(MixedNumericOp),
+    /// Ordered add/sub/mul operations in an unboxed checked numeric chain.
+    CheckedNumericChain(Box<CheckedNumericChainImmediate>),
     CmpPredicate(CmpPredicate),
     CastTarget(IrType),
     TypeName(DataId),
     Capacity(u32),
     WidthBytes(u8),
+}
+
+/// Heap-backed operation sequence carried by a fused checked numeric chain immediate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckedNumericChainImmediate {
+    operations: Vec<MixedNumericOp>,
+}
+
+impl CheckedNumericChainImmediate {
+    /// Creates a compact immediate from its ordered left-associated operations.
+    pub fn new(operations: Vec<MixedNumericOp>) -> Self {
+        Self { operations }
+    }
+
+    /// Returns the ordered operations evaluated by the fused chain.
+    pub fn operations(&self) -> &[MixedNumericOp] {
+        &self.operations
+    }
 }
 
 /// Runtime arithmetic operation carried by `Op::MixedNumericBinop`.
@@ -278,6 +298,7 @@ pub enum Op {
     LoadLocal,
     StoreLocal,
     UnsetLocal,
+    ZeroLocalSlot,
     LoadRefCell,
     StoreRefCell,
     PromoteLocalRefCell,
@@ -295,6 +316,7 @@ pub enum Op {
     StoreStaticProperty,
     /// Stores a static property selected by a runtime string name.
     StoreDynamicStaticProperty,
+    StaticPropInitialized,
     LoadReflectionStaticProperty,
     StoreReflectionStaticProperty,
     ReflectionStaticPropertyInitialized,
@@ -313,6 +335,9 @@ pub enum Op {
     /// Multiplies two integers with PHP overflow promotion, then applies PHP's integer
     /// cast without materializing the intermediate boxed `Mixed` value.
     ICheckedMulToInt,
+    /// Evaluates a left-associated integer add/sub/mul chain in registers, promotes the
+    /// remaining suffix to PHP float semantics on first overflow, then casts to `int`.
+    ICheckedNumericChainToInt,
     ICheckedPow,
     IDiv,
     ISDiv,
@@ -342,6 +367,7 @@ pub enum Op {
     StrictNotEq,
     LooseEq,
     LooseNotEq,
+    PhpRelCmp,
     Spaceship,
     IsNull,
     IsTruthy,
@@ -528,6 +554,24 @@ pub enum Op {
     /// message prefix (`"E::from(): Argument #1 ($value) must be of type int, "`), to which
     /// codegen appends the runtime type word. Result: `I64`.
     EnumBackingMixedToInt,
+    /// Narrows a `Mixed` value to the raw `I64` payload a packed `int` field stores, WITHOUT
+    /// coercion: only the int tag passes; every other runtime tag throws `TypeError`. A packed
+    /// field is a fixed-layout systems extension, so the PHP coercions `EnumBackingMixedToInt`
+    /// performs (float truncation, numeric strings, null-to-0) would silently corrupt the very
+    /// overflow the boxed value exists to report. Operand: the Mixed value. Immediate: data id
+    /// of the `TypeError` message prefix (`"Packed field C::$f must be of type int, "`), to
+    /// which codegen appends the runtime type word. Result: `I64`.
+    PackedFieldMixedToInt,
+    /// Narrows a value reaching a DECLARED `int` return boundary with PHP's coercive-mode
+    /// verification, replacing the silent truncation the plain int coercion performs.
+    /// Matching `php -n` 8.5: int/bool forward the payload, a numeric string coerces, an
+    /// in-range float truncates, and everything else — a non-numeric string, null, array,
+    /// object, resource, Closure, or a float outside `[-2^63, 2^63)` (NaN included) — throws
+    /// a catchable `TypeError`. Operand: the value (boxed Mixed or raw F64 after constant
+    /// folding). Immediate: data id of the message prefix
+    /// (`"f(): Return value must be of type int, "`), to which codegen appends the runtime
+    /// type word and `" returned"`. Result: `I64`.
+    ReturnBoundaryMixedToInt,
     ClassConstant,
     ScopedConstantGet,
     ClassAttrNames,
@@ -630,6 +674,7 @@ impl Op {
             | ICheckedAddToInt
             | ICheckedSubToInt
             | ICheckedMulToInt
+            | ICheckedNumericChainToInt
             | IPow
             | INeg
             | IBitAnd
@@ -676,9 +721,8 @@ impl Op {
             ObjectClassId => E::READS_HEAP,
             ClassNameToId => E::READS_GLOBAL | E::READS_HEAP,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
-            StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | FinallyEnter | FinallyExit => {
-                E::WRITES_LOCAL
-            }
+            StoreLocal | UnsetLocal | ZeroLocalSlot | StoreRefCell | ListUnpack | FinallyEnter
+            | FinallyExit => E::WRITES_LOCAL,
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
@@ -689,6 +733,7 @@ impl Op {
             ReleaseLocalSlot => E::READS_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
             LoadGlobal
             | LoadStaticProperty
+            | StaticPropInitialized
             | LoadReflectionStaticProperty
             | ReflectionStaticPropertyInitialized
             | ScopedConstantGet
@@ -816,7 +861,7 @@ impl Op {
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
-            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq => {
+            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
             // `++`/`--` on a string reads the operand's payload, may write the shared
@@ -827,7 +872,8 @@ impl Op {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
-            EnumBackingStringToInt | EnumBackingMixedToInt => {
+            EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
+            | ReturnBoundaryMixedToInt => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
@@ -935,6 +981,7 @@ impl Op {
             LoadLocal => "load_local",
             StoreLocal => "store_local",
             UnsetLocal => "unset_local",
+            ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
@@ -950,6 +997,7 @@ impl Op {
             LoadDynamicStaticProperty => "load_dynamic_static_property",
             StoreStaticProperty => "store_static_property",
             StoreDynamicStaticProperty => "store_dynamic_static_property",
+            StaticPropInitialized => "static_prop_initialized",
             LoadReflectionStaticProperty => "load_reflection_static_property",
             StoreReflectionStaticProperty => "store_reflection_static_property",
             ReflectionStaticPropertyInitialized => "reflection_static_property_initialized",
@@ -962,6 +1010,7 @@ impl Op {
             ICheckedAddToInt => "ichecked_add_to_int",
             ICheckedSubToInt => "ichecked_sub_to_int",
             ICheckedMulToInt => "ichecked_mul_to_int",
+            ICheckedNumericChainToInt => "ichecked_numeric_chain_to_int",
             ICheckedPow => "ichecked_pow",
             IDiv => "idiv",
             ISDiv => "isdiv",
@@ -991,6 +1040,7 @@ impl Op {
             StrictNotEq => "strict_not_eq",
             LooseEq => "loose_eq",
             LooseNotEq => "loose_not_eq",
+            PhpRelCmp => "php_rel_cmp",
             Spaceship => "spaceship",
             IsNull => "is_null",
             IsTruthy => "is_truthy",
@@ -1117,6 +1167,8 @@ impl Op {
             EvalStaticMethodCall => "eval_static_method_call",
             EnumBackingStringToInt => "enum_backing_string_to_int",
             EnumBackingMixedToInt => "enum_backing_mixed_to_int",
+            PackedFieldMixedToInt => "packed_field_mixed_to_int",
+            ReturnBoundaryMixedToInt => "return_boundary_mixed_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
             ClassAttrNames => "class_attr_names",
@@ -1210,6 +1262,7 @@ mod tests {
     /// the existing padding.
     #[test]
     fn instruction_stays_112_bytes() {
-        assert!(std::mem::size_of::<super::Instruction>() <= 112);
+        let size = std::mem::size_of::<super::Instruction>();
+        assert!(size <= 112, "Instruction grew to {size} bytes");
     }
 }

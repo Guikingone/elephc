@@ -189,7 +189,7 @@ fn stop_server(server: &mut std::process::Child, addr: &str) {
         .status();
 }
 
-/// Sends one HTTP/1.1 GET with `Connection: close` and returns the full raw response text.
+/// Sends one HTTP/1.1 GET and returns the response with any complete chunked body decoded.
 fn http_get(addr: &str, path: &str) -> String {
     let mut stream = TcpStream::connect(addr).unwrap();
     stream
@@ -209,7 +209,52 @@ fn http_get(addr: &str, path: &str) -> String {
             Err(_) => break,
         }
     }
-    String::from_utf8_lossy(&response).into_owned()
+    normalize_complete_http_response(String::from_utf8_lossy(&response).into_owned())
+}
+
+/// Decodes a complete chunked response body while preserving the response headers.
+fn normalize_complete_http_response(response: String) -> String {
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return response;
+    };
+    let is_chunked = headers.lines().any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        name.eq_ignore_ascii_case("transfer-encoding")
+            && value
+                .split(',')
+                .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+    });
+    if !is_chunked {
+        return response;
+    }
+    let Some(decoded) = decode_complete_chunked_body(body.as_bytes()) else {
+        return response;
+    };
+    format!("{headers}\r\n\r\n{}", String::from_utf8_lossy(&decoded))
+}
+
+/// Decodes one complete HTTP chunk stream and rejects truncated or malformed framing.
+fn decode_complete_chunked_body(mut body: &[u8]) -> Option<Vec<u8>> {
+    let mut decoded = Vec::new();
+    loop {
+        let size_end = body.windows(2).position(|window| window == b"\r\n")?;
+        let size_line = std::str::from_utf8(&body[..size_end]).ok()?;
+        let size_text = size_line.split(';').next()?.trim();
+        let size = usize::from_str_radix(size_text, 16).ok()?;
+        body = &body[size_end + 2..];
+        if size == 0 {
+            return body.starts_with(b"\r\n").then_some(decoded);
+        }
+        let chunk = body.get(..size)?;
+        body = body.get(size..)?;
+        if !body.starts_with(b"\r\n") {
+            return None;
+        }
+        decoded.extend_from_slice(chunk);
+        body = &body[2..];
+    }
 }
 
 /// The probe every constant test uses: one pipe-separated line per surface.

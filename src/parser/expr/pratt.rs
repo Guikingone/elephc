@@ -378,11 +378,31 @@ fn parse_expr_bp_inner(
                     break;
                 }
             }
+            // `$this->n++` / `$a[0]--` in EXPRESSION position. A bare `$x++` never reaches here
+            // — `parse_variable` consumes it — so this only sees the l-values the dedicated
+            // increment node cannot name.
             Token::PlusPlus | Token::MinusMinus => {
-                if !is_non_local_assignment_target(&lhs) {
-                    return Err(CompileError::new(lhs.span, "Invalid increment target"));
-                }
                 let increment = tokens[*pos].0 == Token::PlusPlus;
+                if !is_non_local_assignment_target(&lhs) {
+                    // Not a shape the stabilizing lowering can name. The generic desugaring
+                    // takes what it can; when it declines (a call, say, which cannot be read
+                    // twice) the operator is left unconsumed so the caller reports the error
+                    // it always did.
+                    let op_span = tokens[*pos].1.span;
+                    match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
+                        lhs.clone(),
+                        increment,
+                        false,
+                        op_span,
+                    ) {
+                        Some(desugared) => {
+                            *pos += 1;
+                            lhs = desugared;
+                            continue;
+                        }
+                        None => break,
+                    }
+                }
                 let span = lhs.span.merge(tokens[*pos].1.span);
                 *pos += 1;
                 let op = if increment { BinOp::Add } else { BinOp::Sub };

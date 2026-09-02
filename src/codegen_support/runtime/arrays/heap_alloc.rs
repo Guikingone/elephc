@@ -31,7 +31,8 @@ use crate::codegen_support::platform::Arch;
 /// Output: `x0` / `rax` = user pointer (header + 16).
 ///
 /// Updates `_gc_allocs`, `_gc_live`, and `_gc_peak` counters on every allocation.
-/// On heap exhaustion, prints a fatal message to stderr and exits with code 1.
+/// On heap exhaustion, a cdylib call with an active native boundary unwinds
+/// with `STATUS_ALLOCATION_FAILURE`; ordinary executables retain the fatal exit.
 pub fn emit_heap_alloc(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_heap_alloc_linux_x86_64(emitter);
@@ -50,6 +51,8 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x0, x0, #15");                                     // reserve room to round the payload up to the next 16-byte boundary
     emitter.instruction("lsr x0, x0, #4");                                      // divide by the 16-byte runtime allocation alignment
     emitter.instruction("lsl x0, x0, #4");                                      // restore the aligned payload byte count before any heap pointer arithmetic
+    emitter.instruction("lsr x9, x0, #32");                                     // inspect bits the 32-bit block-size header cannot represent
+    emitter.instruction("cbnz x9, __rt_heap_alloc_size_overflow");              // reject unrepresentable payload sizes before truncating metadata
 
     // -- debug mode: validate the free list before consuming it --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_debug_enabled");
@@ -261,6 +264,24 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
 
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");
+    if emitter.cdylib_boundary {
+        crate::codegen_support::abi::emit_symbol_address(
+            emitter,
+            "x9",
+            crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
+        );
+        emitter.instruction("ldr x9, [x9]");                                    // read whether a native recovery boundary is active
+        emitter.instruction("cbz x9, __rt_heap_exhausted_fatal");               // retain executable fatal behavior without a boundary
+        crate::codegen_support::abi::emit_store_imm_to_symbol(
+            emitter,
+            crate::codegen_support::cdylib::BOUNDARY_STATUS,
+            0,
+            crate::codegen_support::cdylib::STATUS_ALLOCATION_FAILURE as i64,
+        );
+        crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+        emitter.instruction("b __rt_throw_current");                            // unwind to the cdylib handler with allocation status recorded
+        emitter.label("__rt_heap_exhausted_fatal");
+    }
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the failed request and immediate caller return address across fatal writes
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_err_msg");
@@ -269,6 +290,9 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emit_heap_exhaustion_stats(emitter);
     emitter.instruction("mov x0, #1");                                          // exit code 1
     emitter.syscall(1);
+
+    emitter.label("__rt_heap_alloc_size_overflow");
+    emitter.instruction("b __rt_heap_exhausted");                               // report an impossible header size through the established fatal path
 }
 
 /// Emits the x86_64 Linux variant of `__rt_heap_alloc`.
@@ -291,6 +315,9 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_heap_alloc_start");
     emitter.instruction("add rax, 15");                                         // reserve room to round the payload up to the next 16-byte boundary
     emitter.instruction("and rax, -16");                                        // keep the aligned payload size before any heap pointer arithmetic
+    emitter.instruction("mov r10d, 0xffffffff");                                // materialize u32::MAX with zero-extension to a 64-bit comparison operand
+    emitter.instruction("cmp rax, r10");                                        // verify the request fits the 32-bit block-size header
+    emitter.instruction("ja __rt_heap_alloc_size_overflow");                    // reject before a narrowing metadata store can truncate the size
 
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before consuming cached free-list state
@@ -491,6 +518,29 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");
+    if emitter.cdylib_boundary {
+        crate::codegen_support::abi::emit_symbol_address(
+            emitter,
+            "r8",
+            crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
+        );
+        emitter.instruction("mov r8, QWORD PTR [r8]");                          // read whether a native recovery boundary is active
+        emitter.instruction("test r8, r8");                                     // distinguish cdylib recovery from executable fatal handling
+        emitter.instruction("jz __rt_heap_exhausted_fatal");                    // retain executable fatal behavior without a boundary
+        emitter.instruction(&format!(                                           // materialize the boundary allocation-failure status
+            "mov r8, {}",
+            crate::codegen_support::cdylib::STATUS_ALLOCATION_FAILURE
+        ));
+        crate::codegen_support::abi::emit_store_reg_to_symbol(
+            emitter,
+            "r8",
+            crate::codegen_support::cdylib::BOUNDARY_STATUS,
+            0,
+        );
+        crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+        emitter.instruction("jmp __rt_throw_current");                          // unwind to the cdylib handler with allocation status recorded
+        emitter.label("__rt_heap_exhausted_fatal");
+    }
     emitter.instruction("mov r11, QWORD PTR [rsp]");                            // capture the immediate caller return address before reserving fatal-report storage
     emitter.instruction("sub rsp, 16");                                         // reserve aligned storage for the failed allocation request and return address
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // preserve the aligned failed allocation request across fatal writes
@@ -504,6 +554,86 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");                                          // exit code 1 for heap exhaustion
     emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process after reporting heap exhaustion
+
+    emitter.label("__rt_heap_alloc_size_overflow");
+    emitter.instruction("jmp __rt_heap_exhausted");                             // report an impossible header size through the established fatal path
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies the AArch64 allocator rejects payload sizes that cannot be
+    /// represented by its 32-bit block-size header before any metadata write.
+    #[test]
+    fn aarch64_heap_allocator_guards_32_bit_header_size() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        emit_heap_alloc(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("lsr x9, x0, #32\n"));
+        assert!(asm.contains("cbnz x9, __rt_heap_alloc_size_overflow\n"));
+        assert!(asm.contains("__rt_heap_alloc_size_overflow:\n"));
+    }
+
+    /// Verifies PIC allocators recover through the cdylib boundary instead of exiting.
+    #[test]
+    fn pic_heap_allocator_routes_exhaustion_to_cdylib_boundary() {
+        let mut arm = Emitter::new_cdylib(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_heap_alloc(&mut arm);
+        let arm_asm = arm.output();
+        assert!(arm_asm.contains(crate::codegen_support::cdylib::BOUNDARY_ACTIVE));
+        assert!(arm_asm.contains("b __rt_throw_current"));
+
+        let mut x86 = Emitter::new_cdylib(Target::new(Platform::Linux, Arch::X86_64));
+        emit_heap_alloc(&mut x86);
+        let x86_asm = x86.output();
+        assert!(x86_asm.contains(crate::codegen_support::cdylib::BOUNDARY_STATUS));
+        assert!(x86_asm.contains("jmp __rt_throw_current"));
+    }
+
+    /// Verifies the x86_64 allocator rejects payload sizes that cannot be
+    /// represented by its 32-bit block-size header before truncating `rax`.
+    #[test]
+    fn x86_64_heap_allocator_guards_32_bit_header_size() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_heap_alloc(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("mov r10d, 0xffffffff\n"));
+        assert!(asm.contains("cmp rax, r10\n"));
+        assert!(asm.contains("ja __rt_heap_alloc_size_overflow\n"));
+        assert!(asm.contains("__rt_heap_alloc_size_overflow:\n"));
+    }
+
+    /// Verifies both allocator targets report the counters that explain terminal exhaustion.
+    #[test]
+    fn heap_exhaustion_reports_allocation_counters() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_heap_alloc(&mut emitter);
+            let asm = emitter.output();
+            for label in [
+                "_heap_stats_allocs_msg",
+                "_heap_stats_frees_msg",
+                "_heap_stats_live_msg",
+                "_heap_stats_peak_msg",
+                "_heap_stats_bump_msg",
+                "_heap_stats_max_msg",
+                "_heap_stats_hash_origin_msg",
+                "_heap_stats_return_msg",
+                "_heap_stats_request_msg",
+                "_heap_stats_nl",
+            ] {
+                assert!(asm.contains(label), "{target:?}: {label} missing");
+            }
+            assert!(asm.contains("__rt_itoa"), "{target:?}: no counter formatting");
+        }
+    }
 }
 
 /// Emits allocator counters immediately before a terminal heap-exhaustion exit.
@@ -608,40 +738,6 @@ fn emit_heap_exhaustion_requested_bytes(emitter: &mut Emitter) {
             crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
             crate::codegen_support::emit_write_current_string_stderr(emitter);
             emitter.instruction("add rsp, 16");                                 // release the request preservation slot after reporting it
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codegen_support::platform::{Platform, Target};
-
-    /// Verifies both allocator targets report the counters that explain terminal exhaustion.
-    #[test]
-    fn heap_exhaustion_reports_allocation_counters() {
-        for target in [
-            Target::new(Platform::MacOS, Arch::AArch64),
-            Target::new(Platform::Linux, Arch::X86_64),
-        ] {
-            let mut emitter = Emitter::new(target);
-            emit_heap_alloc(&mut emitter);
-            let asm = emitter.output();
-            for label in [
-                "_heap_stats_allocs_msg",
-                "_heap_stats_frees_msg",
-                "_heap_stats_live_msg",
-                "_heap_stats_peak_msg",
-                "_heap_stats_bump_msg",
-                "_heap_stats_max_msg",
-                "_heap_stats_hash_origin_msg",
-                "_heap_stats_return_msg",
-                "_heap_stats_request_msg",
-                "_heap_stats_nl",
-            ] {
-                assert!(asm.contains(label), "{target:?}: {label} missing");
-            }
-            assert!(asm.contains("__rt_itoa"), "{target:?}: no counter formatting");
         }
     }
 }

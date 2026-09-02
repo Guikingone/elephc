@@ -60,6 +60,12 @@ pub(super) fn resolve_include_stmt(
     function_variants: &FunctionVariantRegistry,
     preserve_return: bool,
 ) -> Result<Option<Vec<Stmt>>, CompileError> {
+    if include_chain.len() >= super::MAX_INCLUDE_DEPTH {
+        return Err(CompileError::new(
+            stmt.span,
+            "maximum include depth exceeded",
+        ));
+    }
     let path_str =
         fold_include_path(path, state).map_err(|msg| CompileError::new(stmt.span, &msg))?;
     let resolved = resolve_path(&path_str, base_dir);

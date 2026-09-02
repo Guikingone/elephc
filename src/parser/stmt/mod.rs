@@ -36,6 +36,7 @@ pub(crate) use assign::{
     assignment_target_append_stmt, assignment_target_store_stmt,
     can_replay_assignment_target,
     is_valid_reference_source,
+    lower_postfix_incdec_assignment,
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};
 pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};

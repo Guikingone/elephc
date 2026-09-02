@@ -2,7 +2,7 @@
 title: "substr_replace()"
 description: "Replaces text within a portion of a string."
 sidebar:
-  order: 480
+  order: 491
 ---
 
 ## substr_replace()

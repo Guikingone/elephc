@@ -64,7 +64,14 @@ pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instru
     } else {
         "__rt_gen_suspend"
     };
+    // The yielded key and value are staged; parking here keeps the cost of
+    // staging them on the body that is suspending, and the two registers are
+    // saved because the hook is an ordinary call that takes its own arguments.
+    crate::codegen::frame::emit_instr_suspend(ctx, &[key_arg, value_arg]);
     abi::emit_call_label(ctx.emitter, suspend_symbol);
+    // Execution picks up HERE on the next send()/next(), with the sent value in
+    // the result register — which is why the result register is what is saved.
+    crate::codegen::frame::emit_instr_resume(ctx, &[result_reg]);
     store_call_result(ctx, inst, &PhpType::Mixed)
 }
 
@@ -83,7 +90,28 @@ pub(super) fn lower_generator_yield_from(ctx: &mut FunctionContext<'_>, inst: &I
         ctx.emitter
             .instruction(&format!("mov {}, {}", arg0, result_reg)); // pass the inner generator as delegate argument 0
     }
+    // Parked across the WHOLE delegation, not around each forwarded yield.
+    //
+    // `__rt_gen_delegate` drives the inner generator on this coroutine stack and
+    // forwards each of its yields out through `__rt_gen_suspend` — which it
+    // calls itself, from hand-written assembly, so the bracket at the `yield`
+    // lowering never sees those suspensions. Left alone, this body stayed open
+    // across every one of them: measured on a generator delegating to another,
+    // it took **52.6%** of the program's inclusive time for 52 µs of work, the
+    // exact defect the bracket above exists to close, on the delegated half.
+    //
+    // What parking here costs is one level of nesting. The inner generator is
+    // started by the delegate call, so it enters while this body is already
+    // parked and reads as a callee of the CONSUMER rather than of this body —
+    // `drain -> inner` where PHP says `outer -> inner`. Getting that back needs
+    // the suspension bracketed inside the delegate loop, which is shared by
+    // every generator and so has no function id to check a frame against; the
+    // id guard is not worth trading for an edge. The consumer's foreach is also
+    // what actually drives those resumes, so the flattened edge names something
+    // real.
+    crate::codegen::frame::emit_instr_suspend(ctx, &[arg0]);
     abi::emit_call_label(ctx.emitter, "__rt_gen_delegate");
+    crate::codegen::frame::emit_instr_resume(ctx, &[result_reg]);
     store_call_result(ctx, inst, &PhpType::Mixed)
 }
 

@@ -406,7 +406,8 @@ echo ":";
 
 $name = "show_runtime";
 $walk = $name;
-array_walk([5, 6], $walk);
+$walked = [5, 6];
+array_walk($walked, $walk);
 echo ":";
 
 $name = "add_runtime";
@@ -815,7 +816,8 @@ foreach ($filtered as $value) {
 echo ":";
 echo array_reduce([1, 2], $reduce, 0);
 echo ":";
-array_walk([1, 2], $walk);
+$walked = [1, 2];
+array_walk($walked, $walk);
 echo ":";
 
 $usorted = [1, 3, 2];
@@ -975,7 +977,8 @@ foreach ($filtered as $value) {
 echo ":";
 echo array_reduce([1, 2], $reduce, 0);
 echo ":";
-array_walk([1, 2], $walk);
+$walked = [1, 2];
+array_walk($walked, $walk);
 echo ":";
 
 $usorted = [1, 3, 2];
@@ -1229,7 +1232,8 @@ foreach ($filtered as $value) {
 echo ":";
 echo array_reduce([1, 2], $reduce, 0);
 echo ":";
-array_walk([1, 2], $walk);
+$walked = [1, 2];
+array_walk($walked, $walk);
 echo ":";
 
 $usorted = [1, 3, 2];

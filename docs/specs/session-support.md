@@ -13,7 +13,7 @@ version-dependent session semantics with `--php-version` (default `8.5`).
 ## Scope
 
 Sessions are available only when compiling with `--web`. The web prelude exposes
-the PHP-visible API and the `elephc-web` static library owns per-worker state,
+the PHP-visible API and the `elephc-web` static library owns per-handler state,
 file storage, locking, upload progress, and trans-SID output rewriting.
 
 The implemented surface includes:
@@ -43,9 +43,12 @@ PHP handler
   -> trans_sid.rs            response URL/form/Location rewriting
 ```
 
-One worker executes PHP synchronously on one thread. Mutable bridge state is
-therefore process-local and race-free within a worker. Cross-worker access to a
-session file is serialized with `flock(LOCK_EX)`.
+Mutable bridge state is always process-local: default `worker` mode executes PHP
+synchronously in the web worker, `pool` uses persistent handler children, and
+`request` uses one disposable child. No process executes two PHP handlers at
+once, so bridge statics remain race-free even when pool/request mode runs several
+handler processes concurrently. Cross-process access to a session file is
+serialized with `flock(LOCK_EX)`.
 
 ## PHP lifecycle
 
@@ -180,7 +183,8 @@ progress.
 Runtime-settable directives report access `7`. The php-src PERDIR directives
 `session.auto_start` and `session.upload_progress.*` report access `2` and
 cannot be changed through `ini_set()` during a request. Auto-start and the two
-deployment upload-progress toggles can be seeded for a worker with the documented
+deployment upload-progress toggles are seeded before the selected
+worker/broker/handler process tree is created with the documented
 `ELEPHC_SESSION_*` environment variables. The upload tracker also accepts
 deployment-time name, save-path, serializer, and cookie-only policy variables,
 because body draining necessarily precedes execution of PHP request code. The

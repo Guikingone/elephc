@@ -283,7 +283,15 @@ def _availability_section(b: dict) -> str:
     else:
         route = aot.get("kind")
         if route == "registry":
-            lines.append("- **Compiled (AOT)**: supported by the Elephc code generator.")
+            target_support_kind = (b.get("semantics") or {}).get("target_support_kind")
+            if target_support_kind == "host_only":
+                lines.append(
+                    "- **Compiled (AOT)**: supported on the three executable/release "
+                    "hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are "
+                    "refused at compile time for iOS library targets."
+                )
+            else:
+                lines.append("- **Compiled (AOT)**: supported by the Elephc code generator.")
         else:
             route_text = {
             "language-construct": "a dedicated compiler language-construct path",
@@ -387,14 +395,14 @@ def _eval_internals_section(b: dict) -> str:
 
 
 def _internals_link(b: dict) -> str:
-    """Cross-link to the internals page for this builtin, if it has been lowered.
+    """Cross-link to the internals page for this builtin.
 
-    The link is built relative to the current user-page path
-    (docs/php/builtins/<area>/<name>.md) → the internals page lives at
-    docs/internals/builtins/<area>/<name>.md.
+    Internals pages are emitted for every catalog builtin — including
+    constructs with no AOT lowering (aot kind none / language-construct /
+    dedicated-syntax) — so the link always resolves. It is built relative to
+    the current user-page path (docs/php/builtins/<area>/<name>.md) → the
+    internals page lives at docs/internals/builtins/<area>/<name>.md.
     """
-    if not b["lowering"].get("codegen_file"):
-        return ""
     name = b["name"]
     # From docs/php/builtins/<area>/<name>.md → docs/internals/builtins/<area>/<name>.md
     # requires three .. to climb out of php/builtins/<area>/, then descend.
@@ -597,6 +605,11 @@ def render_master_index(builtins: list[dict]) -> str:
     """Render the master builtins index at docs/php/builtins.md."""
     relevant = [b for b in builtins if not b["is_internal"]]
     relevant.sort(key=lambda b: (b["area"], b["name"]))
+    # Link the per-area index pages so they are reachable from the master index.
+    areas = sorted({b["area"] for b in relevant})
+    category_line = " · ".join(
+        f"[{area}](./builtins/{area.lower()}.md)" for area in areas
+    )
     lines = [
         "---",
         'title: "Builtins"',
@@ -606,6 +619,8 @@ def render_master_index(builtins: list[dict]) -> str:
         "---",
         "",
         "## Builtins",
+        "",
+        f"Browse by category: {category_line}",
         "",
         "| Function | Signature | Returns | AOT | eval() |",
         "|---|---|---|:-:|:-:|",

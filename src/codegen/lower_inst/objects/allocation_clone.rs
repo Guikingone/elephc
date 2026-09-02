@@ -39,7 +39,7 @@ pub(super) fn emit_object_allocation(
             ctx.emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            )); // materialize the x86_64 object heap kind word
+            ));                                                                 // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id

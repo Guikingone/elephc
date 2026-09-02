@@ -17,6 +17,7 @@ use super::*;
 /// resolved instant via `date()`, filling every field (PHP leaves unparsed explicit fields as
 /// `false`, but a resolved relative instant has all fields). Timezone info from the string is
 /// not captured in the fallback path (documented gap).
+#[cfg(test)]
 pub(super) const DATE_PARSE_SRC: &str = r#"<?php
 $fmts = ["Y-m-d\\TH:i:sP", "Y-m-d\\TH:i:s", "Y-m-d H:i:s.u", "Y-m-d H:i:s", "Y-m-d H:i", "Y-m-d", "Y/m/d H:i:s", "Y/m/d", "d.m.Y H:i:s", "d.m.Y", "m/d/Y H:i:s", "m/d/Y", "d-m-Y H:i:s", "d-m-Y", "d/m/Y H:i:s", "d/m/Y", "H:i:s", "H:i", "j F Y H:i:s", "j F Y", "Y M j", "M j Y"];
 $n = count($fmts);
@@ -51,6 +52,7 @@ return [
 /// (so sub-microsecond precision may vary); `minuteswest`/`dsttime` come from the default zone's
 /// current UTC offset (`date("Z")`) and DST flag (`date("I")`). Uses `(int)` casts on the
 /// `microtime()` float and `intval()` on the `date()` strings.
+#[cfg(test)]
 pub(super) const GETTIMEOFDAY_SRC: &str = r#"<?php
 $mt = microtime(true);
 if ($as_float) {
@@ -68,9 +70,7 @@ return ["sec" => $sec, "usec" => $usec, "minuteswest" => $mw, "dsttime" => $dst]
 /// the `gettimeofday()` procedural function (the name resolver desugars the call to it). Returns the
 /// component array, or a float when `$as_float` is true. Self-contained parsed source.
 pub(super) fn datetime_gettimeofday() -> ClassMethod {
-    let tokens =
-        crate::lexer::tokenize(GETTIMEOFDAY_SRC).expect("gettimeofday body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("gettimeofday body source must parse");
+    let body = super::bodies::gettimeofday();
     ClassMethod {
         name: "__elephc_gettimeofday".to_string(),
         visibility: Visibility::Public,

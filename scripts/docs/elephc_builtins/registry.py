@@ -772,6 +772,10 @@ def slug(name: str) -> str:
 # `check_builtin()` arms (which sometimes narrow to the wrong type, e.g.
 # `array_shift` returns `mixed`, not the array element type).
 RETURN_TYPE_OVERRIDES: Dict[str, str] = {
+    # getenv() returns the value string for a set name and the exact `false`
+    # singleton when the name is absent; the neutral contract records the
+    # union-covering `Mixed` because TypeSpec has no union variant.
+    "getenv": "string|false",
     # phpversion() is `string`, phpversion($extension) is `string|false`; the
     # registry records the union-covering `Mixed` for the whole arity, so the
     # documented return type is recovered here (reference PHP's own signature).

@@ -140,6 +140,7 @@ pub(crate) fn phase_label(name: &str) -> &str {
         "autoload-build" => "Building autoload index",
         "resolve" => "Resolving includes",
         "pdo-prelude" => "Configuring PDO support",
+        "mysqli-prelude" => "Configuring mysqli support",
         "tz-prelude" => "Configuring timezone support",
         "list-id-prelude" => "Loading timezone identifiers",
         "var-export-prelude" => "Configuring var_export()",

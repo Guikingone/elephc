@@ -2,7 +2,7 @@
 title: "__elephc_hash_ctx_init() — internals"
 description: "Compiler internals for __elephc_hash_ctx_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 524
+  order: 535
 ---
 
 ## `__elephc_hash_ctx_init()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/__elephc_hash_ctx_init.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/__elephc_hash_ctx_init.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L543) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -29,7 +29,7 @@ sidebar:
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (1 requirements)`
 - **Callable policy**: `static_only`
-- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 

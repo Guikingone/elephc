@@ -78,13 +78,14 @@ pub(in crate::interpreter) fn eval_parse_sprintf_number(
 pub(in crate::interpreter) fn eval_format_sprintf_arg(
     spec: EvalSprintfSpec,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<u8>, EvalStatus> {
     match spec.specifier {
-        b's' => eval_format_sprintf_string(spec, value, values),
-        b'f' | b'e' | b'g' => eval_format_sprintf_float(spec, value, values),
-        b'c' => eval_format_sprintf_char(spec, value, values),
-        _ => eval_format_sprintf_int(spec, value, values),
+        b's' => eval_format_sprintf_string(spec, value, context, values),
+        b'f' | b'e' | b'g' => eval_format_sprintf_float(spec, value, context, values),
+        b'c' => eval_format_sprintf_char(spec, value, context, values),
+        _ => eval_format_sprintf_int(spec, value, context, values),
     }
 }
 
@@ -92,9 +93,23 @@ pub(in crate::interpreter) fn eval_format_sprintf_arg(
 pub(in crate::interpreter) fn eval_format_sprintf_string(
     spec: EvalSprintfSpec,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<u8>, EvalStatus> {
-    let mut bytes = values.string_bytes(value)?;
+    let tag = values.type_tag(value)?;
+    let mut bytes = if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        values.warning("Warning: Array to string conversion\n")?;
+        b"Array".to_vec()
+    } else if tag == EVAL_TAG_CALLABLE {
+        return eval_throw_error(
+            "Object of class Closure could not be converted to string",
+            context,
+            values,
+        );
+    } else {
+        let value = eval_string_context_value(value, context, values)?;
+        values.string_bytes(value)?
+    };
     if let Some(precision) = spec.precision {
         bytes.truncate(precision);
     }
@@ -105,9 +120,13 @@ pub(in crate::interpreter) fn eval_format_sprintf_string(
 pub(in crate::interpreter) fn eval_format_sprintf_int(
     spec: EvalSprintfSpec,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<u8>, EvalStatus> {
-    let value = eval_int_value(value, values)?;
+    let value = match eval_sprintf_non_scalar_numeric(value, "int", context, values)? {
+        Some(value) => value,
+        None => eval_int_value(value, values)?,
+    };
     let mut output = Vec::new();
     match spec.specifier {
         b'u' => {
@@ -159,9 +178,13 @@ pub(in crate::interpreter) fn eval_format_sprintf_int(
 pub(in crate::interpreter) fn eval_format_sprintf_char(
     spec: EvalSprintfSpec,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<u8>, EvalStatus> {
-    let value = eval_int_value(value, values)?;
+    let value = match eval_sprintf_non_scalar_numeric(value, "int", context, values)? {
+        Some(value) => value,
+        None => eval_int_value(value, values)?,
+    };
     Ok(eval_sprintf_apply_width(vec![value as u8], spec, false))
 }
 
@@ -169,9 +192,13 @@ pub(in crate::interpreter) fn eval_format_sprintf_char(
 pub(in crate::interpreter) fn eval_format_sprintf_float(
     spec: EvalSprintfSpec,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<u8>, EvalStatus> {
-    let value = eval_float_value(value, values)?;
+    let value = match eval_sprintf_non_scalar_numeric(value, "float", context, values)? {
+        Some(value) => value as f64,
+        None => eval_float_value(value, values)?,
+    };
     let precision = spec.precision.unwrap_or(6);
     let mut output = if value.is_nan() {
         b"NAN".to_vec()
@@ -194,6 +221,38 @@ pub(in crate::interpreter) fn eval_format_sprintf_float(
         }
     }
     Ok(eval_sprintf_apply_width(output, spec, true))
+}
+
+/// Returns PHP's numeric value for arrays, objects, and Closures, warning where required.
+fn eval_sprintf_non_scalar_numeric(
+    value: RuntimeCellHandle,
+    target: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<i64>, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Ok(Some(i64::from(values.array_len(value)? != 0)));
+    }
+    let class_name = if tag == EVAL_TAG_CALLABLE {
+        Some(String::from("Closure"))
+    } else if tag == EVAL_TAG_OBJECT {
+        let identity = values.object_identity(value)?;
+        Some(match context.dynamic_object_class_name(identity) {
+            Some(class_name) => class_name,
+            None => runtime_object_class_name(value, values)?,
+        })
+    } else {
+        None
+    };
+    if let Some(class_name) = class_name {
+        values.warning(&format!(
+            "Warning: Object of class {} could not be converted to {target}\n",
+            class_name.trim_start_matches('\\')
+        ))?;
+        return Ok(Some(1));
+    }
+    Ok(None)
 }
 
 /// Applies integer precision by left-padding digits with zeros.

@@ -692,11 +692,16 @@ Bridge-linked extensions are added on top, per compilation:
 |---|---|---|
 | `elephc-tls` | `openssl` | TLS streams used, or `--with-tls` |
 | `elephc-pdo` | `PDO` | PDO used, or `--with-pdo` |
+| `elephc-pdo` | `mysqli` | mysqli used, or `--with-mysqli` |
 | `elephc-crypto` | `hash` | `hash()` used, or `--with-crypto` |
 | `elephc-bcmath` | `bcmath` | A `bc*` function used, or `--with-bcmath` |
 | `elephc-phar` | `Phar` | Phar used, or `--with-phar` |
 | `elephc-image` | `gd` | GD/Imagick used, or `--with-image` |
 | `elephc-web` | `session` | `--web` |
+
+The `elephc-pdo` archive backs two PHP surfaces; the reported extension follows
+the surface the program actually uses (a mysqli-only program reports `mysqli`
+but not `PDO`, and vice versa; `mysqlnd` is never reported).
 
 `elephc-tz` and `elephc-magician` expose no distinct PHP extension surface and
 report nothing.

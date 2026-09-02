@@ -15,15 +15,24 @@ AST layer.
 Today the AST optimizer is split into six passes:
 
 1. `fold_constants(program)` runs before type checking
-2. `propagate_constants(program)` runs after successful type checking
-3. `prune_constant_control_flow(program)` runs after propagation and warning collection
-4. `normalize_control_flow(program)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
-5. `eliminate_dead_code(program)` runs after normalization and removes leftover unreachable or non-observable statements from the already-normalized AST
+2. `propagate_constants(program, mixed_storage_locals)` runs after successful type checking
+3. `prune_constant_control_flow(program, binding_decision_spans)` runs after propagation and warning collection
+4. `normalize_control_flow(program, binding_decision_spans)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
+5. `eliminate_dead_code(program, binding_decision_spans)` runs after normalization and removes leftover unreachable or non-observable statements from the already-normalized AST
 6. `prune_unreachable_declarations(program, check_result, options)` runs after DCE and removes unreachable functions, classes, and methods while reconciling checker metadata
+
+The extra arguments from the third pass on are the checker's local-binding decisions
+(`CheckResult::local_binding_decision_spans()`). Those decisions are keyed BY SPAN and a cloned AST
+node keeps the original's span, so **no pass may duplicate a node carrying one**: it would hand a
+single checker decision to two syntactic sites. Two passes clone today, and both consult the set and
+veto themselves — DCE's tail-sinking, and the single-case `switch` rewrite reached from the prune and
+normalize phases (which otherwise materializes a `switch` default body into both branches of a
+synthesized `if`). `propagate_constants` takes the mixed-storage local NAMES for a related reason:
+it must not substitute a literal for a read of a local the checker boxed as `mixed`.
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
-Alongside those five passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
+Alongside those six passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
 
 - does this expression have observable side effects?
 - can this expression throw?
@@ -217,7 +226,10 @@ Current dead-code-elimination coverage includes:
   - `break`
   - `continue`
 - statements after exhaustive `try/catch` and `try/finally` exits
-- unreachable `catch` paths when the post-DCE `try` body can no longer throw
+- unreachable `catch` paths when the post-DCE `try` body can no longer throw, or when its exact and constrained throwable domains cannot match that handler
+- exact thrown-class routing for explicit `throw new Class`, statically proven arithmetic failures, and fixed-point summaries of direct user functions and exact-receiver methods; unresolved calls, late-bound instance dispatch, dynamic operands, and external constructors retain an unknown `Throwable` domain
+- source-order handler subtraction for unknown throws, including the PHP `Throwable = Exception | Error` root partition, so a later handler is removed once earlier catches exhaust its remaining domain without assuming arbitrary interfaces or open class families are closed
+- caught-variable domains preserved through nested `try` blocks and simple local aliases/reassignments, allowing `throw $e` to retain the incoming exact or constrained class while writes through unknown paths invalidate that fact conservatively
 - shadowed `catch` clauses whose exception types are already fully covered by earlier handlers, including all later handlers after `catch (Throwable ...)`
 - shadowed `switch` patterns whose match points are already covered by earlier case labels, including full-case removal or fallthrough-body merging when no entry pattern remains
 - internal `if` regions pruned when outer pure variable guards or strict boolean checks already determine a nested branch outcome, with guard invalidation on relevant local writes to stay conservative
@@ -242,7 +254,8 @@ Current dead-code-elimination coverage includes:
 - `switch (true|false)` cases using single guard-like patterns can feed the same internal region pruning inside the selected case body, again with local-write invalidation to stay conservative
 - `catch` and `finally` bodies now invalidate outer guard facts only for locals written on the relevant pre-handler paths, so nested pruning there stays sound without discarding unrelated guard facts
 - throw-path invalidation for `switch` now consults the CFG-lite reachable block set, so writes in impossible case bodies do not unnecessarily kill catch-body guards, while reachable case writes before a `throw` still invalidate them
-- catch-side guard invalidation is now path-aware: writes that only happen on non-throwing `try` paths no longer block pruning inside the `catch`
+- catch-side guard invalidation is now path- and exception-type-aware: writes that only happen on non-throwing paths or paths throwing into a different handler no longer block pruning inside the selected `catch`, while call-aware by-reference writes performed by the throwing instruction itself still invalidate the affected locals
+- finally-entry guard invalidation separates normal/throw/return/break transfers from unconditional `exit`/`die` paths, which PHP terminates without running `finally`; branch-local writes on exit-only paths therefore no longer discard unrelated facts in the finally body
 - condition-only empty `if` / `elseif` chains reduced to just the observable condition checks that still matter
 - empty `elseif` bodies in the middle of a live chain folded into the minimum negated guard needed for later branches
 - trailing block tails sunk into `if` and `ifdef` fallthrough branches, so later statements are only retained on paths that can still reach them
@@ -284,13 +297,16 @@ The scanner deliberately widens the keep-set for PHP-observable dynamic lookup:
 `eval` and unknown function calls retain free functions, unknown method lookup
 retains methods on live classes, and `unserialize`, dynamic class names, and
 Reflection retain class-like declarations conservatively. Literal
-`function_exists`, `class_exists`, and `method_exists` probes retain the named
-declaration instead of triggering a global widening. Registry parameters named
-`callback` add callable edges using the shared argument planner, including named
-arguments and conservative dynamic-spread fallback. Explicit prelude requests
-such as `--with-pdo`, `--with-tz`, and `--with-image` root their complete
-inventory group; `--with-crypto` only force-links the bridge, and `--web` is
-demand-pruned from its executable bootstrap roots.
+`function_exists`, `class_exists`, `method_exists`, and class-string
+`property_exists` probes retain the named declaration instead of triggering a
+global widening. The same shared argument planner maps reordered named arguments
+before introspection targets, callbacks, or argument-dependent builtin link
+requirements are inspected. Registry parameters with a callable type or
+structural callback-slot metadata add callable edges, including named arguments
+and conservative dynamic-spread fallback. Explicit prelude requests —
+`--with-pdo`, `--with-mysqli`, `--with-tz`, and `--with-image` — root their
+complete inventory group; `--with-crypto` only force-links the bridge, and
+`--web` is demand-pruned from its executable bootstrap roots.
 
 Dynamic hazards are accumulated from top-level executable code and from
 declarations reached through executable calls; hazards hidden in dead bodies do
@@ -315,6 +331,25 @@ Two-element array literals are treated as possible callable arrays even when
 they are ordinary data, for the same reason: the resulting over-retention is
 safe, while rejecting a runtime callable would not be.
 
+Compiler-invoked protocol methods (`Iterator`, `IteratorAggregate`,
+`Countable`, `ArrayAccess`, `JsonSerializable`) gain behavioral edges from the
+operations whose lowering can invoke them: `foreach`, `count()`, object offset
+access, `json_encode()`, the iterator builtins, and `IteratorIterator`
+construction. A statically known receiver contributes a class-qualified edge;
+an opaque receiver widens only the corresponding protocol method names, while
+recursive JSON encoding conservatively uses the `jsonSerialize` method name.
+Declared scalar/array locals and positive `is_array()` branch guards suppress
+impossible object protocol edges. A dynamic lookup inside a protocol body therefore widens the
+keep-set only when such an operation can execute it, just as it would in an
+ordinary reachable method. User interfaces that lowering does not invoke stay
+structural, so an unused `Runner::run()` body does not retain sibling methods.
+
+Late-static construction is also a family-wide runtime edge. A reachable
+`new static(...)` roots the lexical class and each checker-known descendant that
+could be selected by the called-class id. Their constructor bodies and signatures
+participate in the fixed point, so an override cannot disappear and callable or
+by-reference constructor parameters retain the same dependencies as direct calls.
+
 Compiler-internal declaration factories are scanned at their semantic call
 site. In particular, the runtime class selected by `PDO::prepare` roots the
 instantiable `PDOStatement` subclass family, while other non-literal
@@ -327,8 +362,12 @@ methods from `CheckResult`. The pass therefore filters `method_decls` and all
 related method maps, resolves inherited implementations through
 `method_impl_classes`, scans trait-imported bodies from each consuming class's
 flattened declarations, rebuilds instance and static vtable slots in survivor
-order, removes dead extern schemas and link requirements, and keeps the checked
-metadata synchronized with the remaining AST.
+order, and keeps every shared virtual slot on the whole inheritance lineage once
+any occupant survives, so a mid-chain `parent::` call cannot renumber a
+grandparent-typed dispatch. It also removes dead extern schemas and link
+requirements, and keeps the checked metadata synchronized with the remaining AST. Conditional builtin requirements
+are rescanned from normalized parameter-order arguments before a bridge or system
+library is removed.
 
 Linker dead stripping is deliberately secondary. Linux user functions already
 live in separate text sections. The macOS runtime object uses
@@ -530,7 +569,7 @@ The current optimizer is still intentionally local. It does not yet implement:
 
 - full fixed-point/basic-block constant propagation across arbitrary loops and general path merges
 - object/property facts, nested-array facts, and per-class constructor effect summaries beyond the current array-literal facts and unioned by-ref signatures
-- exact exception-type reachability, nested rethrow modeling, and less conservative `finally` invalidation beyond the current path-aware `try` heuristics
+- exact exception inference for unresolved/dynamic calls, open instance-dispatch sets, and runtime operand types beyond the current explicit-throw, exact-callable, and statically proven operator cases
 - broader control-flow normalization beyond the current local AST shell rewrites
 - backend-specific peephole cleanup
 - elimination of the `adrp/add/stur` instruction triple at the FCC assignment site when the wrapper is stubbed (the stub address still gets loaded and stored even though both are dead)
@@ -551,7 +590,13 @@ acquire/release cancellation, string-literal concat folding, redundant
 integer-sink specialization for checked add/subtract/multiply. Those passes make
 proven-stable local loads pure and replace transient boxed Mixed arithmetic with
 allocation-free `ichecked_*_to_int` operations only when every use observes an
-integer. Per-block constant folding then collapses
+integer. After `CheckedIntSink`, `CheckedNumericChain` may fuse a left-associated
+add/subtract/multiply chain whose `Mixed` intermediates are used only by the next
+operation, the final integer cast, and removable `Release` instructions into
+`ICheckedNumericChainToInt`; its in-range path stays in i64 registers, while the
+first signed overflow promotes the exact accumulator and operand, finishes the
+remaining suffix in double, and then uses the existing PHP float-to-int conversion.
+Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's
 scalar load/store forwarding, propagates constants through EIR value ids and

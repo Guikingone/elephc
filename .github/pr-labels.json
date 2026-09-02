@@ -122,6 +122,14 @@
       "color": "5319E7",
       "description": "Contains behavior specific to the macOS AArch64 target."
     },
+    "target:ios-arm64": {
+      "color": "5319E7",
+      "description": "Contains behavior specific to the iOS device AArch64 target."
+    },
+    "target:ios-sim-arm64": {
+      "color": "5319E7",
+      "description": "Contains behavior specific to the iOS Simulator AArch64 target."
+    },
     "target:windows-x86_64": {
       "color": "5319E7",
       "description": "Contains behavior specific to the Windows x86_64 target."
@@ -324,6 +332,20 @@
     {
       "label": "target:macos-aarch64",
       "patterns": ["(?:macos|darwin)[-_/](?:aarch64|arm64)"]
+    },
+    {
+      "label": "target:ios-arm64",
+      "patterns": [
+        "ios[-_/](?:device[-_/])?(?:aarch64|arm64)",
+        "(?:aarch64|arm64)[-_/]apple[-_/]ios(?![-_/](?:sim|simulator))"
+      ]
+    },
+    {
+      "label": "target:ios-sim-arm64",
+      "patterns": [
+        "ios[-_/](?:sim|simulator)[-_/](?:aarch64|arm64)",
+        "(?:aarch64|arm64)[-_/]apple[-_/]ios[-_/](?:sim|simulator)"
+      ]
     }
   ]
 }

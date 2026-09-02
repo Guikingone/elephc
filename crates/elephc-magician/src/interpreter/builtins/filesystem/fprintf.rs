@@ -71,7 +71,7 @@ pub(in crate::interpreter) fn eval_fprintf_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
     let format = values.string_bytes(format)?;
-    let output = eval_sprintf_bytes(&format, format_args, values)?;
+    let output = eval_sprintf_bytes(&format, format_args, context, values)?;
     match context.stream_resources_mut().write(id, &output) {
         Some(written) => values.int(i64::try_from(written).map_err(|_| EvalStatus::RuntimeFatal)?),
         None => values.bool_value(false),

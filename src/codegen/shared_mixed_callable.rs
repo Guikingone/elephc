@@ -163,7 +163,7 @@ fn emit_one_helper(
     let label = helper_label(strict_php);
     let function = helper_function(label, strict_php);
     let inst = function.instructions[0].clone();
-    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear);
+    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear, false);
     let mut ctx = FunctionContext::new(
         module,
         &function,

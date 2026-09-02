@@ -20,6 +20,9 @@ const NO_MORE_ROWS: c_int = -2;
 const NO_MORE_RESULTS: c_int = 2;
 const INT_CANCEL: c_int = 2;
 
+/// Selects Sybase DB-Library behavior, matching FreeTDS's `dbopen` macro.
+const TDSDBOPEN_SYBASE_MODE: c_int = 0;
+
 const DBSETUSER: c_int = 2;
 const DBSETPWD: c_int = 3;
 const DBSETAPP: c_int = 5;
@@ -129,7 +132,11 @@ extern "C" {
     fn dbsetlversion(login: *mut LoginRecord, version: c_uchar) -> c_int;
     fn dbsetlogintime(seconds: c_int) -> c_int;
     fn dbsettime(seconds: c_int) -> c_int;
-    fn dbopen(login: *mut LoginRecord, server: *const c_char) -> *mut DbProcess;
+    fn tdsdbopen(
+        login: *mut LoginRecord,
+        server: *const c_char,
+        msdblib: c_int,
+    ) -> *mut DbProcess;
     fn dbclose(process: *mut DbProcess);
     fn dbdead(process: *mut DbProcess) -> c_int;
     fn dbcmd(process: *mut DbProcess, sql: *const c_char) -> c_int;
@@ -378,7 +385,7 @@ fn parse_dsn(dsn: &str) -> Result<DsnOptions, String> {
     })
 }
 
-/// Builds the server name passed to `dbopen`, using FreeTDS's documented port override syntax.
+/// Builds the server name passed to `tdsdbopen`, using FreeTDS's documented port override syntax.
 fn server_name(options: &DsnOptions) -> String {
     match options.port {
         Some(port) => format!("{}:{}", options.host, port),
@@ -481,7 +488,7 @@ impl DblibConn {
             }
             let host = CString::new(server_name(&options))
                 .map_err(|_| "PDO_DBLIB: host contains NUL".to_string())?;
-            let link = dbopen(login, host.as_ptr());
+            let link = tdsdbopen(login, host.as_ptr(), TDSDBOPEN_SYBASE_MODE);
             dbloginfree(login);
             if link.is_null() {
                 let message = open_error()

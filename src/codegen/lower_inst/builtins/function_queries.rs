@@ -233,7 +233,9 @@ pub(in crate::codegen::lower_inst) fn emit_variant_function_exists(ctx: &mut Fun
             ctx.emitter.instruction(&format!("cset {}, ne", result_reg));       // return true only when a function variant is active
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // test whether an include has activated this function variant
+            ctx.emitter.instruction(
+                &format!("test {}, {}", result_reg, result_reg)
+            );                                                                  // test whether an include has activated this function variant
             ctx.emitter.instruction("setne al");                                // return true only when a function variant is active
             ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }

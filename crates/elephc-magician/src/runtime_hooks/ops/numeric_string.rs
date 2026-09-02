@@ -169,6 +169,15 @@ macro_rules! impl_numeric_string_ops {
         Self::handle(unsafe { __elephc_eval_value_spaceship(left.as_ptr(), right.as_ptr()) })
     }
 
+    /// Compares normalized array keys through the generated native key comparator.
+    fn regular_key_compare(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<i64, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_regular_key_compare(left.as_ptr(), right.as_ptr()) })
+    }
+
     /// Emits one boxed Mixed cell to stdout through the generated runtime wrapper.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         unsafe {

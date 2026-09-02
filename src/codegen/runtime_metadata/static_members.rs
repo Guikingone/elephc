@@ -29,6 +29,7 @@ pub(in crate::codegen) fn referenced_static_property_class_names(module: &Module
                     | Op::LoadDynamicStaticProperty
                     | Op::StoreStaticProperty
                     | Op::StoreDynamicStaticProperty
+                    | Op::StaticPropInitialized
                     | Op::LoadReflectionStaticProperty
                     | Op::ReflectionStaticPropertyInitialized
                     | Op::StoreReflectionStaticProperty

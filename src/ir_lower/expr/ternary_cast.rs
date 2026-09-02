@@ -119,7 +119,8 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     if matches!(target, CastType::Object) {
         return lower_object_cast(ctx, value, expr);
     }
-    let php_type = cast_php_type(target);
+    let source_type = ctx.builder.value_php_type(value.value);
+    let php_type = cast_php_type(target, &source_type);
     let result = ctx.emit_value(
         Op::Cast,
         vec![value.value],
@@ -130,7 +131,7 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     );
     if matches!(target, CastType::String) {
         release_coerced_source_if_owned(ctx, value, Some(expr.span));
-    } else if matches!(target, CastType::Int | CastType::Float | CastType::Bool)
+    } else if matches!(target, CastType::Int | CastType::Float | CastType::Bool | CastType::Array)
         && ctx.value_is_owning_temporary(value)
     {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
@@ -202,12 +203,23 @@ pub(super) fn coerced_source_repr_is_releasable(php_type: &PhpType) -> bool {
 }
 
 /// Returns the PHP type produced by a cast.
-pub(super) fn cast_php_type(target: &CastType) -> PhpType {
+pub(super) fn cast_php_type(target: &CastType, source_type: &PhpType) -> PhpType {
     match target {
         CastType::Int => PhpType::Int,
         CastType::Float => PhpType::Float,
         CastType::String => PhpType::Str,
         CastType::Bool => PhpType::Bool,
+        CastType::Array
+            if matches!(source_type.codegen_repr(), PhpType::Object(_)) =>
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        },
+        CastType::Array
+            if matches!(
+                source_type.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) => PhpType::Mixed,
         CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
         CastType::Object => PhpType::Object("stdClass".to_string()),
     }
