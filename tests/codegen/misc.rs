@@ -477,6 +477,48 @@ echo isset($_SESSION) ? "y" : "n";
     assert_eq!(out, "yyn");
 }
 
+/// Assigning a whole array to a superglobal is legal PHP, and the array need not already have
+/// the hash shape the program's request storage uses.
+///
+/// `Request::overrideGlobals()` is the shape, verbatim in structure: five superglobals taken
+/// from a method's `array` return, then `$_REQUEST = [[]]` and an `array_merge` spread over it.
+/// Each of those was `cannot reassign $_GET from array<string, mixed> to array<mixed>` — the
+/// merge treated the superglobal as an ordinary local binding, and the widening arm refuses it
+/// for the right reason (this frame does not own that storage). A superglobal assignment does
+/// neither: it stores INTO the storage, whose type nothing about the assignment can change.
+#[test]
+fn superglobal_assigned_a_runtime_array_keeps_the_program_storage_type() {
+    let out = compile_and_run(
+        r#"<?php
+function bag(int $n): array { return ["q" => "v" . $n]; }
+class R { public function overrideGlobals(int $n): void { $_GET = bag($n); $_SERVER = bag($n); $_REQUEST = [[]]; $_REQUEST[] = $_GET; $_REQUEST = array_merge(...$_REQUEST); } }
+(new R())->overrideGlobals($argc);
+function read() { return $_GET["q"]; }
+echo $_GET["q"], "|", $_SERVER["q"], "|", $_REQUEST["q"], "|", read();
+"#,
+    );
+    assert_eq!(out, "v1|v1|v1|v1");
+}
+
+/// The INDEXED half of the same rule: the value has to be converted on the way in, because every
+/// reader of the superglobal's symbol dereferences it as a hash.
+///
+/// The conversion already existed for an array LITERAL. A call's `array<mixed>` reaches the same
+/// store, and keeping its indexed pointer would publish it through a symbol nothing reads that
+/// way — so the conversion is now driven by the target being program storage rather than by the
+/// syntax of the value. PHP's own keys survive it: `0` and `1`, in order.
+#[test]
+fn superglobal_assigned_a_runtime_indexed_array_becomes_a_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function listOf(int $n): array { return ["x" . $n, "y"]; }
+$_GET = listOf($argc);
+echo $_GET[0], "|", $_GET[1], "|", \count($_GET), "|", \implode(",", \array_keys($_GET));
+"#,
+    );
+    assert_eq!(out, "x1|y|2|0,1");
+}
+
 /// A superglobal is visible in EVERY scope, which is the half a top-level test cannot show.
 /// The seeding is driven by MENTION — the same thing that makes PHP materialize an auto-global —
 /// so a closure with no `use`, an arrow function and a method all reach them, and a write from

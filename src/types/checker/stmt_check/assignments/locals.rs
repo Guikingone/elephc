@@ -981,6 +981,48 @@ fn merge_local_assignment_type(
         env.insert(name.to_string(), declared);
         return Ok(());
     }
+    // A SUPERGLOBAL is a declaration too, and the one place a "reassignment" is not a rebinding at
+    // all: `$_GET = […]` writes the program's request storage, a hash with `Str` keys and `Mixed`
+    // values that every scope reaches by name (`superglobals::superglobal_type`). Nothing about
+    // the assignment can change that type, so — exactly like the declared-local arm above — the
+    // environment keeps it and the value is validated against it instead of merged with it.
+    //
+    // `Request::overrideGlobals()` is the shape: `$_GET = $this->query->all();` and its four
+    // siblings, plus `$_REQUEST = [[]];`. Each was `cannot reassign $_GET from
+    // array<string, mixed> to array<mixed>` because the merge treated the superglobal as an
+    // ordinary local binding, and because the widening arm below refuses it for the RIGHT reason —
+    // storage this frame does not own is not this frame's to re-represent
+    // (`Checker::name_is_seeded_program_storage`). Neither is what a superglobal assignment does:
+    // it stores INTO that storage, and `ir_lower::stmt::local_assignments` already converts the
+    // value to the superglobal's contract on the way in.
+    //
+    // Only an ARRAY is accepted here. PHP lets a superglobal hold any value, but the storage this
+    // compiler gives it is a hash: publishing a scalar through the symbol every reader
+    // dereferences as one would be a silent wrong answer, so `$_GET = 5;` keeps its loud error
+    // until that storage is gradual.
+    if crate::superglobals::is_superglobal(name) {
+        let superglobal = crate::superglobals::superglobal_type();
+        if matches!(
+            ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+        ) {
+            env.insert(name.to_string(), superglobal);
+            return Ok(());
+        }
+        if let Some(existing) = env.get(name) {
+            if checker.merged_assignment_type(existing, ty).is_none() {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Type error: cannot reassign ${} from {} to {}",
+                        name, existing, ty
+                    ),
+                ));
+            }
+        }
+        env.insert(name.to_string(), superglobal);
+        return Ok(());
+    }
     // This visit RE-DECIDES the site, so any decision a superseded walk recorded for it is
     // dropped first. The checker walks a body more than once (top level twice, method bodies
     // to stability, a function body once per call-site re-specialization) and only the LAST

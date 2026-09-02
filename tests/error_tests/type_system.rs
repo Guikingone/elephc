@@ -2380,6 +2380,34 @@ fn test_seeded_superglobal_not_killable() {
     expect_error("<?php unset($_SERVER); $_SERVER = 5;", "cannot reassign");
 }
 
+/// A superglobal assignment is not a re-binding at all: it stores into the program's request
+/// storage, whose type — a hash with `Str` keys and `Mixed` values — nothing about the
+/// assignment can change. So ANY array is accepted and the environment keeps that type, exactly
+/// as the declared-local arm does for `int $x = …`.
+///
+/// Five of the stock fixture's checker errors were this, all inside
+/// `Request::overrideGlobals()`: an `array<mixed>` from a method call and an `array<array<never>>`
+/// literal, both refused as `cannot reassign $_GET from array<string, mixed> to …`.
+///
+/// A SCALAR keeps its error, in both modes: PHP would allow it, but the storage this compiler
+/// gives a superglobal is a hash, and publishing a scalar through the symbol every reader
+/// dereferences as one would be a silent wrong answer rather than a diagnostic.
+#[test]
+fn test_superglobal_assignment_keeps_the_program_storage_type() {
+    expect_no_error(
+        "<?php function bag(): array { return [\"q\" => 1]; } $_GET = bag(); $_REQUEST = [[]]; echo \\count($_GET);",
+    );
+    expect_no_error_strict(
+        "<?php function bag(): array { return [\"q\" => 1]; } $_GET = bag(); $_REQUEST = [[]]; echo \\count($_GET);",
+    );
+    expect_no_warning(
+        "<?php function bag(): array { return [\"q\" => 1]; } $_GET = bag(); echo \\count($_GET);",
+        "changes type",
+    );
+    expect_error("<?php $_GET = 5; var_dump($_GET);", "cannot reassign $_GET");
+    expect_error_strict("<?php $_GET = 5; var_dump($_GET);", "cannot reassign $_GET");
+}
+
 /// Same rule for the top-level-seeded `$argv`/`$argc`. Measured before the fix: the kill was
 /// recorded, lowering abandoned the slot holding the runtime-built argv array, and the program
 /// leaked it (`HEAP DEBUG: live_blocks=2`).

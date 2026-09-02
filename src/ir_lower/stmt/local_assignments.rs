@@ -247,7 +247,16 @@ pub(super) fn contextualize_local_assignment(
         return (converted, contextual_ty);
     }
 
-    if matches!(value.kind, ExprKind::ArrayLiteral(_))
+    // A SUPERGLOBAL's contextual type is not an inference guess that a later walk may revise: it
+    // is the program's request storage, a hash every scope reads by name, and the symbol behind it
+    // is dereferenced as one everywhere. So an indexed array assigned to it must be converted
+    // whatever produced it — `$_GET = $this->query->all();` reaches here with a call's
+    // `array<mixed>`, not with a literal, and keeping the indexed pointer would publish it through
+    // a symbol every reader treats as a `Hash`. The literal-only rule below stays for ordinary
+    // locals, where the target representation is a contract this pass inferred rather than one the
+    // program declared.
+    let target_is_program_storage = crate::superglobals::is_superglobal(name);
+    if (target_is_program_storage || matches!(value.kind, ExprKind::ArrayLiteral(_)))
         && matches!(source_repr, PhpType::Array(_))
         && matches!(contextual_repr, PhpType::AssocArray { .. })
     {
