@@ -277,14 +277,18 @@ mod tests {
             }
         }
 
-        assert_eq!(eval_registry, 484);
-        assert_eq!(eval_internal, 39);
+        // The thirty-four prelude-provided `curl_*` contracts are published only
+        // with the `curl` feature; see `crate::catalog_curl`'s module doc.
+        let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
+        assert_eq!(eval_registry, 484 + curl_surface);
+        assert_eq!(eval_internal, 82);
         assert_eq!(eval_pending, 31);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
-        // promotes get_object_vars from an external surface into the registry and adds
-        // the ten iconv contracts, which both backends implement through the registry.
-        assert_eq!(aot_registry, 541);
-        assert_eq!(aot_external, 10);
+        // promotes get_object_vars from an external surface into the registry and
+        // adds the ten iconv contracts and forty-three internal `__elephc_curl_*`
+        // entry points.
+        assert_eq!(aot_registry, 584);
+        assert_eq!(aot_external, 10 + curl_surface);
         assert_eq!(aot_unsupported, 3);
     }
 
@@ -329,10 +333,11 @@ mod tests {
             }
         }
 
+        let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 463);
-        assert_eq!(unsupported, 70);
+        assert_eq!(interpreter_adapter, 463 + curl_surface);
+        assert_eq!(unsupported, 113);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

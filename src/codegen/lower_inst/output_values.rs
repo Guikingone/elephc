@@ -68,7 +68,7 @@ pub(super) fn emit_object_tostring_call(
     );
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
     Ok(target.return_ty)
 }
 
@@ -141,19 +141,11 @@ pub(super) fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &Ph
             );
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!(
-                        "cmp {}, {}",
-                        abi::int_result_reg(ctx.emitter),
-                        sentinel_reg
-                    ));                                                         // compare integer value against the runtime null sentinel
+                    ctx.emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(ctx.emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
                     ctx.emitter.instruction(&format!("b.eq {}", skip_label));   // skip integer echo when the value represents null
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!(
-                        "cmp {}, {}",
-                        abi::int_result_reg(ctx.emitter),
-                        sentinel_reg
-                    ));                                                         // compare integer value against the runtime null sentinel
+                    ctx.emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(ctx.emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
                     ctx.emitter.instruction(&format!("je {}", skip_label));     // skip integer echo when the value represents null
                 }
             }
@@ -182,4 +174,3 @@ pub(super) fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &Ph
         ))),
     }
 }
-
