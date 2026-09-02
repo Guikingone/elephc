@@ -100,6 +100,9 @@ fn load_var_dump_object_argument(
             "{builtin_name} expected object, got {ty:?}"
         )));
     }
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                               // materialize the object in the SysV first argument register
+    }
     Ok(())
 }
 
@@ -160,6 +163,8 @@ pub(crate) fn emit_datetime_var_dump_dispatcher(emitter: &mut Emitter, module: &
             emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
         }
         Arch::X86_64 => {
+            emitter.instruction("push rbp");                                   // align the SysV stack before any nested renderer call
+            emitter.instruction("mov rbp, rsp");                               // keep a conventional frame for the dispatcher
             emitter.instruction("test rdi, rdi");                               // reject defensive null object payloads
             emitter.instruction("jz __elephc_vd_datetime_no_match");            // null object payloads use the generic runtime renderer
             emitter.instruction("mov r11, QWORD PTR [rdi]");                    // load the runtime class id from the object header
@@ -186,6 +191,7 @@ pub(crate) fn emit_datetime_var_dump_dispatcher(emitter: &mut Emitter, module: &
         }
         Arch::X86_64 => {
             emitter.instruction("xor eax, eax");                                // return false so the shared runtime uses its generic walker
+            emitter.instruction("pop rbp");                                    // restore the caller frame after the aligned dispatcher frame
             emitter.instruction("ret");                                         // return to the recursive value renderer
         }
     }
@@ -207,6 +213,7 @@ pub(crate) fn emit_datetime_var_dump_dispatcher(emitter: &mut Emitter, module: &
             }
             Arch::X86_64 => {
                 emitter.instruction("mov eax, 1");                              // report that the ext/date renderer handled the object
+                emitter.instruction("pop rbp");                                // restore the caller frame after the nested renderer
                 emitter.instruction("ret");                                     // return to the recursive value renderer
             }
         }
@@ -247,6 +254,8 @@ pub(crate) fn emit_datetime_print_r_dispatcher(emitter: &mut Emitter, module: &M
             emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
         }
         Arch::X86_64 => {
+            emitter.instruction("push rbp");                                   // align the SysV stack before any nested renderer call
+            emitter.instruction("mov rbp, rsp");                               // keep a conventional frame for the dispatcher
             emitter.instruction("test rdi, rdi");                               // reject defensive null object payloads
             emitter.instruction("jz __elephc_pr_datetime_no_match");            // null object payloads are not rendered
             emitter.instruction("mov r11, QWORD PTR [rdi]");                    // load the runtime class id from the object header
@@ -273,6 +282,7 @@ pub(crate) fn emit_datetime_print_r_dispatcher(emitter: &mut Emitter, module: &M
         }
         Arch::X86_64 => {
             emitter.instruction("xor eax, eax");                                // report that no ext/date renderer matched
+            emitter.instruction("pop rbp");                                    // restore the caller frame after the aligned dispatcher frame
             emitter.instruction("ret");                                         // return to the recursive value renderer
         }
     }
@@ -287,6 +297,7 @@ pub(crate) fn emit_datetime_print_r_dispatcher(emitter: &mut Emitter, module: &M
             }
             Arch::X86_64 => {
                 emitter.instruction("mov eax, 1");                              // report that the ext/date renderer handled the object
+                emitter.instruction("pop rbp");                                // restore the caller frame after the nested renderer
                 emitter.instruction("ret");                                     // return to the recursive value renderer
             }
         }

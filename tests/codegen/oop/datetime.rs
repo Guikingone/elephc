@@ -5343,41 +5343,25 @@ echo ($deprecated->isInternal() ? "I" : "i"), ":",
 /// untyped parameter.
 #[test]
 fn test_datetime_php_src_method_surface_and_constructor_metadata() {
-    let methods = |class_name: &str| {
-        compile_and_run_with_heap_size(
-            &format!(
-                "<?php\nforeach ((new ReflectionClass({class_name}::class))->getMethods() as $method) {{\n    echo $method->getName(), \",\";\n}}\n"
-            ),
-            67_108_864,
+    let method_probes = [
+        "DateTimeInterface",
+        "DateTime",
+        "DateTimeImmutable",
+        "DateTimeZone",
+        "DateInterval",
+        "DatePeriod",
+    ]
+    .iter()
+    .map(|class_name| {
+        format!(
+            "foreach ((new ReflectionClass({class_name}::class))->getMethods() as $method) {{\n    echo $method->getName(), \",\";\n}}\necho \"|\";\n"
         )
-    };
-    assert_eq!(
-        methods("DateTimeInterface"),
-        "format,getTimezone,getOffset,getTimestamp,getMicrosecond,diff,__wakeup,__serialize,__unserialize,"
-    );
-    assert_eq!(
-        methods("DateTime"),
-        "__construct,__serialize,__unserialize,__wakeup,__set_state,createFromImmutable,createFromInterface,createFromFormat,createFromTimestamp,getLastErrors,format,modify,add,sub,getTimezone,setTimezone,getOffset,getMicrosecond,setTime,setDate,setISODate,setTimestamp,setMicrosecond,getTimestamp,diff,"
-    );
-    assert_eq!(
-        methods("DateTimeImmutable"),
-        "__construct,__serialize,__unserialize,__wakeup,__set_state,createFromFormat,createFromTimestamp,getLastErrors,format,getTimezone,getOffset,getTimestamp,getMicrosecond,diff,modify,add,sub,setTimezone,setTime,setDate,setISODate,setTimestamp,setMicrosecond,createFromMutable,createFromInterface,"
-    );
-    assert_eq!(
-        methods("DateTimeZone"),
-        "__construct,getName,getOffset,getTransitions,getLocation,listAbbreviations,listIdentifiers,__serialize,__unserialize,__wakeup,__set_state,"
-    );
-    assert_eq!(
-        methods("DateInterval"),
-        "__construct,createFromDateString,format,__serialize,__unserialize,__wakeup,__set_state,"
-    );
-    assert_eq!(
-        methods("DatePeriod"),
-        "createFromISO8601String,__construct,getStartDate,getEndDate,getDateInterval,getRecurrences,__serialize,__unserialize,__wakeup,__set_state,getIterator,"
-    );
-
-    let out = compile_and_run(
-        r#"<?php
+    })
+    .collect::<String>();
+    let mut source = String::from("<?php\n");
+    source.push_str(&method_probes);
+    source.push_str(
+        r#"
 $period = new ReflectionMethod(DatePeriod::class, "__construct");
 echo $period->getNumberOfRequiredParameters(), ":", $period->getNumberOfParameters(), ":";
 foreach ($period->getParameters() as $parameter) {
@@ -5392,29 +5376,27 @@ echo $zone->getNumberOfRequiredParameters(), ":",
      ((new ReflectionClass(DateInterval::class))->hasMethod("__get") ? "leak" : "hidden");
 "#,
     );
+    let out = compile_and_run_with_heap_size(
+        &source,
+        67_108_864,
+    );
     assert_eq!(
         out,
-        "1:4:-R-,-O-,-O-,-O-,|1:R|hidden"
+        "format,getTimezone,getOffset,getTimestamp,getMicrosecond,diff,__wakeup,__serialize,__unserialize,|\
+__construct,__serialize,__unserialize,__wakeup,__set_state,createFromImmutable,createFromInterface,createFromFormat,createFromTimestamp,getLastErrors,format,modify,add,sub,getTimezone,setTimezone,getOffset,getMicrosecond,setTime,setDate,setISODate,setTimestamp,setMicrosecond,getTimestamp,diff,|\
+__construct,__serialize,__unserialize,__wakeup,__set_state,createFromFormat,createFromTimestamp,getLastErrors,format,getTimezone,getOffset,getTimestamp,getMicrosecond,diff,modify,add,sub,setTimezone,setTime,setDate,setISODate,setTimestamp,setMicrosecond,createFromMutable,createFromInterface,|\
+__construct,getName,getOffset,getTransitions,getLocation,listAbbreviations,listIdentifiers,__serialize,__unserialize,__wakeup,__set_state,|\
+__construct,createFromDateString,format,__serialize,__unserialize,__wakeup,__set_state,|\
+createFromISO8601String,__construct,getStartDate,getEndDate,getDateInterval,getRecurrences,__serialize,__unserialize,__wakeup,__set_state,getIterator,|\
+1:4:-R-,-O-,-O-,-O-,|1:R|hidden"
     );
 }
 
-/// Verifies every php-src ext/date method signature, including declared versus tentative
-/// returns and the complete parameter type/optionality/reference/variadic metadata.
-#[test]
-fn test_datetime_php_src_method_signature_inventory() {
-    let classes = [
-        "DateTimeInterface",
-        "DateTime",
-        "DateTimeImmutable",
-        "DateTimeZone",
-        "DateInterval",
-        "DatePeriod",
-    ];
-    let probes = classes
-        .iter()
-        .map(|class_name| {
-            format!(
-                r#"$class = new ReflectionClass({class_name}::class);
+/// Reflects every method signature for one literal ext/date class name.
+fn datetime_method_signature_inventory(class_name: &str) -> String {
+    let probe = format!(
+        r#"<?php
+$class = new ReflectionClass({class_name}::class);
 foreach ($class->getMethods() as $method) {{
     echo "{class_name}::", $method->getName(), "=",
          $method->getNumberOfRequiredParameters(), "/",
@@ -5431,16 +5413,17 @@ foreach ($class->getMethods() as $method) {{
              $parameter->isVariadic(), ";";
     }}
     echo "\n";
-}}"#
-            )
-        })
-        .map(|probe| {
-            compile_and_run_with_heap_size(&format!("<?php\n{probe}\n"), 134_217_728)
-        })
-        .collect::<String>();
-    let out = probes;
+}}
+"#,
+    );
+    compile_and_run_with_heap_size(&probe, 134_217_728)
+}
+
+/// Verifies php-src's `DateTimeInterface` method signatures and tentative returns.
+#[test]
+fn test_datetimeinterface_php_src_method_signature_inventory() {
     assert_eq!(
-        out,
+        datetime_method_signature_inventory("DateTimeInterface"),
         r#"DateTimeInterface::format=1/1::::string:format~string~~~;
 DateTimeInterface::getTimezone=0/0::::DateTimeZone|false:
 DateTimeInterface::getOffset=0/0::::int:
@@ -5450,7 +5433,16 @@ DateTimeInterface::diff=1/2::::DateInterval:targetObject~DateTimeInterface~~~;ab
 DateTimeInterface::__wakeup=0/0::::void:
 DateTimeInterface::__serialize=0/0:::array::
 DateTimeInterface::__unserialize=1/1:::void::data~array~~~;
-DateTime::__construct=0/2:::::datetime~string~1~~;timezone~?DateTimeZone~1~~;
+"#
+    );
+}
+
+/// Verifies php-src's mutable `DateTime` method signature inventory.
+#[test]
+fn test_datetime_php_src_method_signature_inventory() {
+    assert_eq!(
+        datetime_method_signature_inventory("DateTime"),
+        r#"DateTime::__construct=0/2:::::datetime~string~1~~;timezone~?DateTimeZone~1~~;
 DateTime::__serialize=0/0:::array::
 DateTime::__unserialize=1/1:::void::data~array~~~;
 DateTime::__wakeup=0/0::::void:
@@ -5475,7 +5467,16 @@ DateTime::setTimestamp=1/1::::DateTime:timestamp~int~~~;
 DateTime::setMicrosecond=1/1:::static::microsecond~int~~~;
 DateTime::getTimestamp=0/0::::int:
 DateTime::diff=1/2::::DateInterval:targetObject~DateTimeInterface~~~;absolute~bool~1~~;
-DateTimeImmutable::__construct=0/2:::::datetime~string~1~~;timezone~?DateTimeZone~1~~;
+"#
+    );
+}
+
+/// Verifies php-src's immutable `DateTimeImmutable` method signature inventory.
+#[test]
+fn test_datetimeimmutable_php_src_method_signature_inventory() {
+    assert_eq!(
+        datetime_method_signature_inventory("DateTimeImmutable"),
+        r#"DateTimeImmutable::__construct=0/2:::::datetime~string~1~~;timezone~?DateTimeZone~1~~;
 DateTimeImmutable::__serialize=0/0:::array::
 DateTimeImmutable::__unserialize=1/1:::void::data~array~~~;
 DateTimeImmutable::__wakeup=0/0::::void:
@@ -5500,7 +5501,16 @@ DateTimeImmutable::setTimestamp=1/1::::DateTimeImmutable:timestamp~int~~~;
 DateTimeImmutable::setMicrosecond=1/1:::static::microsecond~int~~~;
 DateTimeImmutable::createFromMutable=1/1:1:::static:object~DateTime~~~;
 DateTimeImmutable::createFromInterface=1/1:1::DateTimeImmutable::object~DateTimeInterface~~~;
-DateTimeZone::__construct=1/1:::::timezone~string~~~;
+"#
+    );
+}
+
+/// Verifies php-src's `DateTimeZone` method signature inventory.
+#[test]
+fn test_datetimezone_php_src_method_signature_inventory() {
+    assert_eq!(
+        datetime_method_signature_inventory("DateTimeZone"),
+        r#"DateTimeZone::__construct=1/1:::::timezone~string~~~;
 DateTimeZone::getName=0/0::::string:
 DateTimeZone::getOffset=1/1::::int:datetime~DateTimeInterface~~~;
 DateTimeZone::getTransitions=0/2::::array|false:timestampBegin~int~1~~;timestampEnd~int~1~~;
@@ -5511,14 +5521,32 @@ DateTimeZone::__serialize=0/0:::array::
 DateTimeZone::__unserialize=1/1:::void::data~array~~~;
 DateTimeZone::__wakeup=0/0::::void:
 DateTimeZone::__set_state=1/1:1:::DateTimeZone:array~array~~~;
-DateInterval::__construct=1/1:::::duration~string~~~;
+"#
+    );
+}
+
+/// Verifies php-src's `DateInterval` method signature inventory.
+#[test]
+fn test_dateinterval_php_src_method_signature_inventory() {
+    assert_eq!(
+        datetime_method_signature_inventory("DateInterval"),
+        r#"DateInterval::__construct=1/1:::::duration~string~~~;
 DateInterval::createFromDateString=1/1:1:::DateInterval:datetime~string~~~;
 DateInterval::format=1/1::::string:format~string~~~;
 DateInterval::__serialize=0/0:::array::
 DateInterval::__unserialize=1/1:::void::data~array~~~;
 DateInterval::__wakeup=0/0::::void:
 DateInterval::__set_state=1/1:1:::DateInterval:array~array~~~;
-DatePeriod::createFromISO8601String=1/2:1::static::specification~string~~~;options~int~1~~;
+"#
+    );
+}
+
+/// Verifies php-src's `DatePeriod` method signature inventory.
+#[test]
+fn test_dateperiod_php_src_method_signature_inventory() {
+    assert_eq!(
+        datetime_method_signature_inventory("DatePeriod"),
+        r#"DatePeriod::createFromISO8601String=1/2:1::static::specification~string~~~;options~int~1~~;
 DatePeriod::__construct=1/4:::::start~~~~;interval~~1~~;end~~1~~;options~~1~~;
 DatePeriod::getStartDate=0/0::::DateTimeInterface:
 DatePeriod::getEndDate=0/0::::?DateTimeInterface:

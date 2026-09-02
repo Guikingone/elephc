@@ -12,7 +12,6 @@
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,16 +23,7 @@ builtin! {
 }
 
 /// Validates the extension name and returns PHP's `array<string>|false` result type.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let extension_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(cx.args[0].kind, ExprKind::StringLiteral(_))
-        && extension_ty.codegen_repr() != PhpType::Str
-    {
-        return Err(CompileError::new(
-            cx.span,
-            "get_extension_funcs() first argument must be a string in AOT mode",
-        ));
-    }
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Union(vec![
         PhpType::Array(Box::new(PhpType::Str)),
         PhpType::False,

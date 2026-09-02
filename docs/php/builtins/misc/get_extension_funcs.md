@@ -16,6 +16,8 @@ Returns functions exported by a loaded extension.
 **Parameters**:
 - `$extension` (`string`)
 
+In weak typing mode, PHP scalar values are coerced to their string form and `null` is coerced to `""` with PHP's deprecation diagnostic. Arrays, resources, and objects that do not implement `Stringable` raise a catchable `TypeError`; strict-types code accepts only a string. Extension names are compared case-insensitively.
+
 **Returns**: `mixed`
 
 ## Availability

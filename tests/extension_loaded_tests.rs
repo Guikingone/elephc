@@ -504,3 +504,49 @@ date_interval_format,date_default_timezone_set,date_default_timezone_get,date_su
 date_sun_info|LDF|extension:string:array|false"
     );
 }
+
+/// Verifies `get_extension_funcs()` uses php-src weak string binding and catchable errors.
+#[test]
+fn get_extension_funcs_coerces_scalars_and_throws_runtime_type_errors() {
+    let dir = make_test_dir("ext_date_function_coercions");
+    let src = r#"<?php
+class DateExtensionName {
+    public function __toString(): string { return "DATE"; }
+}
+foreach ([0, 1.5, true, false] as $extension) {
+    echo get_extension_funcs($extension) === false ? "F" : "x";
+}
+echo @get_extension_funcs(null) === false ? "N" : "x";
+echo get_extension_funcs(new DateExtensionName())[0] === "strtotime" ? "S" : "x";
+try {
+    get_extension_funcs([]);
+} catch (TypeError $error) {
+    echo "|", $error->getMessage();
+}
+try {
+    get_extension_funcs(new stdClass());
+} catch (TypeError $error) {
+    echo "|", $error->getMessage();
+}
+"#;
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(
+        run_binary(&bin),
+        "FFFFNS|get_extension_funcs(): Argument #1 ($extension) must be of type string, array given\
+|get_extension_funcs(): Argument #1 ($extension) must be of type string, stdClass given"
+    );
+
+    let strict_src = r#"<?php
+declare(strict_types=1);
+try {
+    get_extension_funcs(0);
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#;
+    let strict_bin = compile_with_flags(&dir, strict_src, "strict", &[]);
+    assert_eq!(
+        run_binary(&strict_bin),
+        "get_extension_funcs(): Argument #1 ($extension) must be of type string, int given"
+    );
+}

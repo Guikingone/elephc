@@ -873,6 +873,35 @@ return function_exists("get_extension_funcs");"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval applies php-src scalar binding and exposes invalid types as catchable errors.
+#[test]
+fn execute_program_get_extension_funcs_coercions_are_php_compatible() {
+    let program = parse_fragment(
+        br#"echo get_extension_funcs(0) === false ? "scalar" : "bad";
+try {
+    get_extension_funcs([]);
+} catch (TypeError $error) {
+    echo "|" . $error->getMessage();
+}
+return get_extension_funcs(null) === false;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "scalar|get_extension_funcs(): Argument #1 ($extension) must be of type string, array given"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(
+        values.warnings,
+        vec!["\nDeprecated: get_extension_funcs(): Passing null to parameter #1 ($extension) of type string is deprecated"]
+    );
+}
+
 /// Verifies eval `extension_loaded()` resolves the compile-time-known extension set.
 ///
 /// `curl` is the one deliberate exception that tracks `cfg!(feature = "curl")` instead of

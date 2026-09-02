@@ -638,6 +638,9 @@ fn resolve_integer_arg_to_result(
         }
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, value)?;
+            if ctx.emitter.target.arch == Arch::X86_64 {
+                ctx.emitter.instruction("mov rax, rdi");                       // mixed-cast helpers use the legacy boxed-value input register
+            }
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
         }
         PhpType::TaggedScalar => {
@@ -958,6 +961,7 @@ fn materialize_boxed_nullable_strtotime_base(
             ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the boxed base is null
             ctx.emitter.instruction(&format!("je {}", null_label));             // null asks timelib to choose the current timestamp
             abi::emit_pop_reg(ctx.emitter, "rdi");
+            ctx.emitter.instruction("mov rax, rdi");                           // mixed-cast helpers consume the boxed value in rax
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             ctx.emitter.instruction("mov rdx, rax");                            // move the concrete payload into the base-timestamp register
             ctx.emitter.instruction("mov rcx, 1");                              // a concrete boxed base timestamp was provided
@@ -1799,6 +1803,7 @@ fn load_boxed_nullable_date_timestamp(
             ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the boxed timestamp is null
             ctx.emitter.instruction(&format!("je {}", null_label));             // null selects the formatter's current-time sentinel
             abi::emit_pop_reg(ctx.emitter, "rdi");
+            ctx.emitter.instruction("mov rax, rdi");                           // mixed-cast helpers consume the boxed value in rax
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             ctx.emitter.instruction("mov rcx, 1");                              // a concrete boxed timestamp was supplied
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null cleanup path after coercion

@@ -281,15 +281,6 @@ fn lower_args_with_signature_options(
     };
     let literal_bound = rewrite_literal_param_bindings(sig, args);
     let args = literal_bound.as_deref().unwrap_or(args);
-    let static_spread_args = if has_static_call_spread_args(args) {
-        Some(expand_static_call_spread_args(args))
-    } else {
-        None
-    };
-    let args = static_spread_args.as_deref().unwrap_or(args);
-    if let Some(operands) = lower_assoc_spread_only_args(ctx, sig, args) {
-        return coerce_operands_to_params(ctx, sig, operands);
-    }
     if crate::types::call_args::has_named_args(args) {
         let operands = if trim_trailing_defaults {
             lower_named_args_with_signature_options(ctx, sig, args, true)
@@ -301,6 +292,15 @@ fn lower_args_with_signature_options(
     if let Some(operands) =
         lower_positional_spread_args_with_signature(ctx, sig, args, spread_overflow_error)
     {
+        return coerce_operands_to_params(ctx, sig, operands);
+    }
+    let static_spread_args = if has_static_call_spread_args(args) {
+        Some(expand_static_call_spread_args(args))
+    } else {
+        None
+    };
+    let args = static_spread_args.as_deref().unwrap_or(args);
+    if let Some(operands) = lower_assoc_spread_only_args(ctx, sig, args) {
         return coerce_operands_to_params(ctx, sig, operands);
     }
     if args.iter().any(is_spread_arg) {

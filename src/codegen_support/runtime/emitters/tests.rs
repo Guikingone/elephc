@@ -96,6 +96,28 @@ fn test_runtime_gates_date_formatter_with_timelib_feature() {
     assert!(included.contains("_elephc_tz_format"));
 }
 
+/// Verifies every supported target formats dates exclusively through the timelib bridge.
+#[test]
+fn test_date_formatter_has_no_unreachable_libc_fast_path() {
+    for target_name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let target = Target::parse(target_name).expect("supported target");
+        let mut emitter = Emitter::new(target);
+        crate::codegen_support::runtime::system::emit_date(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains("elephc_tz_format"), "{target_name}: {asm}");
+        assert!(!asm.contains("call localtime"), "{target_name}: {asm}");
+        assert!(!asm.contains("call gmtime"), "{target_name}: {asm}");
+        assert!(!asm.contains("bl _localtime"), "{target_name}: {asm}");
+        assert!(!asm.contains("bl _gmtime"), "{target_name}: {asm}");
+    }
+}
+
 /// Verifies that Linux x86_64 uses the shared runtime surface.
 #[test]
 fn test_linux_x86_64_runtime_uses_shared_surface() {

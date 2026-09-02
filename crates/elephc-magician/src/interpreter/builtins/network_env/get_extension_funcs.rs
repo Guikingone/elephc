@@ -80,15 +80,16 @@ pub(in crate::interpreter) fn eval_builtin_get_extension_funcs(
         return Err(EvalStatus::RuntimeFatal);
     };
     let extension = eval_expr(extension, context, scope, values)?;
-    eval_get_extension_funcs_result(extension, values)
+    eval_get_extension_funcs_result(extension, context, values)
 }
 
 /// Returns the ordered function inventory for an evaluated extension name.
 pub(in crate::interpreter) fn eval_get_extension_funcs_result(
     extension: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let name = values.string_bytes(extension)?;
+    let name = eval_get_extension_funcs_name(extension, context, values)?;
     if !String::from_utf8_lossy(&name).eq_ignore_ascii_case("date") {
         return values.bool_value(false);
     }
@@ -97,4 +98,71 @@ pub(in crate::interpreter) fn eval_get_extension_funcs_result(
         functions = values.string_array_push(functions, name)?;
     }
     Ok(functions)
+}
+
+/// Applies PHP's weak string-parameter binding before extension lookup.
+fn eval_get_extension_funcs_name(
+    extension: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<u8>, EvalStatus> {
+    let tag = values.type_tag(extension)?;
+    if tag == EVAL_TAG_NULL {
+        values.deprecated(
+            "\nDeprecated: get_extension_funcs(): Passing null to parameter #1 ($extension) of type string is deprecated",
+        )?;
+        return Ok(Vec::new());
+    }
+    if matches!(tag, EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL) {
+        let coerced = values.cast_string(extension)?;
+        let bytes = values.string_bytes(coerced)?;
+        values.release(coerced)?;
+        return Ok(bytes);
+    }
+    if tag == EVAL_TAG_STRING {
+        return values.string_bytes(extension);
+    }
+    if tag == EVAL_TAG_OBJECT {
+        let actual = runtime_object_class_name(extension, values)?;
+        let stringable = context.class_is_a(&actual, "Stringable", false)
+            || values.object_is_a(extension, "Stringable", false)?;
+        if stringable {
+            let coerced = eval_string_context_value(extension, context, values)?;
+            let bytes = values.string_bytes(coerced)?;
+            if coerced != extension {
+                values.release(coerced)?;
+            }
+            return Ok(bytes);
+        }
+        return eval_throw_type_error(
+            &format!(
+                "get_extension_funcs(): Argument #1 ($extension) must be of type string, {actual} given"
+            ),
+            context,
+            values,
+        );
+    }
+    let actual = eval_get_extension_funcs_type_name(tag);
+    eval_throw_type_error(
+        &format!(
+            "get_extension_funcs(): Argument #1 ($extension) must be of type string, {actual} given"
+        ),
+        context,
+        values,
+    )
+}
+
+/// Returns the PHP type spelling used by the builtin's argument `TypeError`.
+fn eval_get_extension_funcs_type_name(tag: u64) -> &'static str {
+    match tag {
+        EVAL_TAG_INT => "int",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_FLOAT => "float",
+        EVAL_TAG_BOOL => "bool",
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+        EVAL_TAG_NULL => "null",
+        EVAL_TAG_RESOURCE => "resource",
+        EVAL_TAG_OBJECT => "object",
+        _ => "unknown",
+    }
 }

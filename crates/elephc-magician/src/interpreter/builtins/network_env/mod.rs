@@ -112,6 +112,7 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
 pub(in crate::interpreter) fn eval_network_env_values_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
@@ -172,7 +173,7 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
             let [extension] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_get_extension_funcs_result(*extension, values)
+            eval_get_extension_funcs_result(*extension, context, values)
         }
         "get_loaded_extensions" => {
             let zend_extensions = match evaluated_args {

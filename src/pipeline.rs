@@ -233,6 +233,18 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = tz_prelude::inject_if_used(ast, tz_used, &mut prelude_inventory);
     timings.record_since("tz-prelude", phase_started);
 
+    // Inject the hidden weak string binder used by get_extension_funcs(). The source call
+    // remains a registry builtin, so reachability cannot discover this EIR-only helper edge;
+    // root its pay-for-use group explicitly when the call is present.
+    crate::progress::phase("get-extension-funcs-prelude");
+    let phase_started = Instant::now();
+    if crate::get_extension_funcs_prelude::program_uses_get_extension_funcs(&ast) {
+        structural_groups
+            .insert(crate::get_extension_funcs_prelude::REACHABILITY_GROUP.to_string());
+    }
+    let ast = crate::get_extension_funcs_prelude::inject_if_used(ast, &mut prelude_inventory);
+    timings.record_since("get-extension-funcs-prelude", phase_started);
+
     // Inject the listIdentifiers-filtering prelude (a pure elephc-PHP function over
     // a baked group/country table) only when the program references
     // DateTimeZone::listIdentifiers or timezone_identifiers_list, so other binaries

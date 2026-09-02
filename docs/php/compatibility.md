@@ -151,7 +151,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [Streams](./streams.md) ([PHP](https://www.php.net/manual/en/book.stream.php)) | 🟡 Partial |  |
 | [SPL](./spl.md) ([PHP](https://www.php.net/manual/en/book.spl.php)) | 🟡 Partial |  |
 | [Reflection](./classes.md) ([PHP](https://www.php.net/manual/en/book.reflection.php)) | 🟡 Partial |  |
-| [DateTime](./datetime.md) ([PHP](https://www.php.net/manual/en/book.datetime.php)) | 🟡 Partial |  |
+| [DateTime](./datetime.md) ([PHP](https://www.php.net/manual/en/book.datetime.php)) | ✅ Supported | php-src `ext/date` surface, backed by vendored timelib and IANA timezone data |
 | [Calendar](./calendar.md) ([PHP](https://www.php.net/manual/en/book.calendar.php)) | ✅ Supported |  |
 | [iconv](./iconv.md) ([PHP](https://www.php.net/manual/en/book.iconv.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |

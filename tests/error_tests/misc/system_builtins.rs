@@ -357,15 +357,6 @@ fn test_error_get_extension_funcs_wrong_args() {
     );
 }
 
-/// Verifies dynamic non-string extension names are rejected before backend lowering.
-#[test]
-fn test_error_get_extension_funcs_wrong_type() {
-    expect_error(
-        "<?php $extension = [\"date\"]; get_extension_funcs($extension);",
-        "get_extension_funcs() first argument must be a string in AOT mode",
-    );
-}
-
 /// Verifies `get_loaded_extensions()` rejects more than its optional flag argument.
 #[test]
 fn test_error_get_loaded_extensions_wrong_args() {

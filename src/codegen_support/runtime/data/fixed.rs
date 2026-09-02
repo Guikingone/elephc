@@ -269,7 +269,6 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_dateperiod_foreach_trace_active", 8, target));
     out.push_str(&comm_directive("_dateperiod_foreach_trace_exception_ptr", 8, target));
     out.push_str(&comm_directive("_dateperiod_foreach_trace_line", 8, target));
-    out.push_str(&comm_directive("_strtotime_clock", 8, target));
     // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
     // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
     // "UTC" literal returned in that default case.
@@ -1530,7 +1529,6 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _locale_env_name\n_locale_env_name:\n    .asciz \"\"\n");
     out.push_str(&system::emit_json_data());
     out.push_str(&system::emit_date_data());
-    out.push_str(&system::emit_strtotime_data());
     out.push_str(&system::emit_pcntl_data());
     out.push_str(&emit_php_uname_data());
 

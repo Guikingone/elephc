@@ -287,9 +287,17 @@ pub(super) fn common_dynamic_method_signature(
         let Some(signature) = class_method_signature(ctx, class_name, method_key).cloned() else {
             continue;
         };
-        match common.as_ref() {
+        match common.as_mut() {
             Some(existing) if !method_argument_signatures_match(existing, &signature) => {
                 return None;
+            }
+            Some(existing) if existing.by_ref_return != signature.by_ref_return => return None,
+            Some(existing) if existing.return_type != signature.return_type => {
+                // A runtime receiver can select any matching class. Keeping whichever return
+                // type HashMap iteration visited first made codegen box every branch with that
+                // candidate's tag (for example mysqli_stmt objects as bool). Mixed is the only
+                // representation that can safely merge genuinely different return contracts.
+                existing.return_type = PhpType::Mixed;
             }
             Some(_) => {}
             None => common = Some(signature),

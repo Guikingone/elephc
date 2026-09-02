@@ -116,6 +116,5 @@ pub(crate) use regex_locale::emit_prepare_regex_locale;
 pub(crate) use serialize::emit_serialize;
 pub(crate) use shell_exec::emit_shell_exec;
 pub(crate) use strtotime::emit_strtotime;
-pub(crate) use strtotime::emit_strtotime_data;
 pub(crate) use time::emit_time;
 pub(crate) use unserialize::emit_unserialize;

@@ -5,8 +5,6 @@
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` through
 //!   `crate::codegen_support::runtime::system`.
-//! - `crate::codegen_support::runtime::data::fixed` for legacy lookup data kept
-//!   ABI-stable while older cached runtime objects are invalidated.
 //!
 //! Key details:
 //! - The runtime returns the timestamp plus a separate success flag so php-src's
@@ -14,11 +12,7 @@
 //! - Input and timezone strings use explicit pointer/length pairs, so no NUL
 //!   termination assumption leaks across the Rust bridge boundary.
 
-mod data;
-
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-
-pub(crate) use data::emit_strtotime_data;
 
 /// Emits `__rt_strtotime` for the active supported architecture.
 ///
