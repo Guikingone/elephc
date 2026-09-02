@@ -424,3 +424,101 @@ echo count($empty), ":", implode(",", $single), ":", implode(",", $many), ":", i
     );
     assert_eq!(out, "0:1,2:1,2,3,4,5,6,7:a,b,c,d");
 }
+
+/// Verifies `array_merge` joins two arrays of two genuinely DIFFERENT classes.
+///
+/// The gate demanded both element types be identical, so any pair of object element types the
+/// checker named differently refused to lower and took the whole compile with it. They produce
+/// byte-for-byte the same code: one refcounted pointer per slot, stamped `object`, whatever class
+/// it names. Heap-clean, so the merge itself is proved to own and release exactly its slots.
+#[test]
+fn test_array_merge_of_differently_named_object_elements() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Node {
+    private string $label;
+    public function __construct(string $label) { $this->label = $label; }
+    public function getLabel(): string { return $this->label; }
+}
+class Tag {
+    public function __construct(public string $name) {}
+}
+$mixedClasses = array_merge([new Node('n')], [new Tag('t')]);
+echo count($mixedClasses), "\n";
+echo get_class($mixedClasses[0]), "|", get_class($mixedClasses[1]), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2\nNode|Tag\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies `array_merge([$this], $this->getAllPrevious())` lowers and walks the whole chain.
+///
+/// This is the shape both `FlattenException::toArray()` and `FlattenException::getAsString()` are
+/// written in: the first element is typed as the unspecified object `$this` is, the second from
+/// the `array` return of the accessor, and demanding the two match refused the whole compile.
+/// No heap assertion here — the residual this fixture leaves is the `?Node $previous` chain still
+/// reachable at exit, which `test_array_merge_of_differently_named_object_elements` shows is not
+/// the merge, and which the same program leaves behind with the `array_merge` call removed.
+#[test]
+fn test_array_merge_of_this_and_a_declared_object_array() {
+    let out = compile_and_run(
+        r#"<?php
+class Node {
+    private ?Node $previous = null;
+    private string $label;
+
+    public function __construct(string $label) { $this->label = $label; }
+
+    public function setPrevious(?Node $previous): void { $this->previous = $previous; }
+
+    public function getPrevious(): ?Node { return $this->previous; }
+
+    /** @return Node[] */
+    public function getAllPrevious(): array {
+        $out = [];
+        $e = $this->getPrevious();
+        while ($e !== null) {
+            $out[] = $e;
+            $e = $e->getPrevious();
+        }
+        return $out;
+    }
+
+    public function getLabel(): string { return $this->label; }
+
+    public function toArray(): array {
+        $labels = [];
+        foreach (array_merge([$this], $this->getAllPrevious()) as $node) {
+            $labels[] = $node->getLabel();
+        }
+        return $labels;
+    }
+
+    public function getAsString(): string {
+        $out = '';
+        foreach (array_reverse(array_merge([$this], $this->getAllPrevious())) as $node) {
+            $out .= $node->getLabel() . ';';
+        }
+        return $out;
+    }
+}
+
+$a = new Node('a');
+$b = new Node('b');
+$c = new Node('c');
+$b->setPrevious($a);
+$c->setPrevious($b);
+echo implode(',', $c->toArray()), "\n";
+echo $c->getAsString(), "\n";
+echo implode(',', $a->toArray()), "\n";
+echo $a->getAsString(), "\n";
+"#,
+    );
+    assert_eq!(out, "c,b,a\na;b;c;\na\na;\n");
+}
