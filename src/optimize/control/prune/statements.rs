@@ -103,33 +103,23 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             let condition = prune_expr(condition);
             match scalar_value(&condition) {
                 Some(value) if !value.truthy() => Vec::new(),
-                _ => vec![Stmt {
-                    kind: StmtKind::While {
-                        condition,
-                        body: prune_block(body),
-                    },
+                _ => normalize_while_stmt(
+                    condition,
+                    prune_block(body),
                     span,
-            source_mode,
-            strict_types,
-                    attributes: Vec::new(),
-                }],
+                    source_mode,
+                    strict_types,
+                ),
             }
         }
         StmtKind::DoWhile { body, condition } => {
             let condition = prune_expr(condition);
-            let body = prune_block(body);
+            // A trailing `continue` reaches the test exactly as falling off the body does, so it
+            // is dropped before deciding whether a false test lets the body run inline.
+            let body = strip_trailing_terminator(prune_block(body), TailTerminator::LoopContinue);
             match scalar_value(&condition) {
                 Some(value) if !value.truthy() && !block_contains_loop_exit(&body) => body,
-                _ => vec![Stmt {
-                    kind: StmtKind::DoWhile {
-                        body,
-                        condition,
-                    },
-                    span,
-            source_mode,
-            strict_types,
-                    attributes: Vec::new(),
-                }],
+                _ => normalize_do_while_stmt(body, condition, span, source_mode, strict_types),
             }
         }
         StmtKind::For {
@@ -143,18 +133,15 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             let update = prune_for_clause(update);
             match condition.as_ref().and_then(scalar_value) {
                 Some(value) if !value.truthy() => init.map(|stmt| vec![*stmt]).unwrap_or_default(),
-                _ => vec![Stmt {
-                    kind: StmtKind::For {
-                        init,
-                        condition,
-                        update,
-                        body: prune_block(body),
-                    },
+                _ => normalize_for_stmt(
+                    init,
+                    condition,
+                    update,
+                    prune_block(body),
                     span,
-            source_mode,
-            strict_types,
-                    attributes: Vec::new(),
-                }],
+                    source_mode,
+                    strict_types,
+                ),
             }
         }
         StmtKind::Foreach {
@@ -169,7 +156,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
                 key_var,
                 value_var,
                 value_by_ref,
-                body: prune_block(body),
+                body: strip_trailing_terminator(prune_block(body), TailTerminator::LoopContinue),
             },
             span,
             source_mode,
@@ -298,7 +285,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
                 variadic_by_ref,
                 variadic_type,
                 return_type,
-                body: prune_block(body),
+                body: prune_function_body(body, by_ref_return),
             },
             span,
             source_mode,
@@ -452,8 +439,11 @@ pub(crate) fn prune_method(
         class_name: class_name.to_string(),
         parent_name: parent_name.map(str::to_string),
     };
+    let by_ref_return = method.by_ref_return;
     ClassMethod {
-        body: with_class_effect_context(Some(context), || prune_block(method.body)),
+        body: with_class_effect_context(Some(context), || {
+            prune_function_body(method.body, by_ref_return)
+        }),
         ..method
     }
 }
@@ -461,10 +451,27 @@ pub(crate) fn prune_method(
 /// Rewrites a class method body without class context, used for interfaces and traits
 /// where inherited effects cannot be resolved. Sets ClassEffectContext to None.
 pub(crate) fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
+    let by_ref_return = method.by_ref_return;
     ClassMethod {
-        body: with_class_effect_context(None, || prune_block(method.body)),
+        body: with_class_effect_context(None, || prune_function_body(method.body, by_ref_return)),
         ..method
     }
+}
+
+/// Prunes a function or method body and drops a redundant trailing `return;`: falling off the
+/// end of a body returns `null` exactly as the bare `return` does, so the terminator only adds
+/// an extra exit edge for later passes. By-reference-returning functions keep it because PHP
+/// reports their implicit `null` differently, and generators keep it so the generator pipeline
+/// sees the body it validated.
+pub(crate) fn prune_function_body(body: Vec<Stmt>, by_ref_return: bool) -> Vec<Stmt> {
+    let body = prune_block(body);
+    if by_ref_return
+        || !tail_carries_terminator(&body, TailTerminator::FunctionReturn)
+        || crate::types::checker::yield_validation::body_contains_yield(&body)
+    {
+        return body;
+    }
+    strip_trailing_terminator(body, TailTerminator::FunctionReturn)
 }
 
 /// Prunes a for-loop clause (init/condition/update) by applying prune_stmt and

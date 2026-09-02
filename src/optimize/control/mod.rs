@@ -19,9 +19,11 @@ mod cfg;
 mod dce;
 mod fold;
 mod if_chain;
+mod loops;
 mod path;
 mod prune;
 mod switch;
+mod terminators;
 
 pub(crate) use binding_decisions::{
     expr_carries_local_binding_decision, stmts_carry_local_binding_decision,
@@ -31,6 +33,8 @@ pub(crate) use cfg::*;
 pub(crate) use dce::*;
 pub(crate) use fold::*;
 pub(crate) use if_chain::*;
+pub(crate) use loops::*;
 pub(crate) use path::*;
 pub(crate) use prune::*;
 pub(crate) use switch::*;
+pub(crate) use terminators::*;

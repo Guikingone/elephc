@@ -28,15 +28,17 @@ pub(crate) fn prune_switch_stmt(
     strict_types: bool,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
-    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
+    let (cases, default) = strip_final_switch_break(
         cases
             .into_iter()
             .map(|(patterns, body)| {
                 (patterns.into_iter().map(prune_expr).collect(), prune_block(body))
             })
             .collect(),
-    )));
-    let default = normalize_optional_block(default.map(prune_block));
+        default.map(prune_block),
+    );
+    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(cases)));
+    let default = normalize_optional_block(default);
 
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
         return expr_to_effect_stmt(subject);
@@ -117,6 +119,27 @@ pub(crate) fn prune_switch_stmt(
     } else {
         Vec::new()
     }
+}
+
+/// Drops the trailing `break` of the body that runs last in a `switch`: the `default` body when
+/// there is one, otherwise the last case body. Falling off that body leaves the `switch` exactly
+/// as the `break` does, so the terminator only adds an extra exit edge for later passes. The
+/// strip happens before case normalization so a case emptied this way is folded like any other
+/// empty trailing case.
+fn strip_final_switch_break(
+    mut cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
+    if let Some(default_body) = default {
+        return (
+            cases,
+            Some(strip_trailing_terminator(default_body, TailTerminator::SwitchBreak)),
+        );
+    }
+    if let Some((_, body)) = cases.last_mut() {
+        *body = strip_trailing_terminator(std::mem::take(body), TailTerminator::SwitchBreak);
+    }
+    (cases, None)
 }
 
 /// Returns whether rewriting this single-case switch into an `if` would put a node the CHECKER

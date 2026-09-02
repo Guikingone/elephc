@@ -93,6 +93,42 @@ fn test_prune_for_false_keeps_init_only() {
 /// The loop exit via continue counts as non-exhaustive control flow.
 #[test]
 fn test_prune_keeps_do_while_false_with_loop_exit() {
+    let guarded_continue = Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("skip"),
+            then_body: vec![Stmt::new(StmtKind::Continue(1), Span::dummy())],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::DoWhile {
+            body: vec![guarded_continue.clone(), Stmt::echo(Expr::int_lit(2))],
+            condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert_eq!(
+        pruned,
+        vec![Stmt::new(
+            StmtKind::DoWhile {
+                body: vec![guarded_continue, Stmt::echo(Expr::int_lit(2))],
+                condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+/// A `continue` that ends the body of a `do { } while (false)` is not a loop exit that keeps
+/// the shell alive: it reaches the false test exactly as falling off the body does, so the
+/// body runs inline once.
+#[test]
+fn test_prune_inlines_do_while_false_whose_only_continue_is_trailing() {
     let program = vec![Stmt::new(
         StmtKind::DoWhile {
             body: vec![
@@ -106,19 +142,7 @@ fn test_prune_keeps_do_while_false_with_loop_exit() {
 
     let pruned = prune_constant_control_flow(program);
 
-    assert_eq!(
-        pruned,
-        vec![Stmt::new(
-            StmtKind::DoWhile {
-                body: vec![
-                    Stmt::echo(Expr::int_lit(2)),
-                    Stmt::new(StmtKind::Continue(1), Span::dummy()),
-                ],
-                condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
-            },
-            Span::dummy(),
-        )]
-    );
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(2))]);
 }
 
 /// Verifies that statements following an unconditional return inside a

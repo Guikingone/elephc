@@ -340,3 +340,111 @@ fn test_normalize_control_flow_collapses_identical_if_branches_to_condition_effe
         ]
     );
 }
+
+/// `if (!$a) { echo 1; } else { echo 2; }` swaps its branches so the positive condition is
+/// tested: `if ($a) { echo 2; } else { echo 1; }`.
+#[test]
+fn test_normalize_control_flow_swaps_negated_two_way_branches() {
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(ExprKind::Not(Box::new(Expr::var("a"))), Span::dummy()),
+            then_body: vec![Stmt::echo(Expr::int_lit(1))],
+            elseif_clauses: Vec::new(),
+            else_body: Some(vec![Stmt::echo(Expr::int_lit(2))]),
+        },
+        Span::dummy(),
+    )];
+
+    let normalized = normalize_control_flow(program);
+
+    assert_eq!(
+        normalized,
+        vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: vec![Stmt::echo(Expr::int_lit(2))],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(1))]),
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+/// A negated head whose `else` is a lone `if` is an `elseif` chain in canonical nested form,
+/// and the chain shape wins: `if (!$a) { echo 1; } else { if ($b) { echo 2; } }` is kept.
+#[test]
+fn test_normalize_control_flow_keeps_negated_head_of_elseif_chain() {
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(ExprKind::Not(Box::new(Expr::var("a"))), Span::dummy()),
+            then_body: vec![Stmt::echo(Expr::int_lit(1))],
+            elseif_clauses: vec![(Expr::var("b"), vec![Stmt::echo(Expr::int_lit(2))])],
+            else_body: None,
+        },
+        Span::dummy(),
+    )];
+
+    let normalized = normalize_control_flow(program);
+
+    assert_eq!(
+        normalized,
+        vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::new(ExprKind::Not(Box::new(Expr::var("a"))), Span::dummy()),
+                then_body: vec![Stmt::echo(Expr::int_lit(1))],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("b"),
+                        then_body: vec![Stmt::echo(Expr::int_lit(2))],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    Span::dummy(),
+                )]),
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+/// A negated head whose `then` is a lone `if` becomes a chain after the swap:
+/// `if (!$a) { if ($b) { echo 1; } } else { echo 2; }` turns into
+/// `if ($a) { echo 2; } else { if ($b) { echo 1; } }`.
+#[test]
+fn test_normalize_control_flow_swaps_negated_head_into_chain_form() {
+    let inner = Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("b"),
+            then_body: vec![Stmt::echo(Expr::int_lit(1))],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(ExprKind::Not(Box::new(Expr::var("a"))), Span::dummy()),
+            then_body: vec![inner.clone()],
+            elseif_clauses: Vec::new(),
+            else_body: Some(vec![Stmt::echo(Expr::int_lit(2))]),
+        },
+        Span::dummy(),
+    )];
+
+    let normalized = normalize_control_flow(program);
+
+    assert_eq!(
+        normalized,
+        vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: vec![Stmt::echo(Expr::int_lit(2))],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![inner]),
+            },
+            Span::dummy(),
+        )]
+    );
+}

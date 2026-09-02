@@ -200,6 +200,15 @@ Current normalization coverage includes:
 - outer `finally` blocks folded into a single inner `try` when they wrap exactly one inner `try` that does not already have its own `finally`
 - safe hoisting of non-throwing, fallthrough prefixes out of `try` blocks
 - conservative flattening of `try` / `finally` when the `try` body cannot throw, falls through, and cannot leave early: a `return`, `break`, or `continue` nested in a branch of the body still runs `finally` under PHP, so such a body keeps its shell (the same rule gates DCE's flattening and its sinking of a tail into `finally`)
+
+The second generation of the pass (control-flow normalization v2) adds shell canonicalizations that matter to the CFG-aware EIR passes (loop analysis, LICM, branch simplification), all of which move AST nodes rather than clone them so the span-keyed checker decisions stay singular:
+
+- `if (!c) { A } else { B }` swapped into `if (c) { B } else { A }`, unless the `else` is a lone `if` (the canonical nested `elseif` chain, whose head/tail merges key on that shape)
+- `for (init; test;)` without an update clause hoisted into `init; while (test)` (`for (;;)` becomes `while (true)`), because `continue` reaches the test directly in both forms
+- `do { ... } while (true)` rewritten to `while (true) { ... }`
+- leading `if (g) { break; } [else { E }]` guards folded into the loop test: `while (c) { if (g) break; rest }` becomes `while (c && !g) { rest }` (`while (true)` / `for (;;)` become plain `while (!g)`), with the guard's `else` body leading the remaining body; the fold repeats while the body still starts with such a guard, and `for` loops with an update clause receive the same test without changing shape
+- an endless loop that ends in `if (g) { break; }` rotated into `do { body } while (!g)`, refused when the body carries a `continue` targeting that loop (it skips the guard today but would reach the rotated test); nested loops and `switch` bodies raise the `continue` level the check looks for
+- trailing terminators that transfer exactly where falling off the block would are dropped: a `continue` ending a loop body, the `break` ending the body that runs last in a `switch` (the `default` body, else the last case), and a bare `return;` ending a function or method body. The walk follows only the tail path — the last statement, then recursively the last statement of each `if` / `ifdef` / `try` branch — and never enters loops, `switch` bodies, or `finally` blocks; a shell whose branch was emptied is re-pruned so it collapses like fresh input. By-reference-returning functions and generators keep their `return;`, and a `break`-only last case is kept when a `default` follows it
 ### Example
 
 ```php
@@ -571,7 +580,7 @@ The current optimizer is still intentionally local. It does not yet implement:
 - full fixed-point/basic-block constant propagation across arbitrary loops and general path merges
 - object/property facts, nested-array facts, and per-class constructor effect summaries beyond the current array-literal facts and unioned by-ref signatures
 - exact exception inference for unresolved/dynamic calls, open instance-dispatch sets, and runtime operand types beyond the current explicit-throw, exact-callable, and statically proven operator cases
-- broader control-flow normalization beyond the current local AST shell rewrites
+- control-flow normalization that reasons across sibling statements (merging adjacent `if` statements on the same pure condition, for instance), which needs the reference-volatility ledger the DCE guard state carries
 - backend-specific peephole cleanup
 - elimination of the `adrp/add/stur` instruction triple at the FCC assignment site when the wrapper is stubbed (the stub address still gets loaded and stored even though both are dead)
 
