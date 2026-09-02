@@ -299,8 +299,8 @@ pub(in crate::codegen::lower_inst) fn normalized_type_name(type_name: &str) -> &
 }
 
 /// Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value
-/// whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is
-/// not treated as a definite array here (it may hold a Traversable); use `is_iterable` for that.
+/// whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value holds
+/// either shape or a Traversable object, so it is decided at RUN TIME from its heap kind.
 pub(crate) fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_array", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -310,9 +310,66 @@ pub(crate) fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         PhpType::Mixed | PhpType::Union(_) => {
             emit_mixed_array_predicate(ctx, value)?;
         }
+        PhpType::Iterable => emit_iterable_heap_kind_predicate(ctx, value, IterableKind::Array)?,
         _ => emit_static_bool(ctx, false),
     }
     store_if_result(ctx, inst)
+}
+
+/// Which side of `iterable`'s `array|Traversable` an `is_*` predicate is asking about.
+#[derive(Clone, Copy)]
+enum IterableKind {
+    /// PHP `array`: heap kind 2 (indexed) or 3 (hash).
+    Array,
+    /// A `Traversable` instance: heap kind 4.
+    Object,
+}
+
+/// Answers an `is_array`/`is_object` predicate for a value whose static type is `iterable`.
+///
+/// `iterable` is `array|Traversable`, and unlike `Mixed` it is NOT a boxed cell carrying a tag:
+/// `PhpType::Iterable` is a raw heap pointer whose concrete shape is read from the uniform heap
+/// header (`crate::types::model` — "type-erased pointer (array|Traversable)"). The predicate
+/// therefore has to ask the heap, which is what `__rt_heap_kind` is for; it is the same probe
+/// `codegen_support::value_boxing::emit_box_iterable_as_mixed` uses to give an iterable a Mixed
+/// tag, and it maps kinds the same way — 2 indexed array, 3 hash, 4 object.
+///
+/// Answering statically instead was measured wrong on the commonest shape there is: a promoted
+/// constructor property `private iterable $items = []` holding a plain array reported
+/// `is_array=false` while `get_debug_type` on the same value said `array`, so a `!is_array($x)`
+/// guard took the branch PHP never takes. `count()` on the same value has always dispatched on
+/// the heap kind (`builtins::count_empty::lower_iterable_count`), which is why the two disagreed.
+fn emit_iterable_heap_kind_predicate(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    kind: IterableKind,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match (ctx.emitter.target.arch, kind) {
+        // Kinds 2 and 3 are the two array shapes, so one unsigned range test covers both.
+        (Arch::AArch64, IterableKind::Array) => {
+            ctx.emitter.instruction("sub x0, x0, #2");                          // rebase the indexed/hash heap kinds onto 0 and 1
+            ctx.emitter.instruction("cmp x0, #1");                              // is the rebased heap kind still inside the array pair?
+            ctx.emitter.instruction("cset x0, ls");                             // materialize true for an indexed array or a hash
+        }
+        (Arch::AArch64, IterableKind::Object) => {
+            ctx.emitter.instruction("cmp x0, #4");                              // heap kind 4 is an object instance
+            ctx.emitter.instruction("cset x0, eq");                             // materialize true only for a Traversable instance
+        }
+        (Arch::X86_64, IterableKind::Array) => {
+            ctx.emitter.instruction("sub rax, 2");                              // rebase the indexed/hash heap kinds onto 0 and 1
+            ctx.emitter.instruction("cmp rax, 1");                              // is the rebased heap kind still inside the array pair?
+            ctx.emitter.instruction("setbe al");                                // materialize true for an indexed array or a hash
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
+        }
+        (Arch::X86_64, IterableKind::Object) => {
+            ctx.emitter.instruction("cmp rax, 4");                              // heap kind 4 is an object instance
+            ctx.emitter.instruction("sete al");                                 // materialize true only for a Traversable instance
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
+        }
+    }
+    Ok(())
 }
 
 /// Checks boxed gradual values for indexed/hash arrays or a callable descriptor explicitly marked
@@ -394,7 +451,8 @@ fn emit_callable_array_predicate(ctx: &mut FunctionContext<'_>, value: ValueId) 
 }
 
 /// Lowers `is_object()`: true for statically-known objects and closures, or boxed values whose
-/// runtime tag is an object (6) or callable descriptor (10).
+/// runtime tag is an object (6) or callable descriptor (10). An `iterable` is the other half of
+/// the same run-time question `is_array` asks — see [`emit_iterable_heap_kind_predicate`].
 pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_object", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -403,6 +461,7 @@ pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         PhpType::Mixed | PhpType::Union(_) => {
             predicates::emit_mixed_tag_membership(ctx, value, &[6, 10])?;
         }
+        PhpType::Iterable => emit_iterable_heap_kind_predicate(ctx, value, IterableKind::Object)?,
         _ => emit_static_bool(ctx, false),
     }
     store_if_result(ctx, inst)

@@ -78,6 +78,10 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         emit_mixed_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
     }
+    if matches!(ty, PhpType::Iterable) {
+        emit_iterable_type_name(ctx, value, IterableNaming::Gettype)?;
+        return store_if_result(ctx, inst);
+    }
     let Some(type_name) = static_gettype_name(&ty) else {
         return Err(CodegenIrError::unsupported(format!(
             "gettype for PHP type {:?}",
@@ -109,6 +113,10 @@ pub(crate) fn lower_get_debug_type(
         super::types::emit_dynamic_object_class_name(ctx, "get_class");
         return store_if_result(ctx, inst);
     }
+    if matches!(ty, PhpType::Iterable) {
+        emit_iterable_type_name(ctx, value, IterableNaming::DebugType)?;
+        return store_if_result(ctx, inst);
+    }
     let Some(type_name) = static_get_debug_type_name(&ty) else {
         return Err(CodegenIrError::unsupported(format!(
             "get_debug_type for PHP type {:?}",
@@ -117,6 +125,63 @@ pub(crate) fn lower_get_debug_type(
     };
     emit_type_name_result(ctx, type_name);
     store_if_result(ctx, inst)
+}
+
+/// Which naming convention an `iterable` type probe answers with.
+#[derive(Clone, Copy)]
+enum IterableNaming {
+    /// `gettype()`: the legacy long names, so `"object"` for a Traversable.
+    Gettype,
+    /// `get_debug_type()`: PHP 8's names, so the object's own CLASS name.
+    DebugType,
+}
+
+/// Emits `gettype()` / `get_debug_type()` for a value whose static type is `iterable`.
+///
+/// `iterable` is `array|Traversable` and, unlike `Mixed`, it is not a boxed cell carrying a tag:
+/// the value is a raw heap pointer whose concrete shape lives in the uniform heap header. Naming
+/// it therefore means asking `__rt_heap_kind`, the same probe
+/// `builtins::type_predicates::emit_iterable_heap_kind_predicate` uses, with heap kind 4 meaning an
+/// object instance.
+///
+/// Answering `array` for every iterable was measured wrong: an `iterable` property holding an
+/// `IteratorAggregate` reported `get_debug_type` = `array` while `is_object` on the same value was
+/// already answering `true`, so the two disagreed about one value.
+fn emit_iterable_type_name(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    naming: IterableNaming,
+) -> Result<()> {
+    let array_case = ctx.next_label("iterable_type_name_array");
+    let done = ctx.next_label("iterable_type_name_done");
+    ctx.load_value_to_result(value)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // heap kind 4 is an object instance
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // heap kind 4 is an object instance
+        }
+    }
+    // The pop leaves the flags alone on both targets, so the receiver is back in the result
+    // register before either arm needs it and the comparison above still decides the branch.
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b.ne {}", array_case)), // every non-object heap kind an iterable can hold is an array
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jne {}", array_case)),   // every non-object heap kind an iterable can hold is an array
+    }
+    match naming {
+        IterableNaming::Gettype => emit_type_name_result(ctx, b"object"),
+        IterableNaming::DebugType => super::types::emit_dynamic_object_class_name(ctx, "get_class"),
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&array_case);
+    emit_type_name_result(ctx, b"array");
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Emits `get_debug_type()` for an inline tagged scalar containing an integer or null.
