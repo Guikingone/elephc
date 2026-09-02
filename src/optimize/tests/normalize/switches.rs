@@ -486,3 +486,79 @@ fn test_normalize_control_flow_empties_break_only_last_case_without_default() {
         )]
     );
 }
+
+/// Builds a span starting at `line:1` so fixtures can encode source order.
+fn span_at_line(line: u32) -> Span {
+    Span {
+        line,
+        col: 1,
+        end_line: line,
+        end_col: 1,
+    }
+}
+
+/// A `default` written between two cases is not the last body of the switch: falling off it
+/// would enter the following case, so its trailing `break` is kept (and nothing else in that
+/// switch is stripped). The same shape with the `default` written last drops its `break`.
+#[test]
+fn test_normalize_control_flow_keeps_break_of_default_written_between_cases() {
+    let case_body = |value: i64, line: u32| {
+        vec![
+            Stmt::new(StmtKind::Echo(Expr::int_lit(value)), span_at_line(line)),
+            Stmt::new(StmtKind::Break(1), span_at_line(line)),
+        ]
+    };
+    let default_body = |line: u32| {
+        vec![
+            Stmt::new(StmtKind::Echo(Expr::int_lit(9)), span_at_line(line)),
+            Stmt::new(StmtKind::Break(1), span_at_line(line)),
+        ]
+    };
+    let pattern = |value: i64, line: u32| {
+        vec![Expr::new(ExprKind::IntLiteral(value), span_at_line(line))]
+    };
+
+    // case 1 (line 1), default (line 2), case 2 (line 3)
+    let middle = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![
+                (pattern(1, 1), case_body(1, 1)),
+                (pattern(2, 3), case_body(2, 3)),
+            ],
+            default: Some(default_body(2)),
+        },
+        Span::dummy(),
+    )];
+    assert_eq!(normalize_control_flow(middle.clone()), middle);
+
+    // case 1 (line 1), case 2 (line 2), default (line 3)
+    let last = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![
+                (pattern(1, 1), case_body(1, 1)),
+                (pattern(2, 2), case_body(2, 2)),
+            ],
+            default: Some(default_body(3)),
+        },
+        Span::dummy(),
+    )];
+    assert_eq!(
+        normalize_control_flow(last),
+        vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases: vec![
+                    (pattern(1, 1), case_body(1, 1)),
+                    (pattern(2, 2), case_body(2, 2)),
+                ],
+                default: Some(vec![Stmt::new(
+                    StmtKind::Echo(Expr::int_lit(9)),
+                    span_at_line(3),
+                )]),
+            },
+            Span::dummy(),
+        )]
+    );
+}

@@ -216,3 +216,24 @@ echo implode(",", $rows);
 
     assert_eq!(out, "9|6|01,02,10,12,20,21");
 }
+
+/// A `default` written between two cases keeps its trailing `break`: EIR lowering places the
+/// default at its source position, so dropping the `break` would fall through into `case 2`.
+#[test]
+fn test_normalization_keeps_break_of_default_written_between_cases() {
+    let out = compile_and_run(
+        r#"<?php
+function f($x) {
+    switch ($x) {
+        case 1: echo "a"; break;
+        default: echo "d"; break;
+        case 2: echo "b"; break;
+    }
+    echo "|";
+}
+f($argc); f($argc + 1); f($argc + 2);
+"#,
+    );
+
+    assert_eq!(out, "a|b|d|");
+}
