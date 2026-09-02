@@ -1584,3 +1584,70 @@ echo invert_mixed(2);
     );
     assert_eq!(out, "-3");
 }
+
+/// Verifies a relational comparison against a class constant whose initializer is a NESTED
+/// expression still orders as plain integers.
+///
+/// `const MAX = 16 * 1024 * 1024;` lowers as a runtime-tagged value, so `$n > self::MAX` picks
+/// the runtime relational opcode; constant folding then rewrites the operand to `const_i64
+/// 16777216` and the opcode arrives at the backend with two statically integer operands. That
+/// combination used to abort the whole compile ("php_rel_cmp requires a runtime-tagged operand,
+/// got Int and Int"), which is how `Symfony\Component\Console\Helper\FileInputHelper` refused to
+/// lower. A single-level initializer (`16 * 2`) folds before the comparison is lowered and never
+/// reached this path, which is why the shape needs two multiplications.
+#[test]
+fn test_relational_compare_against_a_folded_class_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class Limits {
+    const MAX = 16 * 1024 * 1024;
+    const MIN = 2 * 3 * 4;
+}
+$n = strlen("abcdef");
+var_dump($n > Limits::MAX);
+var_dump($n < Limits::MAX);
+var_dump($n >= Limits::MIN);
+var_dump($n <= Limits::MIN);
+var_dump(Limits::MIN > $n);
+var_dump(Limits::MIN <= $n);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\n"
+    );
+}
+
+/// Verifies a float or bool operand against a folded integer class constant keeps PHP's rules.
+///
+/// These reach the same backend opcode with no runtime tag left on either side, and they are the
+/// reason the integer fast path is restricted to `int` against `int`: PHP compares `true > 24` as
+/// BOOLEANS (`true > true`, false), so ordering the payloads as integers would answer `true`.
+/// They are ordered by boxing both sides into `Mixed` cells and calling PHP's comparison table.
+#[test]
+fn test_relational_compare_of_bool_and_float_against_a_folded_class_constant() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Limits {
+    const MIN = 2 * 3 * 4;
+}
+$f = sqrt(4.0);
+$b = (bool) strlen("x");
+var_dump($f > Limits::MIN);
+var_dump($f < Limits::MIN);
+var_dump($b > Limits::MIN);
+var_dump($b <= Limits::MIN);
+var_dump(Limits::MIN >= $b);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

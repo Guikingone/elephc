@@ -927,6 +927,19 @@ fn emit_php_runtime_compare(
 }
 
 /// Lowers a PHP relational comparison whose operands require runtime tag dispatch.
+///
+/// The opcode is chosen while lowering the expression, from the types the operands have THEN.
+/// A later EIR pass can narrow an operand and leave the opcode behind: a class constant whose
+/// initializer is a nested expression (`16 * 1024 * 1024`) lowers as a runtime-tagged value, so
+/// `strlen($b) > self::MAX` picks `php_rel_cmp`, and constant folding then replaces the operand
+/// with `const_i64 16777216`. The instruction that arrives here has two statically typed
+/// operands and no runtime tag to dispatch on, which is not a malformed module — it is the same
+/// comparison with better types. Two statically integer operands take the ordinary signed
+/// integer predicate, which is exactly PHP's rule for `int` against `int`; every other shape is
+/// boxed into `Mixed` cells and ordered by PHP's runtime comparison table, the same path a
+/// runtime-tagged operand takes (`emit_runtime_ordering_compare` already boxes whichever side is
+/// not `Mixed`). Reducing those to a typed opcode instead would be wrong: `2 > true` compares as
+/// booleans in PHP, `"10" > "9"` compares numerically, and every NaN predicate is `false`.
 pub(super) fn lower_php_rel_cmp(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -935,11 +948,12 @@ pub(super) fn lower_php_rel_cmp(
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
-    if !needs_runtime_ordering_compare(&lhs_ty) && !needs_runtime_ordering_compare(&rhs_ty) {
-        return Err(CodegenIrError::invalid_module(format!(
-            "php_rel_cmp requires a runtime-tagged operand, got {:?} and {:?}",
-            lhs_ty, rhs_ty
-        )));
+    if !needs_runtime_ordering_compare(&lhs_ty)
+        && !needs_runtime_ordering_compare(&rhs_ty)
+        && lhs_ty.codegen_repr() == PhpType::Int
+        && rhs_ty.codegen_repr() == PhpType::Int
+    {
+        return super::local_loads::lower_int_compare(ctx, inst);
     }
     emit_runtime_ordering_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
     emit_runtime_relational_result(ctx, super::expect_cmp_predicate(inst)?)?;
