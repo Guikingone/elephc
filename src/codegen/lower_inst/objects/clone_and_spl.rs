@@ -146,6 +146,7 @@ fn lower_known_class_object_clone(
         property_count,
         allow_dynamic_properties,
         retained_offsets,
+        persisted_offsets,
         owned_reference_property_offsets,
     ) = {
         let class_info =
@@ -153,12 +154,14 @@ fn lower_known_class_object_clone(
                 CodegenIrError::unsupported(format!("unknown class {}", class_name))
             })?;
         let retained_offsets = cloned_property_retain_offsets(class_info);
+        let persisted_offsets = cloned_property_persist_offsets(class_info);
         let owned_reference_property_offsets = owned_reference_property_offsets(class_info);
         (
             class_info.class_id,
             class_info.properties.len(),
             class_info.allow_dynamic_properties,
             retained_offsets,
+            persisted_offsets,
             owned_reference_property_offsets,
         )
     };
@@ -181,7 +184,14 @@ fn lower_known_class_object_clone(
     let dest_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, source_reg);
     ctx.load_value_to_reg(result, dest_reg)?;
-    emit_clone_declared_property_slots(ctx, source_reg, dest_reg, property_count, &retained_offsets);
+    emit_clone_declared_property_slots(
+        ctx,
+        source_reg,
+        dest_reg,
+        property_count,
+        &retained_offsets,
+        &persisted_offsets,
+    );
     if allow_dynamic_properties {
         emit_clone_dynamic_property_hash(
             ctx,

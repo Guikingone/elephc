@@ -113,25 +113,53 @@ pub(super) fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usiz
         .collect()
 }
 
-/// Returns true when a property slot's low word owns heap storage after a shallow copy.
-pub(super) fn property_clone_needs_retain(php_type: &PhpType) -> bool {
-    let php_type = php_type.codegen_repr();
-    matches!(php_type, PhpType::Str) || php_type.is_refcounted()
+/// Returns property slot offsets whose copied string payload must be COPIED for the clone.
+///
+/// A string is the one owned property payload that carries no refcount: a `string` slot owns an
+/// independent `__rt_str_persist` block, which is why every store into one persists and every
+/// release frees outright. `__rt_incref` on such a block therefore retained NOTHING, so a clone
+/// and its source shared one block and the source's next assignment freed it under the clone —
+/// `foreach ($chunks as $c) { $s->string = $c; $out[] = clone $s; }` printed the LAST chunk for
+/// every element, and 2-byte garbage once the block had been reused. Under `--heap-debug` the
+/// same program stopped at "bad refcount", the incref writing a refcount word a string block
+/// does not have. An `array` property in the same class survived, which is what made the defect
+/// look string-specific: arrays ARE refcounted, so their incref was real.
+pub(super) fn cloned_property_persist_offsets(class_info: &ClassInfo) -> Vec<usize> {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (property, php_type))| {
+            if class_info.property_slot_is_reference(index, property) {
+                return None;
+            }
+            (php_type.codegen_repr() == PhpType::Str).then_some(8 + index * 16)
+        })
+        .collect()
 }
 
-/// Copies declared 16-byte property slots and retains heap-backed child payloads.
+/// Returns true when a property slot's low word owns heap storage after a shallow copy.
+pub(super) fn property_clone_needs_retain(php_type: &PhpType) -> bool {
+    php_type.codegen_repr().is_refcounted()
+}
+
+/// Copies declared 16-byte property slots and gives the clone its own heap-backed payloads.
 pub(super) fn emit_clone_declared_property_slots(
     ctx: &mut FunctionContext<'_>,
     source_reg: &str,
     dest_reg: &str,
     property_count: usize,
     retained_offsets: &[usize],
+    persisted_offsets: &[usize],
 ) {
     for index in 0..property_count {
         let offset = 8 + index * 16;
         emit_copy_property_slot(ctx, source_reg, dest_reg, offset);
         if retained_offsets.contains(&offset) {
             emit_retain_cloned_property_pointer(ctx, source_reg, dest_reg, offset);
+        }
+        if persisted_offsets.contains(&offset) {
+            emit_persist_cloned_property_string(ctx, source_reg, dest_reg, offset);
         }
     }
 }
@@ -151,7 +179,7 @@ pub(super) fn emit_copy_property_slot(
     abi::emit_store_to_address(ctx.emitter, high_reg, dest_reg, offset + 8);
 }
 
-/// Retains the copied low-word pointer for string, array, hash, object, or Mixed slots.
+/// Retains the copied low-word pointer for array, hash, object, or Mixed slots.
 pub(super) fn emit_retain_cloned_property_pointer(
     ctx: &mut FunctionContext<'_>,
     source_reg: &str,
@@ -165,6 +193,95 @@ pub(super) fn emit_retain_cloned_property_pointer(
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     abi::emit_pop_reg(ctx.emitter, dest_reg);
     abi::emit_pop_reg(ctx.emitter, source_reg);
+}
+
+/// Gives a cloned `string` slot its OWN heap block instead of the source object's.
+///
+/// String payloads carry no refcount, so the shallow copy left both objects pointing at one
+/// `__rt_str_persist` block that only one of them could free. `__rt_str_persist` re-run on the
+/// copied pointer/length pair produces the independent block the clone must own, exactly what a
+/// store into a `string` property already does. The scratch registers the copy loop holds the
+/// source and destination objects in (`x10`/`x9`, `r10`/`r11`) are not the helper's pointer and
+/// length registers, so restoring them cannot clobber the fresh copy.
+///
+/// A DECLARED-but-unassigned typed property carries `UNINITIALIZED_TYPED_PROPERTY_SENTINEL` in
+/// the slot's high word, where an initialized string keeps its length. Copying that pair through
+/// the persist helper would read `0x7fff_ffff_ffff_fffd` bytes, so the marker is left exactly as
+/// the shallow copy placed it — `clone` has to preserve "still uninitialized", which is what
+/// `isset($this->path)` reads afterwards. The comparison is repeated after the register restores
+/// because the helper call clobbers the flags; `pop`/`ldp` do not, and the pointer and length
+/// registers survive both restores, so the second compare sees the same operands as the first.
+pub(super) fn emit_persist_cloned_property_string(
+    ctx: &mut FunctionContext<'_>,
+    source_reg: &str,
+    dest_reg: &str,
+    offset: usize,
+) {
+    let skip_label = ctx.next_label("object_clone_string_uninitialized");
+    let done_label = ctx.next_label("object_clone_string_persisted");
+    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, source_reg);
+    abi::emit_push_reg(ctx.emitter, dest_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_from_address(ctx.emitter, "x1", dest_reg, offset);
+            abi::emit_load_from_address(ctx.emitter, "x2", dest_reg, offset + 8);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                sentinel_reg,
+                UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+            );
+            ctx.emitter
+                .instruction(&format!("cmp x2, {}", sentinel_reg));             // is the copied slot still the uninitialized typed-property marker?
+            ctx.emitter
+                .instruction(&format!("b.eq {}", skip_label));                  // an uninitialized slot owns no string block to copy
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.label(&skip_label);
+            abi::emit_pop_reg(ctx.emitter, dest_reg);
+            abi::emit_pop_reg(ctx.emitter, source_reg);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                sentinel_reg,
+                UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+            );
+            ctx.emitter
+                .instruction(&format!("cmp x2, {}", sentinel_reg));             // re-test the marker now that the call has clobbered the flags
+            ctx.emitter
+                .instruction(&format!("b.eq {}", done_label));                  // leave the uninitialized marker exactly as the shallow copy placed it
+            abi::emit_store_to_address(ctx.emitter, "x1", dest_reg, offset);
+            abi::emit_store_to_address(ctx.emitter, "x2", dest_reg, offset + 8);
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_from_address(ctx.emitter, "rax", dest_reg, offset);
+            abi::emit_load_from_address(ctx.emitter, "rdx", dest_reg, offset + 8);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                sentinel_reg,
+                UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+            );
+            ctx.emitter
+                .instruction(&format!("cmp rdx, {}", sentinel_reg));            // is the copied slot still the uninitialized typed-property marker?
+            ctx.emitter
+                .instruction(&format!("je {}", skip_label));                    // an uninitialized slot owns no string block to copy
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.label(&skip_label);
+            abi::emit_pop_reg(ctx.emitter, dest_reg);
+            abi::emit_pop_reg(ctx.emitter, source_reg);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                sentinel_reg,
+                UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+            );
+            ctx.emitter
+                .instruction(&format!("cmp rdx, {}", sentinel_reg));            // re-test the marker now that the call has clobbered the flags
+            ctx.emitter
+                .instruction(&format!("je {}", done_label));                    // leave the uninitialized marker exactly as the shallow copy placed it
+            abi::emit_store_to_address(ctx.emitter, "rax", dest_reg, offset);
+            abi::emit_store_to_address(ctx.emitter, "rdx", dest_reg, offset + 8);
+            ctx.emitter.label(&done_label);
+        }
+    }
 }
 
 /// Replaces the constructor-seeded dynamic-property hash with a shallow clone of the source hash.

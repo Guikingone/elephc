@@ -253,3 +253,97 @@ echo CloneConsumer::read();
     );
     assert_eq!(out, "ready");
 }
+
+/// Verifies a cloned `string` property survives the SOURCE object's next assignment.
+///
+/// A string is the one owned property payload that carries no refcount: a `string` slot owns an
+/// independent `__rt_str_persist` block, every store into one persists, and every release frees
+/// outright. The clone called `__rt_incref` on the copied pointer, which retained NOTHING, so the
+/// clone and its source shared one block that the source's next assignment freed. This loop —
+/// the shape `Symfony\Component\String\ByteString::split()` is written in — printed `delta` for
+/// every element and 2-byte garbage once the freed block had been reused. The `array` property is
+/// in the fixture on purpose: arrays ARE refcounted, their incref was real, and their surviving
+/// while the strings did not is what made the defect look string-specific.
+#[test]
+fn test_clone_gives_each_copy_its_own_string_property_block() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Chunk {
+    public string $string = '';
+    public array $tags = [];
+}
+
+$chunk = new Chunk();
+$out = [];
+foreach (['alpha', 'bravo', 'charlie', 'delta'] as $piece) {
+    $chunk->string = $piece;
+    $chunk->tags = [$piece];
+    $out[] = clone $chunk;
+}
+foreach ($out as $copy) {
+    echo $copy->string, "|", $copy->tags[0], "\n";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "alpha|alpha\nbravo|bravo\ncharlie|charlie\ndelta|delta\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies inherited, promoted, and nullable string properties each get their own block too.
+///
+/// The nullable one is a union, so it keeps the refcounted `Mixed` retain; the inherited and
+/// promoted ones are plain `string` slots reached through a different declaration path. Under
+/// `--heap-debug` the pre-fix program stopped at "bad refcount" — the incref writing a refcount
+/// word a string block does not have — which is the other half of the same defect.
+#[test]
+fn test_clone_gives_inherited_and_promoted_string_properties_their_own_blocks() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Base {
+    public string $tag = 'base';
+}
+class Node extends Base {
+    public array $tags = [];
+    public ?string $note = null;
+
+    public function __construct(public string $name = '') {}
+}
+
+$n = new Node();
+$out = [];
+foreach (['alpha', 'bravo', 'charlie', 'delta'] as $chunk) {
+    $n->name = $chunk . '!';
+    $n->tag = strtoupper($chunk);
+    $n->tags = [$chunk];
+    $n->note = $chunk === 'bravo' ? null : $chunk . '?';
+    $out[] = clone $n;
+}
+foreach ($out as $o) {
+    echo $o->name, "|", $o->tag, "|", $o->tags[0], "|", $o->note ?? 'NULL', "\n";
+}
+$a = new Node('x');
+$b = clone $a;
+$a->name = 'changed';
+echo $b->name, "|", $a->name, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "alpha!|ALPHA|alpha|alpha?\nbravo!|BRAVO|bravo|NULL\ncharlie!|CHARLIE|charlie|charlie?\n\
+         delta!|DELTA|delta|delta?\nx|changed\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
