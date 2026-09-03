@@ -3422,9 +3422,13 @@ fn test_widened_by_ref_param_lent_to_another_matches_its_hand_written_twin() {
 /// fixture would most easily lose: `2c662c5e0c` had just made that call COMPILE, which turned a
 /// refusal into a silently empty label.
 ///
-/// Heap: 8 blocks / 416 bytes, attributed rather than asserted clean. The same `?N $p` chain with
-/// no accessor call at all leaves 7 blocks / 368 bytes, so the one extra block is the returned
-/// array itself, still live at exit.
+/// Heap: 1 block / 48 bytes, attributed rather than asserted clean — the returned array itself,
+/// still live at exit. This used to be 8 blocks / 416 bytes: passing `$a`/`$b` into the `?N $p`
+/// constructor parameter boxes each for the Mixed ABI and runs the nullable nominal guard over
+/// that box, which FORWARDS the same cell; the post-call cleanup asked only about the argument
+/// itself and released nothing, so all 3 chain links leaked their boxed guard cell (7 blocks / 368
+/// bytes even with no accessor call at all). Fixed by releasing the argument expression's own box
+/// when the guard forwards it (`LoweringContext::owning_box_behind_borrowed_nominal_guard`).
 #[test]
 fn test_a_retyped_locals_boxed_slot_is_visible_in_the_arrays_it_fills() {
     let out = compile_and_run_with_heap_debug(
@@ -3506,8 +3510,8 @@ unset($n);
     );
     assert!(
         out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=8 live_bytes=416"),
-        "expected the recorded object-chain residual plus the live result array, got: {}",
+            .contains("HEAP DEBUG: leak summary: live_blocks=1 live_bytes=48"),
+        "expected only the live result array to remain (the chain-building leak is fixed), got: {}",
         out.stderr
     );
 }

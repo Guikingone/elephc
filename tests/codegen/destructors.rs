@@ -173,6 +173,58 @@ echo "|end";
     assert_eq!(out.stdout, "d1d2|end");
 }
 
+/// A temporary passed to a NULLABLE object parameter is destroyed when the call returns, the
+/// same as one passed to a non-nullable parameter.
+///
+/// `?C` has the Mixed ABI, so the argument is boxed and then run through the nullable nominal
+/// guard, which FORWARDS the same cell. The forwarded value is borrowed, so the post-call
+/// cleanup — which asks only about the argument itself — released nothing and the box kept the
+/// object alive forever. The non-nullable and untyped arms are the controls: neither emits the
+/// guard, and both were already correct.
+#[test]
+fn test_destruct_of_a_temporary_passed_to_a_nullable_object_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public string $id;
+    public function __construct(string $id) { $this->id = $id; }
+    public function __destruct() { echo "destruct {$this->id}\n"; }
+}
+function nn(C $c): void { echo "nn\n"; }
+function nu(?C $c): void { echo "nu\n"; }
+function un($c): void { echo "un\n"; }
+nn(new C('nn'));
+nu(new C('nu'));
+un(new C('un'));
+echo "after\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "nn\ndestruct nn\nnu\ndestruct nu\nun\ndestruct un\nafter\n"
+    );
+}
+
+/// The nullable-parameter call leaves a clean heap: the leaked box kept the object live for the
+/// whole process, so the ordering assertion alone would not pin the ownership half.
+#[test]
+fn test_nullable_object_parameter_call_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public function __destruct() { echo "d"; } }
+function nu(?C $c): void { echo "n"; }
+nu(new C());
+echo "|end";
+"#,
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+    assert_eq!(out.stdout, "nd|end");
+}
+
 /// A subclass with no destructor inherits its parent's `__destruct`, dispatched
 /// to the implementing ancestor's method.
 #[test]

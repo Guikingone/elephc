@@ -3212,6 +3212,41 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
+    /// Returns the fresh Mixed box a borrowed nominal guard forwards, when this expression made it.
+    ///
+    /// `f(new C())` against a `?C` PARAMETER boxes the object for the Mixed ABI and then runs the
+    /// nullable nominal guard over that box. The guard FORWARDS the same cell
+    /// (`value_is_borrowed_gradual_nominal_guard`), so the value the call receives is BORROWED and
+    /// the post-call cleanup — which asks only about the argument itself — releases nothing. The
+    /// box, and the object inside it, stay one reference above zero forever: `__destruct` never
+    /// runs. A non-nullable `C` parameter takes no guard and was always balanced.
+    ///
+    /// Only a box the ARGUMENT EXPRESSION itself minted is returned. A guard over a local load —
+    /// a callee forwarding its own `?ParentLink $parent` to `parent::__construct` — borrows
+    /// storage the frame still owns, and releasing that is exactly the use-after-free
+    /// `test_nullable_nominal_parent_constructor_parameter_keeps_its_boxed_owner` pins.
+    pub(crate) fn owning_box_behind_borrowed_nominal_guard(
+        &self,
+        value: LoweredValue,
+    ) -> Option<LoweredValue> {
+        if !self.value_is_borrowed_gradual_nominal_guard(value.value) {
+            return None;
+        }
+        let source = self
+            .builder
+            .value_defining_instruction(value.value)
+            .and_then(|inst| inst.operands.first().copied())?;
+        if self.builder.value_defining_op(source) != Some(Op::MixedBox) {
+            return None;
+        }
+        let php_type = self.builder.value_php_type(source);
+        let boxed = LoweredValue {
+            value: source,
+            ir_type: value_ir_type(&php_type),
+        };
+        self.value_is_owning_temporary(boxed).then_some(boxed)
+    }
+
     /// Returns whether a generic cast owns a detached string copy of a Mixed operand.
     fn value_is_owning_mixed_string_cast(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {

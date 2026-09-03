@@ -283,6 +283,42 @@ fn test_sentinel_plain_int_still_emits_sentinel_check() {
     );
 }
 
+/// A null-capable int reaches an associative-array literal as a boxed entry.
+///
+/// A hash carries ONE static value tag and two payload words per entry, so it has nowhere to put
+/// the tag register a `TaggedScalar` needs: its bucket shape is the boxed Mixed cell. Reading the
+/// element type literally instead PANICKED the compiler in `hash_new`
+/// (`runtime_value_tag(TaggedScalar)` is `unreachable!`), and tagging only the allocation would
+/// have moved the failure to `hash_set`, which would then refuse `TaggedScalar` storage.
+///
+/// `isset` is in here because it recomputes the element type from the hash on its own: reading
+/// it literally there made the null check compare the BUCKET's tag against 8 while the bucket
+/// holds tag 7 and the null lives inside the cell, so `isset($m['a'])` answered `set` for a null.
+/// That would have turned the compiler panic into a silent wrong answer.
+#[test]
+fn test_tagged_nullable_int_in_an_assoc_literal_round_trips() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function f(int $n): ?int { return $n > 0 ? $n : null; }
+$a = f(0);
+$b = f(7);
+$m = ["a" => $a, "b" => $b];
+echo json_encode($m) . "\n";
+echo count($m) . "\n";
+echo (isset($m["a"]) ? "set" : "unset") . "\n";
+echo (isset($m["b"]) ? "set" : "unset") . "\n";
+echo (array_key_exists("a", $m) ? "yes" : "no") . "\n";
+foreach ($m as $k => $v) { echo $k . "=" . var_export($v, true) . "\n"; }
+echo implode(",", array_keys($m)) . "\n";
+var_dump($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"a\":null,\"b\":7}\n2\nunset\nset\nyes\na=NULL\nb=7\na,b\narray(2) {\n  [\"a\"]=>\n  NULL\n  [\"b\"]=>\n  int(7)\n}\n"
+    );
+}
+
 /// The legacy in-band behavior is preserved under the explicit sentinel opt-out:
 /// the same fixture still misreads PHP_INT_MAX-1 as null when --null-repr=sentinel.
 #[test]

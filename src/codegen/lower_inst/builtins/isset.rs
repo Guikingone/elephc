@@ -199,8 +199,15 @@ fn emit_isset_hash_offset_missing_result(
 ) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
+    // The BUCKET shape, not the declared element type: a `TaggedScalar` element is stored as a
+    // boxed Mixed cell (a bucket has nowhere to put the tag register), so reading the element
+    // type literally here made the null check compare the bucket's tag against 8 while the
+    // bucket actually holds tag 7 and the null lives inside the cell — `isset($m['a'])` answered
+    // `set` for a `?int` null where php answers `unset`.
     let value_ty = match ctx.value_php_type(hash)? {
-        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        PhpType::AssocArray { value, .. } => {
+            super::super::hashes::hash_bucket_value_type(&value)
+        }
         _ => return emit_loaded_isset_missing_result(ctx, expect_operand(inst, 0)?),
     };
     let missing = ctx.next_label("isset_hash_missing");

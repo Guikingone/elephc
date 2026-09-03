@@ -1776,7 +1776,7 @@ fn emit_hash_get_miss(ctx: &mut FunctionContext<'_>, value_ty: &PhpType, miss_re
 fn hash_value_type_tag(hash_ty: &PhpType) -> Result<i64> {
     match hash_ty.codegen_repr() {
         PhpType::AssocArray { value, .. } => {
-            Ok(crate::codegen::runtime_value_tag(&value.codegen_repr()) as i64)
+            Ok(crate::codegen::runtime_value_tag(&hash_bucket_value_type(&value)) as i64)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "hash_new result PHP type {:?}",
@@ -1788,12 +1788,32 @@ fn hash_value_type_tag(hash_ty: &PhpType) -> Result<i64> {
 /// Returns the static value type for an associative-array operand.
 fn assoc_value_type(hash_ty: &PhpType, inst: &Instruction) -> Result<PhpType> {
     match hash_ty.codegen_repr() {
-        PhpType::AssocArray { value, .. } => Ok(value.codegen_repr()),
+        PhpType::AssocArray { value, .. } => Ok(hash_bucket_value_type(&value)),
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             inst.op.name(),
             other
         ))),
+    }
+}
+
+/// Returns the storage shape a hash bucket can actually hold for an element type.
+///
+/// A hash carries ONE static value tag for the whole table and stores each entry as two payload
+/// words. `TaggedScalar` is the one element type with no such shape: a nullable scalar keeps its
+/// runtime tag in a REGISTER beside the payload, which a bucket has nowhere to put. Its storage
+/// shape is therefore the boxed `Mixed` cell, exactly as `hash_set_value_tag` already decides for
+/// the value side.
+///
+/// Deriving that here — where the bucket shape itself is read — is what keeps allocation, the
+/// per-entry tag, value materialization and the read side agreeing. Without it `["a" => $x]` with
+/// a `?int` `$x` reached `runtime_value_tag(TaggedScalar)` and PANICKED the compiler at
+/// `hash_new`; giving `hash_new` the Mixed tag alone would only move the failure to `hash_set`,
+/// which would then see `TaggedScalar` storage and refuse the entry.
+pub(in crate::codegen::lower_inst) fn hash_bucket_value_type(value: &PhpType) -> PhpType {
+    match value.codegen_repr() {
+        PhpType::TaggedScalar => PhpType::Mixed,
+        other => other,
     }
 }
 

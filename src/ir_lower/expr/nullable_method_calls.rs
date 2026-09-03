@@ -328,6 +328,33 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
                 continue;
             }
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+        } else if let Some(boxed) = ctx.owning_box_behind_borrowed_nominal_guard(lowered) {
+            // The argument is the nullable nominal guard's FORWARDED cell, so it is borrowed and
+            // the branch above releases nothing. The caller still owns the box the argument
+            // expression minted for the Mixed ABI (`f(new C())` against `?C $c`), and this call
+            // is its last use — release it, or the object never reaches zero and `__destruct`
+            // never runs.
+            //
+            // A callee that hands its parameter back returns that same cell, so decide at
+            // runtime whenever the result is a comparable single pointer, the way the
+            // `result_reuses_arg` suppression above does.
+            match result {
+                Some(result)
+                    if matches!(
+                        ctx.builder.value_php_type(result).codegen_repr(),
+                        PhpType::Mixed | PhpType::Union(_)
+                    ) =>
+                {
+                    ctx.emit_void(
+                        Op::ReleaseUnlessAliases,
+                        vec![boxed.value, result],
+                        None,
+                        Op::ReleaseUnlessAliases.default_effects(),
+                        Some(span),
+                    );
+                }
+                _ => crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(span)),
+            }
         }
     }
 }
