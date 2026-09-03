@@ -88,6 +88,91 @@ echo "end\n";
     assert_eq!(out, "drop:first\nend\ndrop:second\n");
 }
 
+/// The same overwrite still releases the previous object when a LATER store widens the
+/// variable's frame slot to boxed Mixed.
+///
+/// `test_destruct_on_overwrite_reads_this` above passes without the trailing `$x = null`
+/// because the slot stays a concrete object for the whole function. Adding that store
+/// makes codegen lay the slot out as Mixed, so the overwrite's occupant load — lowered
+/// earlier, when the slot still looked concrete — becomes an unbox PLUS a retain, and its
+/// paired release only gave that retain back: the box owning `first` was overwritten
+/// without ever being released, so `drop:first` never printed (php prints it at the second
+/// store). `retype_stale_local_load_release_ops` types that release by the slot's FINAL
+/// storage instead.
+#[test]
+fn test_destruct_on_overwrite_when_a_later_store_boxes_the_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class Logger {
+    private string $tag;
+    public function __construct(string $t) { $this->tag = $t; }
+    public function __destruct() { echo "drop:" . $this->tag . "\n"; }
+}
+$x = new Logger("first");
+$x = new Logger("second");
+$x = null;
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "drop:first\ndrop:second\nend\n");
+}
+
+/// A fluent chain of overwrites inside a function loses EVERY superseded object when a
+/// conditional null store boxes the slot — the shape Symfony's `ServiceConfigurator` uses,
+/// where each `->set()` supersedes the previous configurator and the destructor is what
+/// registers the service definition.
+#[test]
+fn test_destruct_on_repeated_overwrite_with_a_conditional_null_store() {
+    let out = compile_and_run(
+        r#"<?php
+class Cfg {
+    public string $id;
+    public function __construct(string $id) { $this->id = $id; }
+    public function __destruct() { echo "register {$this->id}\n"; }
+}
+function build(bool $reset): void {
+    $c = new Cfg('a');
+    $c = new Cfg('b');
+    $c = new Cfg('c');
+    if ($reset) { $c = null; }
+    echo "built\n";
+}
+build(true);
+echo "after\n";
+"#,
+    );
+    assert_eq!(out, "register a\nregister b\nregister c\nbuilt\nafter\n");
+}
+
+/// The boxed-slot overwrite leaves a clean heap: before the fix the superseded object's
+/// Mixed box stayed live for the whole process, so the value assertions above alone would
+/// not have pinned the ownership half of the fix.
+#[test]
+fn test_overwrite_of_a_boxed_object_slot_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Item {
+    public string $id;
+    public function __construct(string $id) { $this->id = $id; }
+    public function __destruct() { echo "d{$this->id}"; }
+}
+function run(): void {
+    $x = new Item('1');
+    $x = new Item('2');
+    $x = null;
+}
+run();
+echo "|end";
+"#,
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+    assert_eq!(out.stdout, "d1d2|end");
+}
+
 /// A subclass with no destructor inherits its parent's `__destruct`, dispatched
 /// to the implementing ancestor's method.
 #[test]

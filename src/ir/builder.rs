@@ -267,6 +267,146 @@ impl<'f> Builder<'f> {
         }
     }
 
+    /// Retypes a slot-occupant release whose load was lowered at a now-stale representation.
+    ///
+    /// `release_stored_local_value` names the value a store is about to overwrite by loading it
+    /// and releasing the load. It types that load with the slot's storage type AS KNOWN THEN, and
+    /// a store lowered LATER can still widen the slot to boxed Mixed — `$a = new C(); $a = new C();
+    /// $a = null;` is the shape, where only the trailing null store widens the slot.
+    ///
+    /// Codegen lays the frame out with the FINAL storage type, so the stale narrow load becomes an
+    /// unbox PLUS a retain (`local_load_requires_owned_mixed_unbox`), and the paired release then
+    /// only gives that retain back: the Mixed box that actually owns the occupant is overwritten
+    /// without ever being released, so the object's refcount never reaches zero and `__destruct`
+    /// never runs (php prints `destruct A1` at the second store; elephc printed nothing).
+    ///
+    /// A load whose ONLY use is that release exists solely to name the occupant — nothing else can
+    /// observe the narrow payload — so retyping it to the slot's final storage type is what the
+    /// release always meant. That is the same rule `lower_release_local_slot` states for the
+    /// deferred form: a slot release is typed by the slot, not by what lowering guessed.
+    ///
+    /// Loads with further uses are left alone: there the release balances a retain codegen really
+    /// does need, which is exactly what `prune_borrowed_local_load_release_ops` keeps it for.
+    pub fn retype_stale_local_load_release_ops(&mut self) {
+        let mut uses = vec![0usize; self.func.values.len()];
+        for inst in &self.func.instructions {
+            for operand in &inst.operands {
+                if let Some(count) = uses.get_mut(operand.as_raw() as usize) {
+                    *count += 1;
+                }
+            }
+        }
+        let count_use = |uses: &mut Vec<usize>, value: ValueId| {
+            if let Some(count) = uses.get_mut(value.as_raw() as usize) {
+                *count += 1;
+            }
+        };
+        for block in &self.func.blocks {
+            match &block.terminator {
+                Some(Terminator::Br { args, .. }) => {
+                    for value in args {
+                        count_use(&mut uses, *value);
+                    }
+                }
+                Some(Terminator::CondBr {
+                    cond,
+                    then_args,
+                    else_args,
+                    ..
+                }) => {
+                    count_use(&mut uses, *cond);
+                    for value in then_args.iter().chain(else_args) {
+                        count_use(&mut uses, *value);
+                    }
+                }
+                Some(Terminator::Switch {
+                    scrutinee,
+                    cases,
+                    default_args,
+                    ..
+                }) => {
+                    count_use(&mut uses, *scrutinee);
+                    for value in default_args {
+                        count_use(&mut uses, *value);
+                    }
+                    for case in cases {
+                        for value in &case.args {
+                            count_use(&mut uses, *value);
+                        }
+                    }
+                }
+                Some(Terminator::Return { value: Some(value) }) => count_use(&mut uses, *value),
+                Some(Terminator::Throw { value }) => count_use(&mut uses, *value),
+                Some(Terminator::GeneratorSuspend {
+                    key,
+                    value,
+                    resume_args,
+                    ..
+                }) => {
+                    for operand in key.iter().chain(value.iter()) {
+                        count_use(&mut uses, *operand);
+                    }
+                    for operand in resume_args {
+                        count_use(&mut uses, *operand);
+                    }
+                }
+                Some(Terminator::Return { value: None })
+                | Some(Terminator::Fatal { .. })
+                | Some(Terminator::Unreachable)
+                | None => {}
+            }
+        }
+        let mut retype = Vec::new();
+        for inst in &self.func.instructions {
+            if inst.op != Op::Release {
+                continue;
+            }
+            let Some(source) = inst.operands.first().copied() else {
+                continue;
+            };
+            if inst.operands.len() != 1 {
+                continue;
+            }
+            if uses.get(source.as_raw() as usize).copied() != Some(1) {
+                continue;
+            }
+            let Some(value) = self.func.values.get(source.as_raw() as usize) else {
+                continue;
+            };
+            let ValueDef::Instruction { inst: source_inst, .. } = value.def else {
+                continue;
+            };
+            let Some(load) = self.func.instructions.get(source_inst.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(load.op, Op::LoadLocal | Op::LoadStaticLocal) {
+                continue;
+            }
+            let Some(Immediate::LocalSlot(slot)) = load.immediate else {
+                continue;
+            };
+            let Some(local) = self.func.locals.get(slot.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::StaticLocal) {
+                continue;
+            }
+            if !local_load_requires_owned_mixed_unbox(&local.php_type, &value.php_type) {
+                continue;
+            }
+            retype.push((source, source_inst, local.php_type.clone()));
+        }
+        for (value, load_inst, storage_type) in retype {
+            let ir_type = local_storage_ir_type(&storage_type);
+            let value_index = value.as_raw() as usize;
+            self.func.values[value_index].php_type = storage_type.clone();
+            self.func.values[value_index].ir_type = ir_type;
+            let load = &mut self.func.instructions[load_inst.as_raw() as usize];
+            load.result_php_type = storage_type;
+            load.result_type = ir_type;
+        }
+    }
+
     /// Returns the semantic role of a local slot.
     pub fn local_kind(&self, slot: LocalSlotId) -> LocalKind {
         self.func.locals[slot.as_raw() as usize].kind

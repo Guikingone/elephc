@@ -1385,6 +1385,11 @@ fn lower_body_into_function(
     // Likewise, erase provisional releases for concrete local loads unless a
     // later store widened their final frame slot to Mixed (issue #538).
     ctx.builder.prune_borrowed_local_load_release_ops();
+    // And retype the ones that SURVIVE but only ever named a slot's occupant: a
+    // later store can have widened the slot to Mixed after the release was
+    // lowered, and codegen would otherwise unbox+retain and hand the retain
+    // straight back, leaking the box that owns the value being overwritten.
+    ctx.builder.retype_stale_local_load_release_ops();
     // Publish the lowering-time ownership proof after provisional local-load
     // releases have been pruned, so codegen can consume EIR metadata instead of
     // maintaining a second producer allow-list (issue #595).
