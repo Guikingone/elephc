@@ -597,6 +597,45 @@ fn test_get_resource_type_returns_stream() {
     assert_eq!(out, "stream");
 }
 
+/// Verifies `get_debug_type()` names a resource the way PHP does, including after a close.
+///
+/// PHP never answers the bare word `resource` here: an open handle is `resource (stream)`
+/// and a closed one is `resource (closed)` — measured on PHP 8.5.6 for `fopen`/`fclose` and
+/// for `opendir`/`closedir` alike. The name is NOT the `get_resource_type()` label, which
+/// says `Unknown` for the same closed handle.
+#[test]
+fn test_get_debug_type_names_open_and_closed_resources() {
+    let out = compile_and_run(
+        r#"<?php
+echo get_debug_type(STDOUT) . "|";
+$f = fopen("php://memory", "r+");
+echo get_debug_type($f) . "|";
+fclose($f);
+echo get_debug_type($f);
+"#,
+    );
+    assert_eq!(out, "resource (stream)|resource (stream)|resource (closed)");
+}
+
+/// Verifies `get_debug_type()` names a resource reached through a boxed Mixed value.
+///
+/// An array element is a boxed cell, so this exercises the runtime tag-9 arm rather than
+/// the unboxed `Resource` one; both must reach the same runtime name resolver.
+#[test]
+fn test_get_debug_type_names_a_boxed_resource_element() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["r" => fopen("php://memory", "r+"), "n" => 1];
+echo get_debug_type($m["r"]) . "|";
+$d = opendir(".");
+echo get_debug_type($d) . "|";
+closedir($d);
+echo get_debug_type($d);
+"#,
+    );
+    assert_eq!(out, "resource (stream)|resource (stream)|resource (closed)");
+}
+
 /// Verifies compiled PHP output for get resource id matches display marker.
 #[test]
 fn test_get_resource_id_matches_display_marker() {

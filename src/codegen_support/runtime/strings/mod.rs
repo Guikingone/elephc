@@ -107,6 +107,7 @@ mod rtrim_mask;
 mod ltrim_mask;
 mod trim_mask;
 mod resource_to_string;
+mod resource_debug_type_name;
 mod resource_type_name;
 mod resource_write_stdout;
 mod parse_url;
@@ -305,6 +306,8 @@ pub use resource_to_string::emit_resource_to_string;
 /// Emit resource-to-string conversion.
 pub use resource_type_name::emit_resource_type_name;
 /// Emit the resource type-name resolver (`stream` when open, `Unknown` once closed).
+pub use resource_debug_type_name::emit_resource_debug_type_name;
+/// Emit the `get_debug_type()` resource-name resolver (`resource (stream)` / `resource (closed)`).
 pub use resource_write_stdout::emit_resource_write_stdout;
 /// Emit the PHP-compatible URL component scanner.
 pub use parse_url::emit_parse_url;

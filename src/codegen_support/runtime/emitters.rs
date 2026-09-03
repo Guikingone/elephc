@@ -36,6 +36,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_itoa(emitter);
     strings::emit_resource_to_string(emitter);
     strings::emit_resource_type_name(emitter);
+    strings::emit_resource_debug_type_name(emitter);
     strings::emit_resource_write_stdout(emitter);
     strings::emit_php_num_scan(emitter);
     strings::emit_ftoa(emitter);

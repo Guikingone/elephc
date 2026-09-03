@@ -117,6 +117,14 @@ pub(crate) fn lower_get_debug_type(
         emit_iterable_type_name(ctx, value, IterableNaming::DebugType)?;
         return store_if_result(ctx, inst);
     }
+    // A resource has no compile-time name: PHP prints its DISPLAY type, which an explicit
+    // close rewrites in place (`resource (stream)` -> `resource (closed)`), so the name has
+    // to be read off the payload at runtime like `get_resource_type()` already does.
+    if matches!(ty, PhpType::Resource(_)) {
+        ctx.load_value_to_result(value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_resource_debug_type_name");
+        return store_if_result(ctx, inst);
+    }
     let Some(type_name) = static_get_debug_type_name(&ty) else {
         return Err(CodegenIrError::unsupported(format!(
             "get_debug_type for PHP type {:?}",
@@ -233,13 +241,37 @@ fn emit_mixed_get_debug_type(
     emit_mixed_gettype_case(ctx, &boolean_case, b"bool", &done);
     emit_mixed_gettype_case(ctx, &null_case, b"null", &done);
     emit_mixed_gettype_case(ctx, &array_case, b"array", &done);
-    emit_mixed_gettype_case(ctx, &resource_case, b"resource", &done);
+    emit_mixed_resource_debug_type_case(ctx, &resource_case, &done);
 
     ctx.emitter.label(&object_case);
     super::types::emit_mixed_object_class_name_from_value(ctx, value, "get_class")?;
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Emits the tag-9 arm of `get_debug_type()` on a boxed Mixed: names the resource by its
+/// runtime close state instead of a literal.
+///
+/// The arm is jumped to straight from the tag dispatch, so the unboxed payload low word is
+/// still live in the register `__rt_mixed_unbox` left it in; only that word has to move into
+/// the helper's input register (`x0` / `rax`).
+fn emit_mixed_resource_debug_type_case(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    done: &str,
+) {
+    ctx.emitter.label(label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed resource payload into the name resolver's input
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed resource payload into the name resolver's input
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_debug_type_name");
+    abi::emit_jump(ctx.emitter, done);
 }
 
 /// Returns PHP's `get_debug_type()` spelling for concrete statically known non-object types.
@@ -254,7 +286,10 @@ fn static_get_debug_type_name(ty: &PhpType) -> Option<&'static [u8]> {
             Some(b"array".as_slice())
         }
         PhpType::Callable => Some(b"Closure".as_slice()),
-        PhpType::Resource(_) => Some(b"resource".as_slice()),
+        // `Resource` is deliberately absent: its name depends on the runtime close state,
+        // so `lower_get_debug_type` routes it through `__rt_resource_debug_type_name`
+        // before reaching here. Answering a literal would print `resource`, a name PHP
+        // never gives a resource.
         _ => None,
     }
 }

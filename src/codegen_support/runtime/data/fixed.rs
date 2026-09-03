@@ -1322,6 +1322,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     out.push_str(".globl _resource_type_stream\n_resource_type_stream:\n    .ascii \"stream\"\n");
     out.push_str(".globl _resource_type_unknown\n_resource_type_unknown:\n    .ascii \"Unknown\"\n");
+    // `get_debug_type()` names a resource by its DISPLAY type, not by the `get_resource_type()`
+    // label above: PHP 8.5.6 answers "resource (stream)" while the handle is open and
+    // "resource (closed)" once it is closed, where `get_resource_type()` answers "Unknown".
+    out.push_str(".globl _resource_debug_type_stream\n_resource_debug_type_stream:\n    .ascii \"resource (stream)\"\n");
+    out.push_str(".globl _resource_debug_type_closed\n_resource_debug_type_closed:\n    .ascii \"resource (closed)\"\n");
     out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
     out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
     out.push_str(".globl _fmt_star_f\n_fmt_star_f:\n    .asciz \"%.*f\"\n");
