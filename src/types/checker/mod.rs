@@ -419,6 +419,26 @@ pub(crate) struct Checker {
     /// be authoritative rather than merely initial. Per-body, like every other field in
     /// [`SavedLocalBindingScope`].
     pub mixed_storage_locals: HashSet<String>,
+    /// Names of the CURRENT body's locals whose frame slot became boxed `Mixed` because an
+    /// assignment RETYPED them, as opposed to the syntactic pre-scan's `mixed_storage_locals`.
+    ///
+    /// The two sets exist for the same reason and are consulted differently. A pre-scan mark makes
+    /// `Mixed` the only type the environment may hold for the name, so nothing can narrow it away.
+    /// A retype cannot do that: `$e = $this; while ($e = $e->getP())` binds `$e` to `N|null`, whose
+    /// `codegen_repr` is the boxed cell the slot really holds, and the environment must keep that
+    /// PHP type — it is what reports `$e->noSuchMethod()`. What flow narrowing then does to it is
+    /// correct as a PHP type and WRONG as a representation: the loop body narrows `$e` to `N`,
+    /// whose repr is a raw object pointer, while the slot still holds a cell.
+    ///
+    /// Nothing that only reads the value cares. What cares is a write that STORES the value into a
+    /// container, because the container's element type is a representation and the lowering reads
+    /// the slot: `$out[] = $e` typed the element `N` in the checker and stored a boxed cell,
+    /// leaving the callee returning `array<mixed>` while every CALLER was compiled against
+    /// `array<N>` (see `Checker::stored_element_type`).
+    ///
+    /// Per-body, like every other field in [`SavedLocalBindingScope`]: a name boxed in the caller
+    /// says nothing about a same-named local in the callee.
+    pub retyped_boxed_storage_locals: HashSet<String>,
     /// Every statement-form assignment to a mixed-storage local, as span -> the SET of local names
     /// boxed at that position, so EIR lowering can declare the slot boxed BEFORE the first store
     /// instead of inferring it from the first stored value. Cumulative across bodies, and keyed
@@ -484,6 +504,7 @@ pub(crate) struct SavedLocalBindingScope {
     statics: HashSet<String>,
     typed: HashSet<String>,
     mixed_storage: HashSet<String>,
+    retyped_boxed_storage: HashSet<String>,
     contains_eval: bool,
 }
 
@@ -706,6 +727,10 @@ impl Checker {
             // nothing about a same-named local in the callee, and leaking the set inward would
             // box a callee local the pre-scan never marked.
             mixed_storage: std::mem::take(&mut self.mixed_storage_locals),
+            // Boxed by a RETYPE in the enclosing body, which describes that frame's slot and no
+            // other — leaking it inward would type a callee's container element `Mixed` on the
+            // strength of a caller local that merely shares the name.
+            retyped_boxed_storage: std::mem::take(&mut self.retyped_boxed_storage_locals),
             contains_eval: self.body_contains_eval,
         };
         self.local_conditional_depth = 0;
@@ -729,7 +754,42 @@ impl Checker {
         self.static_local_names = saved.statics;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
+        self.retyped_boxed_storage_locals = saved.retyped_boxed_storage;
         self.body_contains_eval = saved.contains_eval;
+    }
+
+    /// Returns the element type an array element WRITE contributes when it stores `value`.
+    ///
+    /// `inferred` is what the value's expression means as a PHP type; the answer is what its slot
+    /// HOLDS. The two differ for exactly one shape — a plain read of a local whose slot a retype
+    /// boxed (`retyped_boxed_storage_locals`) and which flow narrowing has since re-typed to
+    /// something with a concrete representation. `$out[] = $e` inside
+    /// `$e = $this; while ($e = $e->getP()) { … }` is that shape: `$e` is honestly `N` there, and
+    /// the value the store moves is honestly a boxed cell.
+    ///
+    /// The element type of an array is a REPRESENTATION — it decides the slot width, the header's
+    /// value-type stamp and which runtime helper reads the payload — so it has to be answered from
+    /// the storage. Answering it from the narrowed type left the checker's array type `array<N>`
+    /// while the EIR lowering, which reads the same slot and cannot see the narrowing, ran
+    /// `__rt_array_to_mixed` and returned `array<mixed>`. That disagreement does not stay inside
+    /// the body: the method's inferred return type is what every CALLER is compiled against, so a
+    /// caller read raw object pointers out of an array of cells. `foreach` faulted; `array_pop`,
+    /// `array_shift`, `array_map`, `array_filter`, `array_merge`, a by-reference `foreach` and an
+    /// append followed by a read all answered SILENTLY wrong (see the `locals_retype` fixtures).
+    ///
+    /// Only ever widens, and only to `Mixed` — the one representation that can hold anything —
+    /// which is why it cannot make a correct program wrong: an array whose elements really are
+    /// cells is typed as holding cells.
+    pub(crate) fn stored_element_type(&self, value: &Expr, inferred: PhpType) -> PhpType {
+        let ExprKind::Variable(name) = &value.kind else {
+            return inferred;
+        };
+        if inferred.codegen_repr() != PhpType::Mixed
+            && self.retyped_boxed_storage_locals.contains(name.as_str())
+        {
+            return PhpType::Mixed;
+        }
+        inferred
     }
 
     /// Drops every per-name fact the checker carries for a local whose binding just ended.
@@ -739,6 +799,10 @@ impl Checker {
     /// captures, or reflected class of the binding that is gone — that is how a stale
     /// `$f()` signature would survive an `unset($f)`.
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
+        // A kill ABANDONS the slot, so whatever representation a retype had given it ends with the
+        // binding. Left standing, the mark would keep typing container writes from the name
+        // `Mixed` after `unset($e); $e = 5;` had put a raw integer back in a fresh slot.
+        self.retyped_boxed_storage_locals.remove(name);
         self.closure_return_types.remove(name);
         self.callable_sigs.remove(name);
         self.callable_captures.remove(name);

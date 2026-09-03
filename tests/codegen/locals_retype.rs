@@ -3396,6 +3396,191 @@ fn test_widened_by_ref_param_lent_to_another_matches_its_hand_written_twin() {
     );
 }
 
+/// Every reader a CALLER can apply to an array a retyped local filled agrees with `php -n`.
+///
+/// `$out = []; $e = $this; while ($e = $e->getP()) { $out[] = $e; }` is
+/// `Symfony\Component\ErrorHandler\Exception\FlattenException::getAllPrevious()` verbatim. The
+/// loop header retypes `$e` from `N` to `N|null`, which boxes its frame slot; the checker then
+/// narrows `$e` back to `N` for the loop body, which is right as a PHP type and wrong as a
+/// REPRESENTATION. Typing the pushed element from the narrowed view left the method returning
+/// `array<mixed>` — EIR lowering runs `__rt_array_to_mixed` on `$out`, and reading the emitted IR
+/// is how that was confirmed — while the inferred return type every CALLER compiles against still
+/// said `array<N>`.
+///
+/// The fixture is every reader, not one, because that is what decided the level of the fix.
+/// Measured against `php -n` on the tree before it, with the per-reader `foreach` dispatch that
+/// preceded it already in place: `foreach` (value and key/value), `count`, `$r[0]->label`,
+/// `array_search`, `end`/`reset`, `array_reverse`, `json_encode`, `print_r`, an `array`-typed
+/// parameter and an `array` property were already right, and SEVEN were not — a by-reference
+/// `foreach`, `array_pop`, `array_shift`, `array_map`, `array_filter`, `array_merge` and an
+/// append-then-read all read raw object pointers out of an array of cells. Six of the seven
+/// printed empty labels, `array_filter` answered `2` where PHP answers `1`, and none of them
+/// crashed: the class of failure was SILENT. Seven readers is what says the fix belongs at the
+/// return boundary rather than in each reader.
+///
+/// `array_merge([$this], $r)` is `FlattenException::toArray()`'s exact shape and the one this
+/// fixture would most easily lose: `2c662c5e0c` had just made that call COMPILE, which turned a
+/// refusal into a silently empty label.
+///
+/// Heap: 8 blocks / 416 bytes, attributed rather than asserted clean. The same `?N $p` chain with
+/// no accessor call at all leaves 7 blocks / 368 bytes, so the one extra block is the returned
+/// array itself, still live at exit.
+#[test]
+fn test_a_retyped_locals_boxed_slot_is_visible_in_the_arrays_it_fills() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class N {
+    public string $label;
+    public ?N $p;
+    public function __construct(string $label, ?N $p) { $this->label = $label; $this->p = $p; }
+    public function getP(): ?N { return $this->p; }
+    public function getAllPrevious(): array {
+        $out = [];
+        $e = $this;
+        while ($e = $e->getP()) { $out[] = $e; }
+        return $out;
+    }
+}
+$a = new N("a" . $argc, null);
+$b = new N("b", $a);
+$c = new N("c", $b);
+$r = $c->getAllPrevious();
+$parts = [];
+foreach ($r as $n) { $parts[] = $n->label; }
+echo "foreach=", implode(",", $parts), "\n";
+foreach ($r as $k => $n) { echo "kv=", $k, ":", $n->label, "\n"; }
+echo "count=", count($r), "\n";
+echo "index=", $r[0]->label, ",", $r[1]->label, "\n";
+echo "search=", var_export(array_search($a, $r, true), true), "\n";
+$labels = array_map(function (N $x): string { return $x->label; }, $r);
+echo "map=", implode(",", $labels), "\n";
+$kept = array_filter($r, function (N $x): bool { return $x->label !== "b"; });
+echo "filter=", count($kept), ":", implode(",", array_map(function (N $x): string { return $x->label; }, $kept)), "\n";
+$all = array_merge([$c], $r);
+$m = [];
+foreach ($all as $x) { $m[] = $x->label; }
+echo "merge=", implode(",", $m), "\n";
+$rev = array_reverse($r);
+$rv = [];
+foreach ($rev as $x) { $rv[] = $x->label; }
+echo "reverse=", implode(",", $rv), "\n";
+echo "json=", json_encode($r), "\n";
+$copy = $r;
+$popped = array_pop($copy);
+echo "pop=", $popped->label, ":", count($copy), "\n";
+$copy2 = $r;
+$shifted = array_shift($copy2);
+echo "shift=", $shifted->label, ":", count($copy2), "\n";
+$last = end($r);
+$first = reset($r);
+echo "ends=", $last->label, ",", $first->label, "\n";
+$appended = $r;
+$appended[] = $c;
+$ap = [];
+foreach ($appended as $x) { $ap[] = $x->label; }
+echo "append=", implode(",", $ap), "\n";
+foreach ($r as &$n) { echo "byref=", $n->label, "\n"; }
+unset($n);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "foreach=b,a1\n\
+         kv=0:b\n\
+         kv=1:a1\n\
+         count=2\n\
+         index=b,a1\n\
+         search=1\n\
+         map=b,a1\n\
+         filter=1:a1\n\
+         merge=c,b,a1\n\
+         reverse=a1,b\n\
+         json=[{\"label\":\"b\",\"p\":{\"label\":\"a1\",\"p\":null}},{\"label\":\"a1\",\"p\":null}]\n\
+         pop=a1:1\n\
+         shift=b:1\n\
+         ends=a1,b\n\
+         append=b,a1,c\n\
+         byref=b\n\
+         byref=a1\n"
+    );
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=8 live_bytes=416"),
+        "expected the recorded object-chain residual plus the live result array, got: {}",
+        out.stderr
+    );
+}
+
+/// The same rule for an INDEXED element write, which is the other statement form that stores a
+/// value into a local array.
+///
+/// `$out[$i] = $e` reaches a different checker entry point from `$out[] = $e`
+/// (`check_array_assign` rather than `check_array_push`) and had to be corrected there too, or the
+/// FlattenException shape written with an explicit cursor would keep the old, silent answer. The
+/// readers here are the two that failed most loudly in the append form: a closure typed `N` and
+/// `array_pop`.
+#[test]
+fn test_an_indexed_element_write_from_a_retyped_local_boxes_the_array_too() {
+    let out = compile_and_run(
+        r#"<?php
+class N {
+    public string $label;
+    public ?N $p;
+    public function __construct(string $label, ?N $p) { $this->label = $label; $this->p = $p; }
+    public function getP(): ?N { return $this->p; }
+    public function indexedPrevious(): array {
+        $out = [];
+        $i = 0;
+        $e = $this;
+        while ($e = $e->getP()) { $out[$i] = $e; $i = $i + 1; }
+        return $out;
+    }
+}
+$a = new N("a" . $argc, null);
+$b = new N("b", $a);
+$c = new N("c", $b);
+$r = $c->indexedPrevious();
+echo "count=", count($r), "\n";
+$labels = array_map(function (N $x): string { return $x->label; }, $r);
+echo "map=", implode(",", $labels), "\n";
+$popped = array_pop($r);
+echo "pop=", $popped->label, "\n";
+"#,
+    );
+    assert_eq!(out, "count=2\nmap=b,a1\npop=a1\n");
+}
+
+/// Control: a loop local that keeps ONE representation leaves its array packed.
+///
+/// This is what fails if the rule ever degrades to "a value stored into an array is boxed". `$i`
+/// is an `int` on every path, so nothing retypes it, the array stays `array<int>`, and the heap
+/// says so: ONE live block at exit — the array — where boxed elements would leave FOUR, one cell
+/// per element. That block count is the observable half; the values are the other.
+#[test]
+fn test_a_loop_local_that_keeps_its_type_leaves_its_array_packed() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function evens(int $n): array {
+    $out = [];
+    $i = 0;
+    while ($i < $n) { $out[] = $i * 2; $i = $i + 1; }
+    return $out;
+}
+$r = evens($argc + 2);
+echo implode(",", $r), "|", count($r), "|", gettype($r[0]);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0,2,4|3|integer");
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=1 live_bytes=48"),
+        "expected ONE live block — a packed int array, not one cell per element: {}",
+        out.stderr
+    );
+}
+
 /// Control: a by-reference parameter whose body keeps the declaration's representation is NOT
 /// widened, and a caller that never sees a wider value keeps reading it concretely.
 ///

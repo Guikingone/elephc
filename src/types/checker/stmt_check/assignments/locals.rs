@@ -21,6 +21,24 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
+/// Records — or retracts — the fact that `name`'s frame slot is a boxed `Mixed` cell because this
+/// assignment retyped it.
+///
+/// Set-or-clear, because the arm that calls this ABANDONS the old slot and creates one for `ty`:
+/// `$a = 1; $a = "s"; $a = 2;` ends on a raw integer slot, and a name left in the set would type
+/// every later container write from it `Mixed` for no reason. The predicate is `codegen_repr`, not
+/// the type: `?int` retypes an `int` without leaving tagged-scalar storage, and only a slot that
+/// really holds a cell may claim to.
+fn record_retyped_boxed_storage(checker: &mut Checker, name: &str, ty: &PhpType) {
+    if ty.codegen_repr() == PhpType::Mixed {
+        checker
+            .retyped_boxed_storage_locals
+            .insert(name.to_string());
+    } else {
+        checker.retyped_boxed_storage_locals.remove(name);
+    }
+}
+
 /// Binds an otherwise-unbound local as `Mixed` after its assignment fails.
 ///
 /// Error recovery must preserve a valid earlier binding, while ensuring a name
@@ -1150,6 +1168,10 @@ fn merge_local_assignment_type(
                 // The fresh binding is created here, at depth 0 — pin that explicitly so a
                 // later kill or retype of the same name is judged against THIS binding.
                 checker.local_binding_depth.insert(name.to_string(), 0);
+                // This arm ABANDONS the old slot, so the name's storage is exactly the new type's
+                // representation — set-or-clear rather than accumulate, or a name re-bound back to
+                // a concrete type would keep answering "boxed" for the rest of the body.
+                record_retyped_boxed_storage(checker, name, ty);
                 // Unlike the `unset` kill, the per-name callable/reflection tables are NOT
                 // cleared here. The old binding's metadata is already gone: `check_assign`
                 // ran `update_callable_assignment_metadata`,
@@ -1197,6 +1219,13 @@ fn merge_local_assignment_type(
                 // deliberately left alone: no binding ended here, so nothing downstream may
                 // abandon the slot or judge a later decision against a binding this arm did not
                 // create.
+                //
+                // The slot IS boxed, though, and unconditionally: this arm is only reached
+                // because `merged_assignment_type` refused, so the kept slot has to hold two
+                // representations at once and `store_local` joins it to a boxed cell.
+                checker
+                    .retyped_boxed_storage_locals
+                    .insert(name.to_string());
                 env.insert(name.to_string(), ty.clone());
                 return Ok(());
             }

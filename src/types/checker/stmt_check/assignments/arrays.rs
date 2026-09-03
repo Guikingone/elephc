@@ -45,6 +45,12 @@ pub(super) fn check_array_assign(
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
+    // Same storage-over-narrowing rule as `check_array_push`: an indexed element write moves the
+    // slot's contents, so the ELEMENT TYPE it contributes has to describe the slot. Only the array
+    // element merges below read it — the string-offset, `buffer<T>` and `ArrayAccess` arms are
+    // acceptance CHECKS against a declared element type, and they must keep judging the value the
+    // program actually wrote rather than the representation it is carried in.
+    let element_val_ty = checker.stored_element_type(value, val_ty.clone());
     if arr_ty == PhpType::Str {
         if !valid_string_offset_assignment_index(index, &idx_ty) {
             return Err(CompileError::new(
@@ -79,12 +85,12 @@ pub(super) fn check_array_assign(
                 merge_array_key_types(PhpType::Int, normalized_idx_ty)
             };
             let merged_value = if matches!(elem_ty.as_ref(), PhpType::Never) {
-                val_ty
-            } else if elem_ty.as_ref() == &val_ty {
+                element_val_ty.clone()
+            } else if elem_ty.as_ref() == &element_val_ty {
                 *elem_ty.clone()
             } else {
                 checker
-                    .merge_array_element_type(elem_ty, &val_ty)
+                    .merge_array_element_type(elem_ty, &element_val_ty)
                     .unwrap_or(PhpType::Mixed)
             };
             env.insert(
@@ -99,9 +105,9 @@ pub(super) fn check_array_assign(
                 array.to_string(),
                 PhpType::Array(Box::new(PhpType::Mixed)),
             );
-        } else if **elem_ty != val_ty {
+        } else if **elem_ty != element_val_ty {
             let merged_ty = checker
-                .merge_array_element_type(elem_ty, &val_ty)
+                .merge_array_element_type(elem_ty, &element_val_ty)
                 .unwrap_or(PhpType::Mixed);
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
@@ -114,7 +120,7 @@ pub(super) fn check_array_assign(
             *key.clone(),
             normalized_array_key_type(index, idx_ty),
         );
-        let merged_value = if **existing_value == val_ty {
+        let merged_value = if **existing_value == element_val_ty {
             *existing_value.clone()
         } else {
             PhpType::Mixed
@@ -287,10 +293,15 @@ pub(super) fn check_array_push(
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
+    // The element type is the value's STORAGE, not its narrowed PHP type: a push moves whatever
+    // the slot holds, and the array's element type is what decides how the payload is read back
+    // — here and, through the body's inferred return type, in every caller. The `ArrayAccess`
+    // arm below keeps the inferred type: it judges the receiver, not an element representation.
+    let element_val_ty = checker.stored_element_type(value, val_ty.clone());
     if let PhpType::Array(elem_ty) = &arr_ty {
-        if **elem_ty != val_ty {
+        if **elem_ty != element_val_ty {
             let merged_ty = checker
-                .merge_array_element_type(elem_ty, &val_ty)
+                .merge_array_element_type(elem_ty, &element_val_ty)
                 .unwrap_or(PhpType::Mixed);
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
@@ -300,7 +311,7 @@ pub(super) fn check_array_push(
     } = &arr_ty
     {
         let merged_key = merge_array_key_types(*key.clone(), PhpType::Int);
-        let merged_value = if **existing_value == val_ty {
+        let merged_value = if **existing_value == element_val_ty {
             *existing_value.clone()
         } else {
             PhpType::Mixed
