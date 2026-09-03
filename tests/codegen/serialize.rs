@@ -1298,3 +1298,69 @@ echo get_class($value), "|", serialize($value);
         "__PHP_Incomplete_Class|O:7:\"Missing\":1:{s:4:\"self\";r:1;}",
     );
 }
+
+/// Verifies a `?int` / `int|null` property survives a `serialize()` → `unserialize()` round trip.
+///
+/// Such a slot is an inline `{payload, tag}` pair: writing only the payload back (the plain
+/// typed-scalar hydration arm) would leave the previous tag behind, so a `N;` on the wire read
+/// back as the integer `PHP_INT_MAX - 1`. The re-serialization proves the tag word, not just
+/// the payload, was restored.
+#[test]
+fn test_unserialize_restores_a_nullable_int_property_payload_and_tag() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public ?int $n = null; public ?int $v = 5; }
+$a = new A();
+$r = unserialize(serialize($a));
+var_dump($r);
+echo serialize($r), "\n";
+echo json_encode($r), "\n";
+var_dump($r == $a);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(A)#2 (2) {\n  [\"n\"]=>\n  NULL\n  [\"v\"]=>\n  int(5)\n}\n",
+            "O:1:\"A\":2:{s:1:\"n\";N;s:1:\"v\";i:5;}\n",
+            "{\"n\":null,\"v\":5}\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+/// Verifies `unserialize()` hydrates a NULL into a boxed-Mixed property slot as a boxed cell.
+///
+/// The hydration path used to write the bare in-band `NULL_SENTINEL` into the slot instead — a
+/// shape no other producer of a Mixed property slot emits, since both the constructor's null
+/// default and `$o->p = null` store a cell. Every unguarded reader (`var_dump`, `===`, `isset`,
+/// the `(array)` cast, `json_encode`) dereferences that slot's low word on sight, so the
+/// sentinel was a segfault rather than a null; it also leaked the parsed box, which the caller
+/// transfers unconditionally.
+#[test]
+fn test_unserialize_hydrates_a_null_mixed_property_as_a_boxed_cell() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public $x = 1; public ?float $f = 1.5; }
+$o = new C();
+$o->x = null;
+$o->f = null;
+$r = unserialize(serialize($o));
+var_dump($r->x === null, $r->f === null, isset($r->x), isset($r->f), is_null($r->x));
+var_dump($r);
+echo json_encode($r), "\n";
+echo serialize($r), "\n";
+var_dump((array) $r);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\n",
+            "object(C)#2 (2) {\n  [\"x\"]=>\n  NULL\n  [\"f\"]=>\n  NULL\n}\n",
+            "{\"x\":null,\"f\":null}\n",
+            "O:1:\"C\":2:{s:1:\"x\";N;s:1:\"f\";N;}\n",
+            "array(2) {\n  [\"x\"]=>\n  NULL\n  [\"f\"]=>\n  NULL\n}\n",
+        )
+    );
+}

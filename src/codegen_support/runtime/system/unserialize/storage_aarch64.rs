@@ -8,6 +8,7 @@
 //! - Parsed Mixed ownership is transferred into object slots or rebuilt indexed arrays without extra retains.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::sentinels::PROP_DESC_TAG_TAGGED_SCALAR;
 
 /// Emits AArch64 object-property storage and parsed-hash conversion helpers.
 pub(super) fn emit_object_storage(emitter: &mut Emitter) {
@@ -49,6 +50,8 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_obj_store_prop_str");                        // store pointer and length
     emitter.instruction("cmp x7, #4");                                          // is this an indexed-array slot?
     emitter.instruction("b.eq __rt_obj_store_prop_arr");                        // convert the parsed hash to an indexed array
+    emitter.instruction(&format!("cmp x7, #{}", PROP_DESC_TAG_TAGGED_SCALAR));  // is this an inline tagged-scalar slot?
+    emitter.instruction("b.eq __rt_obj_store_prop_tagged");                     // rebuild both the payload and the slot's own runtime tag
     emitter.instruction("ldr x9, [x3, #8]");                                    // typed scalar/object/hash: unbox the low word
     emitter.instruction("str x9, [x8]");                                        // store it inline in the slot
     emitter.instruction("ret");                                                 // property stored
@@ -65,16 +68,30 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x3, #16]");                                   // string length from the box
     emitter.instruction("str x9, [x8, #8]");                                    // store the string length
     emitter.instruction("ret");                                                 // property stored
-    emitter.label("__rt_obj_store_prop_mixed");
+    // A `?int` / `int|null` slot is two inline words: the payload, then the runtime value
+    // tag that says which of int/null the payload is. Writing only the low word (the plain
+    // typed-scalar arm above) would leave a stale tag behind and make `n:null` read back as
+    // the integer `NULL_SENTINEL`, so the tag word is restored from the parsed box too. The
+    // canonical null payload is the in-band sentinel, matching `emit_tagged_scalar_null`.
+    emitter.label("__rt_obj_store_prop_tagged");
     emitter.instruction("ldr x9, [x3]");                                        // boxed value tag
-    emitter.instruction("cmp x9, #8");                                          // is the boxed value null?
-    emitter.instruction("b.eq __rt_obj_store_prop_mixed_null");                 // store the null sentinel
-    emitter.instruction("str x3, [x8]");                                        // store the boxed Mixed cell pointer
+    emitter.instruction("ldr x10, [x3, #8]");                                   // boxed payload low word
+    emitter.instruction("cmp x9, #8");                                          // is the parsed value PHP null?
+    emitter.instruction("b.ne __rt_obj_store_prop_tagged_store");               // a non-null payload is stored exactly as parsed
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", crate::codegen_support::NULL_SENTINEL);
+    emitter.label("__rt_obj_store_prop_tagged_store");
+    emitter.instruction("str x10, [x8]");                                       // store the tagged-scalar payload word
+    emitter.instruction("str x9, [x8, #8]");                                    // store the tagged-scalar runtime tag word
     emitter.instruction("ret");                                                 // property stored
-    emitter.label("__rt_obj_store_prop_mixed_null");
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x9", crate::codegen_support::NULL_SENTINEL);
-    emitter.instruction("str x9, [x8]");                                        // store the in-band null sentinel
-    emitter.instruction("str xzr, [x8, #8]");                                   // clear the high word
+    // PHP null goes into the slot as a boxed cell like every other value. Writing the bare
+    // in-band `NULL_SENTINEL` instead would be a shape NO other producer of a Mixed property
+    // slot emits — the constructor's null default and `$o->p = null` both store a cell — and
+    // the unguarded readers (`var_dump`, `===`, `isset`, the `(array)` cast) dereference the
+    // slot's low word on sight, so a sentinel there is a segfault, not a null. It also leaks:
+    // the caller transfers the parsed box unconditionally and never frees it.
+    emitter.label("__rt_obj_store_prop_mixed");
+    emitter.instruction("str x3, [x8]");                                        // store the parsed boxed Mixed cell, PHP null included
+    emitter.instruction("str xzr, [x8, #8]");                                   // an unserialized property is initialized: clear any uninitialized marker
     emitter.instruction("ret");                                                 // property stored
     emitter.label("__rt_obj_store_prop_next");
     emitter.instruction("add x13, x13, #1");                                    // advance to the next row

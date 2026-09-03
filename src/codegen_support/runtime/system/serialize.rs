@@ -20,7 +20,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::codegen_support::sentinels::{emit_branch_if_null_container, emit_resolve_prop_desc_tag};
 
 /// Emits `__rt_serialize_value`, the tag-dispatching serializer, and the
 /// `__rt_serialize_mixed` wrapper that unpacks a boxed Mixed cell first.
@@ -706,6 +706,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x7, x7, x9");                                      // address of the property slot
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
+    emit_resolve_prop_desc_tag(emitter, "x10", "x2", "x9");
     emitter.instruction("mov x0, x10");                                         // value tag
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload the property cursor
@@ -793,6 +794,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x7, x7, x9");                                      // address of the property slot
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
+    emit_resolve_prop_desc_tag(emitter, "x10", "x2", "x9");
     emitter.instruction("mov x0, x10");                                         // value tag
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
     emitter.instruction("b __rt_serialize_named_prop_done");                    // stop after the matching property
@@ -1581,6 +1583,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, r8");                                         // address of the property slot
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
+    emit_resolve_prop_desc_tag(emitter, "r9", "rdx", "rax");
     emitter.instruction("mov rdi, r9");                                         // value tag
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the property cursor
@@ -1671,6 +1674,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, r8");                                         // address of the property slot
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
+    emit_resolve_prop_desc_tag(emitter, "r9", "rdx", "rax");
     emitter.instruction("mov rdi, r9");                                         // value tag
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
     emitter.instruction("jmp __rt_serialize_named_prop_done");                  // stop after the matching property

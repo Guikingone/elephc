@@ -11,6 +11,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use crate::codegen_support::sentinels::emit_resolve_prop_desc_tag;
 
 /// __rt_json_encode_object: encode a PHP object instance as JSON.
 ///
@@ -268,6 +269,9 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     // for the high word to avoid clobbering the caller's x19.
     emitter.instruction("ldr x14, [x9]");                                       // load the property low payload word
     emitter.instruction("ldr x15, [x9, #8]");                                   // load the property high payload word without clobbering caller x19
+    emitter.instruction("ldr x17, [sp, #56]");                                  // reload the descriptor tag before it is dispatched on
+    emit_resolve_prop_desc_tag(emitter, "x17", "x15", "x9");
+    emitter.instruction("str x17, [sp, #56]");                                  // save the tag the slot actually carries back over the descriptor tag
     emitter.instruction("str x14, [sp, #64]");                                  // save the property low payload across the encoder dispatch
     emitter.instruction("str x15, [sp, #72]");                                  // save the property high payload across the encoder dispatch
 
@@ -630,6 +634,9 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, rcx");                                        // resolve the absolute address of the property slot
     emitter.instruction("mov rdx, QWORD PTR [rax]");                            // load the property low payload word
     emitter.instruction("mov rsi, QWORD PTR [rax + 8]");                        // load the property high payload word
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the descriptor tag before it is dispatched on
+    emit_resolve_prop_desc_tag(emitter, "r9", "rsi", "rcx");
+    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // save the tag the slot actually carries back over the descriptor tag
     emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // save the property low payload across the encoder dispatch
     emitter.instruction("mov QWORD PTR [rbp - 80], rsi");                       // save the property high payload across the encoder dispatch
 

@@ -81,6 +81,56 @@ pub(crate) const TAGGED_SCALAR_TAG_NULL: i64 = 8;
 /// This is an internal array-storage tag, not a boxed Mixed runtime value tag.
 pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 
+/// Property-descriptor tag meaning "this slot is an inline `{payload, tag}` tagged scalar".
+///
+/// The per-class descriptor tables (`_class_serprop_*`, `_class_vd_desc_*`,
+/// `_class_prop_desc_*`, `_class_json_desc_*`) normally carry the property's STATIC runtime
+/// value tag, because a declared type pins one shape for the slot's whole life. A
+/// `PhpType::TaggedScalar` property (`?int`, `int|null`) is the one declared type that does
+/// not: its slot carries the payload at `offset` and its OWN runtime value tag — 0 for int,
+/// 8 for null — at `offset + 8`. There is therefore no single static tag that describes it,
+/// and every value it must be one of the reserved tags 0..=10 could name, so the descriptor
+/// gets this out-of-band marker instead. It never reaches a value consumer: each descriptor
+/// reader folds it away with `emit_resolve_prop_desc_tag` the moment the row and the slot
+/// have both been loaded.
+pub(crate) const PROP_DESC_TAG_TAGGED_SCALAR: i64 = 11;
+
+/// Folds `PROP_DESC_TAG_TAGGED_SCALAR` out of a just-loaded property descriptor row.
+///
+/// `tag_reg` holds the descriptor row's tag and `hi_reg` the slot's high word. When the row
+/// marks an inline tagged scalar, the slot's high word IS the runtime value tag, so it moves
+/// into `tag_reg` and `hi_reg` is cleared — leaving exactly the `(tag, lo, hi)` triple a
+/// plain slot of that runtime type would have produced. Any other tag passes through
+/// untouched, so a reader can call this unconditionally right after loading the row.
+///
+/// Branch-free on purpose: these readers sit inside descriptor walk loops whose labels are
+/// global (one runtime emission per program), so a conditional would need a fresh unique
+/// label per call site. `scratch_reg` is clobbered on x86_64 only; AArch64 uses `xzr`.
+///
+/// MUST run AFTER the caller's `UNINITIALIZED_TYPED_PROPERTY_SENTINEL` check, which reads
+/// the same high word: an uninitialized tagged scalar carries that sentinel in its tag word,
+/// and folding first would hide it behind a nonsense runtime tag.
+pub(crate) fn emit_resolve_prop_desc_tag(
+    emitter: &mut Emitter,
+    tag_reg: &str,
+    hi_reg: &str,
+    scratch_reg: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, PROP_DESC_TAG_TAGGED_SCALAR)); // does this descriptor row describe an inline tagged-scalar slot?
+            emitter.instruction(&format!("csel {}, {}, {}, eq", tag_reg, hi_reg, tag_reg)); // a tagged scalar carries its own runtime value tag in the slot's high word
+            emitter.instruction(&format!("csel {}, xzr, {}, eq", hi_reg, hi_reg)); // and no second payload word once that tag has been consumed
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, PROP_DESC_TAG_TAGGED_SCALAR)); // does this descriptor row describe an inline tagged-scalar slot?
+            emitter.instruction(&format!("mov {}, 0", scratch_reg));            // materialize the cleared high word without disturbing the comparison flags
+            emitter.instruction(&format!("cmove {}, {}", tag_reg, hi_reg));     // a tagged scalar carries its own runtime value tag in the slot's high word
+            emitter.instruction(&format!("cmove {}, {}", hi_reg, scratch_reg)); // and no second payload word once that tag has been consumed
+        }
+    }
+}
+
 /// Heap kind stamped on a request-lifetime global reference cell.
 ///
 /// The uniform dispatcher intentionally treats this private kind as opaque; the owning global

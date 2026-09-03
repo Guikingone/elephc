@@ -64,6 +64,7 @@
 //!   make no calls at all and touch caller-saved scratch only.
 
 use crate::codegen_support::abi;
+use crate::codegen_support::sentinels::emit_resolve_prop_desc_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Capacity of the `_vd_seen` visited-object stack, in pointers. Kept in sync
@@ -758,6 +759,7 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
+    emit_resolve_prop_desc_tag(emitter, "x0", "x2", "x9");
     emitter.instruction("bl __rt_var_dump_value");                              // emit `<indent>TYPE(VAL)\n` (recursing when needed)
 
     emitter.label("__rt_vd_obj_next");
@@ -829,6 +831,7 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
+    emit_resolve_prop_desc_tag(emitter, "rdi", "rdx", "rax");
     emitter.instruction("call __rt_var_dump_value");                            // emit `<indent>TYPE(VAL)\n` (recursing when needed)
 
     emitter.label("__rt_vd_obj_next_x86");

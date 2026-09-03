@@ -42,6 +42,7 @@
 //!   already does for the same objects.
 
 use crate::codegen_support::abi;
+use crate::codegen_support::sentinels::emit_resolve_prop_desc_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Byte width of one `_class_prop_desc_*` property row.
@@ -214,6 +215,7 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
+    emit_resolve_prop_desc_tag(emitter, "x0", "x2", "x9");
     emitter.instruction("cmp x0, #4");                                          // only pointer-shaped tags (4-7) can carry a null payload
     emitter.instruction("b.lt __rt_pr_obj_value");                              // scalar payloads keep their exact bit pattern
     crate::codegen_support::sentinels::emit_branch_if_null_container(
@@ -377,6 +379,7 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
+    emit_resolve_prop_desc_tag(emitter, "rdi", "rdx", "rax");
     emitter.instruction("cmp rdi, 4");                                          // only pointer-shaped tags (4-7) can carry a null payload
     emitter.instruction("jl __rt_pr_obj_value_x86");                            // scalar payloads keep their exact bit pattern
     crate::codegen_support::sentinels::emit_branch_if_null_container(

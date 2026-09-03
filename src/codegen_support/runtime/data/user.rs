@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
+use crate::codegen_support::sentinels::PROP_DESC_TAG_TAGGED_SCALAR;
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
     method_symbol, php_symbol_key, static_method_symbol, static_property_symbol,
@@ -996,6 +997,10 @@ pub(crate) fn emit_runtime_data_user(
         for (prop_index, (prop_name, prop_ty)) in &public_props {
             let tag = if class_info.property_slot_is_reference(*prop_index, prop_name) {
                 0
+            } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+                // Inline `{payload, tag}` slot: `__rt_json_encode_object` resolves the real
+                // runtime tag (0 = int, 8 = null → JSON `null`) out of the slot itself.
+                PROP_DESC_TAG_TAGGED_SCALAR as u64
             } else {
                 match prop_ty {
                     PhpType::Int => 0,
@@ -1008,7 +1013,7 @@ pub(crate) fn emit_runtime_data_user(
                     PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
                     PhpType::Resource(_) => 9,
                     PhpType::TaggedScalar => {
-                        unreachable!("nullable scalar properties use the boxed Mixed representation")
+                        unreachable!("a TaggedScalar-repr property took the inline-slot arm above")
                     }
                     PhpType::Callable
                     | PhpType::Pointer(_)
@@ -1040,6 +1045,12 @@ pub(crate) fn emit_runtime_data_user(
                 let prop_name = &class_info.properties[i].0;
                 let tag = if class_info.property_slot_is_reference(i, prop_name) {
                     0
+                } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+                    // An inline `{payload, tag}` slot owns nothing on the heap: the payload
+                    // is either a PHP int or the in-band null sentinel. Tag 0 is what the
+                    // ownership walkers already spell "no cleanup" — tag 7 would hand that
+                    // int to `__rt_decref_any` as if it were a boxed cell pointer.
+                    0
                 } else {
                     match prop_ty {
                         PhpType::Int => 0,
@@ -1054,7 +1065,7 @@ pub(crate) fn emit_runtime_data_user(
                         PhpType::Iterable => 7,
                         PhpType::Resource(_) => 9,
                         PhpType::TaggedScalar => {
-                            unreachable!("nullable scalar properties use the boxed Mixed representation")
+                            unreachable!("a TaggedScalar-repr property took the inline-slot arm above")
                         }
                         PhpType::Callable => 10,
                         PhpType::Pointer(_)
@@ -3063,12 +3074,23 @@ fn print_r_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &st
 /// Renders the declared type name PHP prints inside `uninitialized(...)` for a
 /// typed property read before its first write.
 ///
-/// PHP echoes the SOURCE type text; `ClassInfo` only retains the resolved
-/// `PhpType`, so this reconstructs the canonical spelling for the shapes a
-/// property declaration can actually take. Unions and intersections collapse to
-/// `mixed` — a property can only be uninitialized when it is typed and
+/// PHP prints the type's REFLECTION spelling, not the source text: `int|null`,
+/// `?int` and `null|int` all render `?int` (verified against PHP 8.4). A union of
+/// exactly one type plus `null` is therefore rendered `?<type>`, which is the whole
+/// nullable family — `?int`, `?string`, `?Foo`. Wider unions keep the `mixed`
+/// fallback: PHP reorders their members by its own canonical ranking
+/// (`int|string` prints `string|int`), and nothing in `ClassInfo` records that
+/// ranking. A property can only be uninitialized when it is typed and
 /// default-less, and the walker's `uninitialized(...)` line is the only consumer.
 fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
+    if let PhpType::Union(members) = prop_ty {
+        let mut non_null = members.iter().filter(|m| !matches!(m, PhpType::Void));
+        if let (Some(only), None) = (non_null.next(), non_null.next()) {
+            if members.iter().any(|m| matches!(m, PhpType::Void)) {
+                return format!("?{}", var_dump_property_type_name(only));
+            }
+        }
+    }
     match prop_ty {
         PhpType::Int => "int".to_string(),
         PhpType::Float => "float".to_string(),
@@ -3088,9 +3110,16 @@ fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
 /// `__rt_serialize_value` when serializing that property's 16-byte object slot.
 /// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
 /// properties are stored as boxed `Mixed` cells (tag 7).
+///
+/// A `?int` / `int|null` property is the exception: its slot is an inline
+/// `PhpType::TaggedScalar` `{payload, tag}` pair, not a pointer to a boxed cell, so it gets
+/// `PROP_DESC_TAG_TAGGED_SCALAR` and every reader resolves the real tag from the slot.
 fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
     if class_info.reference_properties.contains(prop_name) {
         return 7;
+    }
+    if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+        return PROP_DESC_TAG_TAGGED_SCALAR as u64;
     }
     match prop_ty {
         PhpType::Int => 0,
