@@ -562,18 +562,23 @@ sidebar:
 
 ## Roadmap management
 
-`ROADMAP.md` is the planning document, organized by version. It stays as it is:
+`ROADMAP.md` tracks planned and delivered work, organized by version:
 
-- **Do not add entries to record implemented work.** The roadmap only gains new items when work is being *planned*, under the appropriate future version.
-- When an implementation completes an item **already present** in the roadmap, mark it `[x]` in place. If no matching item exists, the roadmap is left untouched.
-- **Never remove completed items** from a version section. Mark them as `[x]` and leave them under the version they belong to. This preserves the history of what was delivered in each release.
-- When all items in a version are completed, the version is considered done — do not move items elsewhere.
+- Add planned work as `[ ]` under the version where it is expected to ship.
+- When an implementation lands, mark its existing item `[x]`. If it was not planned in the roadmap, add a concise `[x]` item under the version that delivers it.
+- During release preparation, reconcile the current version section with the audited release range and add any missing notable delivered work as `[x]`.
+- **Never remove completed items** from a version section. Leave them under the version that delivered them so the roadmap preserves that version's scope.
+- When all items in a version are completed, the version is considered done; do not move items elsewhere.
 
 ## Changelog management
 
-`CHANGELOG.md` records every released version, newest first, in *Keep a Changelog* style.
+`CHANGELOG.md` is a release artifact, not a development log. It records every released version, newest first, in *Keep a Changelog* style.
 
-Before cutting a release, run the `prepare-release-changelog` skill. It must reconcile every merged Pull Request and direct commit since the latest published release against the exact candidate `main` SHA, then prepare the approved user-facing bullets under `[Unreleased]`. An incomplete source ledger or unresolved commit is a release blocker.
+- **Do not edit `CHANGELOG.md` during ordinary development.** Feature, fix, refactor, documentation, dependency, and maintenance Pull Requests must not add entries under `[Unreleased]` or a numbered release.
+- Keep `[Unreleased]` empty between releases. Do not accumulate one changelog bullet per Pull Request.
+- Only an explicit release-preparation task may add, move, rewrite, or remove changelog bullets.
+- Before cutting a release, run the `prepare-release-changelog` skill. It must reconcile every merged Pull Request and direct commit since the latest published release against the exact candidate SHA, then write the approved user-facing bullets directly under the numbered candidate release section. An incomplete source ledger or unresolved commit is a release blocker.
+- If the target version is not known, stop and ask for it before editing the changelog. Do not use `[Unreleased]` as a staging section for a known release.
 
 When cutting a release:
 
