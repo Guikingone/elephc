@@ -27,12 +27,19 @@ pub(super) fn eval_static_method_call_stack_bytes(arg_count: usize) -> usize {
     (bytes + 15) & !15
 }
 
+/// Scratch offsets holding Mixed cells an eval-bridge call boxed and still owns.
+///
+/// `__elephc_eval_*` borrows the cells it is handed; it never takes ownership of them. Anything
+/// `emit_box_current_value_as_mixed` created for one of these calls therefore stays this frame's
+/// to release, and every path that leaves the scratch frame owes that release.
+pub(super) type EvalBoxedOperands = Vec<usize>;
+
 /// Stores positional operands as boxed Mixed cells for the eval function-call ABI.
 pub(super) fn store_eval_function_call_args(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     args_offset: usize,
-) -> Result<()> {
+) -> Result<EvalBoxedOperands> {
     store_eval_function_call_operands(ctx, &inst.operands, args_offset)
 }
 
@@ -41,16 +48,19 @@ pub(super) fn store_eval_function_call_operands(
     ctx: &mut FunctionContext<'_>,
     operands: &[ValueId],
     args_offset: usize,
-) -> Result<()> {
+) -> Result<EvalBoxedOperands> {
+    let mut boxed = EvalBoxedOperands::new();
     for (index, operand) in operands.iter().enumerate() {
         let ty = ctx.load_value_to_result(*operand)?.codegen_repr();
+        let offset = args_offset + index * 8;
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &ty);
+            boxed.push(offset);
         }
         let result_reg = abi::int_result_reg(ctx.emitter);
-        abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset + index * 8);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, offset);
     }
-    Ok(())
+    Ok(boxed)
 }
 
 /// Stores a count-prefixed positional argument pack for the eval method-call ABI.
@@ -58,15 +68,20 @@ pub(super) fn store_eval_method_call_arg_pack(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     args_offset: usize,
-) -> Result<()> {
+) -> Result<EvalBoxedOperands> {
     let arg_count = inst.operands.len().saturating_sub(1);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, arg_count as i64);
     abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
+    let mut boxed = EvalBoxedOperands::new();
     for (index, operand) in inst.operands.iter().skip(1).enumerate() {
-        store_eval_native_method_argument(ctx, *operand, args_offset + 8 + index * 8)?;
+        boxed.extend(store_eval_native_method_argument(
+            ctx,
+            *operand,
+            args_offset + 8 + index * 8,
+        )?);
     }
-    Ok(())
+    Ok(boxed)
 }
 
 /// Stores all positional operands as a count-prefixed static-method argument pack.
@@ -74,22 +89,31 @@ pub(super) fn store_eval_static_method_call_arg_pack(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     args_offset: usize,
-) -> Result<()> {
+) -> Result<EvalBoxedOperands> {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, inst.operands.len() as i64);
     abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
+    let mut boxed = EvalBoxedOperands::new();
     for (index, operand) in inst.operands.iter().enumerate() {
-        store_eval_native_method_argument(ctx, *operand, args_offset + 8 + index * 8)?;
+        boxed.extend(store_eval_native_method_argument(
+            ctx,
+            *operand,
+            args_offset + 8 + index * 8,
+        )?);
     }
-    Ok(())
+    Ok(boxed)
 }
 
 /// Stores one dynamic method argument, retaining writable local storage for PHP references.
+///
+/// The reference-marker form boxes a frame address under an invoker marker tag rather than a
+/// PHP value, so it is deliberately not reported as a releasable operand: `__rt_decref_mixed`
+/// would deep-free a payload that never was a heap value.
 fn store_eval_native_method_argument(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     offset: usize,
-) -> Result<()> {
+) -> Result<Option<usize>> {
     let local_slot = crate::codegen::lower_inst::reference_arguments::local_slot_for_loaded_value(ctx, value);
     if let Ok(slot) = local_slot {
         if !eval_method_argument_has_stable_ref_place(ctx, slot) {
@@ -125,7 +149,7 @@ fn store_eval_native_method_argument(
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, offset);
-    Ok(())
+    Ok(None)
 }
 
 /// Returns whether a local remains an addressable PHP reference place throughout an eval call.
@@ -146,18 +170,24 @@ fn store_eval_native_method_argument_by_value(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     offset: usize,
-) -> Result<()> {
+) -> Result<Option<usize>> {
     let ty = ctx.load_value_to_result(value)?.codegen_repr();
-    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+    let boxed = if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        None
+    } else {
         emit_box_current_value_as_mixed(ctx.emitter, &ty);
-    }
+        Some(offset)
+    };
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, offset);
-    Ok(())
+    Ok(boxed)
 }
 
 /// Stores an object operand as a boxed Mixed cell in eval scratch storage.
-pub(super) fn store_eval_object_operand(ctx: &mut FunctionContext<'_>, object: ValueId) -> Result<()> {
+pub(super) fn store_eval_object_operand(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+) -> Result<Option<usize>> {
     store_eval_mixed_operand_at(ctx, object, EVAL_TEMP_CELL_OFFSET)
 }
 
@@ -166,14 +196,63 @@ pub(super) fn store_eval_mixed_operand_at(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     offset: usize,
-) -> Result<()> {
+) -> Result<Option<usize>> {
     let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
-    if !matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+    let boxed = if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+        None
+    } else {
         emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
-    }
+        Some(offset)
+    };
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, offset);
-    Ok(())
+    Ok(boxed)
+}
+
+/// Releases the Mixed cells an eval-bridge call boxed from statically typed operands.
+///
+/// Use this on a path that leaves the scratch frame without a published result cell: a probe
+/// that missed and falls back to native dispatch strands exactly as many references as a
+/// serviced call would, and a stranded receiver reference is a destructor that never runs.
+///
+/// Must be emitted while the scratch frame is still reserved, and while no value the caller
+/// still needs is live in the ABI result register.
+pub(super) fn emit_release_eval_boxed_operands(ctx: &mut FunctionContext<'_>, boxed: &[usize]) {
+    for offset in boxed {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), *offset);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed"); // release the Mixed cell this call boxed for the eval bridge
+    }
+}
+
+/// Releases boxed operand cells on a path where the bridge published a result cell.
+///
+/// An interpreted body may hand back the very cell it was passed (`return $a;`), in which case
+/// the published result is that operand's cell and its reference has moved to the result rather
+/// than being this frame's to drop.
+pub(super) fn emit_release_eval_boxed_operands_keeping_result(
+    ctx: &mut FunctionContext<'_>,
+    boxed: &[usize],
+) {
+    for offset in boxed {
+        let keep_label = ctx.next_label("eval_boxed_operand_is_result");
+        let cell_reg = abi::int_result_reg(ctx.emitter);
+        let result_cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, cell_reg, *offset);
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            result_cell_reg,
+            EVAL_RESULT_VALUE_CELL_OFFSET,
+        );
+        let compare = format!("cmp {}, {}", cell_reg, result_cell_reg);
+        let branch_if_equal = match ctx.emitter.target.arch {
+            Arch::AArch64 => format!("b.eq {}", keep_label),
+            Arch::X86_64 => format!("je {}", keep_label),
+        };
+        ctx.emitter.instruction(&compare);                                      // compare the boxed operand cell with the cell the bridge published
+        ctx.emitter.instruction(&branch_if_equal);                              // ownership moved to the result, so this cell is not ours to drop
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed"); // release the Mixed cell this call boxed for the eval bridge
+        ctx.emitter.label(&keep_label);
+    }
 }
 
 /// Probes whether eval has a late-static called-class override for an AOT frame.

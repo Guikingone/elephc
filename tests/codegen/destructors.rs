@@ -635,3 +635,95 @@ echo "|end";
     );
     assert_eq!(out.stdout, "ddd|end");
 }
+
+/// An eval context in the enclosing function must not change when a discarded chain is destroyed.
+///
+/// A function that owns an eval context has every statically typed method call preceded by an
+/// eval-bridge probe, and the probe boxes its receiver into a Mixed cell. The bridge only borrows
+/// that cell, so the probe still owns it on both exits; when the miss path dropped it the receiver
+/// stayed one reference above zero and the destructor never ran at all. `php -n` prints `destruct`
+/// before `after chain`, so the ordering — not merely the presence of the line — is the assertion.
+#[test]
+fn test_destruct_of_discarded_chain_under_an_eval_context() {
+    let out = compile_and_run(
+        r#"<?php
+class Cfg {
+    public array $data = [];
+    public function __destruct() { echo "destruct\n"; }
+    public function args(array $a): static { $this->data = $a; return $this; }
+    public function tag(string $t): static { $this->data[] = $t; return $this; }
+}
+function run(): void {
+    eval('$seed = 1;');
+    (new Cfg())->args([1, 2])->tag('x');
+    echo "after chain\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "destruct\nafter chain\nend\n");
+}
+
+/// Releasing probe-boxed operands must not touch a cell the bridge handed back as the result.
+///
+/// An interpreted body may return the very cell it was passed, in which case that cell's
+/// reference moved to the result and is no longer the caller's to drop. Releasing it anyway
+/// would free `$local` while `$back` still names it, so this fixture pins the surviving object:
+/// `$local` is read after the call and its destructor runs once, at scope exit.
+#[test]
+fn test_eval_call_returning_its_argument_keeps_the_returned_cell() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct {$this->n}\n"; }
+}
+function run(): void {
+    eval('function echo_back($v) { return $v; }');
+    $local = new T('local');
+    $back = echo_back($local);
+    echo "back is " . $back->n . "\n";
+    echo "scope end\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "back is local\nscope end\ndestruct local\nend\n");
+}
+
+/// A `static::` call inside an eval-context function releases the operands its override probe boxed.
+///
+/// The late-bound static path runs the same borrow-and-drop probe as instance dispatch, so a
+/// receiver reaching it through a discarded chain has the same destructor to lose.
+#[test]
+fn test_destruct_of_discarded_chain_calling_a_late_bound_static() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Base {
+    public static function processValue(mixed $v, bool $flag = false): mixed { return $v; }
+}
+class Cfg extends Base {
+    public mixed $data = null;
+    public function __destruct() { echo "destruct\n"; }
+    public function args(array $a): static {
+        $this->data = static::processValue($a, true);
+        return $this;
+    }
+    public function tag(string $t): static {
+        $this->data = static::processValue($t, true);
+        return $this;
+    }
+}
+function run(): void {
+    eval('$seed = 1;');
+    (new Cfg())->args([1, 2])->tag('x');
+    echo "after chain\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "destruct\nafter chain\nend\n");
+}

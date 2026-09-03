@@ -22,7 +22,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call(
     let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     ensure_eval_context(ctx)?;
-    store_eval_function_call_args(ctx, inst, args_offset)?;
+    let boxed = store_eval_function_call_args(ctx, inst, args_offset)?;
     load_eval_context_to_arg(ctx, 0);
     let (name_label, name_len) = ctx.data.add_string(function_name.as_bytes());
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -51,6 +51,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call(
         .extern_symbol("__elephc_eval_call_function");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
@@ -71,7 +72,7 @@ fn lower_eval_owned_function_call(ctx: &mut FunctionContext<'_>, inst: &Instruct
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
 
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
-    store_eval_function_call_args(ctx, inst, args_offset)?;
+    let boxed = store_eval_function_call_args(ctx, inst, args_offset)?;
     let (name_label, name_len) = ctx.data.add_string(function_name.as_bytes());
     let name_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::emit_symbol_address(ctx.emitter, name_ptr_arg, &name_label);
@@ -116,10 +117,12 @@ fn lower_eval_owned_function_call(ctx: &mut FunctionContext<'_>, inst: &Instruct
         .extern_symbol("__elephc_eval_call_function");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     abi::emit_jump(ctx.emitter, &done_label);
 
+    // The missing-function path ends the process, so its boxed operands outlive nothing.
     ctx.emitter.label(&missing_label);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     emit_eval_owned_function_missing_fatal(ctx, &function_name);
@@ -269,7 +272,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new(
     let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     ensure_eval_context(ctx)?;
-    store_eval_function_call_args(ctx, inst, args_offset)?;
+    let boxed = store_eval_function_call_args(ctx, inst, args_offset)?;
     load_eval_context_to_arg(ctx, 0);
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
@@ -294,6 +297,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new(
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_new_object");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
@@ -321,7 +325,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
     abi::emit_store_to_sp(ctx.emitter, name_ptr_reg, EVAL_CODE_PTR_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, name_len_reg, EVAL_CODE_LEN_OFFSET);
     load_eval_context_or_null(ctx)?;
-    store_eval_function_call_operands(ctx, constructor_args, args_offset)?;
+    let boxed = store_eval_function_call_operands(ctx, constructor_args, args_offset)?;
     load_eval_context_to_arg(ctx, 0);
     let name_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr_arg, EVAL_CODE_PTR_OFFSET);
@@ -347,6 +351,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_branch_if_eval_c_int_negative(ctx, &eval_miss_label);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
@@ -354,6 +359,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&eval_miss_label);
+    emit_release_eval_boxed_operands(ctx, &boxed);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     abi::emit_jump(ctx.emitter, miss_label);
     ctx.emitter.label(&done_label);
@@ -374,12 +380,14 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_method_call(
     ensure_eval_context(ctx)?;
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;
     let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
+    let mut boxed = EvalBoxedOperands::new();
     if !matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
         emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+        boxed.push(EVAL_TEMP_CELL_OFFSET);
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-    store_eval_method_call_arg_pack(ctx, inst, args_offset)?;
+    boxed.extend(store_eval_method_call_arg_pack(ctx, inst, args_offset)?);
     load_eval_context_to_arg(ctx, 0);
     let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
@@ -402,6 +410,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_method_call(
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_eval_context_class_scope(ctx, pushed_class_scope);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     emit_eval_result_as_type(ctx, &inst.result_php_type)?;
@@ -471,12 +480,14 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     let miss_stack_label = ctx.next_label("eval_owned_method_miss");
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
+    let mut boxed = EvalBoxedOperands::new();
     if !matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
         emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+        boxed.push(EVAL_TEMP_CELL_OFFSET);
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-    store_eval_method_call_arg_pack(ctx, inst, args_offset)?;
+    boxed.extend(store_eval_method_call_arg_pack(ctx, inst, args_offset)?);
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 0),
@@ -503,6 +514,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     emit_eval_result_as_type(ctx, &inst.result_php_type)?;
@@ -511,6 +523,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     abi::emit_jump(ctx.emitter, done_label);
 
     ctx.emitter.label(&miss_stack_label);
+    emit_release_eval_boxed_operands(ctx, &boxed);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     abi::emit_jump(ctx.emitter, miss_label);
     Ok(())
@@ -528,7 +541,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_static_method_call(
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     ensure_eval_context(ctx)?;
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;
-    store_eval_static_method_call_arg_pack(ctx, inst, args_offset)?;
+    let boxed = store_eval_static_method_call_arg_pack(ctx, inst, args_offset)?;
     load_eval_context_to_arg(ctx, 0);
     let target = format!("{}::{}", class_name, method_name);
     let (target_label, target_len) = ctx.data.add_string(target.as_bytes());
@@ -550,6 +563,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_static_method_call(
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_eval_context_class_scope(ctx, pushed_class_scope);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     emit_eval_result_as_type(ctx, &inst.result_php_type)?;
@@ -568,10 +582,14 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_native_frame_static_m
 ) -> Result<()> {
     let args_offset = EVAL_STACK_BYTES;
     let stack_bytes = eval_static_method_call_stack_bytes(inst.operands.len());
+    // The override probe answers before any operand is boxed, so it needs an exit of its own:
+    // releasing cells at the shared miss label would decref whatever the uninitialized scratch
+    // slots happened to hold.
+    let no_probe_label = ctx.next_label("eval_native_frame_static_method_no_probe");
     let miss_stack_label = ctx.next_label("eval_native_frame_static_method_miss");
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
-    emit_eval_native_frame_override_probe(ctx, frame_class, &miss_stack_label);
-    store_eval_static_method_call_arg_pack(ctx, inst, args_offset)?;
+    emit_eval_native_frame_override_probe(ctx, frame_class, &no_probe_label);
+    let boxed = store_eval_static_method_call_arg_pack(ctx, inst, args_offset)?;
     let (frame_label, frame_len) = ctx.data.add_string(frame_class.as_bytes());
     abi::emit_symbol_address(
         ctx.emitter,
@@ -605,6 +623,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_native_frame_static_m
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     emit_eval_result_as_type(ctx, &inst.result_php_type)?;
@@ -613,6 +632,8 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_native_frame_static_m
     abi::emit_jump(ctx.emitter, done_label);
 
     ctx.emitter.label(&miss_stack_label);
+    emit_release_eval_boxed_operands(ctx, &boxed);
+    ctx.emitter.label(&no_probe_label);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     abi::emit_jump(ctx.emitter, no_override_label);
     Ok(())
@@ -684,6 +705,8 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_native_frame_static_p
     no_override_label: &str,
     done_label: &str,
 ) -> Result<()> {
+    // A property write hands the boxed value to the store, which keeps it; unlike a call's
+    // borrowed arguments it is not this frame's to release afterwards.
     let miss_stack_label = ctx.next_label("eval_native_frame_static_prop_set_miss");
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     emit_eval_native_frame_override_probe(ctx, frame_class, &miss_stack_label);
