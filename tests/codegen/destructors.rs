@@ -727,3 +727,138 @@ echo "end\n";
     );
     assert_eq!(out, "destruct\nafter chain\nend\n");
 }
+
+/// A property read under an eval context must release the receiver cell its bridge call boxed.
+///
+/// `lower_eval_property_get` boxes a statically typed receiver into a Mixed cell with
+/// `__rt_mixed_from_value`, which retains the object, and `__elephc_eval_property_get` only
+/// borrows that cell. Nothing released it, so every `$obj->prop` read inside a function that
+/// owns an eval context left the receiver one reference above zero and its `__destruct` never
+/// ran. `php -n` prints `destruct made` after `scope end`, so the interleaving is the assertion.
+#[test]
+fn test_property_read_under_an_eval_context_releases_its_boxed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct {$this->n}\n"; }
+    public function keep(): T { return new T('made'); }
+}
+function run(): void {
+    eval('$seed = 1;');
+    $keeper = new T('keeper');
+    $held = $keeper->keep();
+    echo "held is " . $held->n . "\n";
+    echo "scope end\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "held is made\nscope end\ndestruct keeper\ndestruct made\nend\n"
+    );
+}
+
+/// The stranded reference belongs to whichever object the property was read from.
+///
+/// Reading a property off a call argument rather than off the call result pins the leak to the
+/// receiver of the read: `$local` is the object whose destructor the unreleased box swallowed,
+/// while the call result and the receiver of the call both stayed correct.
+#[test]
+fn test_property_read_of_an_untouched_local_under_an_eval_context_still_destructs() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct {$this->n}\n"; }
+    public function keep(T $o): T { return new T('made'); }
+}
+function run(): void {
+    eval('$seed = 1;');
+    $local = new T('local');
+    $keeper = new T('keeper');
+    $held = $keeper->keep($local);
+    echo "local is " . $local->n . "\n";
+    echo "scope end\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "local is local\nscope end\ndestruct local\ndestruct keeper\ndestruct made\nend\n"
+    );
+}
+
+/// A configurator that publishes itself from `__destruct` needs the property read to be balanced.
+///
+/// `$this->definition->setArguments(...)` reads a property off `$this` before dispatching, so the
+/// unreleased receiver box kept the configurator alive for the whole program and the destructor
+/// that does the publishing never ran. This is the shape a fluent configurator chain has.
+#[test]
+fn test_property_chain_receiver_under_an_eval_context_destructs_at_scope_exit() {
+    let out = compile_and_run(
+        r#"<?php
+class Definition {
+    public array $args = [];
+    public function __destruct() { echo "destruct definition\n"; }
+    public function setArguments(array $a): void { $this->args = $a; }
+}
+class Cfg {
+    public Definition $definition;
+    public function __construct() { $this->definition = new Definition(); }
+    public function __destruct() { echo "destruct cfg\n"; }
+    public function args(array $a): static {
+        $this->definition->setArguments($a);
+        return $this;
+    }
+}
+function run(): void {
+    eval('$seed = 1;');
+    (new Cfg())->args([1, 2]);
+    echo "after chain\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "destruct cfg\ndestruct definition\nafter chain\nend\n"
+    );
+}
+
+/// `instanceof` under an eval context must release the receiver cell its bridge probe boxed.
+///
+/// The relation predicate answers through `__elephc_eval_object_is_a`, which borrows the boxed
+/// receiver the same way the property read does. Neither the answered path nor the non-object
+/// shortcut released it, so testing an object's class was enough to outlive its own destructor.
+#[test]
+fn test_instanceof_under_an_eval_context_releases_its_boxed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct {$this->n}\n"; }
+    public function keep(): int { return 1; }
+}
+function run(): void {
+    eval('$seed = 1;');
+    $keeper = new T('keeper');
+    $keeper->keep();
+    $local = new T('local');
+    echo ($local instanceof T) ? "yes\n" : "no\n";
+    echo "scope end\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "yes\nscope end\ndestruct keeper\ndestruct local\nend\n"
+    );
+}

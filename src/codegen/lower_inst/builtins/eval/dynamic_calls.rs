@@ -419,6 +419,10 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_method_call(
 }
 
 /// Reads a property through the active eval context after boxing the receiver.
+///
+/// The bridge borrows the receiver cell rather than taking it, so the box this frame made is
+/// still this frame's to release; a receiver already represented as Mixed is never boxed and
+/// so has nothing to release.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_property_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -429,8 +433,10 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_property_get(
     ensure_eval_context(ctx)?;
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;
     let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
+    let mut boxed = EvalBoxedOperands::new();
     if !matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
         emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+        boxed.push(EVAL_TEMP_CELL_OFFSET);
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
@@ -454,6 +460,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_property_get(
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_eval_context_class_scope(ctx, pushed_class_scope);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     emit_eval_result_as_type(ctx, &inst.result_php_type)?;

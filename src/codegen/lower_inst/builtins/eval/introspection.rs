@@ -218,6 +218,9 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
 }
 
 /// Lowers object/class relation predicates through the eval bridge.
+///
+/// The bridge borrows the receiver cell rather than taking it, so the box this frame made is
+/// still this frame's to release, on the answered path and on the non-object shortcut alike.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -229,7 +232,8 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
     let done_label = ctx.next_label("eval_object_is_a_done");
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     ensure_eval_context(ctx)?;
-    store_eval_object_operand(ctx, object)?;
+    let mut boxed = EvalBoxedOperands::new();
+    boxed.extend(store_eval_object_operand(ctx, object)?);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_eval_unboxed_not_object(ctx, &false_label);
     load_eval_context_to_arg(ctx, 0);
@@ -253,9 +257,23 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
         .target
         .extern_symbol("__elephc_eval_object_is_a");
     abi::emit_call_label(ctx.emitter, &symbol);
+    // The predicate answer lands in the register the release helper reuses, and this ABI never
+    // fills the scratch result slot, so park the answer there across the decref and take it back.
+    abi::emit_store_to_sp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        EVAL_RESULT_VALUE_CELL_OFFSET,
+    );
+    emit_release_eval_boxed_operands(ctx, &boxed);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        EVAL_RESULT_VALUE_CELL_OFFSET,
+    );
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&false_label);
+    emit_release_eval_boxed_operands(ctx, &boxed);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
 
     ctx.emitter.label(&done_label);
