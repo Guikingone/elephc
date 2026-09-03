@@ -82,7 +82,21 @@ pub(super) fn coerce_typed_assign_value(
             crate::types::param_binding::nominal_object_boundary_target(php_type)
         {
             let target_data = ctx.intern_class_name(&target_name);
-            return ctx.emit_value(
+            // The guard BORROWS its operand and hands back its OWN reference: with an object
+            // source, `store_nominal_object_result` either boxes the payload into a fresh
+            // Mixed cell or increfs it, because the guard's EIR result is declared owned.
+            // An owning source temporary is dead from here on and has to be released, exactly
+            // as `box_value_as_mixed` releases the producer it supersedes — otherwise
+            // `$h->p = new C()` into a `?C` slot leaves the object one reference above zero
+            // forever: no `__destruct`, and the payload leaks.
+            //
+            // A GRADUAL source (Mixed / Union) is excluded on purpose. There the guard result
+            // is the same boxed cell, marked borrowed by
+            // `LoweringContext::value_is_borrowed_gradual_nominal_guard`, so the source must
+            // outlive it.
+            let release_source =
+                matches!(source_ty, PhpType::Object(_)) && ctx.value_is_owning_temporary(value);
+            let guarded = ctx.emit_value(
                 Op::RuntimeCall,
                 vec![value.value],
                 Some(Immediate::NominalObject {
@@ -93,6 +107,10 @@ pub(super) fn coerce_typed_assign_value(
                 effects_lookup::runtime_effects(),
                 Some(span),
             );
+            if release_source {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            return guarded;
         }
     }
     match target_ty {

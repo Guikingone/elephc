@@ -303,3 +303,75 @@ function stage_aot_publication(AotPublicationLog $log): void {
     );
     assert_eq!(out, "released");
 }
+
+/// Storing a fresh object into a NULLABLE object property still releases the producer's
+/// reference, so the object's refcount can reach zero and its destructor runs.
+///
+/// A `?C` slot has the Mixed representation, so the assignment goes through the runtime
+/// nominal-class guard. That guard borrows its operand and hands back its own reference —
+/// its codegen increfs the payload precisely because its EIR result is declared owned — so
+/// the producer's reference is dead once the guard has run. It was not being released, which
+/// left every such object one reference above zero: `__destruct` never ran and the payload
+/// leaked. A non-nullable `C` slot never took that path and was always balanced.
+#[test]
+fn test_destruct_after_store_into_a_nullable_object_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Item {
+    public function __construct(private string $id) {}
+    public function __destruct() { echo "drop:" . $this->id . "\n"; }
+}
+class Nullable { public ?Item $p = null; }
+class Plain { public Item $p; }
+
+function nulled(): void {
+    $h = new Nullable();
+    $h->p = new Item("nulled");
+    $h->p = null;
+}
+function replaced(): void {
+    $h = new Nullable();
+    $h->p = new Item("first");
+    $h->p = new Item("second");
+}
+function plain(): void {
+    $h = new Plain();
+    $h->p = new Item("plain");
+}
+nulled();
+echo "|";
+replaced();
+echo "|";
+plain();
+echo "|end";
+"#,
+    );
+    assert_eq!(
+        out,
+        "drop:nulled\n|drop:first\ndrop:second\n|drop:plain\n|end"
+    );
+}
+
+/// The same store leaves a clean heap: the leaked reference above kept the payload alive for
+/// the whole process, so a value assertion alone would not have pinned the ownership fix.
+#[test]
+fn test_nullable_object_property_store_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Item { public function __destruct() { echo "d"; } }
+class Nullable { public ?Item $p = null; }
+function run(): void {
+    $h = new Nullable();
+    $h->p = new Item();
+}
+run();
+echo "|end";
+"#,
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+    assert_eq!(out.stdout, "d|end");
+}
