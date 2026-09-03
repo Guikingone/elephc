@@ -19,6 +19,9 @@
 # anyone to forget to update.
 #
 # Usage: scripts/verify-release-artifact.sh <tarball>
+#
+# Focused fixture (mock packaged binary, no cargo suite):
+#   cargo test --test verify_release_artifact
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
@@ -106,6 +109,15 @@ while IFS=$'\t' read -r kind name archives; do
     # resolves a managed native package and `mysqli` links the `pdo` archive
     # already covered by its own line.
     #
+    # `curl` is the one packed-archive capability that also needs a managed
+    # catalog package. `libelephc_curl.a` is the PHP ext/curl bridge and
+    # must be compile-probed — skipping it the way `regex` is skipped would
+    # stop proving the archive links — but `--with-curl` fail-closes until
+    # the empty WORKDIR has `elephc native add curl` (pinned libcurl +
+    # openssl/zlib/nghttp2/libssh2). That is a real user workflow, so this
+    # probe adds the catalog package first, then compiles once. A truncated
+    # or wrong-arch archive still fails that single compile.
+    #
     # The check ends at the link. Producing the executable is what proves the
     # archive was packed and usable, and it is the whole of what packaging can
     # get wrong; whether the program then behaves is what CI compiles and runs
@@ -120,6 +132,15 @@ while IFS=$'\t' read -r kind name archives; do
 
     CHECKED=$((CHECKED + 1))
     rm -f probe
+    if [ "$name" = "curl" ]; then
+        echo "  ...   $kind $name: adding managed native package curl before --with-curl"
+        if ! "$ELEPHC" native add curl >native-add.log 2>&1; then
+            fail "$kind $name: native add curl failed"
+            sed 's/^/          /' native-add.log
+            continue
+        fi
+        sed 's/^/          /' native-add.log
+    fi
     if ! "$ELEPHC" "--with-$name" probe.php >compile.log 2>&1; then
         fail "$kind $name: --with-$name did not link"
         sed 's/^/          /' compile.log

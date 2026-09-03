@@ -1104,7 +1104,43 @@ mod tests {
                 "{rel} publishes an artifact without running {probe}, so a \
                  bridge missing from the tarball ships unnoticed again"
             );
+            assert!(
+                body.contains("~/.cache/elephc/native"),
+                "{rel} runs {probe} without caching managed native packages, so \
+                 a cold native add curl rebuilds openssl/libcurl from source \
+                 on every nightly instead of reusing a verified cache"
+            );
         }
+        let script = std::fs::read_to_string(root.join(probe))
+            .unwrap_or_else(|_| panic!("cannot read {probe}"));
+        assert!(
+            script.contains("[ \"$name\" = \"curl\" ]") && script.contains("native add curl"),
+            "{probe} must run native add curl before --with-curl; curl is \
+             the packed-archive capability that also needs a catalog package"
+        );
+        assert!(
+            script.contains("adding managed native package curl before --with-curl"),
+            "{probe} must native-add curl first, not after a failed compile"
+        );
+        assert!(
+            !script.contains("missing_native_package")
+                && !script.contains("requires managed native package")
+                && !script.contains("after native add"),
+            "{probe} must not retry from a compiler FAIL / recovery line"
+        );
+        assert!(
+            script.contains("needs no archive from this tarball"),
+            "{probe} must keep the empty-archive skip for regex/mysqli"
+        );
+        let after_curl = script
+            .split_once("[ \"$name\" = \"curl\" ]")
+            .map(|(_, rest)| rest)
+            .unwrap_or("");
+        assert!(
+            after_curl.contains("native add curl")
+                && !after_curl.contains("needs no archive from this tarball"),
+            "{probe} must not skip curl the way regex is skipped"
+        );
     }
 
     /// Verifies release artifacts also ship the curl-aware Magician variant.
