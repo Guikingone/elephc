@@ -139,10 +139,10 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
 fn emit_float_bits_to_float_result(ctx: &mut FunctionContext<'_>, bits_reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("fmov d0, {}", bits_reg)); // reinterpret the boxed payload as a double
+            ctx.emitter.instruction(&format!("fmov d0, {}", bits_reg));         // reinterpret the boxed payload as a double
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movq xmm0, {}", bits_reg)); // reinterpret the boxed payload as a double
+            ctx.emitter.instruction(&format!("movq xmm0, {}", bits_reg));       // reinterpret the boxed payload as a double
         }
     }
 }
@@ -157,11 +157,11 @@ fn emit_float_result_fits_i64_or_jump(ctx: &mut FunctionContext<'_>, fail_label:
             ctx.emitter.instruction(&format!("b.vs {}", fail_label));           // NaN never fits an int boundary
             abi::emit_load_int_immediate(ctx.emitter, "x9", F64_TWO_POW_63_BITS);
             ctx.emitter.instruction("fmov d1, x9");                             // materialize (double)2^63 without a data load
-            ctx.emitter.instruction("fcmp d0, d1");
+            ctx.emitter.instruction("fcmp d0, d1");                             // compare against the exclusive upper bound
             ctx.emitter.instruction(&format!("b.ge {}", fail_label));           // d >= 2^63 exceeds PHP_INT_MAX
             abi::emit_load_int_immediate(ctx.emitter, "x9", F64_NEG_TWO_POW_63_BITS);
             ctx.emitter.instruction("fmov d1, x9");                             // materialize (double)-2^63
-            ctx.emitter.instruction("fcmp d0, d1");
+            ctx.emitter.instruction("fcmp d0, d1");                             // compare against the inclusive lower bound
             ctx.emitter.instruction(&format!("b.lt {}", fail_label));           // d < -2^63 is below PHP_INT_MIN
             ctx.emitter.instruction("fcvtzs x0, d0");                           // in-range: exact truncation toward zero
         }
@@ -170,11 +170,11 @@ fn emit_float_result_fits_i64_or_jump(ctx: &mut FunctionContext<'_>, fail_label:
             ctx.emitter.instruction(&format!("jp {}", fail_label));             // NaN never fits an int boundary
             abi::emit_load_int_immediate(ctx.emitter, "r10", F64_TWO_POW_63_BITS);
             ctx.emitter.instruction("movq xmm1, r10");                          // materialize (double)2^63 without a data load
-            ctx.emitter.instruction("ucomisd xmm0, xmm1");
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare against the exclusive upper bound
             ctx.emitter.instruction(&format!("jae {}", fail_label));            // d >= 2^63 exceeds PHP_INT_MAX
             abi::emit_load_int_immediate(ctx.emitter, "r10", F64_NEG_TWO_POW_63_BITS);
             ctx.emitter.instruction("movq xmm1, r10");                          // materialize (double)-2^63
-            ctx.emitter.instruction("ucomisd xmm0, xmm1");
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare against the inclusive lower bound
             ctx.emitter.instruction(&format!("jb {}", fail_label));             // d < -2^63 is below PHP_INT_MIN
             ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // in-range: exact truncation toward zero
         }

@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - Reset clears bridge options while preserving the PHP handle identity.
 
 use crate::curl_ffi as ffi;
 

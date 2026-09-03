@@ -19,8 +19,8 @@ its verified static artifact available for future runtime/builtin integrations
 but does not by itself add `libz.a` to every program. curl has the largest
 dependency closure in the catalog: `elephc native add curl` also declares
 libssh2 (SCP/SFTP), nghttp2 (HTTP/2), OpenSSL (curl's TLS backend, and
-libssh2's crypto backend) and zlib, and `--with-curl` (or, once detection
-lands, ordinary `curl_*` usage) requires all six archives at final link time.
+libssh2's crypto backend) and zlib, and `--with-curl` or ordinary detected
+`curl_*` usage requires all six archives at final link time.
 Dependency declaration order is link order: the resolver walks it depth-first
 and splices each package's own dependencies in behind it, so `libssh2.a`
 precedes the OpenSSL and zlib archives that satisfy it. See
@@ -133,10 +133,11 @@ SHA-256, exact source size, recipe revision, provides set, dependencies, and
 ordered link outputs for all supported targets. It contains no absolute cache
 or compiler paths and is safe to commit. Do not edit it by hand.
 
-The installer currently materializes manifest declarations. If a future catalog
-package has native dependencies, every dependency must also be declared in the
-manifest; lock generation fails closed with `elephc native add <dependency>`
-instead of silently producing an incomplete transitive installation.
+`native add` and `native update` declare a package's catalogued transitive
+dependencies directly in the manifest before locking and materializing them.
+Lock generation still fails closed with `elephc native add <dependency>` when a
+hand-edited manifest omits a required dependency, instead of producing an
+incomplete installation.
 
 ## Multi-target locks and caches
 

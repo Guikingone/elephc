@@ -11,7 +11,8 @@
 //! Called from:
 //! - `crate::interpreter::builtins::hooks::{EvalDirectHook, EvalValuesHook}::Curl`.
 //!
-//! Key details — READ THIS BEFORE TOUCHING ANYTHING CURL-RELATED IN THIS CRATE:
+//! Key details:
+//! - The shared C ABI is authoritative for both native and eval curl behavior.
 //!
 //! ## Why this whole tree sits behind the `curl` Cargo feature
 //!

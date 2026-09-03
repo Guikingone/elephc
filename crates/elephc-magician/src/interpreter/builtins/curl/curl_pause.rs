@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - Pause flags are forwarded unchanged after resolving the easy handle.
 
 use crate::curl_ffi as ffi;
 

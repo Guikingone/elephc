@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - The binding resolves a share handle before reading its bridge error code.
 
 use crate::curl_ffi as ffi;
 

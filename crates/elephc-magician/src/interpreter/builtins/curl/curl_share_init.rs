@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - The returned resource owns one curl share handle in the shared bridge.
 
 use crate::curl_ffi as ffi;
 

@@ -199,7 +199,11 @@ The compiler now distinguishes the operating-system side of a target from the in
 - `Arch` describes the instruction set and calling convention such as `AArch64` vs `X86_64`.
 - `Target` combines both and is threaded from the CLI into codegen and the test harness.
 
-AArch64 remains the most established and best-documented backend (macOS and Linux), and the explicit `Target` model now also covers Linux `x86_64` with its own ABI/runtime slices. The `Target` split lets each ISA live alongside the others without reintroducing the old assumption that `Linux` automatically means ARM64.
+All five supported targets are first-class: `macos-aarch64`, `ios-arm64`,
+`ios-sim-arm64`, `linux-aarch64`, and `linux-x86_64`. AArch64 snippets in the
+internals documentation are examples only. The explicit `Target` split keeps OS,
+binary-format, SDK, ABI, and instruction-set decisions separate across macOS,
+iOS device and Simulator, and Linux.
 
 ## Module map
 
@@ -216,12 +220,12 @@ src/
 ├── native_deps/               Curated native package subsystem
 │   ├── orchestration.rs       Slim native-command state-transition coordinator
 │   ├── materialize.rs         Locked download/extract/build/receipt/publication path
-│   ├── catalog.rs             Exact trusted PCRE2 and zlib source/recipe metadata
+│   ├── catalog.rs             Exact trusted source, dependency, and recipe metadata for all curated packages
 │   ├── cache.rs               Cache keys, advisory locks, and atomic publication
 │   ├── doctor.rs              Read-only project/artifact/cache-size diagnostics
 │   ├── prune.rs               Explicit stale-fingerprint and abandoned-staging cleanup
 │   ├── resolver.rs            Read-only compile requirement to exact archive resolution
-│   └── recipes/               Reviewed PCRE2/shim and zlib source-build recipes
+│   └── recipes/               Reviewed PCRE2, zlib, OpenSSL, nghttp2, libssh2, and curl source-build recipes
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
@@ -236,6 +240,14 @@ src/
 ├── autoload/                  Composer/SPL AOT autoload indexing, rule interpretation, and file insertion
 ├── resolver/                  Include/require resolution, declaration discovery, once guards
 ├── eval_aot.rs                Target-independent literal eval planning and fallback classification
+├── php_version.rs             Accepted and automatically maintained PHP compatibility profiles
+├── php_profile/               Project-profile discovery, constraints, minimums, and sensitivity
+├── curl_prelude.rs            Curl PHP surface injection entry point
+├── curl_prelude/              Curl usage detection, classes, constants, and function bodies
+├── monitor/                   Exact, sampled, local, remote, service, and export profiling
+├── call_graph.rs              Profiling call-graph aggregation and DOT/HTML rendering
+├── pprof_encode.rs            Profiling export in pprof protobuf form
+├── probe_key.rs               Monitoring build-key creation and validation
 ├── optimize.rs                Public optimizer entry points and effect context
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination, declaration reachability pruning
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
@@ -342,7 +354,7 @@ src/
 │   ├── function_variants.rs   Include-loaded function-variant dispatcher emission
 │   ├── literal_defaults.rs    Literal property defaults → backend-native values
 │   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: callables, class constants, constructors, methods, properties, ref args, reflection (+ owners), static properties (9 files)
-│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, the boxed-mixed __toString ladder, and their common helper-frame plumbing (3 files)
+│   ├── shared_{count_guard,helper,mixed_string}.rs Shared once-per-program helper frames and common frame plumbing (3 files)
 │   ├── fibers.rs              Fiber-aware EIR codegen integration
 │   └── web.rs                 `--web` program-entry lowering
 │
@@ -353,12 +365,17 @@ src/
 │   ├── callable_descriptor.rs Callable descriptor metadata and materialization
 │   ├── callable_dispatch.rs   Runtime callable dispatch-table emission
 │   ├── callable_invoker_args.rs Descriptor-invoker argument cloning and Mixed boxing helpers
+│   ├── compilation_context.rs Compile-scoped target, data, runtime-feature, and metadata state
+│   ├── declaration_order.rs   Stable declaration ordering shared by metadata emitters
+│   ├── emitted_classes.rs     Emitted-class selection and class-table metadata
 │   ├── value_boxing.rs        Shared runtime-value and owned-value boxing into Mixed cells
 │   ├── wrappers/              Shared callback and fiber wrapper emitters
 │   ├── interface_wrappers.rs  Interface dispatch return-shape adapters
 │   ├── dynamic_new.rs         Builtin-class allow-list metadata for dynamic object construction
 │   ├── hash_crypto.rs         `hash()` / `hash_hmac()` routing through the elephc-crypto staticlib
 │   ├── iconv_bridge.rs        `iconv*()` entry-point publication into runtime function-pointer slots
+│   ├── bcmath.rs              BCMath bridge entry-point publication and call lowering
+│   ├── curl.rs                Curl bridge entry-point publication and runtime slots
 │   ├── phar_stream.rs         `phar://` URL and PHAR archive metadata parsing for I/O lowering
 │   ├── runtime_features.rs    Runtime helper-family derivation keeping optional native link deps pay-for-use
 │   ├── stream_filters/        zlib/bzip2/iconv stream-filter attachment helper emitters
@@ -385,6 +402,7 @@ src/
 │   │   └── toolchain.rs       Assembler / linker invocation
 │   ├── cdylib.rs              Owned-string boundary orchestration + lifecycle/status/error/memory symbols
 │   ├── cdylib/boundary.rs     Recoverable scalar wrappers + nested boundary/concat state
+│   ├── cdylib/owned_string.rs Caller-owned binary-string ABI helpers
 │   ├── visibility.rs          ELF hidden / Mach-O private visibility for internal cdylib globals
 │   ├── sentinels.rs           Null representation selection (sentinel vs tagged) and constants
 │   ├── data_section.rs        String/float literal .data section
@@ -398,13 +416,18 @@ src/
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
 │       ├── emitters/          Managed-value and platform-facing runtime orchestration (3 files)
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (95 files)
+│       ├── numeric.rs         Shared numeric parsing and conversion emitters
+│       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
+│       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
+│       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, and conversion helpers (97 top-level files + iconv/ target-neutral bridge helpers, 4 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (175 files + hash_sort/ target split, 2 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (5 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (121 files)
 │       ├── buffers/           Generation-safe handle resolution, allocation/free, length, bounds/size/use-after-free diagnostics (8 files incl. mod.rs)
 │       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls (3 files incl. target assembly)
+│       ├── curl/              Easy, multi, share, callback, multipart, error, and version bridge adapters (14 files)
 │       ├── eval_bridge/       Magician value, array, cast, reflection, clone, and builtin adapters (23 files)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (7 files)
@@ -423,13 +446,17 @@ src/
     └── report.rs              Error formatting
 
 crates/
+├── elephc-builtin-contract/   Dependency-neutral builtin catalog and signatures
 ├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
+├── elephc-curl/               Static libcurl easy, multi, share, callback, and multipart bridge
 ├── elephc-iconv/              Charset-conversion and RFC 2047 MIME bridge staticlib behind PHP `iconv*()`
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
+├── elephc-instr/              Exact profiling instrumentation runtime
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
+├── elephc-probe/              Sampled profiling and authenticated service endpoint
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
 └── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation

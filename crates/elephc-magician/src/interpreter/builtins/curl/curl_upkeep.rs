@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - The bridge performs connection upkeep for the resolved easy handle.
 
 use crate::curl_ffi as ffi;
 

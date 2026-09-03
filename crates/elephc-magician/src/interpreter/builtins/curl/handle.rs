@@ -5,6 +5,9 @@
 //!
 //! Called from:
 //! - Every `curl_*` home file in this directory.
+//!
+//! Key details:
+//! - Option dispatch validates PHP value shapes before forwarding to the shared bridge.
 
 use crate::curl_ffi as ffi;
 

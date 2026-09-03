@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - The binding delegates handle validation and status retrieval to the shared curl bridge.
 
 use crate::curl_ffi as ffi;
 

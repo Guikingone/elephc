@@ -476,8 +476,8 @@ fn emit_string_conversion(emitter: &mut Emitter) {
 /// Branches when an AArch64 sprintf record tag denotes deferred non-scalar coercion.
 fn emit_branch_if_deferred_tag(emitter: &mut Emitter, tag_reg: &str, label: &str) {
     for tag in [4, 5, 6, 7, 9, 10, 11] {
-        emitter.instruction(&format!("cmp {tag_reg}, #{tag}"));
-        emitter.instruction(&format!("b.eq {label}"));
+        emitter.instruction(&format!("cmp {tag_reg}, #{tag}"));                 // compare against one deferred non-scalar tag
+        emitter.instruction(&format!("b.eq {label}"));                          // defer coercion when this tag matches
     }
 }
 

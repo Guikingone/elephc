@@ -1784,13 +1784,13 @@ fn emit_call_counter_increment(ctx: &mut FunctionContext<'_>, entry_label: &str)
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", &slot);
-            ctx.emitter.instruction("ldr x10, [x9]");
-            ctx.emitter.instruction("add x10, x10, #1");
-            ctx.emitter.instruction("str x10, [x9]");
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the current function call count
+            ctx.emitter.instruction("add x10, x10, #1");                        // increment the function call count
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the updated function call count
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "r10", &slot);
-            ctx.emitter.instruction("inc qword ptr [r10]");
+            ctx.emitter.instruction("inc qword ptr [r10]");                     // increment the function call count in place
         }
     }
 }

@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - Bridge JSON is decoded into the PHP array shape exposed by `curl_version()`.
 
 use crate::curl_ffi as ffi;
 
