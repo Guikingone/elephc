@@ -54,7 +54,7 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
-│   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,web,version}_prelude*
+│   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,curl,web,version}_prelude*
 │              │  Injects only the compiler-owned PHP surfaces required by
 │              │  resolved source usage, forced bridge flags, or --web.
 └─────┬────────┘

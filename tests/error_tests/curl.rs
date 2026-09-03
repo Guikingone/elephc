@@ -277,6 +277,7 @@ fn remaining_curl_wrappers_reject_wrong_arity() {
     let cases = [
         ("<?php curl_copy_handle();", "curl_copy_handle"),
         ("<?php curl_errno();", "curl_errno"),
+        ("<?php curl_error();", "curl_error"),
         ("<?php curl_escape();", "curl_escape"),
         ("<?php curl_multi_getcontent();", "curl_multi_getcontent"),
         ("<?php curl_multi_info_read();", "curl_multi_info_read"),
