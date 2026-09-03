@@ -668,6 +668,40 @@ cannot see it.
 - The relevant `docs/php/` or `docs/beyond-php/` page — document the PHP surface.
 - Update `CLAUDE.md` only if you changed the bridge/flag mechanism itself.
 
+### 8. Packed bridge + managed native package
+
+A bridge crate's `libelephc_<name>.a` is packed next to the compiler in the
+release and nightly tarballs. `scripts/verify-release-artifact.sh` unpacks that
+tarball into an empty directory (no checkout) and compile-probes every
+capability that names a packed archive, using the packaged binary's
+`--print-capabilities` list. That is how a missing, truncated, or wrong-arch
+archive is caught — the hole that left `libelephc_magician.a` out of every
+tarball from 0.26.3 to 0.26.5.
+
+`--with-regex` is not this case. It is a runtime capability; PCRE2 is only a
+managed package; there is no packed regex archive; the probe skips it
+(`needs no archive from this tarball`). Do not copy that skip for a packed
+bridge.
+
+If the new bridge's `.a` also needs a catalog package at PHP-program link time
+(curl is the precedent: `NativeRequirement::package("curl")` when `elephc_curl`
+is planned; `elephc native add curl` in the user project), then:
+
+1. Wire the native requirement in `src/pipeline/backend.rs` the same way curl
+   does.
+2. Pack `-p elephc-<name>` in nightly and release, like curl.
+3. Teach `scripts/verify-release-artifact.sh` to run
+   `$ELEPHC native add <package>` in the empty probe WORKDIR **before**
+   `--with-<name>`. Never fail-then-retry by grepping the compiler recovery
+   text. Never skip the compile probe.
+4. Cache `~/.cache/elephc/native` on the nightly and release `verify-artifact`
+   jobs (keyed like `curl-codegen-tests`) and give the job a long enough
+   timeout for a cold source build of the C library.
+
+System libraries — phar's zlib/bz2, `libdl`, Apple frameworks — are not
+managed native packages. They do not go through `elephc native add` and are
+not this rule.
+
 ## Contributor Certification
 
 By submitting a contribution to this repository, you represent and warrant that:

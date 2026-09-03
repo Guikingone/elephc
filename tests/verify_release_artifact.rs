@@ -1,8 +1,7 @@
 //! Purpose:
-//! Fixture tests for `scripts/verify-release-artifact.sh`: a packed archive
-//! that still needs a managed native package must `ok` after the packaged
-//! `native add`, while archive-less capabilities stay skipped and a real
-//! link failure still fails.
+//! Fixture tests for `scripts/verify-release-artifact.sh`: a packed curl
+//! archive is compile-probed after `native add curl` in the empty WORKDIR,
+//! archive-less capabilities stay skipped, and a real link failure still fails.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness (`cargo test --test verify_release_artifact`).
@@ -10,8 +9,8 @@
 //! Key details:
 //! - The script unpacks into an empty prefix on purpose, so these tests ship a
 //!   mock `elephc` inside a tarball rather than the real compiler.
-//! - The mock prints the same missing-package diagnostic the production
-//!   resolver emits; it never downloads or builds catalog sources.
+//! - The mock accepts `native add curl` before `--with-curl`; it never
+//!   downloads or builds catalog sources.
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -44,9 +43,10 @@ fn scratch(label: &str) -> PathBuf {
 ///
 /// `--print-capabilities` reports `tls` (archive-only), `curl` (archive plus
 /// managed native package), `regex` and `mysqli` (no archive). `--with-tls`
-/// always "links". `--with-curl` fail-closes until `native add curl` has
-/// created a project marker. A `broken` capability, when advertised, always
-/// fails with a non-recovery error so a truncated archive still FAILs.
+/// always "links". `--with-curl` fail-closes unless `native add curl` has
+/// already created a project marker. A `broken` capability, when advertised,
+/// always fails with a truncated-archive error so a real link failure still
+/// FAILs without inventing a native add.
 fn write_mock_elephc(path: &Path, advertise_broken: bool) {
     let broken_line = if advertise_broken {
         "echo -e 'bridge\\tbroken\\tlibelephc_broken.a'\n"
@@ -90,7 +90,7 @@ case "${{1:-}}" in
   native)
     if [ "${{2:-}}" = "add" ] && [ -n "${{3:-}}" ]; then
       touch "$state_dir/added-$3"
-      echo "added $3"
+      echo "mock: native add $3"
       exit 0
     fi
     echo "unexpected native invocation: $*" >&2
@@ -150,7 +150,7 @@ fn run_probe(tarball: &Path) -> (bool, String) {
     (output.status.success(), combined)
 }
 
-/// A tarball that packs `libelephc_curl.a` must `ok` curl after `native add`, not FAIL.
+/// A tarball that packs `libelephc_curl.a` must `ok` curl after add-first, not FAIL.
 #[test]
 fn packed_curl_is_ok_after_native_add() {
     let dir = scratch("curl_ok");
@@ -158,14 +158,26 @@ fn packed_curl_is_ok_after_native_add() {
     pack_tarball(&dir, &tarball, false);
 
     let (ok, log) = run_probe(&tarball);
-    assert!(ok, "probe should pass after native add; log:\n{log}");
+    assert!(ok, "probe should pass after add-first native add; log:\n{log}");
     assert!(
         log.contains("ok    bridge curl (libelephc_curl.a)"),
-        "curl must be reported ok after the generic native-add retry; log:\n{log}"
+        "curl must be reported ok after native add then one --with-curl; log:\n{log}"
     );
     assert!(
-        log.contains("running packaged 'native add curl'"),
-        "the first --with-curl miss must trigger the recovery; log:\n{log}"
+        log.contains("adding managed native package curl before --with-curl"),
+        "curl must native-add first, before the compile; log:\n{log}"
+    );
+    assert!(
+        log.contains("mock: native add curl"),
+        "the packaged binary must have seen native add curl; log:\n{log}"
+    );
+    assert!(
+        !log.contains("running packaged 'native add curl'"),
+        "must not log the old fail-then-retry line; log:\n{log}"
+    );
+    assert!(
+        !log.contains("requires managed native package"),
+        "add-first must not compile-fail before native add; log:\n{log}"
     );
     assert!(
         log.contains("ok    bridge tls (libelephc_tls.a)"),
@@ -187,9 +199,9 @@ fn packed_curl_is_ok_after_native_add() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// A compile that is not a missing managed package must still FAIL, not `native add`.
+/// A truncated-archive compile must FAIL without inventing a native add for that capability.
 #[test]
-fn non_native_link_failure_is_not_retried() {
+fn truncated_archive_still_fails_without_inventing_native_add() {
     let dir = scratch("broken");
     let tarball = dir.join("elephc-fixture.tar.gz");
     pack_tarball(&dir, &tarball, true);
@@ -198,19 +210,20 @@ fn non_native_link_failure_is_not_retried() {
     assert!(!ok, "a truncated-archive style failure must fail the probe; log:\n{log}");
     assert!(
         log.contains("FAIL  bridge broken: --with-broken did not link"),
-        "broken must fail without a native-add retry; log:\n{log}"
+        "broken must fail as a real link error; log:\n{log}"
     );
     assert!(
         log.contains("ld: archive is truncated"),
         "the original linker error must be shown; log:\n{log}"
     );
     assert!(
-        !log.contains("native add broken") && !log.contains("running packaged 'native add broken'"),
-        "a non-recovery failure must not invent a native add; log:\n{log}"
+        !log.contains("native add broken") && !log.contains("mock: native add broken"),
+        "a truncated archive must not invent a native add; log:\n{log}"
     );
     assert!(
-        log.contains("ok    bridge curl (libelephc_curl.a)"),
-        "curl should still recover in the same run; log:\n{log}"
+        log.contains("ok    bridge curl (libelephc_curl.a)")
+            && log.contains("mock: native add curl"),
+        "curl should still native-add first in the same run; log:\n{log}"
     );
 
     let _ = fs::remove_dir_all(&dir);
@@ -226,8 +239,8 @@ fn nightly_still_packs_elephc_curl() {
         "nightly.yml must still build elephc-curl; do not revert #730"
     );
     assert!(
-        body.contains("elephc native add") || body.contains("Cache managed native"),
-        "nightly verify-artifact must give native add a cache; the empty probe \
-         directory has no checkout project"
+        body.contains("Cache managed native"),
+        "nightly verify-artifact must cache ~/.cache/elephc/native so a cold \
+         native add curl can finish"
     );
 }

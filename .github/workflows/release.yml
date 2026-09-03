@@ -271,12 +271,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils build-essential file
 
-      # Packed `libelephc_curl.a` still fail-closes without the managed
-      # curl package. The verify script runs `elephc native add` inside
-      # its empty WORKDIR; this cache is the default root that add writes
-      # (`~/.cache/elephc/native`), keyed like curl-codegen-tests so a
-      # warm runner skips the from-source rebuild. The compiler itself
-      # stays fail-closed for real projects.
+      # The probe native-adds curl in its empty WORKDIR before
+      # --with-curl, then compile-probes the packed archive. This cache
+      # is the default root that add writes (`~/.cache/elephc/native`),
+      # keyed like curl-codegen-tests so a warm runner skips the
+      # from-source openssl/libcurl rebuild. The compiler itself stays
+      # fail-closed for real projects.
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         uses: actions/cache@v4
         with:
