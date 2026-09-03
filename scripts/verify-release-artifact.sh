@@ -19,6 +19,9 @@
 # anyone to forget to update.
 #
 # Usage: scripts/verify-release-artifact.sh <tarball>
+#
+# Focused fixture (mock packaged binary, no cargo suite):
+#   cargo test --test verify_release_artifact
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
@@ -75,6 +78,25 @@ fail() {
     FAILURES=$((FAILURES + 1))
 }
 
+# Prints the catalog package named by a compiler recovery line of the form
+# `elephc native add <package>`, but only when the diagnostic is the
+# fail-closed "requires managed native package" error. Other compile
+# failures (wrong-arch archive, truncated `.a`, missing toolchain) must
+# still fail the probe. The empty WORKDIR prints `cd -- ''`; the package
+# name is taken from the `native add` token, not from that path.
+missing_native_package() {
+    local log="$1"
+    if ! grep -q 'requires managed native package' "$log"; then
+        return 1
+    fi
+    local package
+    package="$(sed -n 's/.*elephc native add \([A-Za-z0-9][A-Za-z0-9._-]*\).*/\1/p' "$log" | head -n 1)"
+    if [ -z "$package" ]; then
+        return 1
+    fi
+    printf '%s\n' "$package"
+}
+
 # `--print-capabilities` prints `<kind>\t<name>[\t<archive>...]`.
 CAPABILITIES="$("$ELEPHC" --print-capabilities)"
 if [ -z "$CAPABILITIES" ]; then
@@ -106,6 +128,19 @@ while IFS=$'\t' read -r kind name archives; do
     # resolves a managed native package and `mysqli` links the `pdo` archive
     # already covered by its own line.
     #
+    # A packed archive is still not always enough to link. `curl` ships
+    # `libelephc_curl.a` and so must be compile-probed — skipping it the way
+    # `regex` is skipped would stop proving the archive links — but the
+    # compiler also fail-closes without a managed native package (`elephc
+    # native add curl` / pinned libcurl). This probe runs in a fresh empty
+    # directory on purpose, so that diagnostic is expected. When the first
+    # compile names a missing managed package, the recovery the compiler
+    # printed is run with the packaged binary and the compile is retried.
+    # The package name comes from that recovery line, not from a curl-only
+    # special case, so the next packed-plus-catalog capability does not
+    # need a second edit here. A truncated or wrong-arch archive still
+    # fails: those errors do not print `elephc native add`.
+    #
     # The check ends at the link. Producing the executable is what proves the
     # archive was packed and usable, and it is the whole of what packaging can
     # get wrong; whether the program then behaves is what CI compiles and runs
@@ -121,9 +156,26 @@ while IFS=$'\t' read -r kind name archives; do
     CHECKED=$((CHECKED + 1))
     rm -f probe
     if ! "$ELEPHC" "--with-$name" probe.php >compile.log 2>&1; then
-        fail "$kind $name: --with-$name did not link"
-        sed 's/^/          /' compile.log
-        continue
+        if package="$(missing_native_package compile.log)"; then
+            echo "  ...   $kind $name: running packaged 'native add $package' in empty probe project"
+            if ! "$ELEPHC" native add "$package" >native-add.log 2>&1; then
+                fail "$kind $name: --with-$name did not link"
+                sed 's/^/          /' compile.log
+                echo "          native add $package failed:"
+                sed 's/^/          /' native-add.log
+                continue
+            fi
+            rm -f probe
+            if ! "$ELEPHC" "--with-$name" probe.php >compile.log 2>&1; then
+                fail "$kind $name: --with-$name did not link after native add $package"
+                sed 's/^/          /' compile.log
+                continue
+            fi
+        else
+            fail "$kind $name: --with-$name did not link"
+            sed 's/^/          /' compile.log
+            continue
+        fi
     fi
     if [ ! -x probe ]; then
         fail "$kind $name: --with-$name reported success but produced no executable"

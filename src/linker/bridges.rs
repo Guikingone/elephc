@@ -1104,7 +1104,26 @@ mod tests {
                 "{rel} publishes an artifact without running {probe}, so a \
                  bridge missing from the tarball ships unnoticed again"
             );
+            assert!(
+                body.contains("~/.cache/elephc/native"),
+                "{rel} runs {probe} without caching managed native packages, so \
+                 --with-curl fails closed in the empty probe directory every \
+                 night instead of reusing a verified libcurl build"
+            );
         }
+        let script = std::fs::read_to_string(root.join(probe))
+            .unwrap_or_else(|_| panic!("cannot read {probe}"));
+        assert!(
+            script.contains("elephc native add")
+                && script.contains("requires managed native package"),
+            "{probe} must retry a missing managed native package from the \
+             compiler recovery line; skipping curl the way regex is skipped \
+             would stop proving libelephc_curl.a links"
+        );
+        assert!(
+            !script.contains("name == \"curl\"") && !script.contains("[ \"$name\" = \"curl\" ]"),
+            "{probe} must not special-case curl; the retry is generic"
+        );
     }
 
     /// Verifies release artifacts also ship the curl-aware Magician variant.
