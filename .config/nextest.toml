@@ -76,6 +76,19 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(parity_function_first_class_callable_dispatch)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# The `codegen::eval` fixtures compile, link (against the Magician staticlib), and
+# run several programs per test — five in the largest — at ~7-8s per program on
+# a fast Linux box and appreciably more on the shared macOS runners, where the
+# eval shards run tests in parallel. Two of them have hit the 60s cap there under
+# load; keep the 60s slow warning but allow three periods before termination.
+[[profile.default.overrides]]
+filter = 'test(/codegen::eval::/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(/codegen::eval::/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
 # also rebuild the optional system-client archive on a cold local cache.
 [[profile.default.overrides]]

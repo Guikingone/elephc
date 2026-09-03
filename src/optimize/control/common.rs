@@ -202,23 +202,22 @@ pub(crate) fn build_if_chain_body(
     elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
     else_body: Option<Vec<Stmt>>,
 ) -> Vec<Stmt> {
-    if let Some(((condition, then_body), rest)) = elseif_clauses.split_first() {
-        let nested_else_body = normalize_optional_block(Some(build_if_chain_body(
-            rest.to_vec(),
-            else_body,
-        )));
-        vec![Stmt::new(
-            StmtKind::If {
-                condition: condition.clone(),
-                then_body: then_body.clone(),
-                elseif_clauses: Vec::new(),
-                else_body: nested_else_body,
-            },
-            condition.span,
-        )]
-    } else {
-        else_body.unwrap_or_default()
-    }
+    let mut clauses = elseif_clauses.into_iter();
+    let Some((condition, then_body)) = clauses.next() else {
+        return else_body.unwrap_or_default();
+    };
+    let nested_else_body =
+        normalize_optional_block(Some(build_if_chain_body(clauses.collect(), else_body)));
+    let span = condition.span;
+    vec![Stmt::new(
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses: Vec::new(),
+            else_body: nested_else_body,
+        },
+        span,
+    )]
 }
 
 /// Materializes the effective execution path of a switch starting from an
@@ -343,13 +342,20 @@ fn stmt_has_level_sensitive_loop_exit(stmt: &Stmt) -> bool {
 /// The hoistable prefix contains only statements that may not throw and
 /// always fall through. The tail contains the first statement that may throw
 /// or any statement with a non-fallthrough terminal effect.
+/// When the `try` has a `finally` (`protects_finally`), a statement that can
+/// leave early through a nested `return` / `break` / `continue` also ends the
+/// prefix: hoisted out of the `try`, that exit would skip the `finally`.
 /// Used to separate invariant code from throwing code in try blocks.
-pub(crate) fn split_hoistable_try_prefix(mut try_body: Vec<Stmt>) -> (Vec<Stmt>, Vec<Stmt>) {
+pub(crate) fn split_hoistable_try_prefix(
+    mut try_body: Vec<Stmt>,
+    protects_finally: bool,
+) -> (Vec<Stmt>, Vec<Stmt>) {
     let hoist_len = try_body
         .iter()
         .take_while(|stmt| {
             !stmt_may_throw(stmt)
                 && matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough)
+                && !(protects_finally && block_has_early_exit(std::slice::from_ref(stmt), 0))
         })
         .count();
     let tail = try_body.split_off(hoist_len);
@@ -422,4 +428,101 @@ pub(crate) fn build_switch_match_condition(subject: &Expr, patterns: &[Expr]) ->
         );
     }
     Some(prune_expr(condition))
+}
+
+/// Returns whether `body` can leave its enclosing block on a path other than falling off its
+/// end: a `return`, a `throw` statement, or a `break` / `continue` that reaches past the
+/// `depth` loop / `switch` shells between `body` and that block (a direct body asks with `0`).
+/// A `try { body } finally { F }` may only be flattened into `body; F` when this is `false`,
+/// because every such exit would otherwise skip `F`. `exit` / `die` are not exits here: PHP
+/// terminates without running `finally`, so flattening keeps their behavior.
+pub(crate) fn block_has_early_exit(body: &[Stmt], depth: usize) -> bool {
+    body.iter().any(|stmt| stmt_has_early_exit(stmt, depth))
+}
+
+/// Statement-level walker for `block_has_early_exit`.
+fn stmt_has_early_exit(stmt: &Stmt, depth: usize) -> bool {
+    match &stmt.kind {
+        StmtKind::Return(_) | StmtKind::Throw(_) => true,
+        StmtKind::Break(levels) | StmtKind::Continue(levels) => *levels > depth,
+        StmtKind::Synthetic(stmts)
+        | StmtKind::IncludeOnceGuard { body: stmts, .. }
+        | StmtKind::NamespaceBlock { body: stmts, .. } => block_has_early_exit(stmts, depth),
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            block_has_early_exit(then_body, depth)
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| block_has_early_exit(body, depth))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_early_exit(body, depth))
+        }
+        StmtKind::IfDef {
+            then_body, else_body, ..
+        } => {
+            block_has_early_exit(then_body, depth)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_early_exit(body, depth))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            block_has_early_exit(try_body, depth)
+                || catches
+                    .iter()
+                    .any(|catch| block_has_early_exit(&catch.body, depth))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_early_exit(body, depth))
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. } => block_has_early_exit(body, depth + 1),
+        StmtKind::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| block_has_early_exit(body, depth + 1))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| block_has_early_exit(body, depth + 1))
+        }
+        _ => false,
+    }
+}
+
+/// Returns whether the `default` body is the last body of the switch in source order, which is
+/// the position EIR lowering gives it: the AST keeps `default` apart from the cases, and
+/// `ir_lower::stmt::switches::switch_default_source_index` recovers its place from spans, so
+/// this mirrors that rule exactly. A default with no statements, a dummy span on the default or
+/// on any case pattern, or an empty case list all lower with the default last.
+pub(crate) fn switch_default_runs_last(cases: &[(Vec<Expr>, Vec<Stmt>)], default: &[Stmt]) -> bool {
+    let Some(default_start) = default.first().map(|stmt| stmt.span) else {
+        return true;
+    };
+    if default_start == crate::span::Span::dummy() {
+        return true;
+    }
+    for (patterns, _) in cases {
+        let Some(case_start) = patterns.first().map(|pattern| pattern.span) else {
+            return true;
+        };
+        if case_start == crate::span::Span::dummy() {
+            return true;
+        }
+        let case_is_after = case_start.line > default_start.line
+            || (case_start.line == default_start.line && case_start.col >= default_start.col);
+        if case_is_after {
+            return false;
+        }
+    }
+    true
 }

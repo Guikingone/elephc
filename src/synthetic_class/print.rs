@@ -539,6 +539,14 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             out.push_str(&format!("{indent}}}"));
             out
         }
+        // A parser-generated group (multi-argument `echo`, destructuring, the empty no-op that
+        // positions a `default:` written before a case) prints as its statements; an empty
+        // group prints nothing.
+        StmtKind::Synthetic(body) => body
+            .iter()
+            .map(|inner| statement(inner, depth))
+            .collect::<Vec<_>>()
+            .join("\n"),
         other => panic!("print: unmodelled statement {:?}", truncate(other)),
     }
 }

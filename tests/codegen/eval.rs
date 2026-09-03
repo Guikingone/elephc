@@ -14330,6 +14330,10 @@ echo $pure->hasMethod("from") ? "bad" : "nofrom";');
 }
 
 /// Verifies eval enums support user interfaces derived from PHP enum marker interfaces.
+///
+/// The two rejection cases live in their own tests: every `compile_and_run` here links the
+/// eval bridge, and three of them in one test ran past nextest's 60s per-test limit on the
+/// macOS runners.
 #[test]
 fn test_eval_declared_enum_marker_interface_inheritance() {
     let out = compile_and_run(
@@ -14357,7 +14361,12 @@ echo EvalDynMarkedBacked::Ready->value;');
         out,
         "UB2:EvalDynUnitMarker:UnitEnum:3:EvalDynBackedMarker:UnitEnum:BackedEnum:ready"
     );
+}
 
+/// Verifies an eval enum cannot implement `UnitEnum` explicitly: the marker is applied by the
+/// engine, and naming it fails at eval runtime.
+#[test]
+fn test_eval_declared_enum_rejects_explicit_unit_enum_interface() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('enum EvalDynExplicitUnitEnum implements UnitEnum {
@@ -14369,7 +14378,11 @@ eval('enum EvalDynExplicitUnitEnum implements UnitEnum {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Verifies a pure eval enum cannot implement a user interface derived from `BackedEnum`.
+#[test]
+fn test_eval_declared_pure_enum_rejects_backed_marker_interface() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('interface EvalDynBackedMarkerBad extends BackedEnum {}
