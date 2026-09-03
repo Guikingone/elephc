@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - The binding returns bridge-owned error text through the eval string adapter.
 
 use crate::curl_ffi as ffi;
 

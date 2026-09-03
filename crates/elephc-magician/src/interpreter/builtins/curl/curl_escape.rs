@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - The binding preserves curl handle validation and bridge string ownership.
 
 use crate::curl_ffi as ffi;
 

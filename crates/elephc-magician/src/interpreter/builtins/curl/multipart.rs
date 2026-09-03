@@ -6,8 +6,8 @@
 //! Called from:
 //! - `crate::interpreter::builtins::curl::handle`'s `eval_curl_setopt_apply`.
 //!
-//! Key details — every one of these is the AOT walker's own, reproduced rather than
-//! reinvented (that function's header carries the measurements behind each):
+//! Key details:
+//! - The walk mirrors the AOT implementation and preserves its observable request shape.
 //!
 //! - AN EMPTY ARRAY IS AN EMPTY STRING BODY, NOT AN EMPTY MULTIPART. php-src
 //!   special-cases it before building any mime structure, and it is observable on the wire:

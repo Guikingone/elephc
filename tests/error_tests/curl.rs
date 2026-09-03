@@ -268,6 +268,40 @@ fn curl_file_create_rejects_wrong_arity() {
     expect_curl_error("<?php $f = curl_file_create();", "curl_file_create");
 }
 
+/// Pins the remaining public curl wrappers to their declared argument counts.
+///
+/// Keeping these cases in one table makes it clear which wrappers still rely on the
+/// shared call validator instead of a bespoke diagnostic path.
+#[test]
+fn remaining_curl_wrappers_reject_wrong_arity() {
+    let cases = [
+        ("<?php curl_copy_handle();", "curl_copy_handle"),
+        ("<?php curl_errno();", "curl_errno"),
+        ("<?php curl_error();", "curl_error"),
+        ("<?php curl_escape();", "curl_escape"),
+        ("<?php curl_multi_getcontent();", "curl_multi_getcontent"),
+        ("<?php curl_multi_info_read();", "curl_multi_info_read"),
+        (
+            "<?php curl_multi_remove_handle();",
+            "curl_multi_remove_handle",
+        ),
+        ("<?php curl_multi_setopt();", "curl_multi_setopt"),
+        ("<?php curl_multi_strerror();", "curl_multi_strerror"),
+        ("<?php curl_pause();", "curl_pause"),
+        ("<?php curl_reset();", "curl_reset"),
+        ("<?php curl_setopt_array();", "curl_setopt_array"),
+        ("<?php curl_share_strerror();", "curl_share_strerror"),
+        ("<?php curl_strerror();", "curl_strerror"),
+        ("<?php curl_unescape();", "curl_unescape"),
+        ("<?php curl_upkeep();", "curl_upkeep"),
+        ("<?php curl_version(1);", "curl_version"),
+    ];
+
+    for (source, function_name) in cases {
+        expect_curl_error(source, function_name);
+    }
+}
+
 /// Runs the frontend with an explicit PHP compatibility version, so the version-gated
 /// halves of the curl prelude can be checked from here. Mirrors `check_source`, which
 /// always uses the default (8.5) profile.

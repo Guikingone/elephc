@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - The optional URL is normalized before allocating the shared bridge handle.
 
 use crate::curl_ffi as ffi;
 

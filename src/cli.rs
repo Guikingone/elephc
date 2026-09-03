@@ -140,7 +140,7 @@ Output modes:
 Target:
   --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
                           linux-aarch64 | linux-x86_64 (default: host)
-  --php-version VERSION   8.2 | 8.3 | 8.4 | 8.5 (default: 8.5)
+  --php-version VERSION   8.0 through 8.6 (detected; fallback: 8.5)
 
 Codegen:
   --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)

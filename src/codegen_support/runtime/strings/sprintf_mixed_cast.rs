@@ -63,21 +63,21 @@ fn emit_sprintf_mixed_to_int_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_mixed_int_unbox");
     emitter.instruction("mov x0, x1");                                          // pass the boxed payload to mixed_unbox
     emitter.instruction("bl __rt_mixed_unbox");                                 // unwrap nested Mixed cells before inspecting the concrete tag
-    emitter.instruction("b __rt_sprintf_mixed_int_dispatch");
+    emitter.instruction("b __rt_sprintf_mixed_int_dispatch");                   // dispatch the unboxed concrete tag
     emitter.label("__rt_sprintf_mixed_int_iterable");
     emitter.instruction("str x1, [sp, #0]");                                    // preserve erased payload across heap classification
-    emitter.instruction("mov x0, x1");
-    emitter.instruction("bl __rt_heap_kind");
-    emitter.instruction("ldr x1, [sp, #0]");
-    emitter.instruction("cmp x0, #2");
-    emitter.instruction("b.eq __rt_sprintf_mixed_int_array");
-    emitter.instruction("cmp x0, #3");
-    emitter.instruction("b.eq __rt_sprintf_mixed_int_array");
-    emitter.instruction("cmp x0, #4");
-    emitter.instruction("b.eq __rt_sprintf_mixed_int_object");
-    emitter.instruction("cmp x0, #6");
-    emitter.instruction("b.eq __rt_sprintf_mixed_int_object");
-    emitter.instruction("b __rt_sprintf_mixed_int_zero");
+    emitter.instruction("mov x0, x1");                                          // pass the erased payload to heap classification
+    emitter.instruction("bl __rt_heap_kind");                                   // recover its concrete runtime heap kind
+    emitter.instruction("ldr x1, [sp, #0]");                                    // restore the erased payload for conversion
+    emitter.instruction("cmp x0, #2");                                          // indexed-array heap kind?
+    emitter.instruction("b.eq __rt_sprintf_mixed_int_array");                   // apply PHP array numeric conversion
+    emitter.instruction("cmp x0, #3");                                          // associative-array heap kind?
+    emitter.instruction("b.eq __rt_sprintf_mixed_int_array");                   // apply PHP array numeric conversion
+    emitter.instruction("cmp x0, #4");                                          // native-object heap kind?
+    emitter.instruction("b.eq __rt_sprintf_mixed_int_object");                  // warn and normalize the object to one
+    emitter.instruction("cmp x0, #6");                                          // eval-object heap kind?
+    emitter.instruction("b.eq __rt_sprintf_mixed_int_object");                  // warn and normalize the object to one
+    emitter.instruction("b __rt_sprintf_mixed_int_zero");                       // unknown erased values normalize to zero
     emitter.label("__rt_sprintf_mixed_int_dispatch");
     emitter.instruction("cmp x0, #4");                                          // indexed array?
     emitter.instruction("b.eq __rt_sprintf_mixed_int_array");                   // arrays cast to zero or one by emptiness
@@ -162,15 +162,15 @@ fn emit_sprintf_mixed_to_string_aarch64(emitter: &mut Emitter, eval_bridge: bool
     emitter.instruction("mov x0, x1");                                          // classify the erased payload by heap kind
     emitter.instruction("bl __rt_heap_kind");                                   // 2/3 arrays, 4/6 objects
     emitter.instruction("ldr x1, [sp, #8]");                                    // restore the erased payload
-    emitter.instruction("cmp x0, #2");
-    emitter.instruction("b.eq __rt_sprintf_mixed_string_array");
-    emitter.instruction("cmp x0, #3");
-    emitter.instruction("b.eq __rt_sprintf_mixed_string_array");
-    emitter.instruction("cmp x0, #4");
-    emitter.instruction("b.eq __rt_sprintf_mixed_string_object");
-    emitter.instruction("cmp x0, #6");
-    emitter.instruction("b.eq __rt_sprintf_mixed_string_object");
-    emitter.instruction("b __rt_sprintf_mixed_string_missing");
+    emitter.instruction("cmp x0, #2");                                          // indexed-array heap kind?
+    emitter.instruction("b.eq __rt_sprintf_mixed_string_array");                // render the PHP Array placeholder
+    emitter.instruction("cmp x0, #3");                                          // associative-array heap kind?
+    emitter.instruction("b.eq __rt_sprintf_mixed_string_array");                // render the PHP Array placeholder
+    emitter.instruction("cmp x0, #4");                                          // native-object heap kind?
+    emitter.instruction("b.eq __rt_sprintf_mixed_string_object");               // dispatch object string conversion
+    emitter.instruction("cmp x0, #6");                                          // eval-object heap kind?
+    emitter.instruction("b.eq __rt_sprintf_mixed_string_object");               // dispatch object string conversion
+    emitter.instruction("b __rt_sprintf_mixed_string_missing");                 // reject unknown erased values
     emitter.label("__rt_sprintf_mixed_string_dispatch");
     emitter.instruction("cmp x0, #4");                                          // indexed array?
     emitter.instruction("b.eq __rt_sprintf_mixed_string_array");                // arrays stringify to the literal "Array"
@@ -223,7 +223,7 @@ fn emit_sprintf_mixed_to_string_aarch64(emitter: &mut Emitter, eval_bridge: bool
         emitter.instruction("bl __rt_mixed_from_value");                        // retain receiver in a temporary box
         emitter.instruction("str x0, [sp, #48]");                               // save the owned box
         emitter.instruction("mov x9, x0");                                      // bridge object argument
-        emitter.instruction("mov x10, #1");
+        emitter.instruction("mov x10, #1");                                     // mark the temporary input box as owned
         emitter.instruction("str x10, [sp, #56]");                              // remember that the helper owns it
         emitter.label("__rt_sprintf_mixed_string_eval_call");
         emitter.instruction("stp xzr, xzr, [sp, #64]");                         // clear kind/padding/value
@@ -234,33 +234,33 @@ fn emit_sprintf_mixed_to_string_aarch64(emitter: &mut Emitter, eval_bridge: bool
         let symbol = emitter.target.extern_symbol("__elephc_eval_string_context");
         abi::emit_call_label(emitter, &symbol);
         emitter.instruction("str x0, [sp, #88]");                               // preserve bridge status during input cleanup
-        emitter.instruction("ldr x9, [sp, #56]");
-        emitter.instruction("cbz x9, __rt_sprintf_mixed_string_eval_status");
+        emitter.instruction("ldr x9, [sp, #56]");                               // load temporary-input ownership
+        emitter.instruction("cbz x9, __rt_sprintf_mixed_string_eval_status");   // skip cleanup for borrowed input
         emitter.instruction("ldr x0, [sp, #48]");                               // owned temporary input box
         emitter.instruction("bl __rt_decref_any");                              // balance its retained receiver
         emitter.label("__rt_sprintf_mixed_string_eval_status");
         emitter.instruction("ldr x0, [sp, #88]");                               // bridge status
-        emitter.instruction("cbz x0, __rt_sprintf_mixed_string_eval_ok");
+        emitter.instruction("cbz x0, __rt_sprintf_mixed_string_eval_ok");       // zero status carries a converted value
         emitter.instruction("cmp x0, #3");                                      // uncaught Throwable?
-        emitter.instruction("b.eq __rt_sprintf_mixed_string_eval_throw");
-        emitter.instruction("b __rt_sprintf_mixed_string_missing");
+        emitter.instruction("b.eq __rt_sprintf_mixed_string_eval_throw");       // propagate an uncaught eval Throwable
+        emitter.instruction("b __rt_sprintf_mixed_string_missing");             // reject other conversion failures
         emitter.label("__rt_sprintf_mixed_string_eval_ok");
         emitter.instruction("ldr x0, [sp, #72]");                               // boxed string result
         emitter.instruction("str x0, [sp, #48]");                               // preserve it through persistence
-        emitter.instruction("bl __rt_mixed_unbox");
+        emitter.instruction("bl __rt_mixed_unbox");                             // expose the converted string payload
         emitter.instruction("cmp x0, #1");                                      // bridge must return a string cell
-        emitter.instruction("b.ne __rt_sprintf_mixed_string_eval_bad");
+        emitter.instruction("b.ne __rt_sprintf_mixed_string_eval_bad");         // reject a non-string bridge result
         emitter.instruction("stp x1, x2, [sp, #24]");                           // source pair for persistence
         emitter.instruction("bl __rt_str_persist");                             // formatter-owned stable copy
-        emitter.instruction("stp x1, x2, [sp, #24]");
+        emitter.instruction("stp x1, x2, [sp, #24]");                           // save the stabilized result pair
         emitter.instruction("str x1, [sp, #40]");                               // owner released after copy
-        emitter.instruction("ldr x0, [sp, #48]");
+        emitter.instruction("ldr x0, [sp, #48]");                               // reload the bridge-owned result box
         emitter.instruction("bl __rt_decref_any");                              // release the bridge-owned result cell
-        emitter.instruction("b __rt_sprintf_mixed_string_return_owned");
+        emitter.instruction("b __rt_sprintf_mixed_string_return_owned");        // return the formatter-owned copy
         emitter.label("__rt_sprintf_mixed_string_eval_bad");
-        emitter.instruction("ldr x0, [sp, #48]");
-        emitter.instruction("bl __rt_decref_any");
-        emitter.instruction("b __rt_sprintf_mixed_string_missing");
+        emitter.instruction("ldr x0, [sp, #48]");                               // reload the invalid bridge result box
+        emitter.instruction("bl __rt_decref_any");                              // release the invalid bridge result
+        emitter.instruction("b __rt_sprintf_mixed_string_missing");             // report the failed string conversion
         emitter.label("__rt_sprintf_mixed_string_eval_throw");
         emitter.instruction("ldr x0, [sp, #80]");                               // boxed Throwable
         emitter.instruction("bl __rt_mixed_unbox");                             // raw object pointer in x1
@@ -273,19 +273,19 @@ fn emit_sprintf_mixed_to_string_aarch64(emitter: &mut Emitter, eval_bridge: bool
     emitter.label("__rt_sprintf_mixed_string_own");
     emitter.instruction("str x1, [sp, #88]");                                   // preserve the original method pointer
     emitter.instruction("bl __rt_str_persist");                                 // make it independent of method scratch/ownership
-    emitter.instruction("stp x1, x2, [sp, #24]");
+    emitter.instruction("stp x1, x2, [sp, #24]");                               // save the stabilized method result pair
     emitter.instruction("str x1, [sp, #40]");                                   // formatter owns the stabilized result
     emitter.instruction("ldr x9, [sp, #88]");                                   // original method result pointer
     emitter.instruction("cmp x1, x9");                                          // did persist take over the same concat block?
     emitter.instruction("b.eq __rt_sprintf_mixed_string_return_owned");         // yes, it is already the formatter owner
     emitter.instruction("mov x0, x9");                                          // release an independently owned method result
     emitter.instruction("bl __rt_heap_free_safe");                              // borrowed/static pointers are ignored safely
-    emitter.instruction("b __rt_sprintf_mixed_string_return_owned");
+    emitter.instruction("b __rt_sprintf_mixed_string_return_owned");            // return the surviving owned string
 
     emitter.label("__rt_sprintf_mixed_string_return_owned");
     emitter.instruction("ldp x1, x2, [sp, #24]");                               // stabilized result pair
     emitter.instruction("ldr x0, [sp, #40]");                                   // owned pointer for post-copy release
-    emitter.instruction("b __rt_sprintf_mixed_string_done");
+    emitter.instruction("b __rt_sprintf_mixed_string_done");                    // share the helper frame teardown
 
     emitter.label("__rt_sprintf_mixed_string_missing");
     emitter.instruction("ldr x9, [sp, #104]");                                  // concrete runtime tag for the failing value
@@ -331,18 +331,18 @@ fn emit_sprintf_mixed_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells before inspecting the concrete tag
     emitter.instruction("jmp __rt_sprintf_mixed_int_dispatch_ready_x64");       // rax/rdi now carry tag/payload
     emitter.label("__rt_sprintf_mixed_int_iterable_x64");
-    emitter.instruction("mov rax, rsi");
-    emitter.instruction("call __rt_heap_kind");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
-    emitter.instruction("cmp rax, 2");
-    emitter.instruction("je __rt_sprintf_mixed_int_array_x64");
-    emitter.instruction("cmp rax, 3");
-    emitter.instruction("je __rt_sprintf_mixed_int_array_x64");
-    emitter.instruction("cmp rax, 4");
-    emitter.instruction("je __rt_sprintf_mixed_int_object_x64");
-    emitter.instruction("cmp rax, 6");
-    emitter.instruction("je __rt_sprintf_mixed_int_object_x64");
-    emitter.instruction("jmp __rt_sprintf_mixed_int_zero_x64");
+    emitter.instruction("mov rax, rsi");                                        // pass the erased payload to heap classification
+    emitter.instruction("call __rt_heap_kind");                                 // recover its concrete runtime heap kind
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the erased payload for conversion
+    emitter.instruction("cmp rax, 2");                                          // indexed-array heap kind?
+    emitter.instruction("je __rt_sprintf_mixed_int_array_x64");                 // apply PHP array numeric conversion
+    emitter.instruction("cmp rax, 3");                                          // associative-array heap kind?
+    emitter.instruction("je __rt_sprintf_mixed_int_array_x64");                 // apply PHP array numeric conversion
+    emitter.instruction("cmp rax, 4");                                          // native-object heap kind?
+    emitter.instruction("je __rt_sprintf_mixed_int_object_x64");                // warn and normalize the object to one
+    emitter.instruction("cmp rax, 6");                                          // eval-object heap kind?
+    emitter.instruction("je __rt_sprintf_mixed_int_object_x64");                // warn and normalize the object to one
+    emitter.instruction("jmp __rt_sprintf_mixed_int_zero_x64");                 // unknown erased values normalize to zero
     emitter.label("__rt_sprintf_mixed_int_dispatch_x64");
     emitter.instruction("mov rax, rdi");                                        // raw record tag
     emitter.instruction("mov rdi, rsi");                                        // raw record payload
@@ -424,19 +424,19 @@ fn emit_sprintf_mixed_to_string_linux_x86_64(emitter: &mut Emitter, eval_bridge:
     emitter.instruction("jmp __rt_sprintf_mixed_string_dispatch_x64");          // apply concrete semantics
     emitter.label("__rt_sprintf_mixed_string_raw_x64");
     emitter.instruction("cmp rdi, 11");                                         // type-erased Iterable record?
-    emitter.instruction("jne __rt_sprintf_mixed_string_raw_ready_x64");
+    emitter.instruction("jne __rt_sprintf_mixed_string_raw_ready_x64");         // other raw tags are already concrete
     emitter.instruction("mov rax, rsi");                                        // erased payload for heap classification
-    emitter.instruction("call __rt_heap_kind");
+    emitter.instruction("call __rt_heap_kind");                                 // recover the erased payload's heap kind
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // restore erased payload
-    emitter.instruction("cmp rax, 2");
-    emitter.instruction("je __rt_sprintf_mixed_string_array_x64");
-    emitter.instruction("cmp rax, 3");
-    emitter.instruction("je __rt_sprintf_mixed_string_array_x64");
-    emitter.instruction("cmp rax, 4");
-    emitter.instruction("je __rt_sprintf_mixed_string_object_x64");
-    emitter.instruction("cmp rax, 6");
-    emitter.instruction("je __rt_sprintf_mixed_string_object_x64");
-    emitter.instruction("jmp __rt_sprintf_mixed_string_missing_x64");
+    emitter.instruction("cmp rax, 2");                                          // indexed-array heap kind?
+    emitter.instruction("je __rt_sprintf_mixed_string_array_x64");              // render the PHP Array placeholder
+    emitter.instruction("cmp rax, 3");                                          // associative-array heap kind?
+    emitter.instruction("je __rt_sprintf_mixed_string_array_x64");              // render the PHP Array placeholder
+    emitter.instruction("cmp rax, 4");                                          // native-object heap kind?
+    emitter.instruction("je __rt_sprintf_mixed_string_object_x64");             // dispatch object string conversion
+    emitter.instruction("cmp rax, 6");                                          // eval-object heap kind?
+    emitter.instruction("je __rt_sprintf_mixed_string_object_x64");             // dispatch object string conversion
+    emitter.instruction("jmp __rt_sprintf_mixed_string_missing_x64");           // reject unknown erased values
     emitter.label("__rt_sprintf_mixed_string_raw_ready_x64");
     emitter.instruction("mov rax, rdi");                                        // raw record tag
     emitter.instruction("mov rdi, rsi");                                        // raw record payload
@@ -488,7 +488,7 @@ fn emit_sprintf_mixed_to_string_linux_x86_64(emitter: &mut Emitter, eval_bridge:
         emitter.instruction("xor esi, esi");                                    // objects have no high payload
         emitter.instruction("call __rt_mixed_from_value");                      // retain receiver in a temporary box
         emitter.instruction("mov QWORD PTR [rbp - 56], rax");                   // save owned input box
-        emitter.instruction("mov r9, rax");
+        emitter.instruction("mov r9, rax");                                     // pass the temporary box to the eval bridge
         emitter.instruction("mov QWORD PTR [rbp - 64], 1");                     // helper owns this box
         emitter.label("__rt_sprintf_mixed_string_eval_call_x64");
         emitter.instruction("mov QWORD PTR [rbp - 96], 0");                     // clear result kind/padding
@@ -500,35 +500,35 @@ fn emit_sprintf_mixed_to_string_linux_x86_64(emitter: &mut Emitter, eval_bridge:
         let symbol = emitter.target.extern_symbol("__elephc_eval_string_context");
         abi::emit_call_label(emitter, &symbol);
         emitter.instruction("mov QWORD PTR [rbp - 8], rax");                    // preserve bridge status during input cleanup
-        emitter.instruction("cmp QWORD PTR [rbp - 64], 0");
-        emitter.instruction("je __rt_sprintf_mixed_string_eval_status_x64");
+        emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                     // does this helper own the input box?
+        emitter.instruction("je __rt_sprintf_mixed_string_eval_status_x64");    // borrowed input needs no cleanup
         emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                   // owned temporary input box
         emitter.instruction("call __rt_decref_any");                            // balance retained receiver
         emitter.label("__rt_sprintf_mixed_string_eval_status_x64");
         emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // bridge status
-        emitter.instruction("test rax, rax");
-        emitter.instruction("jz __rt_sprintf_mixed_string_eval_ok_x64");
+        emitter.instruction("test rax, rax");                                   // did the bridge report success?
+        emitter.instruction("jz __rt_sprintf_mixed_string_eval_ok_x64");        // zero status carries a converted value
         emitter.instruction("cmp rax, 3");                                      // uncaught Throwable?
-        emitter.instruction("je __rt_sprintf_mixed_string_eval_throw_x64");
-        emitter.instruction("jmp __rt_sprintf_mixed_string_missing_x64");
+        emitter.instruction("je __rt_sprintf_mixed_string_eval_throw_x64");     // propagate an uncaught eval Throwable
+        emitter.instruction("jmp __rt_sprintf_mixed_string_missing_x64");       // reject other conversion failures
         emitter.label("__rt_sprintf_mixed_string_eval_ok_x64");
         emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                   // boxed string result
         emitter.instruction("mov QWORD PTR [rbp - 56], rax");                   // preserve through persistence
-        emitter.instruction("call __rt_mixed_unbox");
+        emitter.instruction("call __rt_mixed_unbox");                           // expose the converted string payload
         emitter.instruction("cmp rax, 1");                                      // bridge must return a string cell
-        emitter.instruction("jne __rt_sprintf_mixed_string_eval_bad_x64");
+        emitter.instruction("jne __rt_sprintf_mixed_string_eval_bad_x64");      // reject a non-string bridge result
         emitter.instruction("mov rax, rdi");                                    // standard string pointer register
         emitter.instruction("call __rt_str_persist");                           // formatter-owned stable copy
-        emitter.instruction("mov QWORD PTR [rbp - 32], rax");
-        emitter.instruction("mov QWORD PTR [rbp - 40], rdx");
+        emitter.instruction("mov QWORD PTR [rbp - 32], rax");                   // save the stabilized result pointer
+        emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                   // save the stabilized result length
         emitter.instruction("mov QWORD PTR [rbp - 48], rax");                   // owner released after copy
-        emitter.instruction("mov rax, QWORD PTR [rbp - 56]");
+        emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                   // reload the bridge-owned result box
         emitter.instruction("call __rt_decref_any");                            // release bridge-owned result cell
-        emitter.instruction("jmp __rt_sprintf_mixed_string_return_owned_x64");
+        emitter.instruction("jmp __rt_sprintf_mixed_string_return_owned_x64");  // return the formatter-owned copy
         emitter.label("__rt_sprintf_mixed_string_eval_bad_x64");
-        emitter.instruction("mov rax, QWORD PTR [rbp - 56]");
-        emitter.instruction("call __rt_decref_any");
-        emitter.instruction("jmp __rt_sprintf_mixed_string_missing_x64");
+        emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                   // reload the invalid bridge result box
+        emitter.instruction("call __rt_decref_any");                            // release the invalid bridge result
+        emitter.instruction("jmp __rt_sprintf_mixed_string_missing_x64");       // report the failed string conversion
         emitter.label("__rt_sprintf_mixed_string_eval_throw_x64");
         emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                   // boxed Throwable
         emitter.instruction("call __rt_mixed_unbox");                           // raw object pointer in rdi
@@ -541,18 +541,18 @@ fn emit_sprintf_mixed_to_string_linux_x86_64(emitter: &mut Emitter, eval_bridge:
     emitter.label("__rt_sprintf_mixed_string_own_x64");
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // preserve original method result pointer
     emitter.instruction("call __rt_str_persist");                               // stabilize concat/heap/static results
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the stabilized method result pointer
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the stabilized method result length
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // formatter owns stabilized result
     emitter.instruction("cmp rax, QWORD PTR [rbp - 72]");                       // did persist take over the same block?
-    emitter.instruction("je __rt_sprintf_mixed_string_return_owned_x64");
+    emitter.instruction("je __rt_sprintf_mixed_string_return_owned_x64");       // persist already owns the original block
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // independently owned original result
     emitter.instruction("call __rt_heap_free_safe");                            // borrowed/static pointers are ignored safely
     emitter.label("__rt_sprintf_mixed_string_return_owned_x64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // stabilized result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // stabilized result length
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // owner for post-copy release
-    emitter.instruction("jmp __rt_sprintf_mixed_string_done_x64");
+    emitter.instruction("jmp __rt_sprintf_mixed_string_done_x64");              // share the helper frame teardown
 
     emitter.label("__rt_sprintf_mixed_string_missing_x64");
     emitter.instruction("mov r8, QWORD PTR [rbp - 104]");                       // concrete runtime tag for the failing value

@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl` dispatch.
+//!
+//! Key details:
+//! - Options are applied in array iteration order through the shared option dispatcher.
 
 eval_builtin! {
     contract: "curl_setopt_array",

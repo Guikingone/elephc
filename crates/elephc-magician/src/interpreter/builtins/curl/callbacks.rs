@@ -10,6 +10,9 @@
 //!   the invocation frame around a transfer and to re-raise a parked throw afterwards.
 //! - `crates/elephc-curl`'s trampolines, through [`eval_curl_callback_adapter`]'s address.
 //!
+//! Key details:
+//! - Callback slots scope invocation state to the active transfer and propagate parked throws.
+//!
 //! # Why this is possible at all, when an earlier revision argued it was not
 //!
 //! `crate::interpreter::builtins::curl`'s module doc used to state that callbacks needed

@@ -7,6 +7,9 @@
 //! pointer still references. The mutex serializes the write; it does nothing for
 //! the lifetime of the read.
 //!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
 //! Key details:
 //! - This shipped as a real intermittent CI failure: `elephc_pdo_sqlstate`
 //!   answered garbage bytes instead of "00000" whenever the pg and my live
