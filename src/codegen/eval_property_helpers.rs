@@ -922,11 +922,11 @@ fn emit_x86_64_uninitialized_property_get_guard(
 fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer
     match slot.ty.codegen_repr() {
-        PhpType::Int
-        | PhpType::Bool
-        | PhpType::Object(_)
-        | PhpType::Array(_)
-        | PhpType::AssocArray { .. } => {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // load the array-or-hash property payload pointer
+            emitter.instruction("bl __rt_mixed_from_array_kind");               // box with the payload's live indexed-or-hash shape, not the declared one
+        }
+        PhpType::Int | PhpType::Bool | PhpType::Object(_) => {
             emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset));    // load the property payload low word
             emitter.instruction("mov x2, xzr");                                 // heap/scalar property payloads do not use a high word here
             abi::emit_load_int_immediate(emitter, "x0", runtime_value_tag(&slot.ty) as i64);
@@ -979,7 +979,11 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
 fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
     match slot.ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)); // load the array-or-hash property payload pointer
+            emitter.instruction("call __rt_mixed_from_array_kind");             // box with the payload's live indexed-or-hash shape, not the declared one
+        }
+        PhpType::Int | PhpType::Bool | PhpType::Object(_) => {
             emitter.instruction(
                 &format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)
             );                                                                  // load the property payload low word

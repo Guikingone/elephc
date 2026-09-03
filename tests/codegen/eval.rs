@@ -29819,6 +29819,88 @@ echo eval('return include "eval-plain-piece.txt";');
     assert_eq!(out, "OT:RAW1");
 }
 
+/// Verifies repeated string-key writes from included code keep an `array`-declared
+/// property keyed.
+///
+/// The first write promotes the empty indexed payload to hash storage in place, so every
+/// later bridge read of that property must report the LIVE container kind. Boxing the
+/// declared `array` shape instead made the second write "promote" an already-promoted
+/// hash, which rewrote entry 0 as `int(0) => int(5)` and silently lost the first key.
+#[test]
+fn test_eval_bridge_string_key_writes_into_an_empty_array_property_stay_keyed() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag { public array $items = []; }
+$piece = __DIR__ . "/eval-array-prop-writes.php";
+file_put_contents($piece, '<?php $bag->items["b"] = 2; $bag->items["a"] = 1;');
+$bag = new Bag();
+include $piece;
+echo count($bag->items) . ";";
+echo implode(",", array_keys($bag->items)) . ";";
+foreach ($bag->items as $k => $v) { echo $k . "=" . $v . ","; }
+echo ";" . $bag->items["b"] . $bag->items["a"];
+"#,
+    );
+    assert_eq!(out, "2;b,a;b=2,a=1,;21");
+}
+
+/// Verifies included code reads back an `array`-declared property after its payload
+/// became hash storage.
+///
+/// `isset()`, the keyed element read, `count()` and `array_keys()` all run inside the
+/// interpreter here, so each one goes through the property getter that must box the
+/// promoted hash as an associative Mixed value rather than as an indexed one.
+#[test]
+fn test_eval_bridge_reads_an_array_property_promoted_to_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag { public array $items = []; }
+$piece = __DIR__ . "/eval-array-prop-read.php";
+file_put_contents($piece, '<?php
+$bag->items["b"] = 2;
+echo isset($bag->items["b"]) ? "Y" : "N";
+echo $bag->items["b"];
+$bag->items["a"] = 1;
+echo count($bag->items);
+echo implode(",", array_keys($bag->items));
+');
+$bag = new Bag();
+include $piece;
+echo ";" . count($bag->items) . ";" . implode(",", array_keys($bag->items));
+"#,
+    );
+    assert_eq!(out, "Y22b,a;2;b,a");
+}
+
+/// Verifies a service-container shape: nested runtime includes that register services
+/// under string keys on an `array`-declared property of the calling AOT object.
+///
+/// The inner include runs while the outer one is still on the stack, so the promoted
+/// hash has to survive a second bridge write from a different activation. Losing the
+/// first key made the container re-`require` an already-loaded factory file, which then
+/// aborted on the class redeclaration.
+#[test]
+fn test_eval_bridge_nested_includes_register_services_under_string_keys() {
+    let out = compile_and_run(
+        r#"<?php
+class Cont {
+    public array $services = [];
+    public function load(string $file): void { require $file; }
+    public function keys(): string { return implode(",", array_keys($this->services)); }
+}
+$outer = __DIR__ . "/eval-container-outer.php";
+$inner = __DIR__ . "/eval-container-inner.php";
+file_put_contents($outer, '<?php $this->load("' . $inner . '"); $this->services["a"] = 1;');
+file_put_contents($inner, '<?php $this->services["b"] = 2;');
+$c = new Cont();
+$c->load($outer);
+echo $c->keys() . ";";
+echo $c->services["b"] . $c->services["a"];
+"#,
+    );
+    assert_eq!(out, "b,a;21");
+}
+
 /// Verifies missing eval require aborts through the runtime eval fatal path.
 #[test]
 fn test_eval_fragment_missing_require_fails() {
