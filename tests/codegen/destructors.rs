@@ -512,3 +512,126 @@ echo "|end";
     );
     assert_eq!(out.stdout, "d|end");
 }
+
+/// A discarded fluent result destructs at the end of its statement even when the method's
+/// declared return type forces the receiver to be boxed on the way out.
+///
+/// `return $this` hands the caller a borrowed receiver, so the return lowering acquires it to
+/// balance the caller's release. A declared return type that cannot carry a bare object pointer
+/// — a nullable object, `mixed`, or an object union — makes the return coercion box the receiver
+/// into a freshly allocated Mixed cell first. That cell already owns its reference and is itself
+/// handed over as owned, so the extra acquire landed on the box: the caller's single release
+/// could not free it, the object never reached zero, and `__destruct` never ran. Only the
+/// object-only return type (`: Cfg`) was ever balanced, which is why a fluent DSL lost exactly
+/// the trailing call of a chain — the one whose result nothing else consumes.
+#[test]
+fn test_destruct_of_a_discarded_fluent_result_boxed_by_its_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Other {}
+class Cfg {
+    public function __construct(private string $id) {}
+    public function plain(): Cfg { return $this; }
+    public function nullable(): ?Cfg { return $this; }
+    public function anything(): mixed { return $this; }
+    public function united(): Cfg|Other { return $this; }
+    public function __destruct() { echo "drop:" . $this->id . "\n"; }
+}
+(new Cfg("plain"))->plain();
+echo "|";
+(new Cfg("nullable"))->nullable();
+echo "|";
+(new Cfg("anything"))->anything();
+echo "|";
+(new Cfg("united"))->united();
+echo "|end";
+"#,
+    );
+    assert_eq!(
+        out,
+        "drop:plain\n|drop:nullable\n|drop:anything\n|drop:united\n|end"
+    );
+}
+
+/// A boxed `return $this` still keeps the receiver alive for the binding that owns it: the box
+/// holds its own reference, so dropping the extra acquire must not destruct a live object.
+#[test]
+fn test_boxed_returned_this_keeps_a_live_receiver_alive() {
+    let out = compile_and_run(
+        r#"<?php
+class Cfg {
+    public function __construct(private string $id) {}
+    public function nullable(): ?Cfg { return $this; }
+    public function anything(): mixed { return $this; }
+    public function id(): string { return $this->id; }
+    public function __destruct() { echo "drop:" . $this->id . "\n"; }
+}
+$c = new Cfg("kept");
+$c->nullable();
+echo "after-nullable:" . $c->id() . "|";
+$c->anything();
+echo "after-anything:" . $c->id() . "|";
+$held = $c->nullable();
+unset($c);
+echo "held:" . $held->id() . "|";
+unset($held);
+echo "end";
+"#,
+    );
+    assert_eq!(
+        out,
+        "after-nullable:kept|after-anything:kept|held:kept|drop:kept\nend"
+    );
+}
+
+/// A boxed fluent chain destructs in statement order: every link is the same receiver, so the
+/// object drops once, when the statement's trailing result is released.
+#[test]
+fn test_destruct_order_of_a_boxed_fluent_chain() {
+    let out = compile_and_run(
+        r#"<?php
+class Cfg {
+    public function __construct(private string $id) {}
+    public function step(): ?Cfg { return $this; }
+    public function __destruct() { echo "drop:" . $this->id . "\n"; }
+}
+function make(string $id): Cfg { return new Cfg($id); }
+make("a")->step()->step();
+echo "|";
+make("b")->step();
+echo "|end";
+"#,
+    );
+    assert_eq!(out, "drop:a\n|drop:b\n|end");
+}
+
+/// The discarded boxed result leaves a clean heap: before the fix the object stayed one
+/// reference above zero for the life of the process, so a value assertion alone would not
+/// have pinned the ownership balance.
+#[test]
+fn test_discarded_boxed_fluent_result_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Other {}
+class Cfg {
+    public function nullable(): ?Cfg { return $this; }
+    public function anything(): mixed { return $this; }
+    public function united(): Cfg|Other { return $this; }
+    public function __destruct() { echo "d"; }
+}
+function run(): void {
+    (new Cfg())->nullable();
+    (new Cfg())->anything();
+    (new Cfg())->united();
+}
+run();
+echo "|end";
+"#,
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+    assert_eq!(out.stdout, "ddd|end");
+}

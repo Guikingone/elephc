@@ -81,8 +81,9 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
+    let borrowed = value;
     let value = coerce_to_return_type(ctx, value, Some(span));
-    let value = acquire_returned_this(ctx, value_expr, value, span);
+    let value = acquire_returned_this(ctx, value_expr, borrowed, value, span);
     // `return $this` has already acquired the borrowed receiver above. Other borrowed
     // loads still need the general retain before their frame storage is cleaned up.
     let value = acquire_borrowed_return_value(ctx, value, span);
@@ -108,13 +109,27 @@ pub(super) fn lower_return_expr(ctx: &mut LoweringContext<'_, '_>, value_expr: &
 /// result drops the object's refcount to zero and runs its destructor while the
 /// original binding is still live — a use-after-free for any class with a
 /// destructor. Incrementing the refcount here balances that release.
+///
+/// That reasoning holds only while the returned value still IS the borrowed receiver.
+/// A declared return type that cannot carry a bare object pointer — a nullable object,
+/// `mixed`, or an object union — makes `coerce_to_return_type` box the receiver into a
+/// freshly allocated Mixed cell first. That cell already owns its reference to the
+/// receiver and is itself handed to the caller as owned, so acquiring it again leaves a
+/// reference nobody drops: the caller's single release cannot free the cell, the object
+/// never reaches zero, and `__destruct()` never runs for a discarded fluent temporary
+/// (`$obj->args([]);` on a method declared `: static|null`). `borrowed` is the value
+/// before coercion, so an unchanged value still takes the retain it needs.
 pub(super) fn acquire_returned_this(
     ctx: &mut LoweringContext<'_, '_>,
     value_expr: Option<&Expr>,
+    borrowed: LoweredValue,
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
     if !matches!(value_expr.map(|expr| &expr.kind), Some(ExprKind::This)) {
+        return value;
+    }
+    if value.value != borrowed.value && ctx.value_is_owning_temporary(value) {
         return value;
     }
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
