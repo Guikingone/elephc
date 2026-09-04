@@ -409,12 +409,27 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     // negative, so normalise macOS onto the same shape.
     if emitter.platform == Platform::MacOS {
         emitter.instruction("b.cc __rt_fwrite_wrote");                          // carry clear: x0 really is a byte count
+        emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); // macOS: EAGAIN/EWOULDBLOCK arrives positive
+        emitter.instruction("b.eq __rt_fwrite_would_block");                    // a nonblocking descriptor with a full buffer wrote nothing
         emitter.instruction("mov x0, #-1");                                     // a failed write reports failure, not its errno
         emitter.instruction("b __rt_fwrite_return");                            // a failed write moved nothing to account for
     } else {
         emitter.instruction("cmp x0, #0");
-        emitter.instruction("b.lt __rt_fwrite_return");                         // a failed write moved nothing to account for
+        emitter.instruction("b.ge __rt_fwrite_wrote");                          // a byte count needs no interpreting
+        emitter.instruction(&format!("cmn x0, #{}", emitter.platform.would_block_errno())); // Linux: the syscall answers -EAGAIN
+        emitter.instruction("b.ne __rt_fwrite_return");                         // any other failure moved nothing to account for
     }
+    // php does NOT call this a failure: `main/streams/xp_socket.c` reports a zero-byte write for
+    // EWOULDBLOCK/EAGAIN, so `fwrite()` answers int(0) and not false. MEASURED on `php -n` 8.5.6
+    // with php-src's `streams/bug79000.phpt` — a saturated non-blocking socket pair answers
+    // int(8192) then int(0), where this answered int(8192) then bool(false).
+    //
+    // Only a NONBLOCKING descriptor reaches here: php polls for POLLOUT on a blocking one and
+    // retries, so a saturated blocking write hangs instead of reporting anything. The read side
+    // of this runtime already branches the same way, on the same `would_block_errno()`.
+    emitter.label("__rt_fwrite_would_block");
+    emitter.instruction("mov x0, #0");                                          // nothing moved, and nothing went wrong
+    emitter.instruction("b __rt_fwrite_return");                                // no append accounting for zero bytes
     emitter.label("__rt_fwrite_wrote");
     emit_append_skip_update_aarch64(emitter);
     emitter.label("__rt_fwrite_return");
@@ -812,7 +827,23 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");
     emitter.instruction("call write");                                          // write the payload through libc write()
     emitter.instruction("cmp rax, 0");
-    emitter.instruction("jl __rt_fwrite_return_x86");                           // a failed write moved nothing to account for
+    emitter.instruction("jge __rt_fwrite_wrote_x86");                           // a byte count needs no interpreting
+    // See the AArch64 counterpart: EWOULDBLOCK/EAGAIN is php's zero-byte write, not a failure.
+    // libc reports it through errno, and the frame is already 16-byte aligned here — the `call
+    // write` above sits at the same depth — so the errno lookup needs no padding.
+    let errno_location = match emitter.platform {
+        Platform::MacOS => "__error",
+        Platform::Linux => "__errno_location",
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    };
+    emitter.instruction(&format!("call {errno_location}"));                     // rax = &errno
+    emitter.instruction(&format!("cmp DWORD PTR [rax], {}", emitter.platform.would_block_errno()));
+    emitter.instruction("jne __rt_fwrite_failed_x86");                          // any other failure keeps the -1 php boxes as false
+    emitter.instruction("xor eax, eax");                                        // nothing moved, and nothing went wrong
+    emitter.instruction("jmp __rt_fwrite_return_x86");                          // no append accounting for zero bytes
+    emitter.label("__rt_fwrite_failed_x86");
+    emitter.instruction("mov rax, -1");                                         // the errno lookup clobbered the failure marker
+    emitter.instruction("jmp __rt_fwrite_return_x86");                          // a failed write moved nothing to account for
     emitter.label("__rt_fwrite_wrote_x86");
     emit_append_skip_update_x86_64(emitter);
     emitter.label("__rt_fwrite_return_x86");

@@ -217,6 +217,19 @@ pub(crate) fn lower_stream_wrapper_restore(
     store_if_result(ctx, inst)
 }
 
+/// The `FILE:LINE` a stream-context refusal is reported at.
+///
+/// A `TypeError` raised from inside one of these builtins belongs to the call the user wrote, so
+/// the uncaught report ends in ` in FILE:LINE`, carries php's frame #0 and answers `getLine()`
+/// when it is caught. Spelled once because both `stream_context_create()` and
+/// `stream_context_set_params()` reach the same refusal.
+fn instruction_location(ctx: &FunctionContext<'_>, inst: &Instruction) -> Option<(String, u32)> {
+    ctx.module
+        .source_path
+        .clone()
+        .map(|file| (file, inst.span.map_or(0, |span| span.line)))
+}
+
 /// Lowers `stream_context_create(options?, params?)` into a dynamic ContextState resource.
 pub(crate) fn lower_stream_context_create(
     ctx: &mut FunctionContext<'_>,
@@ -231,7 +244,7 @@ pub(crate) fn lower_stream_context_create(
     clear_stream_notification_callback(ctx);
     if let Some(params) = inst.operands.get(1).copied() {
         capture_stream_notification_callback(ctx, params)?;
-        merge_stream_context_params_options_into_scratch(ctx, params)?;
+        merge_stream_context_params_options_into_scratch(ctx, params, instruction_location(ctx, inst))?;
     }
     emit_dynamic_stream_context_allocation(ctx, "stream_context_create");
     store_if_result(ctx, inst)
@@ -746,7 +759,7 @@ pub(crate) fn lower_stream_context_set_params(
     clear_stream_context_options(ctx);
     restore_stream_context_from_handle(ctx, context)?;
     retain_stream_context_options_scratch(ctx);
-    merge_stream_context_params_options_into_scratch(ctx, params)?;
+    merge_stream_context_params_options_into_scratch(ctx, params, instruction_location(ctx, inst))?;
     update_stream_context_state_from_handle(ctx, context)?;
     emit_bool_result(ctx, true);
     store_if_result(ctx, inst)

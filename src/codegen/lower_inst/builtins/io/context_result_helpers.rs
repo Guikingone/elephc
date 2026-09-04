@@ -213,14 +213,24 @@ fn emit_two_argument_options_shape_guard(ctx: &mut FunctionContext<'_>) {
 
 /// Merges a present runtime `params['options']` map into options scratch.
 ///
-/// The lookup accepts direct associative hashes and hashes boxed behind Mixed
-/// storage. An absent or non-array entry leaves scratch unchanged.
+/// The lookup accepts direct associative hashes and hashes boxed behind Mixed storage. An ABSENT
+/// entry leaves scratch unchanged and says nothing; an entry that is PRESENT but is not a map
+/// throws php's `TypeError: Invalid stream/context parameter`.
+///
+/// Those two used to share one exit, so `["options" => 1]` was silently ignored where php-src's
+/// own `streams/bug44712.phpt` expects the throw. MEASURED on `php -n` 8.5.6: an int, a string and
+/// a null all throw, an empty array does not, and an absent key does not — through
+/// `stream_context_set_params()` and `stream_context_create()`'s second argument alike, which is
+/// why the refusal lives in this shared helper rather than at either call site.
 pub(super) fn merge_stream_context_params_options_into_scratch(
     ctx: &mut FunctionContext<'_>,
     params: ValueId,
+    location: Option<(String, u32)>,
 ) -> Result<()> {
-    let direct = ctx.next_label("sctx_params_options_direct");
-    let merge = ctx.next_label("sctx_params_options_merge");
+    let hashed = ctx.next_label("sctx_params_options_hashed");
+    let tagged = ctx.next_label("sctx_params_options_tagged");
+    let packed = ctx.next_label("sctx_params_options_packed");
+    let bad = ctx.next_label("sctx_params_options_bad");
     let done = ctx.next_label("sctx_params_options_done");
     let (key, key_len) = ctx.data.add_string(b"options");
     ctx.load_value_to_result(params)?;
@@ -231,18 +241,19 @@ pub(super) fn merge_stream_context_params_options_into_scratch(
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
             ctx.emitter.instruction(&format!("cbz x0, {}", done));              // absent params options leave the current context options unchanged
-            ctx.emitter.instruction("cmp x3, #5");                              // is the params entry a direct associative wrapper map?
-            ctx.emitter.instruction(&format!("b.eq {}", direct));               // direct maps expose their pointer in x1
-            ctx.emitter.instruction("cmp x3, #7");                              // is the params entry boxed behind Mixed storage?
-            ctx.emitter.instruction(&format!("b.ne {}", done));                 // ignore malformed non-array params options
+            ctx.emitter.instruction("mov x9, x3");                              // hold the tag: unboxing overwrites x3
+            ctx.emitter.instruction("cmp x9, #7");                              // is the params entry boxed behind Mixed storage?
+            ctx.emitter.instruction(&format!("b.ne {}", tagged));                 // a direct entry already carries its own tag
             ctx.emitter.instruction("mov x0, x1");                              // pass the boxed params entry to Mixed unboxing
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction("cmp x0, #5");                              // did the Mixed cell contain an associative wrapper map?
-            ctx.emitter.instruction(&format!("b.ne {}", done));                 // ignore malformed boxed params options
-            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed map into the canonical result register
-            ctx.emitter.instruction(&format!("b {}", merge));                   // join direct and boxed map paths
-            ctx.emitter.label(&direct);
-            ctx.emitter.instruction("mov x0, x1");                              // move the direct wrapper map into the canonical result register
+            ctx.emitter.instruction("mov x9, x0");                              // the concrete tag behind the box
+            ctx.emitter.label(&tagged);
+            ctx.emitter.instruction("mov x0, x1");                              // the container itself, boxed or not
+            ctx.emitter.instruction("cmp x9, #5");     // an associative wrapper map is merged
+            ctx.emitter.instruction(&format!("b.eq {}", hashed));
+            ctx.emitter.instruction("cmp x9, #4");   // `[]` arrives PACKED and is valid php
+            ctx.emitter.instruction(&format!("b.eq {}", packed));
+            ctx.emitter.instruction(&format!("b {}", bad));                     // a present non-array entry is php's TypeError
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the runtime params hash to lookup
@@ -251,22 +262,46 @@ pub(super) fn merge_stream_context_params_options_into_scratch(
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
             ctx.emitter.instruction("test rax, rax");                           // was a params options key present?
             ctx.emitter.instruction(&format!("jz {}", done));                   // absent params options preserve the current context options
-            ctx.emitter.instruction("cmp rcx, 5");                              // is the entry a direct associative wrapper map?
-            ctx.emitter.instruction(&format!("je {}", direct));                 // direct maps expose their pointer in rdi
-            ctx.emitter.instruction("cmp rcx, 7");                              // is the entry boxed behind Mixed storage?
-            ctx.emitter.instruction(&format!("jne {}", done));                  // ignore malformed non-array params options
+            ctx.emitter.instruction("mov r10, rcx");                            // hold the tag: unboxing overwrites rcx
+            ctx.emitter.instruction("cmp r10, 7");                              // is the entry boxed behind Mixed storage?
+            ctx.emitter.instruction(&format!("jne {}", tagged));                  // a direct entry already carries its own tag
             ctx.emitter.instruction("mov rax, rdi");                            // pass the boxed params entry to Mixed unboxing
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction("cmp rax, 5");                              // did the Mixed cell contain an associative wrapper map?
-            ctx.emitter.instruction(&format!("jne {}", done));                  // ignore malformed boxed params options
-            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed map into the canonical result register
-            ctx.emitter.instruction(&format!("jmp {}", merge));                 // join direct and boxed map paths
-            ctx.emitter.label(&direct);
-            ctx.emitter.instruction("mov rax, rdi");                            // move the direct wrapper map into the canonical result register
+            ctx.emitter.instruction("mov r10, rax");                            // the concrete tag behind the box
+            ctx.emitter.label(&tagged);
+            ctx.emitter.instruction("mov rax, rdi");                            // the container itself, boxed or not
+            ctx.emitter.instruction("cmp r10, 5");     // an associative wrapper map is merged
+            ctx.emitter.instruction(&format!("je {}", hashed));
+            ctx.emitter.instruction("cmp r10, 4");   // `[]` arrives PACKED and is valid php
+            ctx.emitter.instruction(&format!("je {}", packed));
+            ctx.emitter.instruction(&format!("jmp {}", bad));                   // a present non-array entry is php's TypeError
         }
     }
-    ctx.emitter.label(&merge);
+    ctx.emitter.label(&packed);
+    // A packed array is `[]` or a list with integer keys. The form guard refuses the second and
+    // passes the first, which has nothing to merge — and this keeps a packed header away from
+    // `__rt_stream_context_merge_options`, which reads a hash header.
+    emit_two_argument_options_shape_guard(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done)),
+    }
+    ctx.emitter.label(&hashed);
+    // The same FORM check the direct `stream_context_create($options)` door runs: php refuses
+    // `["http" => 1]` with a ValueError through BOTH doors, and this one merged it unexamined.
+    emit_two_argument_options_shape_guard(ctx);
     emit_merge_loaded_stream_context_options_into_scratch(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done)),
+    }
+    ctx.emitter.label(&bad);
+    // `emit_type_error_at` never returns, so `done` below is reached only by the branches above.
+    super::super::exceptions::emit_type_error_at(
+        ctx,
+        STREAM_CONTEXT_PARAMS_OPTIONS_MESSAGE,
+        location,
+    );
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -867,6 +902,13 @@ fn emit_drop_packed_stream_context_options(ctx: &mut FunctionContext<'_>) {
         }
     }
 }
+
+/// php-src's verbatim `TypeError` for a `params['options']` entry that is not an array.
+///
+/// `zend_type_error("Invalid stream/context parameter")` in `ext/standard/streamsfuncs.c` — a bare
+/// `zend_type_error`, so it carries no `funcname(): Argument #n` prefix the way the argument
+/// errors around it do. MEASURED on `php -n` 8.5.6 through `getMessage()`.
+pub(super) const STREAM_CONTEXT_PARAMS_OPTIONS_MESSAGE: &str = "Invalid stream/context parameter";
 
 /// php-src's verbatim `ValueError` for a stream-context options array of the wrong shape.
 pub(super) const STREAM_CONTEXT_OPTIONS_SHAPE_MESSAGE: &str =

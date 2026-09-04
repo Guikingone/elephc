@@ -3345,6 +3345,142 @@ t("php://memory", "a+");
     );
 }
 
+/// `params['options']` gets php's THREE answers, not one.
+///
+/// php-src's own `streams/bug44712.phpt` is `stream_context_set_params($ctx, ["options" => 1])`
+/// and expects `Invalid stream/context parameter`. MEASURED on `php -n` 8.5.6, the whole ladder:
+///
+///     absent                          nothing happens, no diagnostic
+///     []                              ok — an empty array merges nothing
+///     ["http" => ["method" => "P"]]   ok — merged
+///     [1, 2]                          ValueError: Options should have the form ["wrappername"]…
+///     ["http" => 1]                   ValueError: Options should have the form ["wrappername"]…
+///     1 / "x" / null / true           TypeError:  Invalid stream/context parameter
+///
+/// elephc answered "no throw" to every one of them. The lowering had ONE exit for two different
+/// questions: "is the key absent" and "is its value a map" both landed on `done`, so a malformed
+/// entry was as silent as a missing one. And the FORM check that the direct
+/// `stream_context_create($options)` door already runs — `__rt_stream_context_options_shape_ok`,
+/// php's `parse_context_options()` rule — was never run on the params door at all, so
+/// `["http" => 1]` was merged unexamined. The same rule, applied on one side only.
+///
+/// ⚠️ `[]` arrives PACKED, not hashed. Testing for the associative tag alone refused an empty
+/// array as if it were an int. A packed value therefore takes the form guard and then stops: only
+/// `[]` survives that guard, it has nothing to merge, and a packed header must not reach
+/// `__rt_stream_context_merge_options`, which reads a hash header.
+#[test]
+fn test_context_params_options_answers_php_three_ways() {
+    let out = compile_and_run(
+        r#"<?php
+function probe($f, string $what) {
+    try {
+        $f();
+    } catch (TypeError $e) {
+        echo $what, " => TypeError: ", $e->getMessage(), "\n";
+        return;
+    } catch (ValueError $e) {
+        echo $what, " => ValueError: ", $e->getMessage(), "\n";
+        return;
+    }
+    echo $what, " => ok\n";
+}
+$c = stream_context_create();
+probe(function () use ($c) { stream_context_set_params($c, []); }, "absent");
+probe(function () use ($c) { stream_context_set_params($c, ["options" => []]); }, "empty array");
+probe(function () use ($c) { stream_context_set_params($c, ["options" => ["http" => ["method" => "POST"]]]); }, "assoc of assoc");
+probe(function () use ($c) { stream_context_set_params($c, ["options" => [1, 2]]); }, "list of ints");
+probe(function () use ($c) { stream_context_set_params($c, ["options" => ["http" => 1]]); }, "assoc of int");
+probe(function () use ($c) { stream_context_set_params($c, ["options" => 1]); }, "int");
+probe(function () use ($c) { stream_context_set_params($c, ["options" => "x"]); }, "string");
+probe(function () use ($c) { stream_context_set_params($c, ["options" => null]); }, "null");
+// The same params array through stream_context_create's SECOND argument, which shares the helper.
+probe(function () { stream_context_create([], ["options" => 1]); }, "create int");
+probe(function () { stream_context_create([], ["options" => []]); }, "create empty array");
+// Only the well-formed merge landed, and it survived every refusal after it.
+var_dump(stream_context_get_options($c));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "absent => ok\n",
+            "empty array => ok\n",
+            "assoc of assoc => ok\n",
+            // an array whose values are not arrays is php's FORM error, not a type error
+            "list of ints => ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value\n",
+            "assoc of int => ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value\n",
+            // and anything that is not an array at all is the type error
+            "int => TypeError: Invalid stream/context parameter\n",
+            "string => TypeError: Invalid stream/context parameter\n",
+            "null => TypeError: Invalid stream/context parameter\n",
+            "create int => TypeError: Invalid stream/context parameter\n",
+            "create empty array => ok\n",
+            "array(1) {\n",
+            "  [\"http\"]=>\n",
+            "  array(1) {\n",
+            "    [\"method\"]=>\n",
+            "    string(4) \"POST\"\n",
+            "  }\n",
+            "}\n",
+        )
+    );
+}
+
+/// A NON-BLOCKING write that could not move a byte is `int(0)`, not `false`.
+///
+/// php-src's own `streams/bug79000.phpt`: a unix socket pair whose reader never reads, offered a
+/// megabyte twice. MEASURED on `php -n` 8.5.6, the same program either way:
+///
+///     php     first: int(8192)   second: int(0)      third: int(0)
+///     elephc  first: int(8192)   second: bool(false) third: bool(false)
+///
+/// php-src spells the rule out in `main/streams/xp_socket.c`: "EWOULDBLOCK/EAGAIN is not an error
+/// for a non-blocking stream. Report zero byte write instead." `fwrite()` then boxes that count,
+/// and only a NEGATIVE return becomes false.
+///
+/// The read side of this runtime already knew it — `fread` branches on the same
+/// `would_block_errno()` and answers an empty string without setting EOF. The write side did not,
+/// which is the recurring shape here: the rule is in the repo, applied on one side only.
+///
+/// The blocking case needs no distinction. php polls for `POLLOUT` and retries, so the same
+/// program with `stream_set_timeout` in place of `stream_set_blocking` HANGS under `php -n`
+/// rather than reporting anything — EAGAIN only ever reaches this branch from a descriptor the
+/// user made non-blocking.
+#[test]
+fn test_a_saturated_nonblocking_write_answers_zero_not_false() {
+    let out = compile_and_run(
+        r#"<?php
+[$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+$big = str_repeat('a', 1000000);
+stream_set_blocking($a, false);
+$first = fwrite($a, $big);
+// The pipe took a bufferful and no more, so the count is positive and short of the payload.
+echo ($first > 0 && $first < 1000000) ? "partial\n" : "unexpected: " . var_export($first, true) . "\n";
+// Nothing can move now, and php calls that a zero-byte write rather than a failure.
+var_dump(fwrite($a, $big));
+var_dump(fwrite($a, "x"));
+fclose($a);
+fclose($b);
+// A pair nobody saturated still writes normally, so the branch did not swallow the ordinary path.
+[$c, $d] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+var_dump(fwrite($c, "hello"));
+fclose($c);
+fclose($d);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "partial\n",
+            // a full buffer on a nonblocking descriptor: no bytes, no failure
+            "int(0)\n",
+            "int(0)\n",
+            // and an ordinary write is untouched
+            "int(5)\n",
+        )
+    );
+}
+
 /// php never asks a stream's source for more than ONE CHUNK, and a chunk of 1 skips the buffer.
 ///
 /// php-src's own `streams/stream_set_chunk_size.phpt`. MEASURED on `php -n` 8.5.6 against a
