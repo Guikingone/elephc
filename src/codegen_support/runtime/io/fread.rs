@@ -121,6 +121,18 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #8]");                                   // what the caller asked for
     emitter.instruction("cmp x9, x10");
     emitter.instruction("b.ge __rt_fread_held_ready");                          // enough held: serve it
+    // A chunk of 1 means php does not FILL A CHUNK AT A TIME: php-src's own
+    // `stream_set_chunk_size.phpt` says the buffer is skipped, and the measurement agrees — one
+    // `fread(10000)` makes ONE wrapper call for the shortfall, where filling by the chunk made
+    // 2409. `held` is still in x9 and the request in x10 from the compare just above.
+    emitter.instruction("sub x11, x10, x9");                                    // the shortfall, if the chunk is 1
+    emitter.instruction("str x11, [sp, #56]");                                  // across the chunk-size call, in the frame's free slot
+    emitter.instruction("ldr x0, [sp, #0]");
+    emitter.instruction("bl __rt_stream_chunk_size");
+    emitter.instruction("cmp x0, #1");
+    emitter.instruction("ldr x1, [sp, #56]");                                   // the shortfall
+    emitter.instruction("mov x9, #0");                                          // 0 = "ask for one chunk"
+    emitter.instruction("csel x1, x1, x9, eq");                                 // chunk 1: ask for exactly the shortfall
     emitter.instruction("ldr x0, [sp, #0]");
     emitter.instruction("bl __rt_uw_fill_one_chunk");                           // x0 = bytes added
     // php stops filling on a SHORT read, it does not keep asking until satisfied: MEASURED, a
@@ -179,6 +191,18 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #80");                                     // release native-read scratch storage
     emitter.instruction("b __rt_uw_fread_chunked");
     emitter.label("__rt_fread_wrapper_direct");
+    // php asks its source for ONE CHUNK and no more, however much the caller wanted: with a chunk
+    // of 100, `fread($h, 250)` elicits "read with size: 100" and answers 100. The exception is a
+    // chunk of 1, where the buffer is skipped and the caller's own count goes straight through.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_chunk_size");                           // x0 = one chunk
+    emitter.instruction("ldr x1, [sp, #8]");                                    // the caller's request
+    emitter.instruction("cmp x0, #1");
+    emitter.instruction("b.eq __rt_fread_wrapper_size_ready");                  // chunk 1: ask for the whole request
+    emitter.instruction("cmp x1, x0");
+    emitter.instruction("csel x1, x0, x1, gt");                                 // otherwise ask for at most one chunk
+    emitter.label("__rt_fread_wrapper_size_ready");
+    emitter.instruction("str x1, [sp, #8]");                                    // the size this read really asks for
     emitter.instruction("ldr x0, [sp, #32]");                                   // the wrapper descriptor the probe clobbered
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the requested byte count for stream_read
     emitter.instruction("bl __rt_user_wrapper_fread");                          // x0 = verdict, x1/x2 = the bytes
@@ -429,7 +453,11 @@ fn emit_uw_fill_one_chunk(emitter: &mut Emitter) {
             emitter.instruction("stp x29, x30, [sp, #48]");
             emitter.instruction("add x29, sp, #48");
             emitter.instruction("str x0, [sp, #0]");                            // the opaque stream handle
+            emitter.instruction("str x1, [sp, #40]");                           // an explicit size, or 0 for "one chunk"
             emitter.instruction("bl __rt_stream_chunk_size");                   // what php would ask for
+            emitter.instruction("ldr x9, [sp, #40]");                           // the caller's explicit size
+            emitter.instruction("cmp x9, #0");
+            emitter.instruction("csel x0, x9, x0, ne");                         // a size of 0 keeps the chunk
             emitter.instruction("str x0, [sp, #24]");                           // across the descriptor lookup
             emitter.instruction("ldr x0, [sp, #0]");
             emitter.instruction("bl __rt_stream_fd");                           // the source behind this stream
@@ -813,6 +841,19 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_uw_fread_chunked");
     emitter.label("__rt_fread_wrapper_direct_x86");
+    // See the AArch64 counterpart: php asks its source for ONE CHUNK and no more, however much the
+    // caller wanted — with a chunk of 100, `fread($h, 250)` elicits "read with size: 100" and
+    // answers 100. A chunk of 1 is the exception, where the buffer is skipped and the caller's own
+    // count goes straight through.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_chunk_size");                         // rax = one chunk
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // the caller's request
+    emitter.instruction("cmp rax, 1");
+    emitter.instruction("je __rt_fread_wrapper_size_ready_x86");                // chunk 1: ask for the whole request
+    emitter.instruction("cmp rsi, rax");
+    emitter.instruction("cmovg rsi, rax");                                      // otherwise ask for at most one chunk
+    emitter.label("__rt_fread_wrapper_size_ready_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // the size this read really asks for
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the wrapper descriptor the probe clobbered
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
     emitter.instruction("call __rt_user_wrapper_fread");                        // rax/rdx = the bytes, rcx = verdict

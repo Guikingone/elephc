@@ -3299,6 +3299,58 @@ fclose($m3);
     assert_eq!(out, "SGVsbG8gV29ybGQ=|YWI=|YQ==");
 }
 
+/// php never asks a stream's source for more than ONE CHUNK, and a chunk of 1 skips the buffer.
+///
+/// php-src's own `streams/stream_set_chunk_size.phpt`. MEASURED on `php -n` 8.5.6 against a
+/// wrapper that echoes every `stream_read($count)`:
+///
+/// * default chunk 8192, `fread(250)` asks the wrapper for 8192 and answers 250 — the surplus is
+///   buffered, and the next three reads ask for NOTHING;
+/// * with the chunk set to 100, `fread(250)` asks for 100 and answers 100. elephc asked for 250
+///   and answered 250: its rule was "ask for the caller's count whenever it is at least a chunk",
+///   where php's is "never ask for more than a chunk";
+/// * with the chunk set to 1, one `fread(10000)` makes ONE call for the shortfall. elephc filled
+///   the buffer a chunk at a time — 2409 wrapper calls for the same bytes. php-src's test says so
+///   in a comment: at chunk 1 "the read buffer is skipped".
+///
+/// The chunk-1 half is a top-up that asks for the SHORTFALL, not a skipped buffer: skipping it
+/// outright answered 7592, only what was already held, where php answers 10000 by serving the held
+/// bytes AND reading the rest.
+#[test]
+fn test_a_wrapper_is_never_asked_for_more_than_one_chunk() {
+    let out = compile_and_run(
+        r#"<?php
+class chunkwrap {
+    public $context;
+    function stream_open($p, $m, $o) { return true; }
+    function stream_eof() { return false; }
+    function stream_read($count) { echo "asked ", $count, "\n"; return str_repeat('a', $count); }
+    function stream_write($d) { return strlen($d); }
+    function stream_set_option($o, $a, $b) { return false; }
+}
+stream_wrapper_register('chunkt', 'chunkwrap');
+$f = fopen("chunkt://x", "r");
+echo strlen(fread($f, 250)), "\n";
+echo stream_set_chunk_size($f, 100), "\n";
+echo strlen(fread($f, 250)), "\n";
+echo strlen(fread($f, 50)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // one whole chunk, whatever the caller asked for
+            "asked 8192\n",
+            "250\n",
+            // the previous chunk size comes back
+            "8192\n",
+            // and the next two reads are served from the surplus, asking nothing
+            "250\n",
+            "50\n",
+        )
+    );
+}
+
 /// A stream released by its DESTRUCTOR must forget its filters, not leave them for the next fd.
 ///
 /// `_stream_read_filters` / `_stream_write_filters` are 512-byte tables indexed BY DESCRIPTOR, and
