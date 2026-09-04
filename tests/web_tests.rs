@@ -3149,3 +3149,94 @@ fn web_opcache_gate_ignores_enable_cli() {
         assert!(resp.ends_with(expected), "{why}; response was {resp:?}");
     }
 }
+
+/// Pins that a `--web` build still destructs an object whose method was reached through the
+/// eval bridge, in PHP's order.
+///
+/// THE BUG THIS PINS. A `--web` build declares an eval context in any function that calls a
+/// method on a receiver needing the Mixed fallback (`promote_eval_bridge_method_argument_locals`),
+/// and `has_eval_context()` then routes that function's `$this->prop` reads through
+/// `__elephc_eval_property_get`. That bridge boxes the statically typed receiver into
+/// `EVAL_TEMP_CELL_OFFSET` and owes the box a `__rt_decref_mixed` after the call — but
+/// `pop_eval_context_class_scope()` parked the bridge status in that same slot, overwriting the
+/// box's only pointer. The pending release then decref'd the status integer (always 0 on the
+/// path that reaches it, so never a crash), and the receiver kept a reference forever:
+///
+/// ```text
+/// php -n / plain build : d(a)|d(b)|d(c)|a,b,c
+/// --web build (before) : |d(b)||b
+/// ```
+///
+/// Only `b` survives: `a` and `c` are the two whose `set()` routed through `class()`, the method
+/// that reads `$this->definition` through the bridge. This is the shape that left Symfony's
+/// `secrets.local_vault` unregistered — `ServiceConfigurator::__destruct()` is what calls
+/// `setDefinition()`, and it never ran.
+///
+/// WHY A `--web` TEST. The identical program is correct in a plain CLI build, because nothing
+/// there declares the eval context that turns a direct property read into a bridged one. Every
+/// CLI-only destructor test stayed green through this bug.
+///
+/// Reference value captured from `php -n` (PHP 8.5).
+#[test]
+fn web_bridged_property_read_still_destructs_its_receiver() {
+    let src = r#"<?php
+class Registry {
+    public array $ids = [];
+    public function add(?string $id): void { $this->ids[] = $id; echo 'd(' . $id . ')'; }
+}
+class Definition {
+    public ?string $class = null;
+    public function setClass(?string $c): static { $this->class = $c; return $this; }
+}
+class Node {
+    private Registry $registry;
+    private ?Definition $definition = null;
+    private ?string $id = null;
+    public function __construct(Registry $registry, Definition $definition, ?string $id) {
+        $this->registry = $registry;
+        $this->definition = $definition;
+        $this->id = $id;
+    }
+    public function __destruct() { $this->registry->add($this->id); }
+    public function class(?string $c): static { $this->definition->setClass($c); return $this; }
+}
+class Builder {
+    private Registry $registry;
+    public function __construct(Registry $registry) { $this->registry = $registry; }
+    public function set(?string $id, ?string $class = null): Node {
+        $node = new Node($this->registry, new Definition(), $id);
+        return null !== $class ? $node->class($class) : $node;
+    }
+}
+$registry = new Registry();
+$builder = new Builder($registry);
+$builder->set('a', 'A');
+echo '|';
+$builder->set('b');
+echo '|';
+$builder->set('c', 'C');
+echo '|';
+echo implode(',', $registry->ids);
+"#;
+    let dir = make_test_dir("web_bridged_prop_destruct");
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let expected = "d(a)|d(b)|d(c)|a,b,c";
+    assert!(
+        first.ends_with(expected),
+        "a bridged property read stranded its receiver's reference, so the destructor never ran; \
+         expected a body ending {expected:?}, got {first:?}"
+    );
+    // A leak that only shows on a later request would still starve a long-running worker.
+    assert!(
+        second.ends_with(expected),
+        "second request diverged from the first; expected a body ending {expected:?}, got {second:?}"
+    );
+}

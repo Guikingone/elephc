@@ -152,19 +152,24 @@ pub(super) fn push_eval_context_class_scope(ctx: &mut FunctionContext<'_>) -> Re
 }
 
 /// Leaves a pushed eval class scope while preserving the original eval status.
+///
+/// The status is parked in `EVAL_STATUS_SAVE_OFFSET` rather than the generic temp cell: a caller
+/// that boxed a statically typed receiver left that box's only pointer in
+/// `EVAL_TEMP_CELL_OFFSET` and still owes it a release once the status has been checked, so
+/// borrowing that slot here would silently drop the box and strand its object reference.
 pub(super) fn pop_eval_context_class_scope(ctx: &mut FunctionContext<'_>, pushed: bool) {
     if !pushed {
         return;
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
     load_eval_context_to_arg(ctx, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_context_pop_class_scope");
     abi::emit_call_label(ctx.emitter, &symbol);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
 }
 
 /// Returns the lexical class encoded in the current EIR callable name.

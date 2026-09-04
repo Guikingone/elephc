@@ -53,6 +53,14 @@ const EVAL_CODE_LEN_OFFSET: usize = 56;
 const EVAL_GLOBAL_SCOPE_HANDLE_OFFSET: usize = 64;
 const EVAL_CALLED_CLASS_PTR_OFFSET: usize = 72;
 const EVAL_CALLED_CLASS_LEN_OFFSET: usize = 80;
+/// Scratch slot that parks a bridge status across a second call that returns its own status.
+///
+/// It must be a slot no bridge operand can occupy. `EVAL_TEMP_CELL_OFFSET` is where a bridge
+/// boxes its typed receiver, and that box is still owed a release AFTER the class scope is
+/// popped, so parking the status there overwrites the only pointer to the boxed cell and turns
+/// the pending `__rt_decref_mixed` into a decref of the status integer. The receiver's object
+/// reference is then stranded and its destructor never runs.
+const EVAL_STATUS_SAVE_OFFSET: usize = 88;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
