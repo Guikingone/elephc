@@ -162,7 +162,7 @@ function __elephc_gzip_frame(mixed $data, int $level): string {
         . chr($len & 255) . chr(($len >> 8) & 255) . chr(($len >> 16) & 255) . chr(($len >> 24) & 255);
 }
 
-function gzencode(mixed $data, int $level = -1, int $encoding = 31): string|false {
+function gzencode(string $data, int $level = -1, int $encoding = 31): string|false {
     if ($level < -1 || $level > 9) {
         throw new \ValueError('gzencode(): Argument #2 ($level) must be between -1 and 9');
     }
@@ -178,7 +178,7 @@ function gzencode(mixed $data, int $level = -1, int $encoding = 31): string|fals
     return __elephc_gzip_frame($data, $level);
 }
 
-function zlib_encode(mixed $data, int $encoding, int $level = -1): string|false {
+function zlib_encode(string $data, int $encoding, int $level = -1): string|false {
     if ($level < -1 || $level > 9) {
         throw new \ValueError('zlib_encode(): Argument #3 ($level) must be between -1 and 9');
     }
@@ -231,7 +231,7 @@ function __elephc_gzip_body(mixed $data): string|false {
     return substr($data, $pos, $length);
 }
 
-function gzdecode(mixed $data, int $max_length = 0): string|false {
+function gzdecode(string $data, int $max_length = 0): string|false {
     $body = __elephc_gzip_body($data);
     if ($body === false) {
         return false;
@@ -239,7 +239,7 @@ function gzdecode(mixed $data, int $max_length = 0): string|false {
     return gzinflate($body, $max_length);
 }
 
-function zlib_decode(mixed $data, int $max_length = 0): string|false {
+function zlib_decode(string $data, int $max_length = 0): string|false {
     if (strlen($data) < 2) {
         return false;
     }

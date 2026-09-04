@@ -58,6 +58,15 @@ const DYNAMIC_STACK_HELPERS: &[(&str, &str)] = &[
         "realigns the stack with `and rsp, -16` before a C call",
     ),
     (
+        "__rt_curl_version",
+        "a real variable-length alloca: it reserves `curl_version_info`'s blob by the byte \
+         count the bridge reports (`sub rsp, r10` after `shl r10, 4`, `sub sp, sp, x9`), so \
+         the movement CANNOT be read from the text. VERIFIED balanced by hand on both \
+         arches, through the frame pointer rather than by matching the subtraction: x86 \
+         unwinds with `mov rsp, rbp` + `pop rbp`, aarch64 with `sub sp, x29, #16` + \
+         `add sp, sp, #32`",
+    ),
+    (
         "__rt_exception_matches",
         "realigns the stack with `and rsp, -16` before a C call",
     ),

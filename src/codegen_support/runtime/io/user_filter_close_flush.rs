@@ -242,11 +242,29 @@ mod tests {
             "each body reads the write-chain head once"
         );
         assert_eq!(asm.matches("bl __rt_stream_apply_filter_chain").count(), 2);
-        // One body says `$closing = 0`, the other `$closing = 1`, and each lowers it after.
-        assert_eq!(asm.matches("mov x10, #0").count(), 1);
-        assert_eq!(asm.matches("mov x10, #1").count(), 1);
-        assert_eq!(asm.matches("str x10, [x9]").count(), 2);
-        assert_eq!(asm.matches("str xzr, [x9]").count(), 2);
+        // Two flags, two bodies. `$closing` is the ONLY thing that tells the bodies apart, so
+        // its `0` appears once; the `1` appears three times because the closing body publishes
+        // it AND both bodies raise `flush_only`, which is always 1.
+        assert_eq!(
+            asm.matches("mov x10, #0").count(),
+            1,
+            "only the non-closing body publishes $closing = 0"
+        );
+        assert_eq!(
+            asm.matches("mov x10, #1").count(),
+            3,
+            "the closing body's $closing, plus flush_only raised in each body"
+        );
+        assert_eq!(
+            asm.matches("str x10, [x9]").count(),
+            4,
+            "two flags raised in each of the two bodies"
+        );
+        assert_eq!(
+            asm.matches("str xzr, [x9]").count(),
+            4,
+            "and both lowered again in each, immediately after the one walk"
+        );
         assert_eq!(asm.matches("sub sp, sp, #32").count(), 2);
         assert_eq!(asm.matches("add sp, sp, #32").count(), 2);
         // Each body owns its own exit label, and neither jumps into the other's.
@@ -283,9 +301,18 @@ mod tests {
         assert_eq!(asm.matches("mov QWORD PTR [rbp - 32], rdx").count(), 2);
         assert!(!asm.contains("r14"));
         assert!(!asm.contains("r15"));
-        // One body publishes 0 for `$closing`, the other 1, and both lower it after the walk.
-        assert_eq!(asm.matches("mov QWORD PTR [r10], 0").count(), 3);
-        assert_eq!(asm.matches("mov QWORD PTR [r10], 1").count(), 1);
+        // See the AArch64 counterpart for the arithmetic: two flags, two bodies, and `$closing`
+        // the only difference between them.
+        assert_eq!(
+            asm.matches("mov QWORD PTR [r10], 0").count(),
+            5,
+            "the non-closing body's $closing, plus both flags lowered in each body"
+        );
+        assert_eq!(
+            asm.matches("mov QWORD PTR [r10], 1").count(),
+            3,
+            "the closing body's $closing, plus flush_only raised in each body"
+        );
         assert_eq!(asm.matches("call write").count(), 2);
         // See the AArch64 counterpart: neither body branches into the other's atom.
         let (flush, close) = asm

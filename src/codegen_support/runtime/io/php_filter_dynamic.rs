@@ -1329,7 +1329,12 @@ fn emit_suppress_begin_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r8], r9");
     emitter.instruction("test r11, r11");
     emitter.instruction("jz __rt_pfsb_done_x");                                 // a plain path warns in its own words
+    // System V wants `rsp % 16 == 0` AT the call, and this helper is frameless, so it enters
+    // 8 bytes off and would call 8 bytes off. See `runtime::sysv_call_alignment` for the
+    // fault this class of misalignment cost once a bridge was reachable from one.
+    emitter.instruction("sub rsp, 8");                                          // realign the stack for the callee
     emitter.instruction("call __rt_diag_push_filter_suppression");
+    emitter.instruction("add rsp, 8");                                          // give the realignment back
     emitter.label("__rt_pfsb_done_x");
     emitter.instruction("ret");
 }

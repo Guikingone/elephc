@@ -53,6 +53,26 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ),
         ("image_prelude", crate::image_prelude::image_declarations()),
         ("curl_prelude", parsed_curl_prelude()),
+        // This branch's four. They are PHP source like curl's, not built AST like the rest.
+        (
+            "dir_prelude",
+            parsed_php_prelude("dir", crate::dir_prelude::DIR_PRELUDE_SRC),
+        ),
+        (
+            "gz_prelude",
+            parsed_php_prelude("gz", crate::gz_prelude::GZ_PRELUDE_SRC),
+        ),
+        (
+            "similar_text_prelude",
+            parsed_php_prelude(
+                "similar_text",
+                crate::similar_text_prelude::SIMILAR_TEXT_PRELUDE_SRC,
+            ),
+        ),
+        (
+            "scanf_prelude",
+            parsed_php_prelude("scanf", crate::scanf_prelude::SCANF_PRELUDE_SRC),
+        ),
         (
             "version_prelude",
             crate::version_prelude::version_declarations(
@@ -104,9 +124,28 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
 
 /// Parses `CURL_PRELUDE_SRC` exactly as `curl_prelude::inject_if_used_for_version` does.
 fn parsed_curl_prelude() -> crate::parser::ast::Program {
-    let tokens = crate::lexer::tokenize(crate::curl_prelude::CURL_PRELUDE_SRC)
-        .expect("curl prelude must tokenize");
-    crate::parser::parse_internal(&tokens).expect("curl prelude must parse")
+    parsed_php_prelude("curl", crate::curl_prelude::CURL_PRELUDE_SRC)
+}
+
+/// The preludes whose canonical form is PHP SOURCE TEXT, not a built Rust AST.
+///
+/// `prelude_sources` hands these out verbatim rather than through
+/// `synthetic_class::print::print_program`: printing a parsed program back is faithful, but the
+/// source is what a reader of the prelude sees, and for these it is the authority.
+const PHP_SOURCE_PRELUDES: &[(&str, &str)] = &[
+    ("curl_prelude", crate::curl_prelude::CURL_PRELUDE_SRC),
+    ("dir_prelude", crate::dir_prelude::DIR_PRELUDE_SRC),
+    ("gz_prelude", crate::gz_prelude::GZ_PRELUDE_SRC),
+    ("similar_text_prelude", crate::similar_text_prelude::SIMILAR_TEXT_PRELUDE_SRC),
+    ("scanf_prelude", crate::scanf_prelude::SCANF_PRELUDE_SRC),
+];
+
+/// Tokenizes and parses one PHP-source prelude, naming it in the failure.
+fn parsed_php_prelude(label: &str, source: &str) -> crate::parser::ast::Program {
+    let tokens = crate::lexer::tokenize(source)
+        .unwrap_or_else(|error| panic!("the {label} prelude must tokenize: {error:?}"));
+    crate::parser::parse_internal(&tokens)
+        .unwrap_or_else(|error| panic!("the {label} prelude must parse: {error:?}"))
 }
 
 /// Every injected prelude rendered back to PHP source, for the two audits that read
@@ -126,10 +165,9 @@ fn prelude_sources() -> Vec<(&'static str, String)> {
     injected_prelude_programs()
         .into_iter()
         .map(|(name, program)| {
-            let source = if name == "curl_prelude" {
-                crate::curl_prelude::CURL_PRELUDE_SRC.to_string()
-            } else {
-                crate::synthetic_class::print::print_program(&program)
+            let source = match PHP_SOURCE_PRELUDES.iter().find(|(known, _)| *known == name) {
+                Some((_, php)) => (*php).to_string(),
+                None => crate::synthetic_class::print::print_program(&program),
             };
             (name, source)
         })
@@ -553,7 +591,14 @@ fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
         // Parsed rather than string-compared so `1.0`, `1.00` and `1e0` all agree with
         // `Float(1.0)` while `5.0` does not.
         DefaultSpec::Float(value) => declared.parse::<f64>() == Ok(*value),
-        DefaultSpec::Int(value) => declared.parse::<i64>() == Ok(*value),
+        // A php constant is as legitimate a spelling as the literal, and often the honest one:
+        // php's own manual writes `gzseek(..., int $whence = SEEK_SET)`. The name is resolved
+        // through the shared table rather than special-cased, so `SEEK_END` against a contract
+        // of `0` still fails and an undeclared name still fails.
+        DefaultSpec::Int(value) => {
+            declared.parse::<i64>() == Ok(*value)
+                || elephc_builtin_contract::php_constants::int_constant(declared) == Some(*value)
+        }
         DefaultSpec::Str(value) => {
             declared == format!("\"{value}\"") || declared == format!("'{value}'")
         }
