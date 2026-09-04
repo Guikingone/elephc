@@ -3299,6 +3299,83 @@ fclose($m3);
     assert_eq!(out, "SGVsbG8gV29ybGQ=|YWI=|YQ==");
 }
 
+/// `convert.quoted-printable-encode` obeys `line-break-chars`, and that changes THREE rules.
+///
+/// php's own bug64166, and the reason its three `.phpt` variants disagreed with elephc. MEASURED
+/// on `php -n` 8.5.6, over the shapes php-src tests plus nine more:
+///
+/// * A run matching the break chars is copied out VERBATIM and restarts the line. Without them
+///   in force, the same byte is escaped: `"FIRST \nSECOND"` is `FIRST =0ASECOND` with no
+///   parameters and `FIRST=20\nSECOND` with `["line-break-chars" => "\n", "line-length" => 74]`.
+/// * A space or tab is literal mid-line and `=20`/`=09` when it ENDS one. php looks AHEAD to
+///   decide, so the SAME byte goes both ways in one buffer: `"trailing ws  "` answers
+///   `trailing ws=20=20` — the middle space literal, the final two escaped — and a run that ends
+///   the buffer counts as trailing just as one before a break does.
+/// * Both rules, and wrapping itself, exist only when `line-length >= 4`. php's factory nulls the
+///   break chars below that, so `["line-length" => 3]` answers the unparameterised form.
+///
+/// The soft break is `=` plus the break chars, and it costs the LAST column, which is why
+/// `line-length => 6` splits `SECOND` as `SECON=` / `D` rather than after six characters.
+#[test]
+fn test_qp_encode_honours_line_break_chars_and_trailing_whitespace() {
+    let out = compile_and_run(
+        r#"<?php
+function t($data, $params) {
+    $fd = fopen('php://temp', 'w+');
+    fwrite($fd, $data);
+    rewind($fd);
+    stream_filter_append($fd, 'convert.quoted-printable-encode', STREAM_FILTER_READ, $params);
+    var_dump(stream_get_contents($fd, -1, 0));
+    fclose($fd);
+}
+t("FIRST \nSECOND", []);
+t("FIRST \nSECOND", ["line-break-chars" => "\n", "line-length" => 74]);
+t("FIRST \nSECOND", ["line-break-chars" => "\n", "line-length" => 6]);
+t("FIRST  \nSECOND", ["line-break-chars" => "\n", "line-length" => 74]);
+t("FIRST  \nSECOND", ["line-break-chars" => "\n", "line-length" => 6]);
+t("a b\tc", []);
+t("a b\tc", ["binary" => true]);
+t("hello world\r\nnext", ["line-length" => 74]);
+t("hello world\r\nnext", []);
+t("ab \t\ncd", ["line-break-chars" => "\n", "line-length" => 74]);
+t("trailing ws  ", ["line-break-chars" => "\n", "line-length" => 74]);
+t("x\rz", ["line-length" => 74]);
+t("FIRST \nSECOND", ["line-length" => 3]);
+t(str_repeat("z", 10), ["line-break-chars" => "|", "line-length" => 6]);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // no parameters: the break chars are NULL, so `\n` is escaped and the space is not
+            "string(15) \"FIRST =0ASECOND\"\n",
+            // `\n` in force: passed through, and the space before it becomes =20
+            "string(15) \"FIRST=20\nSECOND\"\n",
+            // the same, wrapped at 6: the `=` takes the last column
+            "string(19) \"FIRST=\n=20\nSECON=\nD\"\n",
+            // a two-byte trailing run escapes both bytes
+            "string(18) \"FIRST=20=20\nSECOND\"\n",
+            "string(24) \"FIRST=\n=20=\n=20\nSECON=\nD\"\n",
+            // php escapes a space or tab only under `binary`
+            "string(5) \"a b\tc\"\n",
+            "string(9) \"a=20b=09c\"\n",
+            // the default break chars are CRLF, and only when line-length is given
+            "string(17) \"hello world\r\nnext\"\n",
+            "string(21) \"hello world=0D=0Anext\"\n",
+            // a trailing run mixes space and tab
+            "string(11) \"ab=20=09\ncd\"\n",
+            // a run that ends the BUFFER is trailing too
+            "string(17) \"trailing ws=20=20\"\n",
+            // a `\r` that does not complete CRLF is replayed and escaped
+            "string(5) \"x=0Dz\"\n",
+            // line-length below 4 nulls the break chars outright
+            "string(15) \"FIRST =0ASECOND\"\n",
+            // the break chars need not be a line ending at all
+            "string(12) \"zzzzz=|zzzzz\"\n",
+        )
+    );
+}
+
 /// Verifies compiled PHP output for stream filter qp encode escapes non printables.
 #[test]
 fn test_stream_filter_qp_encode_escapes_non_printables() {
