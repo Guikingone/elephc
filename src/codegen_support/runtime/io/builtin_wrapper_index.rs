@@ -144,15 +144,15 @@ pub fn emit_stream_wrapper_restore_diag(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_swr_diag_warning");                      // kind 1 = the unknown-scheme warning
 
     // -- Notice: "<prefix><scheme>:// was never changed, nothing to restore" --
-    abi::emit_symbol_address(emitter, "x0", "_swr_ntc_prefix");
-    emitter.instruction(&format!("mov x1, #{}", SWR_NTC_PREFIX.len()));         // notice prefix byte count
-    emitter.instruction("bl __rt_stdout_write");                                // notices travel through the output-buffer funnel
-    emitter.instruction("ldr x0, [sp, #0]");                                    // the caller's scheme pointer
-    emitter.instruction("ldr x1, [sp, #8]");                                    // the caller's scheme length
-    emitter.instruction("bl __rt_stdout_write");                                // write the scheme name itself
-    abi::emit_symbol_address(emitter, "x0", "_swr_never_changed");
-    emitter.instruction(&format!("mov x1, #{}", SWR_NEVER_CHANGED.len()));      // notice suffix byte count
-    emitter.instruction("bl __rt_stdout_write");                                // finish the notice line
+    abi::emit_symbol_address(emitter, "x1", "_swr_ntc_prefix");
+    emitter.instruction(&format!("mov x2, #{}", SWR_NTC_PREFIX.len()));         // notice prefix byte count
+    emitter.instruction("bl __rt_diag_warning");                                // a notice is a diagnostic: blank line, location, and @ suppression
+    emitter.instruction("ldr x1, [sp, #0]");                                    // the caller's scheme pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // the caller's scheme length
+    emitter.instruction("bl __rt_diag_warning");                                // write the scheme name itself
+    abi::emit_symbol_address(emitter, "x1", "_swr_never_changed");
+    emitter.instruction(&format!("mov x2, #{}", SWR_NEVER_CHANGED.len()));      // notice suffix byte count
+    emitter.instruction("bl __rt_diag_warning");                                // finish the notice line
     emitter.instruction("b __rt_swr_diag_done");                                // skip the warning path
 
     // -- Warning: "<prefix><scheme>:// never existed, nothing to restore" --
@@ -193,13 +193,13 @@ fn emit_stream_wrapper_restore_diag_linux_x86_64(emitter: &mut Emitter) {
     // -- Notice: "<prefix><scheme>:// was never changed, nothing to restore" --
     abi::emit_symbol_address(emitter, "rdi", "_swr_ntc_prefix");
     emitter.instruction(&format!("mov esi, {}", SWR_NTC_PREFIX.len()));         // notice prefix byte count
-    emitter.instruction("call __rt_stdout_write");                              // notices travel through the output-buffer funnel
+    emitter.instruction("call __rt_diag_warning");                              // a notice is a diagnostic: blank line, location, and @ suppression
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the caller's scheme pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // the caller's scheme length
-    emitter.instruction("call __rt_stdout_write");                              // write the scheme name itself
+    emitter.instruction("call __rt_diag_warning");                              // write the scheme name itself
     abi::emit_symbol_address(emitter, "rdi", "_swr_never_changed");
     emitter.instruction(&format!("mov esi, {}", SWR_NEVER_CHANGED.len()));      // notice suffix byte count
-    emitter.instruction("call __rt_stdout_write");                              // finish the notice line
+    emitter.instruction("call __rt_diag_warning");                              // finish the notice line
     emitter.instruction("jmp __rt_swr_diag_done_x");                            // skip the warning path
 
     // -- Warning: "<prefix><scheme>:// never existed, nothing to restore" --

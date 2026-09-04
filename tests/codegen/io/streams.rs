@@ -3299,6 +3299,47 @@ fclose($m3);
     assert_eq!(out, "SGVsbG8gV29ybGQ=|YWI=|YQ==");
 }
 
+/// `stream_wrapper_restore()`'s Notice is a DIAGNOSTIC, not plain output.
+///
+/// php's own bug76943 reported only a missing blank line. MEASURED on `php -n` 8.5.6, the notice
+/// diverged three ways at once, because elephc wrote it straight to stdout while its Warning
+/// already went through the diagnostic funnel:
+///
+///     BEFORE\n \n Notice: ... nothing to restore in <file> on line 3\n bool(true)\n
+///
+/// * php puts a BLANK LINE before it — the only half the corpus test could see.
+/// * php appends ` in <file> on line N`, which the corpus scrubber hides.
+/// * `@stream_wrapper_restore('phar')` prints NOTHING. elephc printed the notice anyway, and no
+///   corpus test exercises that at all — the existing suppression test covers only the Warning.
+///
+/// The last two are what this test is for: a diff told me about the first, measuring the SHAPE
+/// told me about the others.
+#[test]
+fn test_stream_wrapper_restore_notice_is_a_suppressible_diagnostic() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo "BEFORE\n";
+var_dump(stream_wrapper_restore('phar'));
+echo "AFTER\n";
+echo "SUPPRESSED:";
+var_dump(@stream_wrapper_restore('phar'));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    // `@` swallows the second notice entirely, and neither call's return value changes.
+    assert_eq!(out.stdout, "BEFORE\nbool(true)\nAFTER\nSUPPRESSED:bool(true)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Notice: stream_wrapper_restore(): phar:// was never changed, nothing to restore\n"
+    );
+    // The location is a mechanism of its own, and it was missing entirely before this.
+    assert_eq!(
+        out.located_diagnostics,
+        "Notice: stream_wrapper_restore(): phar:// was never changed, nothing to restore \
+         in test.php on line 3\n"
+    );
+}
+
 /// `convert.quoted-printable-encode` obeys `line-break-chars`, and that changes THREE rules.
 ///
 /// php's own bug64166, and the reason its three `.phpt` variants disagreed with elephc. MEASURED
