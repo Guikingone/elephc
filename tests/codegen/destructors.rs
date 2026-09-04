@@ -964,3 +964,54 @@ echo "end\n";
     );
     assert_eq!(out, "1\n1\nscope end\ndestruct keeper\ndestruct local\nend\n");
 }
+
+/// A spread call under an eval context must not keep the container it spread.
+///
+/// `f(...$args)` after an eval barrier cannot use the fixed native argument ABI, so it is lowered
+/// to `EvalFunctionCallArray` and the container is boxed for the bridge by
+/// `coerce_eval_function_arg_array`. That box is a fresh owning temporary and the bridge only
+/// borrows it, but nothing released it: the box held a reference on the array for the rest of the
+/// program. An array literal spread straight into the call leaked twice over, because the raw
+/// `MixedBox` also kept the producer's reference to the temporary it boxed.
+///
+/// Two shapes, one release each. `$args` is a borrowed local, so only the box is this frame's;
+/// `[2]` is an owning temporary, so `box_value_as_mixed` also hands the array's own reference to
+/// the box. Both are proven by the block count rather than by output, because an int element has
+/// no destructor to observe: this program ended at `live_blocks=12` (880 bytes) before the release
+/// and ends at `live_blocks=8` (496 bytes) after it — four blocks, two per leaked container.
+///
+/// The remaining eight are not this bug and are pinned deliberately so the number keeps its
+/// meaning: the eval context, scope, and module registration an `eval()` frame allocates once, plus
+/// the Mixed cell `__rt_mixed_array_get` freshly boxes for each spread element inside the
+/// interpreter. That interpreter cell is a separate, still-open leak — `append_unpacked_call_arg_values`
+/// releases the key it reads with `array_iter_key` and not the value it reads with `array_get`,
+/// which is why an object element spread this way still never destructs. Fixing that is what will
+/// drop this count further; a drop is not a regression of this release.
+#[test]
+fn test_spread_call_under_an_eval_context_releases_its_boxed_container() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class T {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct {$this->n}\n"; }
+}
+function takesInt(int $x): int { return 1; }
+function run(): void {
+    eval('$seed = 1;');
+    $local = new T('local');
+    $args = [1];
+    takesInt(...$args);
+    takesInt(...[2]);
+    echo "scope end\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out.stdout, "scope end\ndestruct local\nend\n");
+    assert!(
+        out.stderr.contains("live_blocks=8"),
+        "expected the two spread containers to be released, got: {}",
+        out.stderr
+    );
+}

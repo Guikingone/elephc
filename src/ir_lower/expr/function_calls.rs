@@ -307,15 +307,24 @@ fn lower_dynamic_function_owner_spread_call(
     let dynamic_name = php_symbol_key(canonical.trim_start_matches('\\'));
     let data = ctx.intern_function_name(&dynamic_name);
     let container = lower_expr(ctx, container);
-    let container = super::callable_probes::coerce_eval_function_arg_array(ctx, container, expr.span);
-    Some(ctx.emit_value(
+    let boxed_container =
+        super::callable_probes::coerce_eval_function_arg_array(ctx, container, expr.span);
+    let result = ctx.emit_value(
         Op::EvalFunctionCallArray,
-        vec![container.value],
+        vec![boxed_container.value],
         Some(Immediate::Data(data)),
         PhpType::Mixed,
         Op::EvalFunctionCallArray.default_effects(),
         Some(expr.span),
-    ))
+    );
+    release_owned_call_arg_temporaries(
+        ctx,
+        &[boxed_container.value],
+        Some(result.value),
+        &ReturnArgAlias::None,
+        expr.span,
+    );
+    Some(result)
 }
 
 /// Promotes a boxed gradual local before descending key sort and republishes it afterwards.
