@@ -148,6 +148,43 @@ fn parsed_php_prelude(label: &str, source: &str) -> crate::parser::ast::Program 
         .unwrap_or_else(|error| panic!("the {label} prelude must parse: {error:?}"))
 }
 
+/// Parameters a prelude declares LOOSER than its contract, on purpose, with the measurement.
+///
+/// A contract records what PHP DECLARES. A prelude declaration is what elephc's CHECKER
+/// enforces, and the two are not the same instrument: php's coercive mode converts at the
+/// boundary, elephc's checker refuses there. Where php's own declaration would make elephc
+/// reject a program php runs, the prelude keeps the looser spelling and the divergence is
+/// written down here.
+///
+/// SHRINK-ONLY. An entry whose prelude and contract have come to agree FAILS, so this list
+/// cannot quietly outlive its reason.
+const LOOSER_THAN_CONTRACT_PARAMS: &[(&str, &str, &str)] = &[
+    (
+        "gzencode",
+        "data",
+        "MEASURED on `php -n` 8.5.6: php declares `string $data` and still runs \
+         `gzdecode(gzencode($s))`, because its encoders answer `string|false` and coercive mode \
+         converts the `false` to `\"\"`. elephc's checker has no such coercion, so declaring \
+         `string` here refuses at COMPILE TIME a program php executes.",
+    ),
+    (
+        "zlib_encode",
+        "data",
+        "the encode half of the same measurement as gzencode()",
+    ),
+    (
+        "gzdecode",
+        "data",
+        "the decode half: `gzdecode(gzencode($s))` is the shape php runs and a `string` \
+         declaration rejects",
+    ),
+    (
+        "zlib_decode",
+        "data",
+        "the decode half of the same measurement as zlib_encode()",
+    ),
+];
+
 /// Every injected prelude rendered back to PHP source, for the two audits that read
 /// DECLARATION TEXT rather than call sites.
 ///
@@ -367,12 +404,26 @@ fn prelude_contracts_match_their_injected_signatures() {
             let at = format!("{name}(${}) in {prelude}", param.name);
             assert_eq!(actual.by_ref, param.by_ref, "{at}: by-reference marker");
             assert!(!actual.variadic, "{at}: fixed parameter declared variadic");
-            assert!(
-                php_type_matches(param.ty, &actual.php_type),
-                "{at}: declared type `{}` is not the contract's {:?}",
-                actual.php_type,
-                param.ty
-            );
+            let recorded = LOOSER_THAN_CONTRACT_PARAMS
+                .iter()
+                .find(|(fn_name, param_name, _)| {
+                    *fn_name == name && *param_name == param.name
+                })
+                .map(|(_, _, reason)| *reason);
+            if let Some(reason) = recorded {
+                assert!(
+                    !php_type_matches(param.ty, &actual.php_type),
+                    "{at}: the prelude and the contract agree now — drop it from \
+                     LOOSER_THAN_CONTRACT_PARAMS (recorded reason: {reason})"
+                );
+            } else {
+                assert!(
+                    php_type_matches(param.ty, &actual.php_type),
+                    "{at}: declared type `{}` is not the contract's {:?}",
+                    actual.php_type,
+                    param.ty
+                );
+            }
             match (param.default, actual.default.as_deref()) {
                 (None, None) => {}
                 (Some(expected), Some(text)) => assert!(

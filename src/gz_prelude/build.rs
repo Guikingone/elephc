@@ -208,7 +208,7 @@ fn decl_fn_elephc_gzip_frame() -> Stmt {
 /// `gzencode` — transcribed from the PHP form.
 fn decl_fn_gzencode() -> Stmt {
     function("gzencode")
-        .param("data", TypeExpr::Str)
+        .param("data", t_mixed())
         .param_default("level", TypeExpr::Int, e_neg(e_int(1)))
         .param_default("encoding", TypeExpr::Int, e_int(31))
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
@@ -253,7 +253,7 @@ fn decl_fn_gzencode() -> Stmt {
 /// `zlib_encode` — transcribed from the PHP form.
 fn decl_fn_zlib_encode() -> Stmt {
     function("zlib_encode")
-        .param("data", TypeExpr::Str)
+        .param("data", t_mixed())
         .param("encoding", TypeExpr::Int)
         .param_default("level", TypeExpr::Int, e_neg(e_int(1)))
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
@@ -386,7 +386,7 @@ fn decl_fn_elephc_gzip_body() -> Stmt {
 /// `gzdecode` — transcribed from the PHP form.
 fn decl_fn_gzdecode() -> Stmt {
     function("gzdecode")
-        .param("data", TypeExpr::Str)
+        .param("data", t_mixed())
         .param_default("max_length", TypeExpr::Int, e_int(0))
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
@@ -407,7 +407,7 @@ fn decl_fn_gzdecode() -> Stmt {
 /// `zlib_decode` — transcribed from the PHP form.
 fn decl_fn_zlib_decode() -> Stmt {
     function("zlib_decode")
-        .param("data", TypeExpr::Str)
+        .param("data", t_mixed())
         .param_default("max_length", TypeExpr::Int, e_int(0))
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
