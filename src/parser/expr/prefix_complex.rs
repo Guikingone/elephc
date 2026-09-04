@@ -929,10 +929,14 @@ pub(super) fn parse_new_object(
     }
 
     // A dynamic class name may dereference a variable through array offsets or properties.
-    if let Some((Token::Variable(name), metadata)) = tokens.get(*pos) {
-        let variable = Expr::new(ExprKind::Variable(name.clone()), metadata.span);
+    // PHP's `new_variable` production starts from any `simple_variable`, and `$this` is one of
+    // them: `new $this->options['matcher_class'](...)` is how Symfony's routing component picks
+    // its matcher class. `$this` lexes as its own token rather than `Token::Variable`, so a base
+    // matched only against `Token::Variable` sends every `new $this->…` down the class-name path
+    // and rejects the whole file.
+    if let Some(base) = new_variable_base(tokens, *pos) {
         *pos += 1;
-        let name_expr = parse_new_variable_chain(tokens, pos, variable)?;
+        let name_expr = parse_new_variable_chain(tokens, pos, base)?;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             reject_dynamic_new_class_reference(tokens, *pos)?;
             return Ok(Expr::new(
@@ -964,6 +968,21 @@ pub(super) fn parse_new_object(
     let args = parse_args(tokens, pos, span)?;
     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
     Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
+}
+
+/// Returns the `simple_variable` a dynamic `new` class name dereferences from, if the token at
+/// `pos` starts one.
+///
+/// PHP's `new_variable` production bottoms out in `simple_variable`, which covers both a plain
+/// `$name` and `$this`; the two differ only in how they lex.
+fn new_variable_base(tokens: &[SpannedToken], pos: usize) -> Option<Expr> {
+    match tokens.get(pos) {
+        Some((Token::Variable(name), metadata)) => {
+            Some(Expr::new(ExprKind::Variable(name.clone()), metadata.span))
+        }
+        Some((Token::This, metadata)) => Some(Expr::new(ExprKind::This, metadata.span)),
+        _ => None,
+    }
 }
 
 /// Parses array-offset and property dereferences used as a dynamic `new` class name.

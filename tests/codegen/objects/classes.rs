@@ -1205,3 +1205,54 @@ class PropertyBox {
     );
     assert_eq!(out, "bool(false)\nbool(false)\nrestored:again");
 }
+
+/// Verifies that a dynamic `new` reads its class name through `$this`, including an array offset
+/// on a property and a property of a property.
+///
+/// THE BUG THIS PINS. PHP's `new_variable` production bottoms out in `simple_variable`, which
+/// covers `$this` as well as `$name`; `new $this->options['matcher_class'](...)` is therefore
+/// ordinary PHP. `$this` lexes as its own token rather than `Token::Variable`, and the dynamic
+/// class-name branch of `parse_new_object` matched only `Token::Variable`, so every `new $this->…`
+/// fell through to the class-name path and raised "Expected class name after 'new'".
+///
+/// This is what kept `Symfony\Component\Routing\Router` out of the compiled program: the file
+/// holds six such constructions, the whole file failed to parse, and the class was dropped
+/// silently rather than failing the build. `Symfony\Bundle\FrameworkBundle\Routing\Router` extends
+/// it, so `ReflectionClass::hasMethod('setConfigCacheFactory')` — an inherited method — answered
+/// false, and the container build died with:
+///
+/// ```text
+/// Invalid service "router.default": method
+/// "Symfony\Bundle\FrameworkBundle\Routing\Router::setConfigCacheFactory()" does not exist.
+/// ```
+///
+/// Reference value captured from `php -n` (PHP 8.5.6).
+#[test]
+fn test_dynamic_new_reads_class_name_through_this() {
+    let out = compile_and_run(
+        r#"<?php
+class Matcher { public function __construct(public string $tag = "") {} }
+class Dumper { public function __construct(public string $tag = "") {} }
+class Inner { public string $cls = "Dumper"; }
+class Router {
+    public array $options = ["matcher_class" => "Matcher", "dumper_class" => "Dumper"];
+    public string $single = "Matcher";
+    public Inner $inner;
+    public function __construct() { $this->inner = new Inner(); }
+    public function fromOption(string $key, string $tag): object { return new $this->options[$key]($tag); }
+    public function fromProperty(string $tag): object { return new $this->single($tag); }
+    public function fromNestedProperty(string $tag): object { return new $this->inner->cls($tag); }
+}
+$r = new Router();
+$a = $r->fromOption("matcher_class", "m");
+$b = $r->fromOption("dumper_class", "d");
+$c = $r->fromProperty("p");
+$e = $r->fromNestedProperty("n");
+echo get_class($a), ":", $a->tag, "|";
+echo get_class($b), ":", $b->tag, "|";
+echo get_class($c), ":", $c->tag, "|";
+echo get_class($e), ":", $e->tag;
+"#,
+    );
+    assert_eq!(out, "Matcher:m|Dumper:d|Matcher:p|Dumper:n");
+}

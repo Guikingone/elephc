@@ -188,6 +188,43 @@ fn test_parse_new_dynamic_object_from_array_offset() {
     }
 }
 
+/// Verifies that a dynamic class name read from an array offset on a `$this` property is retained
+/// as the `NewDynamic` class-name expression.
+///
+/// `$this` is a `simple_variable` in PHP's `new_variable` production, but it lexes as its own
+/// token; matching the dynamic branch only against `Token::Variable` sent `new $this->…` to the
+/// class-name path and rejected the file. Symfony's routing component builds its matcher exactly
+/// this way.
+#[test]
+fn test_parse_new_dynamic_object_from_this_property_offset() {
+    let stmts = parse_source("<?php $o = new $this->options['matcher_class']($routes);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                match &name_expr.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        match &array.kind {
+                            ExprKind::PropertyAccess { object, property } => {
+                                assert_eq!(object.kind, ExprKind::This);
+                                assert_eq!(property, "options");
+                            }
+                            other => panic!("Expected PropertyAccess base, got {:?}", other),
+                        }
+                        assert_eq!(
+                            index.kind,
+                            ExprKind::StringLiteral("matcher_class".to_string())
+                        );
+                    }
+                    other => panic!("Expected ArrayAccess class name, got {:?}", other),
+                }
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("Expected NewDynamic, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php new Point(1, 2);` parses as an expression statement.
 #[test]
 fn test_parse_new_object_expression_statement() {
