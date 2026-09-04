@@ -1095,16 +1095,28 @@ fn assert_asm_contains_ordered(asm: &str, needles: &[&str]) {
 
 /// Pins `__rt_resource_type_name` inside the REAL generated runtime, on both targets.
 ///
-/// The end-to-end tests above can only run on the host. Generating runtime text directly
-/// gives the x86_64 runtime body real coverage without assembling or linking it, and it
-/// proves something the emitter unit tests cannot: that the helper is actually REGISTERED
-/// in `emit_runtime` and that the two literals it names exist in the data section.
+/// The end-to-end tests above can only run on the host, and `--emit-asm --target
+/// linux-x86_64` cannot complete on an aarch64 host (the runtime cache is assembled with
+/// the host `as`, which rejects `xor eax, eax`). Generating the runtime text directly is
+/// therefore the mechanism that gives the x86_64 body real coverage here, and it proves
+/// something the emitter unit tests cannot: that the helper is actually REGISTERED in
+/// `emit_runtime` and that the three literals it names exist in the data section.
 #[test]
 fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
-    for (target_name, closed_label, context_label, open_needles, closed_needles, end_label) in [
+    for (
+        target_name,
+        closed_label,
+        filter_label,
+        context_label,
+        open_needles,
+        closed_needles,
+        filter_needles,
+        end_label,
+    ) in [
         (
             "macos-aarch64",
             "L__rt_resource_type_name_closed:",
+            "L__rt_resource_type_name_filter:",
             "L__rt_resource_type_name_context:",
             vec![
                 "tbnz x0, #63, L__rt_resource_type_name_closed",
@@ -1119,11 +1131,18 @@ fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
                 "mov x2, #7",
                 "ret",
             ],
+            vec![
+                "adrp x1, _resource_type_stream_filter@PAGE",
+                "add x1, x1, _resource_type_stream_filter@PAGEOFF",
+                "mov x2, #13",
+                "ret",
+            ],
             "__rt_resource_write_stdout",
         ),
         (
             "linux-x86_64",
             "__rt_resource_type_name_closed_x86:",
+            "__rt_resource_type_name_filter_x86:",
             "__rt_resource_type_name_context_x86:",
             vec![
                 "test rax, rax",
@@ -1135,6 +1154,11 @@ fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
             vec![
                 "lea rax, [rip + _resource_type_unknown]",
                 "mov rdx, 7",
+                "ret",
+            ],
+            vec![
+                "lea rax, [rip + _resource_type_stream_filter]",
+                "mov rdx, 13",
                 "ret",
             ],
             "__rt_resource_write_stdout",
@@ -1152,12 +1176,14 @@ fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
             !open_arm.contains("_resource_type_unknown"),
             "the open arm must not name the closed literal ({target_name}):\n{open_arm}"
         );
-        let closed_arm = asm_between_labels(&runtime_asm, closed_label, context_label);
+        let closed_arm = asm_between_labels(&runtime_asm, closed_label, filter_label);
         assert_asm_contains_ordered(closed_arm, &closed_needles);
         assert!(
             !closed_arm.contains("_resource_type_stream"),
             "the closed arm must not name the open literal ({target_name}):\n{closed_arm}"
         );
+        let filter_arm = asm_between_labels(&runtime_asm, filter_label, context_label);
+        assert_asm_contains_ordered(filter_arm, &filter_needles);
         let context_arm = asm_between_labels(&runtime_asm, context_label, end_label);
         assert!(
             context_arm.contains("_resource_type_stream_context"),
@@ -1170,6 +1196,12 @@ fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
         assert!(
             runtime_asm.contains("_resource_type_unknown:\n    .ascii \"Unknown\""),
             "the closed type-name literal must exist ({target_name})"
+        );
+        assert!(
+            runtime_asm.contains(
+                "_resource_type_stream_filter:\n    .ascii \"stream filter\""
+            ),
+            "the filter type-name literal must exist ({target_name})"
         );
     }
 }
