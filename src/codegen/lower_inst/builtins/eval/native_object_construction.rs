@@ -11,6 +11,9 @@
 use super::*;
 
 /// Constructs a statically typed object through runtime metadata and stores its raw object payload.
+///
+/// The bridge borrows the constructor argument cells rather than taking them, so every box this
+/// frame made is released once the constructed object has been published.
 pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -19,7 +22,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new(
     let args_offset = EVAL_STACK_BYTES;
     let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
-    store_eval_function_call_args(ctx, inst, args_offset)?;
+    let boxed = store_eval_function_call_args(ctx, inst, args_offset)?;
     ensure_eval_context(ctx)?;
     load_eval_context_to_arg(ctx, 0);
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -48,6 +51,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new(
         .extern_symbol("__elephc_eval_reflection_new_object");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
 
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -70,6 +74,10 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new(
 /// intentionally materialized only by a runtime include.  In that case the eval bridge owns
 /// the concrete object, while a miss must leave the caller free to retain the normal native
 /// missing-class diagnostic.
+///
+/// The probe borrows the constructor argument cells rather than taking them, so every box this
+/// frame made is released on the constructed exit and on the miss that falls back to native
+/// construction alike.
 pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new_fallback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -81,7 +89,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new_fallback(
     let eval_miss_label = ctx.next_label("eval_native_new_missing_class");
     let done_label = ctx.next_label("eval_native_new_done");
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
-    store_eval_function_call_args(ctx, inst, args_offset)?;
+    let boxed = store_eval_function_call_args(ctx, inst, args_offset)?;
     load_eval_context_or_null(ctx)?;
     load_eval_context_to_arg(ctx, 0);
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -111,6 +119,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new_fallback(
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_branch_if_eval_c_int_negative(ctx, &eval_miss_label);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
 
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -128,6 +137,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new_fallback(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&eval_miss_label);
+    emit_release_eval_boxed_operands(ctx, &boxed);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     abi::emit_jump(ctx.emitter, miss_label);
     ctx.emitter.label(&done_label);

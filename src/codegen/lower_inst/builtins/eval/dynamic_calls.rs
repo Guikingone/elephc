@@ -155,6 +155,11 @@ fn emit_eval_owned_function_missing_fatal(ctx: &mut FunctionContext<'_>, functio
 }
 
 /// Lowers a native call to a prior eval-declared function using an argument array/hash.
+///
+/// The bridge borrows the container cell rather than taking it, so the box this frame made is
+/// still this frame's to release. Boxing an array retains only the container, and releasing the
+/// cell decrefs that same container through `__rt_mixed_free_deep`, so the release is neutral for
+/// the elements the container spreads.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call_array(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -167,12 +172,12 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call_array(
     let arg_array = expect_operand(inst, 0)?;
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     ensure_eval_context(ctx)?;
-    let ty = ctx.load_value_to_result(arg_array)?.codegen_repr();
-    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-        emit_box_current_value_as_mixed(ctx.emitter, &ty);
-    }
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    let mut boxed = EvalBoxedOperands::new();
+    boxed.extend(store_eval_mixed_operand_at(
+        ctx,
+        arg_array,
+        EVAL_TEMP_CELL_OFFSET,
+    )?);
     load_eval_context_to_arg(ctx, 0);
     let (name_label, name_len) = ctx.data.add_string(function_name.as_bytes());
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -192,6 +197,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call_array(
         .extern_symbol("__elephc_eval_call_function_array");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
@@ -199,6 +205,9 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call_array(
 }
 
 /// Calls a runtime-declared function with one spread container from an AOT frame without eval locals.
+///
+/// The bridge borrows the container cell, so the box is released on the serviced exit; the
+/// missing-function path ends the process, so its boxed container outlives nothing.
 fn lower_eval_owned_function_call_array(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -211,11 +220,12 @@ fn lower_eval_owned_function_call_array(
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
 
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    let ty = ctx.load_value_to_result(arg_array)?.codegen_repr();
-    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-        emit_box_current_value_as_mixed(ctx.emitter, &ty);
-    }
-    abi::emit_store_to_sp(ctx.emitter, &result_reg, EVAL_TEMP_CELL_OFFSET);
+    let mut boxed = EvalBoxedOperands::new();
+    boxed.extend(store_eval_mixed_operand_at(
+        ctx,
+        arg_array,
+        EVAL_TEMP_CELL_OFFSET,
+    )?);
     let (name_label, name_len) = ctx.data.add_string(function_name.as_bytes());
     let name_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::emit_symbol_address(ctx.emitter, name_ptr_arg, &name_label);
@@ -251,6 +261,7 @@ fn lower_eval_owned_function_call_array(
         .extern_symbol("__elephc_eval_call_function_array");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     abi::emit_jump(ctx.emitter, &done_label);

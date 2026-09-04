@@ -862,3 +862,105 @@ echo "end\n";
         "yes\nscope end\ndestruct keeper\ndestruct local\nend\n"
     );
 }
+
+/// `is_callable()` under an eval context must release the callback cell its bridge probe boxed.
+///
+/// `lower_eval_is_callable` boxes a statically typed callback into a Mixed cell and
+/// `__elephc_eval_is_callable` only borrows it, so asking whether an object is callable was by
+/// itself enough to strand a reference on that object and swallow its `__destruct`. The probe
+/// answers with a plain integer in the register the release helper reuses, so the answer is
+/// parked in the unused scratch result slot across the decref. `php -n` prints both destructors
+/// after `scope end` and in declaration order, so the interleaving is the assertion.
+#[test]
+fn test_is_callable_under_an_eval_context_releases_its_boxed_callback() {
+    let out = compile_and_run(
+        r#"<?php
+interface Marker {}
+class T implements Marker {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct {$this->n}\n"; }
+    public function __invoke(): int { return 7; }
+}
+class U extends T {}
+function run(): void {
+    eval('$seed = 1;');
+    $keeper = new T('keeper');
+    $local = new U('local');
+    var_dump(is_callable($local));
+    var_dump(is_callable($keeper));
+    echo "scope end\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nscope end\ndestruct keeper\ndestruct local\nend\n"
+    );
+}
+
+/// `method_exists()` and `property_exists()` must release the two cells their bridge probe boxed.
+///
+/// `lower_eval_member_exists` boxes both the target and the member name for
+/// `__elephc_eval_member_exists`, which borrows them. Neither was released, so a single
+/// membership question outlived the object it asked about. Both builtins share the emitter, so
+/// one asks about a method and the other about a property.
+#[test]
+fn test_member_exists_under_an_eval_context_releases_its_boxed_operands() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct {$this->n}\n"; }
+    public function keep(): int { return 1; }
+}
+function run(): void {
+    eval('$seed = 1;');
+    $keeper = new T('keeper');
+    $local = new T('local');
+    var_dump(method_exists($local, 'keep'));
+    var_dump(property_exists($keeper, 'n'));
+    echo "scope end\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nscope end\ndestruct keeper\ndestruct local\nend\n"
+    );
+}
+
+/// `class_implements()` and `class_parents()` must release the target cell their bridge boxed.
+///
+/// `lower_eval_class_relation` boxes the target for `__elephc_eval_class_relation`, which
+/// borrows it and publishes a fresh relation map as its result. The box was never released, so
+/// reading an object's interfaces or parents kept that object alive past its scope. The release
+/// compares against the published cell first, because an interpreted body may hand back the very
+/// cell it was passed.
+#[test]
+fn test_class_relation_under_an_eval_context_releases_its_boxed_target() {
+    let out = compile_and_run(
+        r#"<?php
+interface Marker {}
+class T implements Marker {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct {$this->n}\n"; }
+}
+class U extends T {}
+function run(): void {
+    eval('$seed = 1;');
+    $keeper = new U('keeper');
+    $local = new U('local');
+    echo count(class_implements($local)), "\n";
+    echo count(class_parents($keeper)), "\n";
+    echo "scope end\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "1\n1\nscope end\ndestruct keeper\ndestruct local\nend\n");
+}

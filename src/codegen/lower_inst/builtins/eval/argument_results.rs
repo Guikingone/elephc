@@ -224,6 +224,31 @@ pub(super) fn emit_release_eval_boxed_operands(ctx: &mut FunctionContext<'_>, bo
     }
 }
 
+/// Releases boxed operand cells on a probe ABI that answers with a plain integer.
+///
+/// These bridges hand their answer back in the register `emit_release_eval_boxed_operands` reuses
+/// and never fill the scratch result slot, so the answer is parked in that unused slot across the
+/// decref and taken back afterwards.
+pub(super) fn emit_release_eval_boxed_operands_keeping_int_answer(
+    ctx: &mut FunctionContext<'_>,
+    boxed: &[usize],
+) {
+    if boxed.is_empty() {
+        return;
+    }
+    abi::emit_store_to_sp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        EVAL_RESULT_VALUE_CELL_OFFSET,
+    );
+    emit_release_eval_boxed_operands(ctx, boxed);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        EVAL_RESULT_VALUE_CELL_OFFSET,
+    );
+}
+
 /// Releases boxed operand cells on a path where the bridge published a result cell.
 ///
 /// An interpreted body may hand back the very cell it was passed (`return $a;`), in which case
