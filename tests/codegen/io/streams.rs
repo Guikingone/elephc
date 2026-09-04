@@ -3299,6 +3299,52 @@ fclose($m3);
     assert_eq!(out, "SGVsbG8gV29ybGQ=|YWI=|YQ==");
 }
 
+/// An unnamed Unix endpoint has NO name, and `stream_socket_get_name()` says `false`.
+///
+/// php's own bug74556. MEASURED on `php -n` 8.5.6 over a `unix://` server/client pair: the
+/// SERVER's peer name and the CLIENT's local name are both `bool(false)`, while the other two
+/// directions carry the socket path. elephc answered `string(0) ""` for the client's local name.
+///
+/// `""` is not a harmless stand-in: it is the name of a socket bound to the empty string, which
+/// cannot exist, and it silently breaks the `=== false` check php's own manual shows.
+///
+/// TWO SHAPES OF UNNAMED, and only one was handled. A never-bound socket reports
+/// `addrlen <= 2`; a `unix://` client reports `addrlen > 2` with a NUL first byte, so the scan
+/// ends at length zero and used to fall through to the string path. Fixing only the first left
+/// the probe's output completely unchanged — which is what said the diagnosis was wrong.
+#[test]
+fn test_stream_socket_get_name_answers_false_for_an_unnamed_unix_endpoint() {
+    let out = compile_and_run(
+        r#"<?php
+$path = tempnam(sys_get_temp_dir(), 'ssgn') . '.sock';
+$s = stream_socket_server("unix://$path");
+$c = stream_socket_client("unix://$path");
+var_dump(stream_socket_get_name($s, true));
+var_dump(stream_socket_get_name($s, false) === $path);
+var_dump(stream_socket_get_name($c, true) === $path);
+var_dump(stream_socket_get_name($c, false));
+fclose($c); fclose($s); unlink($path);
+$f = fopen(tempnam(sys_get_temp_dir(), 'plain'), 'w');
+var_dump(@stream_socket_get_name($f, false));
+fclose($f);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // the server has no peer …
+            "bool(false)\n",
+            // … but it does carry the bound path, and so does the client's peer name
+            "bool(true)\n",
+            "bool(true)\n",
+            // the client never bound one: this is the shape that was `""`
+            "bool(false)\n",
+            // and a plain file is not a socket at all
+            "bool(false)\n",
+        )
+    );
+}
+
 /// `stream_wrapper_restore()`'s Notice is a DIAGNOSTIC, not plain output.
 ///
 /// php's own bug76943 reported only a missing blank line. MEASURED on `php -n` 8.5.6, the notice
