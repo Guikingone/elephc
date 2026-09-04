@@ -555,12 +555,16 @@ fn emit_stream_close_backend(emitter: &mut Emitter) {
     emitter.instruction("js __rt_stream_close_backend_mark");                   // an absent descriptor needs no syscall
     // See the AArch64 counterpart: forget this descriptor's filters BEFORE the kernel can hand
     // its number to the next `fopen()`, on EVERY close path and not just an explicit `fclose()`.
-    emitter.instruction("cmp rdi, 512");                                        // the filter tables' bound
+    // See the AArch64 counterpart: TWO slots per descriptor, so 256 descriptors and both slots.
+    emitter.instruction("cmp rdi, 256");                                        // the filter tables cover descriptors below 256
     emitter.instruction("jae __rt_stream_close_backend_filters_done");          // a descriptor past the table indexes nothing
+    emitter.instruction("lea r8, [rdi + 256]");                                 // this descriptor's second slot
     abi::emit_symbol_address(emitter, "r10", "_stream_read_filters");
-    emitter.instruction("mov BYTE PTR [r10 + rdi], 0");                         // clear the read filter for this descriptor
+    emitter.instruction("mov BYTE PTR [r10 + rdi], 0");                         // clear the read filter, slot 0
+    emitter.instruction("mov BYTE PTR [r10 + r8], 0");                          // and slot 1
     abi::emit_symbol_address(emitter, "r10", "_stream_write_filters");
-    emitter.instruction("mov BYTE PTR [r10 + rdi], 0");                         // and the write filter
+    emitter.instruction("mov BYTE PTR [r10 + rdi], 0");                         // clear the write filter, slot 0
+    emitter.instruction("mov BYTE PTR [r10 + r8], 0");                          // and slot 1
     emitter.label("__rt_stream_close_backend_filters_done");
     emitter.instruction("call close");                                          // close the native file or socket descriptor
     // See the AArch64 counterpart: `tmpfile()` owns the file its URI names, and php removes it

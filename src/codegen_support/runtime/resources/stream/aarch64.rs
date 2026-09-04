@@ -543,13 +543,20 @@ fn emit_stream_close_backend(emitter: &mut Emitter) {
     // scope exit — closed the descriptor with its filter byte still set. The next `fopen()` got
     // the recycled number and inherited a dead filter, so a plain `string.rot13` stream answered
     // deflate. Bounded because the tables are 512 bytes indexed by descriptor.
-    emitter.instruction("mov x9, #512");                                        // the filter tables' bound
+    // TWO SLOTS per descriptor, `fd` and `fd + 256`, in each 512-byte table — so the bound is
+    // 256 descriptors, not 512, and both slots have to go. Indexing a descriptor at 300 would
+    // otherwise wipe descriptor 44's second slot, and a filter parked in slot 1 would survive the
+    // close and reach the recycled descriptor anyway.
+    emitter.instruction("mov x9, #256");                                        // the filter tables cover descriptors below 256
     emitter.instruction("cmp x0, x9");
     emitter.instruction("b.hs __rt_stream_close_backend_filters_done");         // a descriptor past the table indexes nothing
+    emitter.instruction("add x11, x0, #256");                                   // this descriptor's second slot
     abi::emit_symbol_address(emitter, "x9", "_stream_read_filters");
-    emitter.instruction("strb wzr, [x9, x0]");                                  // clear the read filter for this descriptor
+    emitter.instruction("strb wzr, [x9, x0]");                                  // clear the read filter, slot 0
+    emitter.instruction("strb wzr, [x9, x11]");                                 // and slot 1
     abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
-    emitter.instruction("strb wzr, [x9, x0]");                                  // and the write filter
+    emitter.instruction("strb wzr, [x9, x0]");                                  // clear the write filter, slot 0
+    emitter.instruction("strb wzr, [x9, x11]");                                 // and slot 1
     emitter.label("__rt_stream_close_backend_filters_done");
     emitter.syscall(6);                                                         // close the native file or socket descriptor
     // `tmpfile()` owns the file its URI names, and php removes it exactly here: the path stays
