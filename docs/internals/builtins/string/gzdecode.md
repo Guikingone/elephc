@@ -2,7 +2,7 @@
 title: "gzdecode() — internals"
 description: "Compiler internals for gzdecode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 427
+  order: 461
 ---
 
 ## `gzdecode()` — internals
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 

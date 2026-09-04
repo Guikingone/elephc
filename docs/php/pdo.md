@@ -40,9 +40,11 @@ read them before porting security-sensitive or data-loading code.
 ## PHP compatibility version
 
 PDO's generated surface is selected with `--php-version=8.0` through
-`--php-version=8.6`; `ELEPHC_PHP_VERSION` provides the same selection for automation.
-The command-line option wins over the environment and the default is PHP 8.5.
-Patch versions and values outside this range are rejected.
+`--php-version=8.6`. Without the flag, the compiler walks upward from the entry
+file for a Composer platform pin, `.php-version`, or a narrowing Composer PHP
+constraint, then falls back to PHP 8.5. Patch versions are accepted in project
+pins, while the command-line flag requires one of the supported `major.minor`
+values.
 
 | Target | PDO differences selected by elephc |
 | --- | --- |

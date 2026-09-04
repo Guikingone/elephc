@@ -311,18 +311,20 @@ mod tests {
             }
         }
 
-        assert_eq!(eval_registry, 494);
-        // ⚠️ Every number below is a COUNT of the merged catalogue: neither side's survives.
-        // This branch added the 14 `gz*` contracts, `zlib_get_coding_type` and `similar_text`;
-        // main added BCMath and the ten iconv contracts and PROMOTES get_object_vars out of the
-        // external surface. Re-measured on the merge result.
-        // +1: the internal `__elephc_deprecated`.
-        assert_eq!(eval_internal, 41);
+        // ⚠️ Every number below is a COUNT of the merged catalogue against a base of
+        // 484/39/31/541/10: NEITHER side's own totals survive, so each one is MEASURED on the
+        // merge result rather than carried over. This branch added the 14 `gz*` contracts,
+        // `zlib_get_coding_type`, `similar_text` and the internal `__elephc_deprecated`; main
+        // added BCMath, the ten iconv contracts, the forty-three internal `__elephc_curl_*`
+        // entry points, and PROMOTES get_object_vars out of the external surface.
+        // The thirty-four prelude-provided `curl_*` contracts are published only
+        // with the `curl` feature; see `crate::catalog_curl`'s module doc.
+        let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
+        assert_eq!(eval_registry, 494 + curl_surface);
+        assert_eq!(eval_internal, 84);
         assert_eq!(eval_pending, 54);
-        // +1: the internal `__elephc_deprecated`, lowered through the registry like any
-        // other runtime-call builtin.
-        assert_eq!(aot_registry, 556);
-        assert_eq!(aot_external, 30);
+        assert_eq!(aot_registry, 599);
+        assert_eq!(aot_external, 30 + curl_surface);
         assert_eq!(aot_unsupported, 3);
     }
 
@@ -367,11 +369,13 @@ mod tests {
             }
         }
 
+        let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 473);
-        // +1: the internal `__elephc_deprecated`, which the interpreter does not bind.
-        assert_eq!(unsupported, 95);
+        assert_eq!(interpreter_adapter, 473 + curl_surface);
+        // +1 of this branch's share: the internal `__elephc_deprecated`, which the interpreter
+        // does not bind.
+        assert_eq!(unsupported, 138);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

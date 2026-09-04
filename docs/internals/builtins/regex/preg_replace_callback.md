@@ -2,7 +2,7 @@
 title: "preg_replace_callback() — internals"
 description: "Compiler internals for preg_replace_callback(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 395
+  order: 429
 ---
 
 ## `preg_replace_callback()` — internals

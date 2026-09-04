@@ -548,6 +548,22 @@ null; never unwind into generated code). Keep the surface small and explicit —
 pass pointers + lengths for strings/buffers, return primitive status values. Name
 exports `elephc_<name>_*` so they are easy to find and namespace-clean.
 
+**Returned buffers must never live in process-global cells.** A bridge function
+that hands back `*const c_char` (or pointer+length) data must keep those bytes
+valid until the caller has read them — and a `static` `Mutex<CString>` /
+`Mutex<Vec<u8>>` cannot: the next call, from *any* thread, assigns the cell,
+which drops the previous contents and frees the exact bytes a previously
+handed-out pointer still references. The mutex serializes the write; it does
+nothing for the lifetime of the read. This exact shape shipped as an
+intermittent use-after-free in the PDO bridge (garbage SQLSTATE whenever two
+tests hammered `elephc_pdo_sqlstate` concurrently) and was then swept out of
+the tz/image/phar bridges too. Use a `thread_local!` cell — a thread can only
+invalidate pointers it was itself handed — or make the caller own the
+allocation. Id-keyed handle registries that hand out *owned values* (no
+interior pointers escape) may stay process-global. The rule is enforced by
+`tests/ffi_buffer_hygiene.rs`; a genuinely justified exception goes on that
+test's named allowlist with its reason, not silently past it.
+
 Every supported target must build and link the crate: `macos-aarch64`,
 `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, and `linux-x86_64`. The iOS
 artifacts are libraries cross-compiled from macOS. A bridge that only works on
@@ -651,6 +667,40 @@ cannot see it.
   and its auto-link trigger.
 - The relevant `docs/php/` or `docs/beyond-php/` page — document the PHP surface.
 - Update `CLAUDE.md` only if you changed the bridge/flag mechanism itself.
+
+### 8. Packed bridge + managed native package
+
+A bridge crate's `libelephc_<name>.a` is packed next to the compiler in the
+release and nightly tarballs. `scripts/verify-release-artifact.sh` unpacks that
+tarball into an empty directory (no checkout) and compile-probes every
+capability that names a packed archive, using the packaged binary's
+`--print-capabilities` list. That is how a missing, truncated, or wrong-arch
+archive is caught — the hole that left `libelephc_magician.a` out of every
+tarball from 0.26.3 to 0.26.5.
+
+`--with-regex` is not this case. It is a runtime capability; PCRE2 is only a
+managed package; there is no packed regex archive; the probe skips it
+(`needs no archive from this tarball`). Do not copy that skip for a packed
+bridge.
+
+If the new bridge's `.a` also needs a catalog package at PHP-program link time
+(curl is the precedent: `NativeRequirement::package("curl")` when `elephc_curl`
+is planned; `elephc native add curl` in the user project), then:
+
+1. Wire the native requirement in `src/pipeline/backend.rs` the same way curl
+   does.
+2. Pack `-p elephc-<name>` in nightly and release, like curl.
+3. Teach `scripts/verify-release-artifact.sh` to run
+   `$ELEPHC native add <package>` in the empty probe WORKDIR **before**
+   `--with-<name>`. Never fail-then-retry by grepping the compiler recovery
+   text. Never skip the compile probe.
+4. Cache `~/.cache/elephc/native` on the nightly and release `verify-artifact`
+   jobs (keyed like `curl-codegen-tests`) and give the job a long enough
+   timeout for a cold source build of the C library.
+
+System libraries — phar's zlib/bz2, `libdl`, Apple frameworks — are not
+managed native packages. They do not go through `elephc native add` and are
+not this rule.
 
 ## Contributor Certification
 

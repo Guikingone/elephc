@@ -17,6 +17,8 @@ mod builtins_arrays_sets;
 mod builtins_arrays_type_errors;
 mod builtins_bcmath;
 mod builtins_class_metadata;
+#[cfg(feature = "curl")]
+mod builtins_curl;
 mod builtins_debug_output;
 mod builtins_directory_streams;
 mod builtins_output_buffering;

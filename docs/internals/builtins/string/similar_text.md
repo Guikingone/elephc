@@ -2,7 +2,7 @@
 title: "similar_text() — internals"
 description: "Compiler internals for similar_text(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 479
+  order: 513
 ---
 
 ## `similar_text()` — internals

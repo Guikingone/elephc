@@ -2,7 +2,7 @@
 title: "zlib_encode() — internals"
 description: "Compiler internals for zlib_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 519
+  order: 553
 ---
 
 ## `zlib_encode()` — internals
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 

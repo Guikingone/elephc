@@ -199,14 +199,30 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "PHP_EXTRA_VERSION" => Some(EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION)),
         "PHP_SAPI" => Some(EvalPredefinedConstant::String(EVAL_PHP_SAPI)),
         "DIRECTORY_SEPARATOR" => Some(EvalPredefinedConstant::String("/")),
-        // Everything else the compiler declares, read from the tables both engines share.
+        // Everything else the compiler declares, read from the tables both engines share, and
+        // then the generated curl table. TWO catch-all arms landed here from two directions; they
+        // chain rather than compete, because the two tables are disjoint and each side's tests
+        // demand its own.
         //
-        // MEASURED before this existed: `eval('echo SEEK_SET;')` was a runtime fatal while php
-        // printed 0, and so were 148 other names — `FILE_APPEND`, the whole `E_*` family, and 95
-        // `STREAM_*` constants among them. The arms above stay because some of them answer names
-        // no table declares; `every_declared_constant_resolves` checks the two never disagree.
+        // MEASURED before the first of them existed: `eval('echo SEEK_SET;')` was a runtime fatal
+        // while php printed 0, and so were 148 other names — `FILE_APPEND`, the whole `E_*`
+        // family, and 95 `STREAM_*` constants among them. The arms above stay because some of them
+        // answer names no table declares; `every_declared_constant_resolves` checks the two never
+        // disagree.
+        //
+        // Every `CURLOPT_*`/`CURLINFO_*`/`CURLE_*`/`CURL_*` name falls through to the
+        // 689-entry generated table rather than growing this hand-written match by 689
+        // arms. Table-driven, not gated behind the `curl` Cargo feature: see
+        // `super::curl_constants`'s header for why a bare numeric constant carries no
+        // ABI-linkage cost.
         name => elephc_builtin_contract::php_constants::int_constant(name)
-            .map(EvalPredefinedConstant::Int),
+            .map(EvalPredefinedConstant::Int)
+            .or_else(|| {
+                super::curl_constants::EVAL_CURL_INT_CONSTANTS
+                    .iter()
+                    .find(|(candidate, _)| *candidate == name)
+                    .map(|(_, value)| EvalPredefinedConstant::Int(*value))
+            }),
     }
 }
 
@@ -294,5 +310,54 @@ mod predefined_constant_tests {
             disagreements.is_empty(),
             "compiler and eval disagree on {disagreements:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod curl_constant_fallback_tests {
+    use super::*;
+
+    /// `CURLOPT_URL`/`CURLOPT_RETURNTRANSFER` resolve through the same predefined-constant
+    /// path `JSON_PRETTY_PRINT` etc. use, table-driven through
+    /// `crate::interpreter::curl_constants::EVAL_CURL_INT_CONSTANTS` rather than a
+    /// 689-arm hand-written match — this is a pure-data lookup, so it needs no bridge, no
+    /// feature flag, and no linked libcurl to verify (`crate::interpreter::curl_constants`'s
+    /// own header explains why the table is unconditional).
+    #[test]
+    fn curl_constants_resolve_through_the_predefined_constant_fallback() {
+        assert!(matches!(
+            eval_predefined_constant_value("CURLOPT_URL"),
+            Some(EvalPredefinedConstant::Int(10002))
+        ));
+        assert!(matches!(
+            eval_predefined_constant_value("CURLOPT_RETURNTRANSFER"),
+            Some(EvalPredefinedConstant::Int(19913))
+        ));
+        assert!(matches!(
+            eval_predefined_constant_value("CURLE_OK"),
+            Some(EvalPredefinedConstant::Int(0))
+        ));
+    }
+
+    /// A name that merely LOOKS curl-ish must not resolve — the fallback is a whole-name
+    /// table lookup, not a prefix match, matching every other predefined-constant arm in
+    /// this file.
+    #[test]
+    fn a_curl_shaped_unknown_name_does_not_resolve() {
+        assert!(eval_predefined_constant_value("CURLOPT_NOT_A_REAL_OPTION").is_none());
+    }
+
+    /// The existing (pre-curl) predefined constants must still resolve unchanged: the new
+    /// fallback arm must not have shadowed or reordered anything above it in the match.
+    #[test]
+    fn pre_existing_predefined_constants_still_resolve() {
+        assert!(matches!(
+            eval_predefined_constant_value("JSON_PRETTY_PRINT"),
+            Some(EvalPredefinedConstant::Int(_))
+        ));
+        assert!(matches!(
+            eval_predefined_constant_value("PHP_INT_MAX"),
+            Some(EvalPredefinedConstant::Int(i64::MAX))
+        ));
     }
 }

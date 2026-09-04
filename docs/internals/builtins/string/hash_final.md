@@ -2,7 +2,7 @@
 title: "hash_final() — internals"
 description: "Compiler internals for hash_final(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 436
+  order: 470
 ---
 
 ## `hash_final()` — internals
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected hash prelude.
 
 ## Semantic descriptor
 

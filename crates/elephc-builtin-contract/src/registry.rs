@@ -30,12 +30,19 @@ pub fn contracts() -> &'static [BuiltinContract] {
     static CONTRACTS: OnceLock<Vec<BuiltinContract>> = OnceLock::new();
     CONTRACTS
         .get_or_init(|| {
+            #[cfg(feature = "curl")]
+            let curl_capacity = crate::catalog_curl::CURL_CONTRACTS.len();
+            #[cfg(not(feature = "curl"))]
+            let curl_capacity = 0;
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
-                    + crate::catalog_surfaces::SURFACE_CONTRACTS.len(),
+                    + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
+                    + curl_capacity,
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
+            #[cfg(feature = "curl")]
+            contracts.extend_from_slice(crate::catalog_curl::CURL_CONTRACTS);
             for contract in &mut contracts {
                 contract.requirements = crate::requirements::fixed_requirements(contract.id);
             }
@@ -134,11 +141,14 @@ mod tests {
     /// Verifies the shared catalog validates and exposes every compiler/eval surface.
     #[test]
     fn catalog_is_valid_and_complete_for_all_contract_surfaces() {
-        // Both sides added contracts: this branch the 14 `gz*` stream functions and
-        // `similar_text`, upstream its own. Re-measured after the merge.
-        // +1: the internal `__elephc_deprecated`, which lets an injected prelude body raise
-        // one php `Deprecated:` line in its own name.
-        assert_eq!(contracts().len(), 589);
+        // Both sides added contracts against a base of 554: this branch the 14 `gz*` stream
+        // functions, `similar_text` and the internal `__elephc_deprecated` (which lets an
+        // injected prelude body raise one php `Deprecated:` line in its own name), upstream its
+        // own. Neither side's own total survives the merge, so this one is MEASURED, not added up.
+        // The PHP-visible `curl_*` surface is published only with the `curl`
+        // feature; see `crate::catalog_curl`'s module doc.
+        let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
+        assert_eq!(contracts().len(), 632 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

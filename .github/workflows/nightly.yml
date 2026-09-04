@@ -1,0 +1,493 @@
+name: Nightly
+
+# Unattended builds of `main`, published as a rolling pre-release under the
+# fixed `nightly` tag. Deliberately disjoint from `release.yml`:
+#
+#   * the tag is `nightly`, not `v*`, so every job in `release.yml` stays
+#     guarded off by its `startsWith(github.event.ref, 'v')` condition — and a
+#     release created through the Actions token raises no `create` event at all;
+#   * nothing is pushed to `main` (no version-bump commit) and the Homebrew tap
+#     is never touched, so the stable install path cannot move;
+#   * the release is `prerelease` with `make_latest: false`, so "Latest release"
+#     keeps pointing at the newest `v*` tag.
+on:
+  schedule:
+    - cron: "0 3 * * *"  # 03:00 UTC
+  workflow_dispatch:
+
+# Least privilege by default. `permissions:` at the workflow level applies to
+# EVERY job, so declaring `contents: write` here handed a write token to the
+# build jobs, which run third-party actions and never write anything — a moved
+# or compromised upstream ref would have run with authority over this
+# repository's contents, releases and tags. Only the jobs that publish are
+# granted write below.
+permissions:
+  contents: read
+
+# Never cancel: a half-run `publish` job leaves the `nightly` tag deleted and
+# no release behind it. A manual dispatch queues behind the scheduled run.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gate:
+    name: Select nightly commit
+    # Reads the `Build & Test` check runs on candidate commits.
+    permissions:
+      contents: read
+      checks: read
+    # Scheduled workflows keep running on forks that never disable Actions;
+    # nothing downstream would be publishable there.
+    if: github.repository == 'illegalstudio/elephc'
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.pick.outputs.build }}
+      sha: ${{ steps.pick.outputs.sha }}
+      version: ${{ steps.pick.outputs.version }}
+      dated_tag: ${{ steps.pick.outputs.dated_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Pick the newest green commit on main
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --tags --force
+
+          # The `nightly` tag records which commit the last nightly shipped, so
+          # it doubles as the "already built" marker — no extra state to keep.
+          PREV="$(git rev-parse -q --verify refs/tags/nightly^{commit} || true)"
+
+          # Publishing the tip unconditionally would ship a compiler from a red
+          # main. Walk back instead: an unattended build that nobody watches is
+          # worth having only if it is installable.
+          SHA=""
+          for CANDIDATE in $(git rev-list -n 20 HEAD); do
+            CONCLUSION="$(gh api \
+              "/repos/${GITHUB_REPOSITORY}/commits/${CANDIDATE}/check-runs?check_name=Build%20%26%20Test&status=completed&filter=latest" \
+              --jq '.check_runs | map(select(.app.slug == "github-actions" and .conclusion == "success")) | first.conclusion // ""')"
+            if [ "$CONCLUSION" = "success" ]; then
+              SHA="$CANDIDATE"
+              break
+            fi
+          done
+
+          if [ -z "$SHA" ]; then
+            echo "::warning::No successful Build & Test check on the last 20 main commits; skipping tonight's nightly."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$SHA" = "$PREV" ]; then
+            echo "::notice::main is unchanged since the last nightly (${SHA}); skipping."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BASE="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          DATE="$(date -u +%Y%m%d)"
+          VERSION="${BASE}-nightly.${DATE}+g$(git rev-parse --short "$SHA")"
+
+          # The dated tag is the pinnable one, and its whole value is that it
+          # never moves — so the name is chosen here to be one that does not
+          # exist yet, rather than overwritten later. A second build on the same
+          # UTC day (main moved again, and someone dispatched the workflow) gets
+          # `.2`; skipping instead would leave that commit unpinnable and would
+          # not refresh the rolling pointer either. Runs are serialised by the
+          # `nightly` concurrency group, so nothing can claim this name between
+          # here and the publish job.
+          # Enumerated rather than incremented: a loop that assigns a name and
+          # then tests the bound rejects its own last candidate, which is how
+          # the first version of this refused `.20` while `.20` was free.
+          DATED=""
+          for CANDIDATE in "nightly-${DATE}" $(seq -f "nightly-${DATE}.%g" 2 20); do
+            if ! git rev-parse -q --verify "refs/tags/${CANDIDATE}" >/dev/null 2>&1; then
+              DATED="$CANDIDATE"
+              break
+            fi
+          done
+          if [ -z "$DATED" ]; then
+            echo "::error::All 20 nightly tag names for ${DATE} are taken."
+            exit 1
+          fi
+
+          echo "Building nightly ${VERSION} from ${SHA} as ${DATED}"
+          echo "build=true" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "dated_tag=${DATED}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }}
+    permissions:
+      contents: read
+    needs: gate
+    if: needs.gate.outputs.build == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      # One broken target should still leave the other two downloadable; the
+      # publish job refuses to ship a partial set.
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14  # Apple Silicon runner
+          # Same glibc 2.35 generation as `release.yml`, so a nightly runs
+          # wherever a release does (Ubuntu 22.04, Debian 12, RHEL 9, ...).
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Patched in the runner's working tree and never committed: `main` keeps
+      # the version `release.yml` owns, and a nightly binary still identifies
+      # the exact commit it came from through `--version`.
+      - name: Stamp the nightly version
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          version = os.environ["VERSION"]
+
+          cargo_toml = Path("Cargo.toml")
+          cargo_toml.write_text(
+              re.sub(
+                  r'^version = ".*"$',
+                  f'version = "{version}"',
+                  cargo_toml.read_text(),
+                  count=1,
+                  flags=re.MULTILINE,
+              )
+          )
+
+          cargo_lock = Path("Cargo.lock")
+          cargo_lock.write_text(
+              re.sub(
+                  r'(\[\[package\]\]\nname = "elephc"\nversion = ")[^"]+(")',
+                  rf'\g<1>{version}\2',
+                  cargo_lock.read_text(),
+                  count=1,
+              )
+          )
+          PY
+          echo "Set Cargo.toml and Cargo.lock version to ${VERSION}"
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Verify nightly binary version
+        run: |
+          EXPECTED="elephc ${{ needs.gate.outputs.version }}"
+          ACTUAL="$(target/release/elephc --version)"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Nightly version mismatch: expected '${EXPECTED}', got '${ACTUAL}'."
+            exit 1
+          fi
+          echo "Verified nightly binary version: ${ACTUAL}"
+
+      # Every bridge in `BRIDGES` (src/linker/bridges.rs), in that order. This
+      # list is guarded by `every_bridge_crate_is_in_the_build_lists`; a bridge
+      # missing here ships a compiler that refuses the flag it advertises.
+      - name: Build release bridge staticlibs
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-magician -p elephc-curl
+
+      - name: Strip binary
+        run: strip target/release/elephc
+
+      # Packed by glob rather than by name. `release.yml` needs the explicit
+      # list because its Homebrew formula installs the archives one by one, and
+      # keeping two hand-written lists in step is what left
+      # `libelephc_magician.a` out of every tarball from v0.26.3 to v0.26.5 —
+      # so an installed elephc refused `--with-eval`, and any `eval()` it could
+      # not fold at compile time, with a linker error. A nightly has no formula,
+      # so deriving the shipping list from the build output removes the second
+      # list instead of adding a third.
+      - name: Create tarball
+        run: |
+          cd target/release
+          TARBALL="elephc-nightly-${{ matrix.target }}.tar.gz"
+          tar czf "$TARBALL" elephc libelephc_*.a
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$TARBALL" > "$TARBALL.sha256"
+          else
+            shasum -a 256 "$TARBALL" > "$TARBALL.sha256"
+          fi
+          tar tzf "$TARBALL"
+
+      - name: Upload nightly artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.target }}
+          path: |
+            target/release/elephc-nightly-*.tar.gz
+            target/release/elephc-nightly-*.tar.gz.sha256
+          retention-days: 1
+          if-no-files-found: error
+
+  # Same probe the release path runs, on the same artifact shape. A nightly is
+  # the one build a real user installs before a tag exists, so a packing list
+  # that has drifted is worth catching here rather than at the next release.
+  verify-artifact:
+    name: Verify ${{ matrix.target }} tarball
+    permissions:
+      contents: read
+    needs:
+      - gate
+      - build
+    if: needs.gate.outputs.build == 'true'
+    runs-on: ${{ matrix.runner }}
+    # Cold `elephc native add curl` builds openssl/zlib/nghttp2/libssh2/curl
+    # from source (~6 minutes). A warm cache is a no-op. Other packed
+    # bridges still compile-probe in the same job.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      # The probe links real programs, which the build jobs never do on these
+      # runners; macOS runners carry the Xcode command line tools already.
+      # `build-essential` is also what `elephc native add curl` needs to
+      # compile the managed libcurl chain (perl is on the image; openssl's
+      # Configure invokes it). Same package set as managed-native-smoke.
+      - name: Install a linking toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils build-essential file
+
+      # The probe native-adds curl in its empty WORKDIR before
+      # --with-curl, then compile-probes the packed archive. This cache
+      # is the default root that add writes (`~/.cache/elephc/native`),
+      # keyed like curl-codegen-tests so a warm runner skips the
+      # from-source openssl/libcurl rebuild. The compiler itself stays
+      # fail-closed for real projects.
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            verify-native-${{ matrix.target }}-
+
+      - name: Download the built tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: nightly-${{ matrix.target }}
+          path: dist
+
+      - name: Verify the tarball is complete
+        run: ./scripts/verify-release-artifact.sh "dist/elephc-nightly-${{ matrix.target }}.tar.gz"
+
+  publish:
+    name: Publish nightly pre-release
+    # Creates the dated release and tag, recreates the rolling `nightly` ones,
+    # and deletes pruned dated releases and tags.
+    permissions:
+      contents: write
+    needs:
+      - gate
+      - build
+      - verify-artifact
+    if: needs.gate.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download nightly artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-*
+          merge-multiple: true
+          path: dist
+
+      # A failed matrix leg already skips this job, so this catches the other
+      # way the set goes short: an artifact that never uploaded or expired
+      # between jobs, which `download-artifact` reports as a merge of whatever
+      # it did find. The previous release is deleted below, so publishing two
+      # targets out of three would take the third away from everyone using it.
+      - name: Require a complete target set
+        run: |
+          for TARGET in aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            TARBALL="dist/elephc-nightly-${TARGET}.tar.gz"
+            if [ ! -s "$TARBALL" ] || [ ! -s "${TARBALL}.sha256" ]; then
+              echo "::error::Missing ${TARBALL}; refusing to publish a partial nightly."
+              exit 1
+            fi
+          done
+
+      # The dated release is created FIRST, and it is the one that matters:
+      # it is what anybody pins to, and its entire value is that its contents
+      # never change once published. If this job dies halfway, the durable
+      # artifact exists and only the rolling pointer is stale.
+      #
+      # The name was chosen in `gate` to be one that did not exist. Re-checking
+      # here is not paranoia about that logic — it is the guarantee itself: a
+      # tag that already exists must never be written over, whatever the reason
+      # it survived, because someone may already have pinned to it.
+      - name: Refuse to overwrite an existing dated tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATED: ${{ needs.gate.outputs.dated_tag }}
+        run: |
+          if gh api "/repos/${GITHUB_REPOSITORY}/git/ref/tags/${DATED}" >/dev/null 2>&1; then
+            echo "::error::Tag ${DATED} already exists; a dated nightly is immutable and is never republished."
+            exit 1
+          fi
+          echo "Publishing ${DATED}"
+
+      - name: Publish the dated nightly
+        # Pinned to a full commit SHA (v2.6.2) rather than the `v2` tag.
+        # This step is the one third-party action that runs while the job
+        # holds `contents: write`, so a moved upstream tag would change the
+        # code authorised to rewrite this repository's releases, tags and
+        # published artifacts without any diff to review here. Both publish
+        # paths pin the same SHA; bump them together.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          tag_name: ${{ needs.gate.outputs.dated_tag }}
+          target_commitish: ${{ needs.gate.outputs.sha }}
+          name: Nightly ${{ needs.gate.outputs.version }}
+          prerelease: true
+          make_latest: false
+          body: |
+            Automated build of `main`. **Not a supported release** — no
+            compatibility, stability, or upgrade guarantees.
+
+            This dated build is immutable: its assets are never replaced, so it
+            can be pinned. It is kept for 14 nightlies and then deleted, tag
+            included. For the newest one, use the rolling
+            [`nightly`](https://github.com/illegalstudio/elephc/releases/tag/nightly)
+            tag instead.
+
+            - Commit: ${{ needs.gate.outputs.sha }}
+            - Version: `${{ needs.gate.outputs.version }}`
+
+            For a supported build, see the
+            [latest release](https://github.com/illegalstudio/elephc/releases/latest).
+          files: dist/*
+
+      # `nightly` is a moving pointer at the newest dated build, so the old
+      # release and tag come down before the new ones go up; updating the
+      # release in place would leave the tag on last night's commit. Its assets
+      # duplicate the dated ones, which is what keeps the download URLs under
+      # `/download/nightly/` stable for anyone who just wants the newest.
+      - name: Drop the previous rolling nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The first run has no release to delete, so a failure here is
+          # expected and ignored — which also means a `--cleanup-tag` that
+          # failed for a real reason passes unnoticed, leaving the tag on last
+          # night's commit for the release action to reuse instead of moving.
+          # Remove any leftover ref explicitly, then refuse to publish if the
+          # tag somehow survived both attempts.
+          gh release delete nightly --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" >/dev/null 2>&1 || true
+          if gh api "/repos/${GITHUB_REPOSITORY}/git/ref/tags/nightly" >/dev/null 2>&1; then
+            echo "::error::The nightly tag still exists; refusing to publish onto a stale tag."
+            exit 1
+          fi
+
+      - name: Refresh the rolling nightly pointer
+        # Pinned to a full commit SHA (v2.6.2) rather than the `v2` tag.
+        # This step is the one third-party action that runs while the job
+        # holds `contents: write`, so a moved upstream tag would change the
+        # code authorised to rewrite this repository's releases, tags and
+        # published artifacts without any diff to review here. Both publish
+        # paths pin the same SHA; bump them together.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          tag_name: nightly
+          target_commitish: ${{ needs.gate.outputs.sha }}
+          name: Nightly ${{ needs.gate.outputs.version }}
+          prerelease: true
+          make_latest: false
+          body: |
+            Automated build of `main`. **Not a supported release** — no
+            compatibility, stability, or upgrade guarantees, and these artifacts
+            are replaced every night.
+
+            This tag moves. To pin a build that will not change under you, use
+            its dated tag —
+            [`${{ needs.gate.outputs.dated_tag }}`](https://github.com/illegalstudio/elephc/releases/tag/${{ needs.gate.outputs.dated_tag }}),
+            which carries these same artifacts and is kept for 14 nightlies.
+
+            - Commit: ${{ needs.gate.outputs.sha }}
+            - Version: `${{ needs.gate.outputs.version }}`
+
+            For a supported build, see the
+            [latest release](https://github.com/illegalstudio/elephc/releases/latest).
+          files: dist/*
+
+      # Pruning runs last, so a failure here leaves too many nightlies rather
+      # than too few — the harmless direction. Ordered by publication time
+      # rather than by tag name, because `nightly-20260901.10` sorts before
+      # `nightly-20260901.2` lexicographically and would prune the wrong one.
+      # The pattern cannot match the rolling `nightly` tag.
+      #
+      # Today's tags are never pruned, and that exclusion is what keeps a dated
+      # pin immutable. `gate` picks a name by finding one that does not exist,
+      # and the only names it can ever pick carry TODAY's date — so deleting a
+      # tag from today hands its name back to the next dispatch, which then
+      # republishes it against a different commit. Reachable with more than
+      # `KEEP` builds in one UTC day: the fifteenth prunes `nightly-<today>`,
+      # and the sixteenth is handed that exact name. A date that has passed can
+      # never be selected again, so pruning older days is safe. The cost is that
+      # a day with many builds holds more than `KEEP` releases until it ends.
+      - name: Prune nightlies past the retention window
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: "14"
+          DATED: ${{ needs.gate.outputs.dated_tag }}
+        run: |
+          # Taken from the tag just published rather than from `date -u`, so a
+          # run that crosses midnight still protects the day it built for.
+          TODAY="${DATED#nightly-}"
+          TODAY="${TODAY%%.*}"
+
+          STALE="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/releases" \
+            --jq --arg today "$TODAY" '.[]
+                 | select(.tag_name | test("^nightly-[0-9]{8}(\\.[0-9]+)?$"))
+                 | select(.tag_name | startswith("nightly-" + $today) | not)
+                 | [.published_at, .tag_name] | @tsv' \
+            | sort -r | tail -n "+$((KEEP + 1))" | cut -f2)"
+
+          if [ -z "$STALE" ]; then
+            echo "Nothing to prune outside ${TODAY}; at most ${KEEP} dated nightlies remain."
+            exit 0
+          fi
+
+          echo "$STALE" | while read -r TAG; do
+            [ -n "$TAG" ] || continue
+            echo "Pruning ${TAG}"
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          done

@@ -119,7 +119,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `DoWhile { body, condition }` | `do { } while (...);` |
 | `For { init, condition, update, body }` | `for (...; ...; ...) { }` — `init`, `condition`, and `update` are all optional, so `for (;;) { }` is valid |
 | `Foreach { array, key_var, value_var, value_by_ref, body }` | `foreach ($arr as $v) { }`, `foreach ($arr as $k => $v) { }`, or `foreach ($arr as &$v) { }` |
-| `Switch { subject, cases, default }` | `switch ($x) { case 1: ...; default: ... }` |
+| `Switch { subject, cases, default }` | `switch ($x) { case 1: ...; default: ... }`. `default` is kept apart from the cases and its source position is recovered later from the span of its first statement, so an empty `default:` written before another case (`default: case 2: ...`) receives one empty `Synthetic(vec![])` carrying the label's span; an empty `default:` written last stays empty |
 | `ArrayAssign { array, index, value }` | `$arr[0] = 5;` |
 | `NestedArrayAssign { target, value }` | `$arr[0][1] = 5;`, `$obj->items[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |

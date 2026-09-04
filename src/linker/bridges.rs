@@ -31,8 +31,8 @@ pub(super) struct BridgeStaticlib {
     pub(super) flag_name: &'static str,
     /// Whether link-time side effects require the whole archive by default.
     pub(super) whole_archive: bool,
-    /// macOS frameworks required by this bridge's transitive dependencies.
-    pub(super) macos_frameworks: &'static [&'static str],
+    /// Apple frameworks required by this bridge's transitive dependencies.
+    pub(super) apple_frameworks: &'static [&'static str],
     /// Whether the Linux link needs the dynamic loader library.
     pub(super) needs_libdl: bool,
     /// Canonical PHP extension reported when this bridge is linked, if distinct.
@@ -47,7 +47,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-tls",
         flag_name: "tls",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The TLS bridge implements PHP's OpenSSL-backed stream crypto surface.
         php_extension: Some("openssl"),
@@ -58,7 +58,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-pdo",
         flag_name: "pdo",
         whole_archive: false,
-        macos_frameworks: &["CoreFoundation", "SystemConfiguration"],
+        apple_frameworks: &["CoreFoundation", "SystemConfiguration"],
         needs_libdl: true,
         // The archive backs MORE THAN ONE PHP surface (PDO and mysqli), so the
         // linked staticlib alone cannot identify a PHP extension. Reporting comes
@@ -72,7 +72,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-crypto",
         flag_name: "crypto",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The crypto bridge implements PHP's digest/HMAC `hash` extension.
         php_extension: Some("hash"),
@@ -83,7 +83,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-bcmath",
         flag_name: "bcmath",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extension: Some("bcmath"),
@@ -94,7 +94,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-iconv",
         flag_name: "iconv",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The charset bridge implements PHP's procedural `iconv` extension.
         php_extension: Some("iconv"),
@@ -105,7 +105,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-phar",
         flag_name: "phar",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The archive reader/writer is exposed by PHP as `Phar`.
         php_extension: Some("Phar"),
@@ -116,7 +116,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-tz",
         flag_name: "tz",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // Timezone support folds into the always-present `date` extension.
         php_extension: None,
@@ -127,7 +127,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-image",
         flag_name: "image",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The image codec/drawing surface maps to PHP's `gd` extension.
         php_extension: Some("gd"),
@@ -138,7 +138,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-probe",
         flag_name: "probe",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The sampling probe is an elephc-native diagnostic, not a PHP extension.
         php_extension: None,
@@ -149,7 +149,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-instr",
         flag_name: "instrument",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // Exact per-function instrumentation is an elephc-native diagnostic.
         php_extension: None,
@@ -160,7 +160,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-web",
         flag_name: "web",
         whole_archive: true,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The web bridge owns the PHP `session` extension surface.
         php_extension: Some("session"),
@@ -171,10 +171,26 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         crate_name: "elephc-magician",
         flag_name: "eval",
         whole_archive: false,
-        macos_frameworks: &[],
+        apple_frameworks: &[],
         needs_libdl: true,
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extension: None,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_curl",
+        env_var: "ELEPHC_CURL_LIB_DIR",
+        crate_name: "elephc-curl",
+        flag_name: "curl",
+        whole_archive: true,
+        apple_frameworks: &[
+            "Security",
+            "CoreFoundation",
+            "CoreServices",
+            "SystemConfiguration",
+        ],
+        needs_libdl: true,
+        // The curl bridge implements PHP's libcurl-backed `curl` extension surface.
+        php_extension: Some("curl"),
     },
 ];
 
@@ -198,6 +214,20 @@ pub(super) fn bridge_lib_for_flag(flag: &str) -> Option<&'static str> {
 /// Returns all accepted `--with-<flag>` suffixes in stable table order.
 pub(super) fn crate_flag_names() -> Vec<&'static str> {
     BRIDGES.iter().map(|bridge| bridge.flag_name).collect()
+}
+
+/// Maps a `--with-<flag>` suffix to the archive filename it resolves to.
+///
+/// Exists so a shipped compiler can name the archives it needs without anyone
+/// writing that list down a second time: `--print-capabilities` reports this
+/// projection of the table, and the release probe checks the tarball against
+/// what the binary inside it says. A bridge added to `BRIDGES` is therefore
+/// carried into the packaging check by the same edit that declares it.
+pub(super) fn archive_filename_for_flag(flag: &str) -> Option<String> {
+    BRIDGES
+        .iter()
+        .find(|bridge| bridge.flag_name == flag)
+        .map(BridgeStaticlib::archive_filename)
 }
 
 /// Returns bridge library/flag pairs present in one planned named-library set.
@@ -225,7 +255,33 @@ pub(super) fn resolve(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<BridgeResolution, LinkError> {
-    resolve_with(plan, forced_whole_archive, BridgeStaticlib::archive_path)
+    // Computed ONCE, ahead of the per-bridge loop below: whether THIS program's link plan
+    // needs `elephc_curl` at all, regardless of which bridge in the plan is being resolved
+    // right now. Only `elephc_magician`'s locator branch below reads it — see
+    // `BridgeStaticlib::magician_curl_archive_path`'s own doc for why linking `eval()`
+    // together with curl needs a build of that bridge distinct from the plain one.
+    let needs_curl = plan_requires_library(plan, "elephc_curl");
+    resolve_with(plan, forced_whole_archive, |bridge| {
+        if bridge.lib_name == "elephc_magician" && needs_curl {
+            bridge.magician_curl_archive_path()
+        } else {
+            bridge.archive_path()
+        }
+    })
+}
+
+/// Returns whether `plan` names `library` anywhere, as either an already-resolved
+/// `StaticArchive` (a codegen test harness supplies these directly) or a `NamedLibrary`
+/// still waiting on bridge resolution (the production compile path).
+fn plan_requires_library(plan: &LinkPlan, library: &str) -> bool {
+    plan.items().iter().any(|item| match item {
+        LinkItem::NamedLibrary { name, .. } => name == library,
+        LinkItem::StaticArchive {
+            origin: LinkOrigin::Bridge { name },
+            ..
+        } => name == library,
+        _ => false,
+    })
 }
 
 /// Resolves bridges through an injected locator so missing-path behavior is deterministic in tests.
@@ -321,7 +377,7 @@ fn record_bridge_metadata(
     seen_frameworks: &mut HashSet<&'static str>,
 ) {
     *needs_libdl |= bridge.needs_libdl;
-    for framework in bridge.macos_frameworks {
+    for framework in bridge.apple_frameworks {
         if seen_frameworks.insert(*framework) {
             frameworks.push(LinkItem::Framework((*framework).to_string()));
         }
@@ -410,6 +466,233 @@ impl BridgeStaticlib {
             }
         }
         Err(self.missing_error())
+    }
+
+    /// Locates (auto-building if needed) a curl-aware `libelephc_magician_curl.a` — a
+    /// SEPARATE archive file from the plain `libelephc_magician.a` the ordinary
+    /// `archive_path()` above locates, never the same slot re-purposed. This is called
+    /// ONLY for the `elephc_magician` bridge, and only when this compiled program's link
+    /// plan requires BOTH `elephc_magician` (it calls `eval()`) and `elephc_curl` (it —
+    /// outside eval, or via `--with-curl` — uses the curl surface); see
+    /// `crate::interpreter::builtins::curl`'s module doc in `elephc-magician` (mirrored
+    /// here) for why a curl-aware magician build cannot be the SAME artifact a curl-free
+    /// program links.
+    ///
+    /// A DISTINCT FILENAME, NOT a rebuild-in-place of `libelephc_magician.a`, is load-
+    /// bearing: `cargo build --features curl` overwrites the very same
+    /// `target/<profile>/libelephc_magician.a` a plain `cargo build` produces (Cargo does
+    /// not vary a staticlib's output filename by feature set), and this `elephc`
+    /// invocation is not the only one that will ever run against this checkout/install —
+    /// an EARLIER program that only used `eval()` may have left a curl-free archive in
+    /// place, and a LATER one will expect it back. Reusing one slot for both would make
+    /// whichever program compiled most recently silently pick the OTHER program's variant:
+    /// a curl-free program picking up a stale curl-aware archive would fail to link (it
+    /// references `elephc_curl_*` symbols its own plan never supplies `libelephc_curl.a`
+    /// for); a curl-in-eval program picking up a stale curl-free archive would fail to
+    /// link for the opposite reason. A second, separately named archive makes the two
+    /// coexist on disk with no risk of clobbering each other.
+    ///
+    /// Honors `ELEPHC_MAGICIAN_LIB_DIR` exactly like `archive_path()` does, so an
+    /// installed binary (no workspace checkout to build from) can still resolve the
+    /// curl-aware archive from an operator-supplied directory — and, when no override is
+    /// set and no workspace can be found either, fails with a message that names the
+    /// curl-aware archive specifically (`libelephc_magician_curl.a`) rather than the
+    /// generic "elephc_magician missing", which would misdirect anyone troubleshooting a
+    /// build where the PLAIN magician archive is present and only the curl-aware one is
+    /// not.
+    fn magician_curl_archive_path(&self) -> Result<PathBuf, LinkError> {
+        debug_assert_eq!(self.lib_name, "elephc_magician");
+        let filename = self.magician_curl_archive_filename();
+
+        if let Ok(env_dir) = std::env::var(self.env_var) {
+            if !env_dir.is_empty() {
+                return self.validate_archive(PathBuf::from(env_dir).join(&filename));
+            }
+        }
+
+        if let Some(archive) = self.find_named_archive(&filename) {
+            // STALENESS, mirroring `refreshed_if_stale`: skip the `cargo build` spawn
+            // entirely when the archive is already newer than every magician source file.
+            // Without this check every `elephc` invocation that compiles an eval()+curl
+            // program pays a full `cargo build -p elephc-magician --features curl`
+            // subprocess, even when nothing changed since the last one.
+            let Some(workspace) = self.find_workspace() else {
+                return self.validate_archive(archive);
+            };
+            if !self.sources_are_newer_than(&workspace, &archive) {
+                return self.validate_archive(archive);
+            }
+            if !self.claim_curl_rebuild_attempt() {
+                // Another resolution already attempted the rebuild this process; reuse
+                // whatever is on disk now rather than spawning a second concurrent build.
+                return self.validate_archive(archive);
+            }
+            self.build_magician_curl_staticlib(&workspace, &filename)?;
+            return self.validate_archive(self.magician_curl_missing_error_if_absent(&filename)?);
+        }
+
+        let Some(workspace) = self.find_workspace() else {
+            return Err(self.magician_curl_missing_error());
+        };
+        self.build_magician_curl_staticlib(&workspace, &filename)?;
+        self.validate_archive(self.magician_curl_missing_error_if_absent(&filename)?)
+    }
+
+    /// The curl-aware magician archive's own filename — distinct from
+    /// `archive_filename()`'s plain `libelephc_magician.a`.
+    fn magician_curl_archive_filename(&self) -> String {
+        format!("lib{}_curl.a", self.lib_name)
+    }
+
+    /// A `LinkError` that names the curl-aware archive specifically, not just
+    /// `elephc_magician` (which `missing_error()` would report, and which is misleading
+    /// here: the PLAIN magician archive may be present and fine — only the curl-aware
+    /// build is missing, so the message should say so and suggest the fix).
+    fn magician_curl_missing_error(&self) -> LinkError {
+        LinkError::MissingBridge {
+            name: format!(
+                "{} (curl-aware build for eval()+curl programs — set {} to a directory \
+                 containing {}, or run elephc from an elephc source checkout so it can be \
+                 built automatically)",
+                self.lib_name,
+                self.env_var,
+                self.magician_curl_archive_filename()
+            ),
+        }
+    }
+
+    /// Re-locates `filename` after a build attempt, or returns the same accurate
+    /// curl-aware-archive error `magician_curl_archive_path` uses everywhere else —
+    /// never silently falling back to a stale/previous archive when the build (or the
+    /// copy inside it) did not actually produce a fresh one at this path.
+    fn magician_curl_missing_error_if_absent(&self, filename: &str) -> Result<PathBuf, LinkError> {
+        self.find_named_archive(filename)
+            .ok_or_else(|| self.magician_curl_missing_error())
+    }
+
+    /// `find_archive()`'s search, generalized to an arbitrary archive filename so the
+    /// curl-aware variant can reuse the same candidate-directory list.
+    fn find_named_archive(&self, filename: &str) -> Option<PathBuf> {
+        let executable = std::env::current_exe().ok()?;
+        let executable_dir = executable.parent()?;
+        let mut candidates = vec![
+            executable_dir.to_path_buf(),
+            executable_dir
+                .parent()
+                .map(|parent| parent.join("lib"))
+                .unwrap_or_default(),
+        ];
+        if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+            if !target_dir.is_empty() {
+                candidates.push(PathBuf::from(&target_dir).join("debug"));
+                candidates.push(PathBuf::from(target_dir).join("release"));
+            }
+        }
+        candidates.push(PathBuf::from("target/debug"));
+        candidates.push(PathBuf::from("target/release"));
+
+        candidates
+            .into_iter()
+            .map(|candidate| candidate.join(filename))
+            .find(|candidate| candidate.exists())
+    }
+
+    /// Registers a curl-aware-magician rebuild as attempted, separately from
+    /// `claim_rebuild_attempt()`'s plain-archive claim (the two builds are independent and
+    /// both may legitimately run once in the same `elephc` process).
+    fn claim_curl_rebuild_attempt(&self) -> bool {
+        static ATTEMPTED: OnceLock<Mutex<bool>> = OnceLock::new();
+        let cell = ATTEMPTED.get_or_init(|| Mutex::new(false));
+        let Ok(mut attempted) = cell.lock() else {
+            return false;
+        };
+        if *attempted {
+            return false;
+        }
+        *attempted = true;
+        true
+    }
+
+    /// Returns the directory a curl-aware archive build should COPY its result into: the
+    /// same directory `find_named_archive`'s (and `find_archive`'s) FIRST candidate
+    /// checks, `current_exe()`'s own parent — the directory this running `elephc` binary
+    /// itself lives in, which is where every other bridge archive it already resolved
+    /// came from. Falling back to `CARGO_TARGET_DIR`/`<profile>` and then
+    /// `workspace/target/<profile>` mirrors `find_named_archive`'s remaining candidates in
+    /// the same priority order, so whatever this returns is always a location the SAME
+    /// discovery function that will look for the result would actually find it at.
+    fn magician_curl_destination_dir(&self, workspace: &Path, release: bool) -> PathBuf {
+        if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
+            return dir;
+        }
+        if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+            if !target_dir.is_empty() {
+                return PathBuf::from(target_dir).join(if release { "release" } else { "debug" });
+            }
+        }
+        workspace.join(if release { "target/release" } else { "target/debug" })
+    }
+
+    /// Builds `elephc-magician` with `--features curl` and copies the resulting
+    /// `libelephc_magician.a` to `filename` (the curl-aware archive's own name) in
+    /// `magician_curl_destination_dir`'s directory. Cargo's own `libelephc_magician.a`
+    /// output slot inside the ISOLATED `--target-dir` below is never the shared workspace
+    /// one, so this never overwrites the plain archive `archive_path()` locates.
+    ///
+    /// SURFACES BOTH THE BUILD AND THE COPY AS ERRORS, never silently swallowed: an
+    /// earlier version of this function discarded both (`let _ = command.status()`, `let _
+    /// = fs::copy(...)`), which meant a failed `cargo build` OR a failed copy (e.g. the
+    /// destination directory not existing, which it never created either) left
+    /// `find_named_archive` reporting a generic, misleading `MissingBridge("elephc_magician")`
+    /// for what was actually a link-preparation failure with a real, discoverable cause.
+    fn build_magician_curl_staticlib(&self, workspace: &Path, filename: &str) -> Result<(), LinkError> {
+        let release = std::env::current_exe()
+            .ok()
+            .and_then(|executable| executable.parent().map(Path::to_path_buf))
+            .is_some_and(|directory| directory.file_name().is_some_and(|name| name == "release"));
+        // `--target-dir` ISOLATION IS LOAD-BEARING, not an optimization. Cargo names a
+        // staticlib's output `lib<crate>.a` regardless of which features built it — it
+        // does NOT vary the filename by feature set — so a PLAIN `cargo build -p
+        // elephc-magician --features curl` run against the WORKSPACE's ordinary
+        // `target/<profile>/` would overwrite the very same `libelephc_magician.a` a
+        // curl-free consumer expects to keep finding there. An earlier version of this
+        // function did exactly that (build into the shared target dir, then copy the
+        // result aside) and left a curl-aware `libelephc_magician.a` behind as a side
+        // effect: the NEXT `elephc` invocation for a curl-free eval program picked up
+        // that contaminated archive, which references `elephc_curl_*` symbols its own
+        // link plan never supplies — a link failure for a program that used to compile
+        // cleanly. Building into a SEPARATE `target-dir` (this bridge's own, not the
+        // shared one) means this command never writes to the shared
+        // `target/<profile>/libelephc_magician.a` path at all, so the plain archive
+        // `archive_path()` locates is never at risk from this build running at any point.
+        let curl_target_dir = workspace.join("target/elephc-magician-curl-build");
+        let mut command = Command::new("cargo");
+        command.args([
+            "build",
+            "-p",
+            self.crate_name,
+            "--features",
+            "curl",
+            "--target-dir",
+        ]);
+        command.arg(&curl_target_dir);
+        if release {
+            command.arg("--release");
+        }
+        let status = command
+            .current_dir(workspace)
+            .status()
+            .map_err(|_| self.magician_curl_missing_error())?;
+        if !status.success() {
+            return Err(self.magician_curl_missing_error());
+        }
+        let profile_dir = curl_target_dir.join(if release { "release" } else { "debug" });
+        let built = profile_dir.join(self.archive_filename());
+        let destination_dir = self.magician_curl_destination_dir(workspace, release);
+        std::fs::create_dir_all(&destination_dir).map_err(|_| self.magician_curl_missing_error())?;
+        std::fs::copy(&built, destination_dir.join(filename))
+            .map_err(|_| self.magician_curl_missing_error())?;
+        Ok(())
     }
 
     /// Validates that a configured bridge archive path names a regular file.
@@ -667,7 +950,7 @@ mod tests {
     }
 
     /// Every bridge crate must appear in the lists CI, the Docker scripts and the
-    /// release workflow build.
+    /// release and nightly workflows build.
     ///
     /// The archives are produced by explicit `cargo build -p …` lists that live
     /// outside Rust, and `cargo test` alone never emits a staticlib. So a bridge
@@ -679,13 +962,15 @@ mod tests {
     ///
     /// `release.yml` was the list nobody checked, and it is the one users meet:
     /// it built eight of eleven, so every published tarball carried a compiler
-    /// that refused `--with-monitoring`.
+    /// that refused `--with-monitoring`. `nightly.yml` ships to users too, and
+    /// nobody watches an unattended 03:00 build, so it is held to the same list.
     #[test]
     fn every_bridge_crate_is_in_the_build_lists() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let lists = [
             ".github/workflows/ci.yml",
             ".github/workflows/release.yml",
+            ".github/workflows/nightly.yml",
             "scripts/test-linux-arm64.sh",
             "scripts/test-linux-x86_64.sh",
         ];
@@ -790,6 +1075,101 @@ mod tests {
         }
     }
 
+    /// The workflows that publish an artifact must actually run the packaging probe.
+    ///
+    /// Every other packaging test here checks one list against the bridge
+    /// table, and all of them pass on a tarball nobody ever unpacks: they prove
+    /// the packing list NAMES each archive, not that the archive arrived beside
+    /// the binary. `scripts/verify-release-artifact.sh` is what closes that —
+    /// it unpacks the tarball, asks the compiler inside it for its capabilities
+    /// and holds it to them — and it closes nothing if the step that runs it is
+    /// dropped from the workflow that publishes.
+    #[test]
+    fn the_publishing_workflows_run_the_packaging_probe() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let probe = "scripts/verify-release-artifact.sh";
+        assert!(
+            root.join(probe).is_file(),
+            "{probe} is missing; the shipped artifact is checked by nothing"
+        );
+        for rel in [
+            ".github/workflows/release.yml",
+            ".github/workflows/nightly.yml",
+        ] {
+            let Ok(body) = std::fs::read_to_string(root.join(rel)) else {
+                panic!("cannot read {rel}; the publishing workflows moved");
+            };
+            assert!(
+                body.contains(probe),
+                "{rel} publishes an artifact without running {probe}, so a \
+                 bridge missing from the tarball ships unnoticed again"
+            );
+            assert!(
+                body.contains("~/.cache/elephc/native"),
+                "{rel} runs {probe} without caching managed native packages, so \
+                 a cold native add curl rebuilds openssl/libcurl from source \
+                 on every nightly instead of reusing a verified cache"
+            );
+        }
+        let script = std::fs::read_to_string(root.join(probe))
+            .unwrap_or_else(|_| panic!("cannot read {probe}"));
+        assert!(
+            script.contains("[ \"$name\" = \"curl\" ]") && script.contains("native add curl"),
+            "{probe} must run native add curl before --with-curl; curl is \
+             the packed-archive capability that also needs a catalog package"
+        );
+        assert!(
+            script.contains("adding managed native package curl before --with-curl"),
+            "{probe} must native-add curl first, not after a failed compile"
+        );
+        assert!(
+            !script.contains("missing_native_package")
+                && !script.contains("requires managed native package")
+                && !script.contains("after native add"),
+            "{probe} must not retry from a compiler FAIL / recovery line"
+        );
+        assert!(
+            script.contains("needs no archive from this tarball"),
+            "{probe} must keep the empty-archive skip for regex/mysqli"
+        );
+        let after_curl = script
+            .split_once("[ \"$name\" = \"curl\" ]")
+            .map(|(_, rest)| rest)
+            .unwrap_or("");
+        assert!(
+            after_curl.contains("native add curl")
+                && !after_curl.contains("needs no archive from this tarball"),
+            "{probe} must not skip curl the way regex is skipped"
+        );
+    }
+
+    /// Verifies release artifacts also ship the curl-aware Magician variant.
+    ///
+    /// The ordinary bridge table names only `libelephc_magician.a`, but a program that
+    /// combines eval with curl resolves Magician to the separately feature-built
+    /// `libelephc_magician_curl.a`. Both the tarball and Homebrew layout must carry it.
+    #[test]
+    fn curl_aware_magician_staticlib_ships_in_both_release_channels() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let rel = ".github/workflows/release.yml";
+        let body = std::fs::read_to_string(root.join(rel)).expect("read release workflow");
+        let marker = "Update Homebrew tap";
+        let split = body
+            .find(marker)
+            .unwrap_or_else(|| panic!("{rel} no longer has an `{marker}` step to split on"));
+        let (tarball, formula) = body.split_at(split);
+
+        assert!(
+            tarball.contains("-p elephc-magician --features curl")
+                && tarball.contains("libelephc_magician_curl.a"),
+            "{rel} must build and pack the curl-aware Magician archive"
+        );
+        assert!(
+            formula.contains("lib.install \"libelephc_magician_curl.a\""),
+            "{rel} must install the curl-aware Magician archive with Homebrew"
+        );
+    }
+
     /// Verifies every bridge flag maps back to the table's linker library name.
     #[test]
     fn crate_flags_map_back_to_bridge_names() {
@@ -814,7 +1194,7 @@ mod tests {
 
         let pdo = bridge_for_library("elephc_pdo").expect("pdo bridge");
         assert_eq!(
-            pdo.macos_frameworks,
+            pdo.apple_frameworks,
             &["CoreFoundation", "SystemConfiguration"]
         );
 
@@ -823,6 +1203,32 @@ mod tests {
         assert_eq!(magician.env_var, "ELEPHC_MAGICIAN_LIB_DIR");
         assert_eq!(magician.archive_filename(), "libelephc_magician.a");
         assert!(!magician.whole_archive);
+
+        // `--with-curl` force-links the whole archive: a program that names no
+        // `curl_*` function/class/constant (the ordinary pay-for-use detection path,
+        // `src/curl_prelude/detect.rs`) but is compiled with the flag anyway references
+        // no `elephc_curl_*` symbol at all, so a selective (non-whole-archive) link
+        // would pull in nothing from the archive. The Apple link also needs the same
+        // framework set as the crate's gated native tests (`crates/elephc-curl/build.rs`):
+        // Security/CoreFoundation/CoreServices mirror curl 8.21's upstream
+        // `APPLE_SECTRUST_LDFLAGS`, while SystemConfiguration satisfies macOS's
+        // `SCDynamicStoreCopyProxies` reference (and is harmless on iOS, where that
+        // source path is compiled out).
+        let curl = bridge_for_library("elephc_curl").expect("curl bridge");
+        assert_eq!(curl.crate_name, "elephc-curl");
+        assert_eq!(curl.env_var, "ELEPHC_CURL_LIB_DIR");
+        assert_eq!(curl.archive_filename(), "libelephc_curl.a");
+        assert!(curl.whole_archive);
+        assert!(curl.needs_libdl);
+        assert_eq!(
+            curl.apple_frameworks,
+            &[
+                "Security",
+                "CoreFoundation",
+                "CoreServices",
+                "SystemConfiguration"
+            ]
+        );
     }
 
     /// Verifies automatic TLS linking stays lazy while `--with-tls` force-loads the archive.
@@ -868,6 +1274,7 @@ mod tests {
         assert_eq!(php_extension_for_lib("elephc_web"), Some("session"));
         assert_eq!(php_extension_for_lib("elephc_tz"), None);
         assert_eq!(php_extension_for_lib("elephc_magician"), None);
+        assert_eq!(php_extension_for_lib("elephc_curl"), Some("curl"));
         assert_eq!(php_extension_for_lib("elephc_bogus"), None);
     }
 
@@ -994,5 +1401,123 @@ mod tests {
         let _ = std::fs::remove_file(empty);
         let _ = std::fs::remove_file(symlink);
         let _ = std::fs::remove_dir(base);
+    }
+
+    /// `resolve()` only chooses the curl-aware `elephc_magician` locator when the SAME
+    /// plan also names `elephc_curl` — an eval-only plan (no curl anywhere in it) must
+    /// keep resolving the plain `libelephc_magician.a` slot, so a curl-free program never
+    /// pays any curl-aware-build cost.
+    #[test]
+    fn plan_requires_library_finds_named_and_resolved_curl_bridge() {
+        let magician_only = LinkPlan::from_items(vec![LinkItem::NamedLibrary {
+            name: "elephc_magician".to_string(),
+            origin: LinkOrigin::Runtime,
+        }]);
+        assert!(!plan_requires_library(&magician_only, "elephc_curl"));
+
+        let both_named = LinkPlan::from_items(vec![
+            LinkItem::NamedLibrary {
+                name: "elephc_magician".to_string(),
+                origin: LinkOrigin::Runtime,
+            },
+            LinkItem::NamedLibrary {
+                name: "elephc_curl".to_string(),
+                origin: LinkOrigin::Runtime,
+            },
+        ]);
+        assert!(plan_requires_library(&both_named, "elephc_curl"));
+
+        // A test harness that hands `resolve()` an already-located `StaticArchive` (rather
+        // than a `NamedLibrary` still waiting on bridge resolution) must be recognized too.
+        let already_resolved = LinkPlan::from_items(vec![LinkItem::bridge_archive(
+            PathBuf::from("/tmp/libelephc_curl.a"),
+            "elephc_curl",
+            true,
+        )]);
+        assert!(plan_requires_library(&already_resolved, "elephc_curl"));
+    }
+
+    /// The curl-aware magician archive is a DISTINCT filename from the plain one — this is
+    /// the invariant `magician_curl_archive_path`'s doc comment depends on: the two builds
+    /// must never share (and therefore never clobber) one file on disk.
+    #[test]
+    fn magician_curl_archive_filename_is_distinct_from_the_plain_one() {
+        let magician = bridge_for_library("elephc_magician").expect("magician bridge");
+        assert_eq!(magician.archive_filename(), "libelephc_magician.a");
+        assert_eq!(
+            magician.magician_curl_archive_filename(),
+            "libelephc_magician_curl.a"
+        );
+        assert_ne!(
+            magician.archive_filename(),
+            magician.magician_curl_archive_filename()
+        );
+    }
+
+    /// The exact routing decision `resolve()` makes (per-bridge, once per plan): the
+    /// `elephc_magician` bridge resolves to a `_curl`-suffixed archive only when the SAME
+    /// plan also names `elephc_curl`; every other bridge, and a magician-only plan, must
+    /// keep resolving to the plain archive. Exercised through `resolve_with`'s injected
+    /// locator (mirroring `resolve()`'s own closure shape exactly) with sentinel paths, so
+    /// this needs no real bridge archives on disk — only `plan_requires_library`'s real
+    /// (already separately tested) answer drives which branch each fake locator call
+    /// takes.
+    #[test]
+    fn resolve_routes_magician_to_the_curl_aware_locator_only_when_the_plan_needs_curl() {
+        /// Resolves a plan with sentinel archives while preserving the real routing decision.
+        fn resolve_with_fake_locators(plan: &LinkPlan) -> BridgeResolution {
+            let needs_curl = plan_requires_library(plan, "elephc_curl");
+            resolve_with(plan, &[], |bridge| {
+                if bridge.lib_name == "elephc_magician" && needs_curl {
+                    Ok(PathBuf::from("/fake/libelephc_magician_curl.a"))
+                } else {
+                    Ok(PathBuf::from(format!("/fake/lib{}.a", bridge.lib_name)))
+                }
+            })
+            .expect("fake locators never fail")
+        }
+
+        /// Extracts the resolved Magician archive path from a synthetic link plan.
+        fn magician_archive_path(resolution: &BridgeResolution) -> PathBuf {
+            resolution
+                .plan
+                .items()
+                .iter()
+                .find_map(|item| match item {
+                    LinkItem::StaticArchive {
+                        path,
+                        origin: LinkOrigin::Bridge { name },
+                        ..
+                    } if name == "elephc_magician" => Some(path.clone()),
+                    _ => None,
+                })
+                .expect("elephc_magician resolved to a static archive")
+        }
+
+        let magician_and_curl = LinkPlan::from_items(vec![
+            LinkItem::NamedLibrary {
+                name: "elephc_magician".to_string(),
+                origin: LinkOrigin::Runtime,
+            },
+            LinkItem::NamedLibrary {
+                name: "elephc_curl".to_string(),
+                origin: LinkOrigin::Runtime,
+            },
+        ]);
+        let resolution = resolve_with_fake_locators(&magician_and_curl);
+        assert_eq!(
+            magician_archive_path(&resolution),
+            PathBuf::from("/fake/libelephc_magician_curl.a")
+        );
+
+        let magician_only = LinkPlan::from_items(vec![LinkItem::NamedLibrary {
+            name: "elephc_magician".to_string(),
+            origin: LinkOrigin::Runtime,
+        }]);
+        let resolution = resolve_with_fake_locators(&magician_only);
+        assert_eq!(
+            magician_archive_path(&resolution),
+            PathBuf::from("/fake/libelephc_magician.a")
+        );
     }
 }

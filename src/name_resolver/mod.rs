@@ -17,7 +17,7 @@ mod symbols;
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
-use crate::names::{Name, NameKind};
+use crate::names::{php_symbol_key, Name, NameKind};
 use crate::parser::ast::{Expr, ExprKind, Program};
 
 /// Tracks namespace use imports for classes, functions, and constants.
@@ -42,11 +42,57 @@ struct Symbols {
     extern_classes: HashMap<String, String>,
 }
 
+/// An impossible PHP namespace used to retain the provenance of symbols seeded only for a
+/// prelude detector. The NUL byte cannot occur in a parsed PHP identifier.
+const PRELUDE_FALLBACK_NAMESPACE: &str = "\0elephc-prelude-fallback";
+
 /// Resolves PHP namespace/use statements and rewrites names to canonical forms across the program.
 pub fn resolve(program: Program) -> Result<Program, CompileError> {
+    resolve_with_additional_global_symbols(program, &[], &[])
+}
+
+/// Resolves a program while seeding additional global function and class-like symbols as
+/// distinguishable fallbacks behind user declarations.
+///
+/// Prelude detectors use this to classify raw names with the same namespace/import rules as
+/// the real resolver before deciding whether to inject their declarations. References bound
+/// to a seed resolve under [`PRELUDE_FALLBACK_NAMESPACE`], while real user declarations keep
+/// their canonical names. Seeded symbols do not replace regular or extern user symbols.
+pub(crate) fn resolve_with_additional_global_symbols(
+    program: Program,
+    global_functions: &[&str],
+    global_classes: &[&str],
+) -> Result<Program, CompileError> {
     let mut symbols = Symbols::default();
     symbols::collect_symbols(&program, None, &mut symbols);
+    for function in global_functions {
+        if !symbols.declares_function(function) {
+            symbols.functions.insert(
+                php_symbol_key(function),
+                format!("{PRELUDE_FALLBACK_NAMESPACE}\\{function}"),
+            );
+        }
+    }
+    for class in global_classes {
+        if !symbols.declares_class_like(class) {
+            symbols.classes.insert(
+                php_symbol_key(class),
+                format!("{PRELUDE_FALLBACK_NAMESPACE}\\{class}"),
+            );
+        }
+    }
     statements::resolve_stmt_list(&program, None, &Imports::default(), &symbols)
+}
+
+/// Returns whether `name` was bound to an additional global fallback named `symbol` by
+/// [`resolve_with_additional_global_symbols`].
+pub(crate) fn is_additional_global_symbol(name: &Name, symbol: &str) -> bool {
+    matches!(
+        name.parts.as_slice(),
+        [namespace, candidate]
+            if namespace == PRELUDE_FALLBACK_NAMESPACE
+                && candidate.eq_ignore_ascii_case(symbol)
+    )
 }
 
 /// Rewrites string literal arguments for functions that invoke callable names.

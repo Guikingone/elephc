@@ -2,7 +2,7 @@
 title: "str_getcsv() — internals"
 description: "Compiler internals for str_getcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 484
+  order: 518
 ---
 
 ## `str_getcsv()` — internals

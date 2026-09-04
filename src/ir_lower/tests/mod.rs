@@ -80,6 +80,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
         crate::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
+    let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(
         ast,

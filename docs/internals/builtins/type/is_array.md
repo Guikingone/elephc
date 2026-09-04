@@ -2,7 +2,7 @@
 title: "is_array() — internals"
 description: "Compiler internals for is_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 531
+  order: 565
 ---
 
 ## `is_array()` — internals

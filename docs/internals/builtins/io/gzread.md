@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 

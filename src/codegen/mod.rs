@@ -48,8 +48,8 @@ pub(crate) use crate::codegen_support::sentinels::{
 };
 pub(crate) use crate::codegen_support::{
     abi, bcmath, callable_descriptor, callable_dispatch, callable_invoker_args, cdylib,
-    data_section, emit, hash_crypto, iconv_bridge, interface_wrappers, phar_stream, reflection,
-    runtime,
+    curl, data_section, emit, hash_crypto, iconv_bridge, interface_wrappers, phar_stream,
+    reflection, runtime,
     sentinels, stream_filters,
     tls, visibility,
 };

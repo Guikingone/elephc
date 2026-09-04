@@ -339,6 +339,13 @@ fn validate_instruction_immediate(
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
             matches!(imm, Imm::MixedNumericOp(_))
         }),
+        ICheckedNumericChainToInt => {
+            require_immediate(inst_id, inst, "checked numeric chain", |imm| {
+                matches!(imm, Imm::CheckedNumericChain(chain) if !chain.operations().is_empty()
+                    && chain.operations().iter()
+                        .all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow)))
+            })
+        }
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
@@ -435,6 +442,7 @@ fn validate_opcode_rules(
         | ICheckedMulToInt | ICheckedPow => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
+        ICheckedNumericChainToInt => check_checked_numeric_chain(function, inst_id, inst),
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
@@ -609,6 +617,27 @@ fn validate_opcode_rules(
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         _ => Ok(()),
     }
+}
+
+/// Validates the operand/operation correspondence of one fused checked numeric chain.
+fn check_checked_numeric_chain(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    let Some(Immediate::CheckedNumericChain(chain)) = inst.immediate.as_ref() else {
+        return Ok(());
+    };
+    check_count(
+        inst_id,
+        inst,
+        chain.operations().len() + 1,
+        "one more than its operation count",
+    )?;
+    for index in 0..inst.operands.len() {
+        check_operand_type(function, inst_id, inst, index, IrType::I64, "I64")?;
+    }
+    Ok(())
 }
 
 /// Validates operand and result storage types for typed runtime calls.

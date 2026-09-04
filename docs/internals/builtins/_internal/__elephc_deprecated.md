@@ -2,7 +2,7 @@
 title: "__elephc_deprecated() — internals"
 description: "Compiler internals for __elephc_deprecated(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 551
+  order: 628
 ---
 
 ## `__elephc_deprecated()` — internals

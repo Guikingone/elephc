@@ -51,9 +51,9 @@ use super::rewrite::{defining_instruction, neutralize_to_nop, replace_all_uses, 
 pub struct Cse;
 
 /// Hashable, equality-correct encoding of an instruction immediate for the value
-/// key. CSE-eligible ops (pure, with operands) only ever carry a comparison
-/// predicate or no immediate, so the `Debug` form is a sound, unique encoding;
-/// it also distinguishes float spellings such as `0.0` and `-0.0` should a
+/// key. CSE-eligible ops can carry comparison predicates or checked numeric
+/// operation sequences; the derived `Debug` form is a sound, unique encoding.
+/// It also distinguishes float spellings such as `0.0` and `-0.0` should a
 /// float-immediate op ever become eligible.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ImmKey {

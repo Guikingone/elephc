@@ -2,7 +2,7 @@
 title: "hash_update() — internals"
 description: "Compiler internals for hash_update(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 439
+  order: 473
 ---
 
 ## `hash_update()` — internals
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected hash prelude.
 
 ## Semantic descriptor
 

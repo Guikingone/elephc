@@ -21,6 +21,9 @@ pub(crate) mod array_constants;
 pub(crate) mod zlib_constants;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
+/// `ext/curl` integer constants (`CURLOPT_*`, `CURLINFO_*`, `CURLE_*`, `CURL_*`, ...),
+/// generated from the frozen `scripts/docs/curl_surface.json` surface.
+pub(crate) mod curl_constants;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// `ext/date` integer constants (e.g. `SUNFUNCS_RET_*`).
@@ -80,6 +83,7 @@ pub use checker::CheckOptions;
 #[allow(unused_imports)]
 pub use result::check_with_target;
 pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
+pub use schema::constructor_owner;
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,

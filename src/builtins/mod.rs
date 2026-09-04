@@ -22,6 +22,7 @@ mod requirements;
 mod array;
 pub(crate) mod array_or_false;
 mod callables;
+mod curl;
 mod io;
 mod string;
 mod math;

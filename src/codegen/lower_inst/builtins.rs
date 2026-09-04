@@ -37,6 +37,7 @@ pub(crate) mod bcmath;
 pub(crate) mod buffers;
 pub(crate) mod class_relations;
 pub(crate) mod ctype;
+pub(crate) mod curl;
 pub(crate) mod debug;
 pub(crate) mod diagnostics;
 mod eval;

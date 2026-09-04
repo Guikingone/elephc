@@ -2,7 +2,7 @@
 title: "ptr_write_string() — internals"
 description: "Compiler internals for ptr_write_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 375
+  order: 409
 ---
 
 ## `ptr_write_string()` — internals

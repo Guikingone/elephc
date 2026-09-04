@@ -3,7 +3,7 @@
 //! Keeps parsing, ordering, and numeric `PHP_VERSION_ID` conversion in one typed model.
 //!
 //! Called from:
-//! - `crate::cli::parse_args()` when normalizing `--php-version`.
+//! - `crate::cli::compile_config()` when normalizing `--php-version`.
 //! - Version-sensitive standard-library preludes such as `crate::pdo_prelude`.
 //!
 //! Key details:

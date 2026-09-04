@@ -69,6 +69,7 @@ fn check_source_with_defines_and_options(
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::scanf_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = elephc::similar_text_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
@@ -89,6 +90,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::scanf_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = elephc::similar_text_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
@@ -295,6 +297,11 @@ mod narrowing;
 mod image;
 #[path = "error_tests/mysqli.rs"]
 mod mysqli;
+
+/// `ext/curl` prelude diagnostics: `CurlHandle`'s object model and the `curl_*`
+/// wrappers' argument contracts.
+#[path = "error_tests/curl.rs"]
+mod curl;
 
 // --- Iterator-related errors ---
 

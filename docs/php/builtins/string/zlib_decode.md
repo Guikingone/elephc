@@ -2,7 +2,7 @@
 title: "zlib_decode()"
 description: "Decompresses a raw, zlib or gzip framed string, detecting which."
 sidebar:
-  order: 518
+  order: 552
 ---
 
 ## zlib_decode()
@@ -21,7 +21,7 @@ Decompresses a raw, zlib or gzip framed string, detecting which.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected gz prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._

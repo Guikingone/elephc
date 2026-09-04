@@ -70,6 +70,16 @@ def run_gen_builtins(repo: Path) -> list[dict]:
     blocks. Prefers a prebuilt binary under ``target/{release,debug}/examples/``
     when present (fast path for CI, which builds it first); otherwise falls back
     to ``cargo run``.
+
+    THE CANONICAL DOCUMENTATION CONFIGURATION IS ``--features curl`` (the root
+    package's relay; see ``Cargo.toml``). The PHP-visible ``curl_*`` contracts live
+    in ``elephc-builtin-contract``'s feature-gated ``catalog_curl`` module and
+    Magician's matching ``eval_builtin!`` homes behind its own ``curl`` feature, so
+    a default-feature exporter simply cannot see that surface — it would silently
+    emit a catalog thirty-four functions short. The committed registry and pages are
+    generated feature-on, and :func:`_require_canonical_configuration` below refuses
+    to continue against a default-feature build rather than let a stale prebuilt
+    binary regenerate a different, smaller catalog.
     """
     cmd: list[str]
     source_inputs = [repo / "Cargo.toml", repo / "Cargo.lock", repo / "tools" / "gen_builtins.rs"]
@@ -88,19 +98,61 @@ def run_gen_builtins(repo: Path) -> list[dict]:
             break
     else:
         cmd = [
-            "cargo", "run", "--quiet", "--example", "gen_builtins", "--",
+            "cargo", "run", "--quiet", "--features", "curl", "--example", "gen_builtins", "--",
             "--include-internal",
         ]
     proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
     if proc.returncode != 0:
         sys.exit(
-            "gen_builtins failed (build it with `cargo build --example gen_builtins`):\n"
+            "gen_builtins failed "
+            "(build it with `cargo build --example gen_builtins --features curl`):\n"
             + proc.stderr
         )
     try:
-        return json.loads(proc.stdout)
+        entries = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:  # pragma: no cover - defensive
         sys.exit(f"gen_builtins produced invalid JSON: {exc}")
+    _require_canonical_configuration(entries)
+    return entries
+
+
+# Every feature-gated catalog slice the canonical documentation configuration must
+# contain, as (label, matcher, expected count, cargo flag that publishes it). A
+# feature-gated slice is the only way the exporter can come back SHORT without failing
+# outright, so each one is pinned here.
+_REQUIRED_SURFACES = (
+    (
+        "PHP-visible curl_*",
+        lambda entry: entry["name"].startswith("curl_"),
+        34,
+        "--features curl",
+    ),
+)
+
+
+def _require_canonical_configuration(entries: list[dict]) -> None:
+    """Fail unless the exporter was built in the canonical documentation configuration."""
+    for label, matches, expected, flag in _REQUIRED_SURFACES:
+        found = sum(1 for entry in entries if matches(entry))
+        if found == expected:
+            continue
+        # Zero found is a wrong-configuration diagnosis; any other count means the
+        # surface really did change size and the constant above needs bumping. Saying
+        # "rebuild with the feature" for the second case sends the reader hunting a
+        # stale binary that is not there.
+        if found == 0:
+            sys.exit(
+                f"gen_builtins exported no {label} entries, expected {expected}.\n"
+                "The committed docs are generated in ONE canonical configuration; rebuild\n"
+                f"the exporter with `cargo build --example gen_builtins {flag}`\n"
+                "(a stale default-feature binary under target/*/examples/ is the usual cause)."
+            )
+        sys.exit(
+            f"gen_builtins exported {found} {label} entries, expected {expected}.\n"
+            f"The {label} surface changed size. If that is intended, update the expected\n"
+            "count in _REQUIRED_SURFACES (scripts/docs/elephc_builtins/extract.py) and\n"
+            "regenerate; the constant exists so a shrinking catalog cannot pass silently."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +516,74 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # Orchestration
 # ---------------------------------------------------------------------------
 
+# Which injected prelude declares a ``prelude``-routed contract, keyed by the contract's
+# own area. Each value is (source file under src/, human name used in the page note,
+# contract module the signature lives in). The contract crate keeps the curl surface in a
+# feature-gated catalog module, so curl entries carry a different ``sig_file`` than the
+# always-on surfaces.
+#
+# THERE IS NO DEFAULT ENTRY ON PURPOSE. An unmapped area used to fall through to
+# hash_prelude.rs, and a missing declaration used to fall through to line 1, so a
+# prelude-provided contract added in a third area would have shipped a page naming the
+# wrong prelude and linking to an unrelated line — generated, committed, and plausible
+# enough to survive review. Both now raise. When a new prelude family lands, add its area
+# here; the prelude sources the compiler can inject are enumerated in
+# ``src/builtins/parity_tests.rs``'s ``injected_prelude_programs``, and its
+# ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
+# by exactly one of them.
+#
+# An area maps to a LIST because an area does not own a prelude: `Area::Io` is `dir()` in
+# dir_prelude.rs and the `gz*` family in gz_prelude.rs, and `Area::String` is the four `hash_*`,
+# `gzdecode`/`gzencode`/`zlib_*` and `similar_text` in three different ones. Candidates are tried
+# in order and the first one that DECLARES the name wins, so adding a prelude to an existing area
+# is an append here, not a rewrite.
+SURFACES = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
+PRELUDE_SOURCES: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "curl": (
+        (
+            "curl_prelude.rs",
+            "curl",
+            "crates/elephc-builtin-contract/src/catalog_curl.rs",
+        ),
+    ),
+    "string": (
+        ("hash_prelude.rs", "hash", SURFACES),
+        ("gz_prelude.rs", "gz", SURFACES),
+        ("similar_text_prelude.rs", "similar_text", SURFACES),
+    ),
+    "io": (
+        ("gz_prelude.rs", "gz", SURFACES),
+        ("dir_prelude.rs", "dir", SURFACES),
+    ),
+}
+
+
+def find_prelude_declaration(source: str, canonical: str):
+    """Locate where an injected prelude declares ``canonical``, in either prelude form.
+
+    A prelude declares a PHP function in ONE OF TWO WAYS, and the generated page has to
+    link to whichever one this prelude actually uses:
+
+    * BUILT IN RUST — ``function("hash_copy")`` opening a ``synthetic_class`` builder
+      chain. This is every stdlib prelude now, and it is why matching only the PHP form
+      silently produced a line-1 anchor for all four ``hash_*`` pages.
+    * PHP SOURCE TEXT — ``function hash_copy(...)`` at the start of a line inside the
+      prelude's embedded source. ``curl_prelude.rs`` is the last one shaped this way
+      (see its injector for why, and the ROADMAP entry for the conversion).
+
+    Both patterns reject a longer identifier ending in the name, so
+    ``__elephc_curl_easy_body`` cannot answer for ``curl_easy_body``. Returns the match, or
+    ``None`` when neither form declares it — which the caller turns into a loud failure
+    rather than an anchor pointing at an unrelated place in the file.
+    """
+    built = re.search(
+        rf"(?<![A-Za-z0-9_])function\(\s*\"{re.escape(canonical)}\"\s*\)", source
+    )
+    if built is not None:
+        return built
+    return re.search(rf"^function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
+
+
 def resolve_non_registry_lowering(
     repo: Path,
     read,
@@ -471,6 +591,7 @@ def resolve_non_registry_lowering(
     lowering_dir: Path,
     canonical: str,
     aot_support: dict,
+    area: str,
 ) -> LoweringInfo:
     """Describe a compiler route that intentionally has no ``builtin!`` home."""
     contract_file = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
@@ -483,33 +604,36 @@ def resolve_non_registry_lowering(
     lowering = LoweringInfo(sig_file=contract_file)
     kind = aot_support.get("kind")
     if kind == "prelude":
-        # Which prelude is FOUND, not assumed. This named `hash_prelude.rs` outright, so every
-        # prelude-provided function that lives elsewhere — `dir()` in `dir_prelude.rs`, the whole
-        # `gz*` family in `gz_prelude.rs` — was documented as sitting at line 1 of a file that does
-        # not declare it. The declaration is searched for across the preludes instead.
-        preludes = sorted((repo / "src").glob("*_prelude.rs"))
-        # Two spellings: PHP source (`function gzopen(`) and the Rust declaration builder some
-        # preludes use instead (`function("hash_init")`). The PHP one is tried first because it
-        # points at a body rather than at a registration.
-        patterns = (
-            rf"^function\s+{re.escape(canonical)}\s*\(",
-            rf"function\(\s*\"{re.escape(canonical)}\"\s*\)",
-        )
-        prelude, line = None, 1
-        for candidate in preludes:
-            body = read(candidate)
-            for pattern in patterns:
-                match = re.search(pattern, body, re.MULTILINE)
-                if match:
-                    prelude, line = candidate, body[: match.start()].count("\n") + 1
-                    break
-            if prelude is not None:
+        candidates = PRELUDE_SOURCES.get(area)
+        if candidates is None:
+            raise ValueError(
+                f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
+                f"PRELUDE_SOURCES does not map to a prelude. Add the area (see the constant's "
+                f"comment) — falling back to another area's prelude would publish a page "
+                f"pointing at the wrong file with the wrong prose."
+            )
+        found = None
+        for source, label, sig_file in candidates:
+            prelude = repo / "src" / source
+            body = read(prelude)
+            match = find_prelude_declaration(body, canonical)
+            if match is not None:
+                found = (prelude, label, sig_file, body[: match.start()].count("\n") + 1)
                 break
-        if prelude is not None:
-            lowering.codegen_file = str(prelude.relative_to(repo))
-            lowering.codegen_line = line
+        if found is None:
+            named = ", ".join(f"src/{source}" for source, _, _ in candidates)
+            raise ValueError(
+                f"prelude-provided builtin {canonical!r} is declared by none of {named}. "
+                f"Its contract area {area!r} maps to those, so either the contract's area or "
+                f"PRELUDE_SOURCES is wrong; a line-1 fallback would ship a page linking to "
+                f"an unrelated place in the file."
+            )
+        prelude, label, sig_file, line = found
+        lowering.sig_file = sig_file
+        lowering.codegen_file = str(prelude.relative_to(repo))
+        lowering.codegen_line = line
         lowering.codegen_function = canonical
-        lowering.notes.append("Implemented by a compiler-injected PHP prelude.")
+        lowering.notes.append(f"Implemented by the compiler-injected {label} prelude.")
     elif kind == "language-construct":
         lowering.notes.append("Lowered through the compiler's dedicated language-construct path.")
     elif kind == "dedicated-syntax":
@@ -592,7 +716,7 @@ def build_registry(repo: Path) -> list[Builtin]:
             lowering = resolve_registry_lowering(repo, read, entry, home_rel)
         else:
             lowering = resolve_non_registry_lowering(
-                repo, read, dispatch, lowering_dir, canonical, aot_support
+                repo, read, dispatch, lowering_dir, canonical, aot_support, entry["area"]
             )
         if canonical in RUNTIME_HELPER_OVERRIDES:
             lowering.runtime_helpers = RUNTIME_HELPER_OVERRIDES[canonical]

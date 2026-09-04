@@ -16,7 +16,7 @@ mod output_buffering;
 #[path = "io/files.rs"]
 mod files;
 #[path = "io/streams.rs"]
-mod streams;
+pub(crate) mod streams;
 #[path = "io/compress_wrapper.rs"]
 mod compress_wrapper;
 #[path = "io/gz_streams.rs"]

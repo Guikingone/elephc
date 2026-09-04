@@ -132,6 +132,29 @@ fn test_parse_switch() {
     assert!(matches!(&stmts[0].kind, StmtKind::Switch { .. }));
 }
 
+/// Verifies that an empty `default:` written before another case keeps a position: its body
+/// holds one empty synthetic no-op carrying the label's span, so later passes can tell it falls
+/// through into that case. An empty `default:` written last stays empty.
+#[test]
+fn test_parse_switch_empty_default_before_case_keeps_its_position() {
+    let stmts = parse_source(
+        "<?php switch ($x) {\n    case 1: echo \"a\"; break;\n    default:\n    case 2: echo \"b\";\n}",
+    );
+    let StmtKind::Switch { default, .. } = &stmts[0].kind else {
+        panic!("expected Switch");
+    };
+    let default = default.as_ref().expect("default clause");
+    assert_eq!(default.len(), 1);
+    assert!(matches!(&default[0].kind, StmtKind::Synthetic(body) if body.is_empty()));
+    assert_eq!(default[0].span.line, 3);
+
+    let stmts = parse_source("<?php switch ($x) { case 1: echo \"a\"; break; default: }");
+    let StmtKind::Switch { default, .. } = &stmts[0].kind else {
+        panic!("expected Switch");
+    };
+    assert_eq!(default.as_deref(), Some(&[][..]));
+}
+
 // --- Match ---
 
 /// Verifies that `<?php foreach ($a as $k => $v) {}` parses with `key_var = Some("k")`,

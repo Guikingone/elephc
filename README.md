@@ -217,6 +217,15 @@ selection and troubleshooting.
 brew install illegalstudio/tap/elephc
 ```
 
+### Nightly builds
+
+`main` is built nightly and published as a pre-release under the rolling
+[`nightly`](https://github.com/illegalstudio/elephc/releases/tag/nightly) tag.
+Each successful build also receives an immutable `nightly-YYYYMMDD` tag, with
+numbered suffixes for same-day rebuilds and retention of the 14 newest dated
+builds. Nightlies are unsupported; see the
+[installation guide](docs/getting-started/installation.md#nightly-builds-unsupported).
+
 ### From source (alternative)
 
 ```bash
@@ -301,7 +310,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, phar, tz, image, eval, regex, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, iconv, phar, tz, image, eval, regex, curl, web)
 elephc app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc app.php --with-mysqli
@@ -349,9 +358,10 @@ elephc main.php
 ```
 
 `elephc native` manages a small, runtime/builtin-oriented catalog of verified C
-sources: PCRE2 10.47 and zlib 1.3.2. It is intentionally **not** the mechanism
-used for Composer packages, Rust bridge crates, compilers/SDKs, or arbitrary FFI
-libraries:
+sources: PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0, libssh2 1.11.1,
+and curl 8.21.0. Adding curl declares and links its complete pinned dependency
+closure. This is intentionally **not** the mechanism used for Composer packages,
+Rust bridge crates, compilers/SDKs, or arbitrary FFI libraries:
 
 | Need | Mechanism |
 |---|---|
@@ -487,14 +497,15 @@ The full list of supported constructs, operators, and control structures is in t
 - **Database (mysqli)**: a documented `mysqli` / `mysqli_stmt` / `mysqli_result` subset for MySQL/MariaDB over the same pure-Rust client — buffered independent results, prepared statements, `multi_query`, `mysqli_report` error modes, and the full procedural `mysqli_*` alias surface
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
+- **Native extensions**: complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
 - **Web server (`--web`)**: standalone prefork HTTP server binaries with compile-time `worker` (default), persistent `pool`, or fork-per-`request` isolation; request superglobals and `php://input`; `header()`/`http_response_code()` response control; and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
 
 </details>
 
-### Built-in functions (500+)
+### Built-in functions (549)
 
-The shared builtin catalog currently exposes 505 PHP-visible entries across arrays, buffers, class introspection, dates, filesystems, I/O, JSON, math/BCMath, process control, regex, SPL, streams, strings, types, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from that catalog in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 549 PHP-visible entries across arrays, buffers, class introspection, dates, filesystems, I/O, JSON, math/BCMath, process control, regex, SPL, streams, strings, types, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 
@@ -512,7 +523,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → function-argument introspection desugaring → OPcache manifest bake → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Optimizer (declaration reachability) → EIR lowering + validation → register allocation → EIR codegen → assembly/source-map write → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
+Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → function-argument introspection desugaring → OPcache manifest bake → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Optimizer (declaration reachability) → EIR lowering + validation → fixed-point EIR optimization → register allocation → EIR codegen → assembly/source-map write → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -537,7 +548,7 @@ elephc already performs a small but useful AST-level optimization pipeline befor
 - **Constant folding before type checking**: folds scalar arithmetic, bitwise ops, comparisons, logical ops, string-literal concatenation, scalar casts, ternaries, null coalescing, known `match` expressions, and scalar indexed/associative array-literal reads when the result is statically known.
 - **Constant propagation after type checking**: forwards scalar local values through straight-line code, across agreeing `if` / `switch` / `try` merges, through known-subject `switch` paths, through non-throwing `try` bodies without poisoning the merge with unreachable catches, through uniform local `?:` / `match` assignments, through fixed scalar destructuring like `[$a, $b] = [2, 3]`, and across simple loops when untouched locals or stable `for` init assignments can be proven safe even with conservative nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop writes, local array mutations like `$items[] = $i` / `$items[0] = $i`, local property writes like `$box->last = $i` / `$box->items[] = $i`, or targeted local invalidations like `unset($tmp)`. It also uses local loop path summaries for known `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` break exits, and branch-local loop exits that agree on scalar values, which in turn unlocks more folding in later expressions such as `$x ** $y`.
 - **Control-flow pruning after type checking**: removes constant-dead `if` / `elseif` / `while (false)` / `for (...; false; ...)` branches, materializes constant `switch` execution, prunes `match` arms, and trims unreachable statements after terminating constructs such as `return`, `throw`, `break`, and `continue`.
-- **Control-flow normalization after pruning**: canonicalizes equivalent residual shapes such as nested `elseif` chains, merged `if` heads/tails, single-case or fallthrough-only `switch` shells, canonical multi-catch handlers, folded outer `finally` wrappers, and identical `if` branches so later passes see fewer structurally different but semantically identical trees.
+- **Control-flow normalization after pruning**: canonicalizes equivalent residual shapes such as nested `elseif` chains, merged `if` heads/tails, negated two-way `if` branches swapped onto the positive test, single-case or fallthrough-only `switch` shells, canonical multi-catch handlers, folded outer `finally` wrappers, and identical `if` branches so later passes see fewer structurally different but semantically identical trees. Loop shells are canonicalized too: `for` loops without an update clause become `while` loops, `do ... while (true)` becomes `while (true)`, leading `if (...) break;` guards fold into the loop test, an endless loop ending in a break guard rotates into `do ... while`, and redundant trailing `continue` / final-`switch`-body `break` / bare function `return;` terminators are dropped.
 - **Dead-code elimination after normalization**: removes empty control shells, simplifies single-path conditionals, and prunes guard contradictions across boolean, strict-scalar, loose-equality, proven-integer range, and cross-variable relational checks. Exact `int` parameters and typed locals seed discrete ranges; strict relational substitution feeds the full exact/truthiness/switch model; and pure, non-throwing `while` / `for` conditions strengthen their body entry. The pass also uses CFG-lite reachability for local `if` / `switch` / `try` shapes, hoists safe non-throwing `try` prefixes, and drops unused pure expression statements and dead pure subexpressions when the surrounding expression already determines the result.
 - **Whole-program declaration reachability after DCE**: removes unreachable functions, unused classes, and unused methods from user code and injected preludes before EIR lowering, while keeping `CheckResult` method/vtable metadata aligned. Dynamic calls, builtin callback parameters, `eval`, `unserialize`, and Reflection conservatively retain wider surfaces only when their containing body is executable; inherited and trait-flattened bodies follow checker ownership, while interface-required symbols remain structurally available without activating dormant dynamic branches. Prelude-producing `--with-pdo`, `--with-tz`, and `--with-image` root their injected groups; `--with-crypto` only force-links its bridge, and `--web` remains demand-pruned.
 - **Local effect summaries for purity / may-throw reasoning**: tracks known pure and non-throwing builtins, user functions, static methods, private `$this` methods, closures, first-class callables, and merged callable aliases through `if` / `switch` / `try` control flow so the optimizer can simplify `try` regions and prune dead handlers more precisely.
@@ -614,6 +625,10 @@ src/
 ├── eval_aot.rs          # Compile-time planning for literal eval AOT vs bridge fallback
 ├── runtime_cache.rs     # Preassembled runtime object cache
 ├── source_map.rs        # Assembly/source-map sidecar emission
+├── monitor/             # Exact, sampled, local, remote, service, and export profiling
+├── call_graph.rs        # Profiling call-graph aggregation and DOT/HTML rendering
+├── pprof_encode.rs      # Profiling export in pprof protobuf form
+├── probe_key.rs         # Monitoring build-key creation and validation
 ├── termination.rs       # Structured terminal-effect analysis
 ├── optimize.rs          # Optimizer public entry points and effect context
 ├── optimize/            # AST optimizer: folding, propagation, DCE, declaration reachability
@@ -662,7 +677,7 @@ src/
 │       ├── builtin_spl_exceptions.rs # SPL exception hierarchy metadata
 │       ├── builtin_stdclass.rs # stdClass dynamic-property metadata
 │       ├── builtin_types/ # Built-in class/interface/enum metadata
-│       ├── builtins/    # Built-in function type signatures
+│       ├── builtins/    # Checker-resident constructs and contextual builtin validation
 │       ├── callables/   # Callable values, first-class callables, and callback checks
 │       ├── driver/      # Checker initialization and orchestration helpers
 │       ├── functions/   # User function type inference
@@ -694,11 +709,14 @@ crates/
 ├── elephc-builtin-contract/ # Dependency-neutral builtin catalog and signatures
 ├── elephc-bcmath/       # Exact arbitrary-precision decimal bridge
 ├── elephc-crypto/       # Hashing, HMAC, and OpenSSL-compatible crypto bridge
+├── elephc-curl/         # Static libcurl easy, multi, share, callback, and multipart bridge
 ├── elephc-iconv/        # Character-set conversion and MIME header bridge
 ├── elephc-image/        # GD/Exif/Imagick/Gmagick/Cairo image bridge
+├── elephc-instr/        # Exact profiling instrumentation runtime
 ├── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
 ├── elephc-pdo/          # Multi-driver PDO bridge
 ├── elephc-phar/         # PHAR/tar/zip bridge
+├── elephc-probe/        # Sampled profiling and authenticated service endpoint
 ├── elephc-tls/          # TLS stream bridge
 ├── elephc-tz/           # IANA timezone bridge
 └── elephc-web/          # Prefork HTTP server bridge
@@ -723,7 +741,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The **[docs/](docs/)** directory is a complete wiki covering every aspect of the compiler. Inside you'll find:
 
-- **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 500+ built-in functions with signatures and examples
+- **PHP syntax reference**: types, operators, control structures, functions, classes, namespaces, and all 549 built-in functions with signatures and examples
 - **Compiler extensions** — pointers, `buffer<T>`, `packed class`, FFI with `extern`, and conditional compilation with `ifdef` — the features that take PHP beyond the web
 - **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to code generation and runtime structure
 - **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of the ARM64 instruction set used by elephc's AArch64 backend

@@ -2,7 +2,7 @@
 title: "iconv_mime_decode_headers() — internals"
 description: "Compiler internals for iconv_mime_decode_headers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 447
+  order: 481
 ---
 
 ## `iconv_mime_decode_headers()` — internals

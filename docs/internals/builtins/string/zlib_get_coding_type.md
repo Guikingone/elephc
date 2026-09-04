@@ -2,7 +2,7 @@
 title: "zlib_get_coding_type() — internals"
 description: "Compiler internals for zlib_get_coding_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 520
+  order: 554
 ---
 
 ## `zlib_get_coding_type()` — internals
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 

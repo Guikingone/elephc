@@ -199,7 +199,16 @@ Current normalization coverage includes:
 - non-throwing `try` / `catch` simplification
 - outer `finally` blocks folded into a single inner `try` when they wrap exactly one inner `try` that does not already have its own `finally`
 - safe hoisting of non-throwing, fallthrough prefixes out of `try` blocks
-- conservative flattening of `try` / `finally` when the `try` body cannot throw and the body falls through
+- conservative flattening of `try` / `finally` when the `try` body cannot throw, falls through, and cannot leave early: a `return`, `break`, or `continue` nested in a branch of the body still runs `finally` under PHP, so such a body keeps its shell (the same rule gates DCE's flattening and its sinking of a tail into `finally`)
+
+The second generation of the pass (control-flow normalization v2) adds shell canonicalizations that matter to the CFG-aware EIR passes (loop analysis, LICM, branch simplification), all of which move AST nodes rather than clone them so the span-keyed checker decisions stay singular:
+
+- `if (!c) { A } else { B }` swapped into `if (c) { B } else { A }`, unless the `else` is a lone `if` (the canonical nested `elseif` chain, whose head/tail merges key on that shape)
+- `for (init; test;)` without an update clause hoisted into `init; while (test)` (`for (;;)` becomes `while (true)`), because `continue` reaches the test directly in both forms
+- `do { ... } while (true)` rewritten to `while (true) { ... }`
+- leading `if (g) { break; } [else { E }]` guards folded into the loop test: `while (c) { if (g) break; rest }` becomes `while (c && !g) { rest }` (`while (true)` / `for (;;)` become plain `while (!g)`), with the guard's `else` body leading the remaining body; the fold repeats while the body still starts with such a guard, and `for` loops with an update clause receive the same test without changing shape
+- an endless loop that ends in `if (g) { break; }` rotated into `do { body } while (!g)`, refused when the body carries a `continue` targeting that loop (it skips the guard today but would reach the rotated test); nested loops and `switch` bodies raise the `continue` level the check looks for
+- trailing terminators that transfer exactly where falling off the block would are dropped: a `continue` ending a loop body, the `break` ending the body that runs last in a `switch` (the `default` body when it is written last, else the last case; a `default` written between cases keeps its `break`, since EIR lowering places it at its source position), and a bare `return;` ending a function or method body. The walk follows only the tail path — the last statement, then recursively the last statement of each `if` / `ifdef` / `try` branch — and never enters loops, `switch` bodies, or `finally` blocks; a shell whose branch was emptied is re-pruned so it collapses like fresh input. By-reference-returning functions and generators keep their `return;`, and a `break`-only last case is kept when a `default` follows it
 ### Example
 
 ```php
@@ -256,6 +265,8 @@ Current dead-code-elimination coverage includes:
 - throw-path invalidation for `switch` now consults the CFG-lite reachable block set, so writes in impossible case bodies do not unnecessarily kill catch-body guards, while reachable case writes before a `throw` still invalidate them
 - catch-side guard invalidation is now path- and exception-type-aware: writes that only happen on non-throwing paths or paths throwing into a different handler no longer block pruning inside the selected `catch`, while call-aware by-reference writes performed by the throwing instruction itself still invalidate the affected locals
 - finally-entry guard invalidation separates normal/throw/return/break transfers from unconditional `exit`/`die` paths, which PHP terminates without running `finally`; branch-local writes on exit-only paths therefore no longer discard unrelated facts in the finally body
+- a `switch` whose `default` is written between cases keeps its shape in both the normalization and DCE passes (bodies are still optimized): every structural `switch` rewrite models `default` as the body that runs last, while EIR lowering places it at its source position, where a fallthrough `default` continues into the next case; the parser gives an empty `default:` written before a case an empty synthetic no-op carrying the label's span, so it can be ordered like any other body
+- statements following a `switch` without `default` stay after the switch, so the no-match path (and a last case falling off the switch) still runs them without cloning them into every exit path; a tail carrying a loop `break` / `continue` stays after the switch as well, where those statements keep targeting the loop
 - condition-only empty `if` / `elseif` chains reduced to just the observable condition checks that still matter
 - empty `elseif` bodies in the middle of a live chain folded into the minimum negated guard needed for later branches
 - trailing block tails sunk into `if` and `ifdef` fallthrough branches, so later statements are only retained on paths that can still reach them
@@ -570,7 +581,7 @@ The current optimizer is still intentionally local. It does not yet implement:
 - full fixed-point/basic-block constant propagation across arbitrary loops and general path merges
 - object/property facts, nested-array facts, and per-class constructor effect summaries beyond the current array-literal facts and unioned by-ref signatures
 - exact exception inference for unresolved/dynamic calls, open instance-dispatch sets, and runtime operand types beyond the current explicit-throw, exact-callable, and statically proven operator cases
-- broader control-flow normalization beyond the current local AST shell rewrites
+- control-flow normalization that reasons across sibling statements (merging adjacent `if` statements on the same pure condition, for instance), which needs the reference-volatility ledger the DCE guard state carries
 - backend-specific peephole cleanup
 - elimination of the `adrp/add/stur` instruction triple at the FCC assignment site when the wrapper is stubbed (the stub address still gets loaded and stored even though both are dead)
 
@@ -590,7 +601,13 @@ acquire/release cancellation, string-literal concat folding, redundant
 integer-sink specialization for checked add/subtract/multiply. Those passes make
 proven-stable local loads pure and replace transient boxed Mixed arithmetic with
 allocation-free `ichecked_*_to_int` operations only when every use observes an
-integer. Per-block constant folding then collapses
+integer. After `CheckedIntSink`, `CheckedNumericChain` may fuse a left-associated
+add/subtract/multiply chain whose `Mixed` intermediates are used only by the next
+operation, the final integer cast, and removable `Release` instructions into
+`ICheckedNumericChainToInt`; its in-range path stays in i64 registers, while the
+first signed overflow promotes the exact accumulator and operand, finishes the
+remaining suffix in double, and then uses the existing PHP float-to-int conversion.
+Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's
 scalar load/store forwarding, propagates constants through EIR value ids and

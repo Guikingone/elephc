@@ -2,7 +2,7 @@
 title: "htmlspecialchars()"
 description: "Converts the HTML special characters in a string into their entities."
 sidebar:
-  order: 443
+  order: 477
 ---
 
 ## htmlspecialchars()

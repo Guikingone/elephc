@@ -46,7 +46,7 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
         // which rejects the clang triple an Apple cross compiler reports
         // ("Kernel `ios13.0' not known to work with OS `simulator'"). `abi` is
         // our normalized identity and parses on every target.
-        command.arg(format!("--host={}", request.toolchain.abi));
+        command.arg(format!("--host={}", request.toolchain.autoconf_host()));
     }
     run_checked(&mut command, "configure trusted PCRE2 recipe")?;
 

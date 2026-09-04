@@ -2,7 +2,7 @@
 title: "gzencode() — internals"
 description: "Compiler internals for gzencode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 429
+  order: 463
 ---
 
 ## `gzencode()` — internals
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 

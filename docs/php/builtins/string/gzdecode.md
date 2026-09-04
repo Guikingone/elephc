@@ -2,7 +2,7 @@
 title: "gzdecode()"
 description: "Decodes a gzip-framed string."
 sidebar:
-  order: 427
+  order: 461
 ---
 
 ## gzdecode()
@@ -21,7 +21,7 @@ Decodes a gzip-framed string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected gz prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
