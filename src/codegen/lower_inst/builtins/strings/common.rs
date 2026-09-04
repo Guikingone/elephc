@@ -215,7 +215,9 @@ fn load_object_as_borrowed_string_to_regs(
 ) -> Result<()> {
     let normalized = class_name.trim_start_matches('\\');
     if !crate::codegen::lower_inst::output_values::object_class_has_tostring(ctx, normalized) {
-        crate::codegen::lower_inst::output_values::emit_missing_tostring_fatal(ctx, normalized);
+        crate::codegen::lower_inst::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
+        copy_owned_string_to_concat_and_release(ctx);
+        move_string_result_to_regs(ctx, ptr_reg, len_reg);
         return Ok(());
     }
     let return_ty = crate::codegen::lower_inst::output_values::emit_object_tostring_call(

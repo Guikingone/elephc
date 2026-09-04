@@ -41,6 +41,62 @@ echo $p;
     assert!(err.contains("could not be converted to string"), "{err}");
 }
 
+/// Verifies a value of the DECLARED type `object` reaches `__toString` in every string context,
+/// and that a subclass's `__toString` binds through a parent-typed value.
+///
+/// `object` is spelled `PhpType::Object("")` in codegen, so the class-name lookup that binds
+/// `__toString` found nothing and every one of these contexts wrote
+/// `Object of class  could not be converted to string` — with an empty class name — and exited.
+/// The parent-typed case failed the same lookup for the opposite reason: `Base` really has no
+/// `__toString`, but the value is a `Child` that does, and PHP calls it.
+///
+/// Values are `php -n` 8.5.6 verbatim: `xL!|yL!|L!|L!|L!|L!|Z|pL!|xC!|C!|C!`.
+#[test]
+fn test_declared_object_type_and_subclass_reach_tostring_in_string_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+class Label { public function __toString(): string { return "L!"; } }
+class Base { public $v = 1; }
+class Child extends Base { public function __toString(): string { return "C!"; } }
+
+function asObject(): object { return new Label(); }
+function takeObject(object $o): string { return "p" . $o; }
+function asBase(): Base { return new Child(); }
+
+$o = asObject();
+echo "x" . $o, "|", "y$o", "|", (string) $o, "|", strval($o), "|", sprintf('%s', $o), "|";
+echo $o;
+echo "|", str_replace("L!", "Z", $o), "|", takeObject(new Label()), "|";
+$b = asBase();
+echo "x" . $b, "|", (string) $b, "|";
+echo $b;
+"#,
+    );
+    assert_eq!(out, "xL!|yL!|L!|L!|L!|L!|Z|pL!|xC!|C!|C!");
+}
+
+/// Verifies the conversion failure NAMES the runtime class even when the static type is `object`,
+/// and that output written before it survives.
+///
+/// The `object`-typed arm used to print an EMPTY class name, and the boxed-Mixed arm printed no
+/// class at all (`Fatal error: Object could not be converted to string`), which is what a Symfony
+/// `--web` request died with. Both now resolve the name from the object itself.
+#[test]
+fn test_declared_object_conversion_error_names_the_runtime_class() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Plain { public $v = 1; }
+function asObject(): object { return new Plain(); }
+echo "before\n";
+echo "x" . asObject();
+"#,
+    );
+    assert!(
+        err.contains("Object of class Plain could not be converted to string"),
+        "{err}"
+    );
+}
+
 /// Verifies `__get` is invoked for undefined property reads, returning the intercepted name.
 #[test]
 fn test_magic_get_handles_missing_property_reads() {

@@ -465,7 +465,10 @@ pub(in crate::codegen) fn emit_mixed_string_dispatch_from_result(
     }
 
     ctx.emitter.label(&no_match_label);
-    emit_mixed_missing_tostring_fatal(ctx);
+    super::output_values::emit_dynamic_object_to_string(ctx, receiver_reg);
+    if matches!(mode, MixedStringContextMode::Stdout) {
+        abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+    }
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -573,32 +576,7 @@ fn coerce_tostring_return_to_string_result(
     }
 }
 
-/// Emits a fatal when a boxed Mixed object has no matching public `__toString()`.
-fn emit_mixed_missing_tostring_fatal(ctx: &mut FunctionContext<'_>) {
-    let (label, len) = ctx
-        .data
-        .add_string(b"Fatal error: Object could not be converted to string\n");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the object string-cast fatal to Linux stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the object string-cast fatal before exiting
-            abi::emit_exit(ctx.emitter, 1);
-        }
-    }
-}
-
-/// Lowers an object string cast through `__toString()` or PHP's conversion fatal.
+/// Lowers an object string cast through `__toString()`, statically bound where the class has one.
 fn lower_object_to_string(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -616,8 +594,17 @@ fn lower_object_to_string(
     if object_class_has_tostring(ctx, normalized) {
         return lower_runtime_object_method_call(ctx, inst, normalized, "__toString");
     }
-    emit_missing_tostring_fatal(ctx, normalized);
-    Ok(())
+    // Everything left is a class whose `__toString` cannot be bound HERE, and neither remaining
+    // case is a compile-time refusal:
+    //   - `normalized` is empty, which is how the DECLARED type `object` is spelled. A value
+    //     typed `object` has a concrete class at run time and PHP calls its `__toString`; the
+    //     static fatal below used to fire for all of them, printing an empty class name.
+    //   - the class is named but publishes no `__toString`. A SUBCLASS of it may still publish
+    //     one, and even when none does PHP throws a CATCHABLE `Error` rather than dying.
+    // The runtime resolver settles both from the object itself.
+    let value = expect_operand(inst, 0)?;
+    super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
+    store_if_result(ctx, inst)
 }
 
 /// Returns true when interface metadata exposes a string-returning `__toString()` contract.
@@ -635,33 +622,6 @@ fn object_class_has_tostring(ctx: &FunctionContext<'_>, class_name: &str) -> boo
         .class_infos
         .get(class_name)
         .is_some_and(|class_info| class_info.methods.contains_key("__tostring"))
-}
-
-/// Emits PHP's fatal diagnostic for object-to-string casts without `__toString()`.
-fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) {
-    let message = format!(
-        "Fatal error: Object of class {} could not be converted to string\n",
-        class_name
-    );
-    let (label, len) = ctx.data.add_string(message.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the object string-cast fatal to Linux stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the object string-cast fatal before exiting
-            abi::emit_exit(ctx.emitter, 1);
-        }
-    }
 }
 
 /// Lowers array-like PHP values to the literal string used by PHP casts.

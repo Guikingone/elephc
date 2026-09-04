@@ -56,8 +56,8 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
     {
         let normalized = class_name.trim_start_matches('\\');
         if !object_class_has_tostring(ctx, normalized) {
-            emit_missing_tostring_fatal(ctx, normalized);
-            return Ok(());
+            emit_value_dynamic_object_to_string(ctx, value)?;
+            return store_if_result(ctx, inst);
         }
         emit_object_tostring_call(ctx, value, normalized)?;
         return store_if_result(ctx, inst);

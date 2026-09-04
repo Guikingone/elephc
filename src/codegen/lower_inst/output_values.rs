@@ -55,7 +55,7 @@ pub(super) fn lower_print_value(ctx: &mut FunctionContext<'_>, inst: &Instructio
     lower_echo_value(ctx, inst)
 }
 
-/// Lowers `echo $object` through `__toString()` or PHP's conversion fatal.
+/// Lowers `echo $object` through `__toString()`, statically bound when the class publishes one.
 pub(super) fn lower_object_echo_value(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -63,8 +63,8 @@ pub(super) fn lower_object_echo_value(
 ) -> Result<()> {
     let normalized = class_name.trim_start_matches('\\');
     if !object_class_has_tostring(ctx, normalized) {
-        emit_missing_tostring_fatal(ctx, normalized);
-        return Ok(());
+        emit_value_dynamic_object_to_string(ctx, value)?;
+        return emit_loaded_value_to_stdout(ctx, &PhpType::Str);
     }
     let return_ty = emit_object_tostring_call(ctx, value, normalized)?;
     emit_loaded_value_to_stdout(ctx, &return_ty.codegen_repr())
@@ -101,31 +101,64 @@ pub(super) fn object_class_has_tostring(ctx: &FunctionContext<'_>, class_name: &
         .is_some_and(|class_info| class_info.methods.contains_key("__tostring"))
 }
 
-/// Emits PHP's fatal diagnostic for object-to-string conversion without `__toString()`.
-pub(super) fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) {
-    let message = format!(
-        "Fatal error: Object of class {} could not be converted to string\n",
-        class_name
-    );
-    let (label, len) = ctx.data.add_string(message.as_bytes());
+/// Coerces an object to string at RUN TIME, for every case compile-time binding cannot settle.
+///
+/// This replaces a static fatal that four lowering sites emitted whenever `class_infos` did not
+/// show a `__toString` on the exact named class. That verdict was wrong three ways, and none of
+/// them is rare:
+///
+///   - the DECLARED type `object` is spelled `PhpType::Object("")`, so every value typed
+///     `object` failed the lookup and the fatal printed an EMPTY class name;
+///   - a SUBCLASS publishing `__toString` was refused because its parent, the static type,
+///     publishes none;
+///   - an object that genuinely has no `__toString` stops PHP with a CATCHABLE `Error` naming
+///     the class, not with an uncatchable write-and-exit. Code that catches it — Symfony's DI
+///     dumper does — cannot see a raw `exit`.
+///
+/// `__rt_sprintf_mixed_to_string` already decides all three from the object itself and is
+/// emitted unconditionally, so this calls the existing behavior instead of restating it: the
+/// method resolves through the dense class-id-indexed `_class_tostring_ptrs` table (which covers
+/// every AOT class, inherited entries included), synthetic negative and out-of-range ids fall
+/// through to the eval bridge, and anything still unresolved throws PHP's catchable `Error` with
+/// the class name read from `_class_name_entries`. The `sprintf` in its name records its first
+/// caller, not its scope; the body is the general non-scalar string coercion.
+///
+/// `receiver_reg` holds the raw object payload. Both arches return the coerced pair directly in
+/// `abi::string_result_regs` (x1/x2, rax/rdx), so callers need no shuffling afterwards.
+///
+/// The eval context is passed as null deliberately: the boxed-Mixed caller is a per-module shared
+/// helper with no caller context in scope, and `__elephc_eval_string_context` documents null as
+/// supported for exactly this case — an eval-created object is resolved through the context it is
+/// still registered with.
+pub(super) fn emit_dynamic_object_to_string(ctx: &mut FunctionContext<'_>, receiver_reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
+            ctx.emitter.instruction(&format!("mov x1, {}", receiver_reg));      // pass the object payload as the coercion operand
+            ctx.emitter.instruction("mov x0, #6");                              // tag 6 selects the helper's object arm
+            ctx.emitter.instruction("mov x2, #0");                              // no caller eval context; the bridge uses the object's own
+            abi::emit_call_label(ctx.emitter, "__rt_sprintf_mixed_to_string");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the object string-cast fatal to Linux stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the object string-cast fatal before exiting
-            abi::emit_exit(ctx.emitter, 1);
+            ctx.emitter.instruction(&format!("mov rsi, {}", receiver_reg));     // pass the object payload as the coercion operand
+            ctx.emitter.instruction("mov edi, 6");                              // tag 6 selects the helper's object arm
+            ctx.emitter.instruction("xor edx, edx");                            // no caller eval context; the bridge uses the object's own
+            abi::emit_call_label(ctx.emitter, "__rt_sprintf_mixed_to_string");
         }
     }
+}
+
+/// Loads a statically typed object operand and coerces it to string at run time.
+///
+/// The shared entry for the three sites that hold the object as an EIR value rather than in a
+/// register already.
+pub(super) fn emit_value_dynamic_object_to_string(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    let receiver_reg = abi::int_result_reg(ctx.emitter);
+    emit_dynamic_object_to_string(ctx, receiver_reg);
+    Ok(())
 }
 
 /// Emits stdout output for the value currently loaded into result register(s).
