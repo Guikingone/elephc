@@ -132,6 +132,28 @@ pub(crate) fn prometheus_text(slices: &[Slice]) -> String {
             s.queries_per_request
         ));
     }
+    out.push_str(
+        "# HELP elephc_network_operations_per_request Mean outgoing network operations per request.\n\
+         # TYPE elephc_network_operations_per_request gauge\n",
+    );
+    for s in &stats {
+        out.push_str(&format!(
+            "elephc_network_operations_per_request{} {:.3}\n",
+            labels(s),
+            s.network_per_request
+        ));
+    }
+    out.push_str(
+        "# HELP elephc_network_wait_seconds_per_request Mean outgoing network wait per request.\n\
+         # TYPE elephc_network_wait_seconds_per_request gauge\n",
+    );
+    for s in &stats {
+        out.push_str(&format!(
+            "elephc_network_wait_seconds_per_request{} {:.6}\n",
+            labels(s),
+            s.network_wait_seconds_per_request
+        ));
+    }
     out
 }
 
@@ -159,8 +181,18 @@ pub(crate) fn export_otlp(slices: &[Slice], endpoint: &str) -> i32 {
         let start_ns = start_us.saturating_mul(1_000);
         let queries: u64 = slice.graph.nodes.iter().map(|n| n.io_exclusive).sum();
         let wait_ns: u64 = slice.graph.nodes.iter().map(|n| n.wait_exclusive).sum();
-        let network_ops: u64 = slice.graph.nodes.iter().map(|node| node.network_ops).sum();
-        let network_wait_ns: u64 = slice.graph.nodes.iter().map(|node| node.network_wait).sum();
+        let network_ops: u64 = slice
+            .graph
+            .nodes
+            .iter()
+            .map(|node| node.network_exclusive)
+            .sum();
+        let network_wait_ns: u64 = slice
+            .graph
+            .nodes
+            .iter()
+            .map(|node| node.network_wait_exclusive)
+            .sum();
         let name = if trace.route.is_empty() {
             slice.service.clone()
         } else {

@@ -135,12 +135,9 @@ const SPEND_ATTEMPTS: usize = 3;
 /// never seen it.
 const REPLAY_TABLE_BYTES: usize = REPLAY_SLOTS * REPLAY_SLOT_BYTES;
 /// Shared-region byte size: the ring, then the route table, then the per-route
-/// event counters, then the control word, then the replay table — all inherited
-/// across a `--web` fork, so route ids stay consistent, every worker's counters
-/// land in one place, and a signature spent on one worker is spent on all.
-///
-/// Each new area is appended LAST so adding it moves no existing offset: every
-/// other area is addressed from the constants above it.
+/// event counters, then the control word, then the replay table. All offsets are
+/// derived from the sizes above, and the whole internal layout is inherited
+/// across a `--web` fork so route ids, counters, and replay state stay shared.
 const REGION_BYTES: usize =
     RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES + CONTROL_BYTES + REPLAY_TABLE_BYTES;
 

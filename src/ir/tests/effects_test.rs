@@ -88,10 +88,16 @@ fn curl_runtime_effects_mark_network_boundaries() {
     let perform = RuntimeFnId::CurlEasyPerform.effects();
     assert!(perform.contains(Effects::NETWORK_IO));
     assert!(perform.contains(Effects::BLOCKING_IO));
+    assert!(perform.contains(Effects::MAY_THROW));
+    assert!(perform.contains(Effects::OUTPUT));
+    assert!(perform.contains(Effects::ALLOC_HEAP));
 
     let progress = RuntimeFnId::CurlMultiExec.effects();
     assert!(progress.contains(Effects::NETWORK_IO));
     assert!(!progress.contains(Effects::BLOCKING_IO));
+    assert!(progress.contains(Effects::MAY_THROW));
+    assert!(progress.contains(Effects::OUTPUT));
+    assert!(progress.contains(Effects::ALLOC_HEAP));
 
     let adapter = RuntimeFnId::CurlAdapterAddr.effects();
     assert!(!adapter.contains(Effects::NETWORK_IO));

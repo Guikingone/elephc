@@ -78,8 +78,12 @@ In a binary built with `--with-monitoring`, an active exact capture counts curl
 transfers separately from database queries and records their elapsed network
 wait. Easy transfers count once per `curl_exec()`; multi transfers count once
 per attached easy handle, while `curl_multi_select()` contributes its blocked
-duration. The monitor table, HTML graph, performance assertions and
-OpenTelemetry span attributes expose those network dimensions.
+duration. `curl_upkeep()` contributes maintenance wait without counting a new
+transfer, and time spent executing PHP callbacks inside `curl_exec()` is
+excluded from network wait. Network operation and wait counters use the same
+inclusive/exclusive attribution as query counters. The monitor table, HTML
+graph, performance assertions, Prometheus gauges and OpenTelemetry span
+attributes expose those network dimensions.
 
 During a captured web request, curl also injects the current W3C `traceparent`
 into `CURLOPT_HTTPHEADER` immediately before the transfer. A header supplied by

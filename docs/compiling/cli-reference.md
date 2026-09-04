@@ -207,7 +207,8 @@ service:
 format for a textfile collector — a file rather than an endpoint, because
 `monitor` runs and exits and leaves nothing to scrape. Percentiles are exposed as
 a `summary`, not a histogram: we hold exact per-request values, and buckets would
-invent a resolution the capture does not have.
+invent a resolution the capture does not have. It also writes mean network
+operations and network-wait seconds per request as gauges.
 
 `--serve <addr>` serves the HTML page over HTTP instead of writing it to disk,
 rewriting it in place as new captures arrive — the page updates without a
@@ -783,11 +784,13 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | `--print-capabilities` | — | off | List the optional capabilities **this** binary accepts and the bridge archives each one needs, then exit successfully. One tab-separated line per capability: `<kind>\t<name>[\t<archive>...]`, where `kind` is `bridge` for a capability backed by one archive of its own and `capability` for one that is not — because it needs no archive (`regex`, whose provider is a managed native package) or because it is built out of several (`monitoring`). Every field is derived from the compiler's own bridge table, so this is the authoritative answer for the binary you are holding, not for the version the documentation was written against. A bridge archive is resolved from the directory the binary lives in or its sibling `lib/`, so `scripts/verify-release-artifact.sh` uses this to check a packaged tarball actually carries everything the compiler inside it advertises. |
 | `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
 
-Exact monitoring rows also append `network_ops` and `network_wait`. Curl reports
-those dimensions through network-specific runtime slots, separate from PDO
-query and wait counters, and propagates the active W3C `traceparent` unless the
-program supplied that header explicitly. The network dimensions are available
-to `--assert` as `network` and `network_wait_ms`.
+Exact monitoring rows also append inclusive/exclusive network operations and
+network wait. Curl reports those dimensions through network-specific runtime
+slots, separate from PDO query and wait counters, and propagates the active W3C
+`traceparent` unless the program supplied that header explicitly. Transfer
+operations exclude connection upkeep, and network wait excludes PHP callback
+execution nested inside `curl_exec()`. The exclusive network dimensions are
+available to `--assert` as `network` and `network_wait_ms`.
 
 See [Output formats and diagnostics](output-and-diagnostics.md).
 

@@ -38,6 +38,12 @@ pub(crate) fn traceparent() -> Option<String> {
     active_traceparent(active())
 }
 
+/// Sets the standalone test runtime's exact-monitor activity flag.
+#[cfg(all(test, elephc_curl_native))]
+pub(crate) fn set_test_active(active: bool) {
+    slot_stub::set_active(active);
+}
+
 // Standalone bridge tests do not link a compiled elephc runtime, so they provide
 // inert slots in their own executable. Production staticlibs never define them.
 #[cfg(test)]
@@ -49,5 +55,13 @@ mod slot_stub {
     #[no_mangle]
     static elephc_instr_network_wait_fn: usize = 0;
     #[no_mangle]
-    static elephc_monitor_active: u64 = 0;
+    static mut elephc_monitor_active: u64 = 0;
+
+    /// Updates the test-only activity symbol read by the production helper.
+    #[cfg(elephc_curl_native)]
+    pub(super) fn set_active(active: bool) {
+        unsafe {
+            std::ptr::addr_of_mut!(elephc_monitor_active).write(u64::from(active));
+        }
+    }
 }

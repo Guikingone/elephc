@@ -660,7 +660,7 @@ every call from a real enter/exit shadow stack, and writes the result to stderr
 at exit.
 
 ```text
-elephc-instr: {fn} calls=<n> incl_ns=<ns> excl_ns=<ns> incl_allocs=<n> excl_allocs=<n> incl_io=<n> excl_io=<n> incl_ret=<n> excl_ret=<n> incl_wait=<ns> excl_wait=<ns> network_ops=<n> network_wait=<ns>
+elephc-instr: {fn} calls=<n> incl_ns=<ns> excl_ns=<ns> incl_allocs=<n> excl_allocs=<n> incl_io=<n> excl_io=<n> incl_ret=<n> excl_ret=<n> incl_wait=<ns> excl_wait=<ns> incl_network=<n> excl_network=<n> incl_network_wait=<ns> excl_network_wait=<ns>
 elephc-instr-edge: {caller} -> {callee} count=<n> ns=<callee ns under caller>
 elephc-instr-query: <count> <normalized SQL text>   (one per distinct statement, if any DB ran)
 ```
@@ -805,13 +805,16 @@ so outright — "*N+1: `list_all` calls `get_user` 200 times and `get_user`
 issues 200 DB queries — batch them into one query*". `monitor`
 shows a `queries` column and per-function query counts in the graph tooltips.
 
-**And outgoing network work.** `network_ops` counts curl transfers against the
-PHP function that starts them, while `network_wait` records the elapsed time in
-blocking curl transfer or multi-wait calls. These counters are separate from
+**And outgoing network work.** `incl_network` / `excl_network` count curl
+transfers with the same inclusive/exclusive attribution as DB queries, while
+`incl_network_wait` / `excl_network_wait` record blocking curl transfer,
+connection-upkeep, or multi-wait time. `curl_upkeep()` contributes maintenance
+wait but not a transfer operation, and PHP callback execution nested inside
+`curl_exec()` is subtracted from network wait. These counters are separate from
 the PDO dimensions, so an HTTP-heavy request cannot inflate query budgets or
 trigger a false N+1 diagnosis. The stdout table, interactive graph, distributed
-trace waterfall, OTLP export and performance assertions all carry the network
-dimensions. Filesystem I/O is still not counted.
+trace waterfall, OTLP and Prometheus exports, and performance assertions all
+carry the network dimensions. Filesystem I/O is still not counted.
 
 **And what stays behind.** `incl_ret` / `excl_ret` are **retained** objects —
 allocated minus freed — attributed per function the same exact way, by reading
@@ -1073,7 +1076,9 @@ service:
 textfile collector. A file rather than an endpoint, because `monitor` runs and
 exits and leaves nothing to poll; percentiles are a `summary` rather than a
 histogram, because we hold exact per-request values and buckets would invent a
-resolution the capture does not have.
+resolution the capture does not have. Network data is exported as the
+`elephc_network_operations_per_request` and
+`elephc_network_wait_seconds_per_request` gauges.
 
 ### Timeline (Perfetto)
 

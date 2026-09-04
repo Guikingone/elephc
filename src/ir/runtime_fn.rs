@@ -932,25 +932,31 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
-            RuntimeFnId::CurlEasyPerform
-            | RuntimeFnId::CurlEasyUpkeep
-            | RuntimeFnId::CurlMultiSelect => crate::ir::Effects::from_bits_retain(
-                crate::ir::Effects::READS_HEAP.bits()
-                    | crate::ir::Effects::WRITES_HEAP.bits()
-                    | crate::ir::Effects::READS_PROCESS.bits()
+            // Both transfer drivers may invoke arbitrary PHP callbacks. Keep the
+            // callback-capable conservative set, then preserve their typed network and
+            // blocking distinctions so optimizer and monitoring consumers agree.
+            RuntimeFnId::CurlEasyPerform => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::REFCOUNT_OP.bits()
+                    & !crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            RuntimeFnId::CurlMultiExec => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::REFCOUNT_OP.bits()
+                    & !crate::ir::Effects::WRITES_GLOBAL.bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits(),
+            ),
+            RuntimeFnId::CurlEasyUpkeep | RuntimeFnId::CurlMultiSelect => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::WRITES_HEAP.bits()
+                        | crate::ir::Effects::READS_PROCESS.bits()
                     | crate::ir::Effects::WRITES_PROCESS.bits()
                     | crate::ir::Effects::MAY_WARN.bits()
                     | crate::ir::Effects::BLOCKING_IO.bits()
-                    | crate::ir::Effects::NETWORK_IO.bits(),
-            ),
-            RuntimeFnId::CurlMultiExec => crate::ir::Effects::from_bits_retain(
-                crate::ir::Effects::READS_HEAP.bits()
-                    | crate::ir::Effects::WRITES_HEAP.bits()
-                    | crate::ir::Effects::READS_PROCESS.bits()
-                    | crate::ir::Effects::WRITES_PROCESS.bits()
-                    | crate::ir::Effects::MAY_WARN.bits()
-                    | crate::ir::Effects::NETWORK_IO.bits(),
-            ),
+                        | crate::ir::Effects::NETWORK_IO.bits(),
+                )
+            }
             RuntimeFnId::BcScale => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_PROCESS.bits()
                     | crate::ir::Effects::WRITES_PROCESS.bits()

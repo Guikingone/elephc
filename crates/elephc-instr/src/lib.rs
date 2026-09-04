@@ -108,10 +108,12 @@ struct FnAcc {
     /// Self time minus this wait is an unclassified non-DB remainder.
     incl_wait: u64,
     excl_wait: u64,
-    /// Outgoing network operations attributed directly to the active function.
-    network_ops: u64,
-    /// Nanoseconds blocked in outgoing network work by the active function.
-    network_wait: u64,
+    /// Outgoing network operations, inclusive and exclusive like DB queries.
+    incl_network: u64,
+    excl_network: u64,
+    /// Nanoseconds blocked in outgoing network work, inclusive and exclusive.
+    incl_network_wait: u64,
+    excl_network_wait: u64,
     /// Live activations on the stack — inclusive is credited only when this
     /// returns to zero, so recursion is not double counted.
     depth: u32,
@@ -155,6 +157,12 @@ struct Frame {
     children_frees: u64,
     children_io: u64,
     children_wait: u64,
+    /// Network work issued directly by this activation.
+    network: u64,
+    network_wait: u64,
+    /// Network work issued by direct and transitive callees.
+    children_network: u64,
+    children_network_wait: u64,
 }
 
 /// One suspended coroutine's activations, off the shadow stack until it resumes.
@@ -286,6 +294,12 @@ struct Throw {
     children_frees: u64,
     children_io: u64,
     children_wait: u64,
+    /// Network work performed directly by the handler before its catcher is known.
+    network: u64,
+    network_wait: u64,
+    /// Network work performed by functions called from the handler.
+    children_network: u64,
+    children_network_wait: u64,
     /// `(callee, calls, summed inclusive ns)` for what this handler called.
     edges: Vec<(u32, u64, u64)>,
 }
@@ -490,6 +504,10 @@ impl State {
             children_frees: 0,
             children_io: 0,
             children_wait: 0,
+            network: 0,
+            network_wait: 0,
+            children_network: 0,
+            children_network_wait: 0,
         });
     }
 
@@ -667,6 +685,10 @@ impl State {
                 children_frees: 0,
                 children_io: 0,
                 children_wait: 0,
+                network: 0,
+                network_wait: 0,
+                children_network: 0,
+                children_network_wait: 0,
             });
         }
     }
@@ -779,6 +801,14 @@ impl State {
                 frame.children_frees = frame.children_frees.wrapping_add(throw.children_frees);
                 frame.children_io = frame.children_io.wrapping_add(throw.children_io);
                 frame.children_wait = frame.children_wait.wrapping_add(throw.children_wait);
+                frame.network = frame.network.wrapping_add(throw.network);
+                frame.network_wait = frame.network_wait.wrapping_add(throw.network_wait);
+                frame.children_network = frame
+                    .children_network
+                    .wrapping_add(throw.children_network);
+                frame.children_network_wait = frame
+                    .children_network_wait
+                    .wrapping_add(throw.children_network_wait);
                 for (callee, calls, ns) in throw.edges {
                     let entry = self.edges.entry((id, callee)).or_insert((0, 0));
                     entry.0 = entry.0.wrapping_add(calls);
@@ -914,6 +944,10 @@ impl State {
         let elapsed_frees = f.wrapping_sub(frame.f_enter);
         let elapsed_io = io.wrapping_sub(frame.io_enter);
         let elapsed_wait = w.wrapping_sub(frame.w_enter);
+        let inclusive_network = frame.network.wrapping_add(frame.children_network);
+        let inclusive_network_wait = frame
+            .network_wait
+            .wrapping_add(frame.children_network_wait);
         // Children can only exceed their parent's own span if the accounting
         // has gone wrong somewhere, and no sequence found so far reaches this —
         // the two that did were both fixed at their cause. It stays because of
@@ -939,6 +973,8 @@ impl State {
         acc.excl_wait = acc
             .excl_wait
             .wrapping_add(elapsed_wait.wrapping_sub(frame.children_wait));
+        acc.excl_network = acc.excl_network.wrapping_add(frame.network);
+        acc.excl_network_wait = acc.excl_network_wait.wrapping_add(frame.network_wait);
         acc.depth = acc.depth.saturating_sub(1);
         if acc.depth == 0 {
             acc.incl_ns = acc.incl_ns.wrapping_add(t.wrapping_sub(acc.t_outer));
@@ -946,6 +982,10 @@ impl State {
             acc.incl_frees = acc.incl_frees.wrapping_add(f.wrapping_sub(acc.f_outer));
             acc.incl_io = acc.incl_io.wrapping_add(io.wrapping_sub(acc.io_outer));
             acc.incl_wait = acc.incl_wait.wrapping_add(w.wrapping_sub(acc.w_outer));
+            acc.incl_network = acc.incl_network.wrapping_add(inclusive_network);
+            acc.incl_network_wait = acc
+                .incl_network_wait
+                .wrapping_add(inclusive_network_wait);
         }
         // Charging this to the frame below would hand the handler's cost to a
         // function the exception had already stopped. It waits with the unwind
@@ -956,6 +996,10 @@ impl State {
             u.children_frees = u.children_frees.wrapping_add(elapsed_frees);
             u.children_io = u.children_io.wrapping_add(elapsed_io);
             u.children_wait = u.children_wait.wrapping_add(elapsed_wait);
+            u.children_network = u.children_network.wrapping_add(inclusive_network);
+            u.children_network_wait = u
+                .children_network_wait
+                .wrapping_add(inclusive_network_wait);
             match u.edges.iter_mut().find(|(c, ..)| *c == id) {
                 Some(edge) => edge.2 = edge.2.wrapping_add(elapsed_ns),
                 None => u.edges.push((id, 0, elapsed_ns)),
@@ -969,6 +1013,10 @@ impl State {
             top.children_frees = top.children_frees.wrapping_add(elapsed_frees);
             top.children_io = top.children_io.wrapping_add(elapsed_io);
             top.children_wait = top.children_wait.wrapping_add(elapsed_wait);
+            top.children_network = top.children_network.wrapping_add(inclusive_network);
+            top.children_network_wait = top
+                .children_network_wait
+                .wrapping_add(inclusive_network_wait);
         }
         if let Some(pid) = parent {
             let entry = self.edges.entry((pid, id)).or_insert((0, 0));
@@ -976,23 +1024,21 @@ impl State {
         }
     }
 
-    /// Attributes one outgoing network operation to the active PHP function.
+    /// Attributes one outgoing network operation to the active PHP activation.
     fn note_network(&mut self) {
-        let Some(id) = self.stack.last().map(|frame| frame.id) else {
-            return;
-        };
-        if let Some(acc) = self.fns.get_mut(id as usize) {
-            acc.network_ops = acc.network_ops.wrapping_add(1);
+        if let Some(unwind) = self.pending_charge() {
+            unwind.network = unwind.network.wrapping_add(1);
+        } else if let Some(frame) = self.stack.last_mut() {
+            frame.network = frame.network.wrapping_add(1);
         }
     }
 
-    /// Attributes blocked outgoing-network time to the active PHP function.
+    /// Attributes blocked outgoing-network time to the active PHP activation.
     fn note_network_wait(&mut self, ns: u64) {
-        let Some(id) = self.stack.last().map(|frame| frame.id) else {
-            return;
-        };
-        if let Some(acc) = self.fns.get_mut(id as usize) {
-            acc.network_wait = acc.network_wait.wrapping_add(ns);
+        if let Some(unwind) = self.pending_charge() {
+            unwind.network_wait = unwind.network_wait.wrapping_add(ns);
+        } else if let Some(frame) = self.stack.last_mut() {
+            frame.network_wait = frame.network_wait.wrapping_add(ns);
         }
     }
 
@@ -1108,7 +1154,7 @@ impl State {
             let incl_ret = acc.incl_allocs as i64 - acc.incl_frees as i64;
             let excl_ret = acc.excl_allocs as i64 - acc.excl_frees as i64;
             out.push_str(&format!(
-                "elephc-instr: {} calls={} incl_ns={} excl_ns={} incl_allocs={} excl_allocs={} incl_io={} excl_io={} incl_ret={} excl_ret={} incl_wait={} excl_wait={} network_ops={} network_wait={}\n",
+                "elephc-instr: {} calls={} incl_ns={} excl_ns={} incl_allocs={} excl_allocs={} incl_io={} excl_io={} incl_ret={} excl_ret={} incl_wait={} excl_wait={} incl_network={} excl_network={} incl_network_wait={} excl_network_wait={}\n",
                 name_of(id),
                 acc.calls,
                 // Ticks became nanoseconds here, once, rather than twice per
@@ -1124,8 +1170,10 @@ impl State {
                 excl_ret,
                 acc.incl_wait,
                 acc.excl_wait,
-                acc.network_ops,
-                acc.network_wait,
+                acc.incl_network,
+                acc.excl_network,
+                acc.incl_network_wait,
+                acc.excl_network_wait,
             ));
         }
         let mut edges: Vec<(&(u32, u32), &(u64, u64))> = self.edges.iter().collect();
@@ -5164,8 +5212,53 @@ mod tests {
             .lines()
             .find(|line| line.starts_with("elephc-instr: hot "))
             .expect("hot row");
-        assert!(hot.contains("network_ops=1 network_wait=2000"), "{out}");
+        assert!(
+            hot.contains(
+                "incl_network=1 excl_network=1 incl_network_wait=2000 \
+                 excl_network_wait=2000"
+            ),
+            "{out}"
+        );
+        let main = out
+            .lines()
+            .find(|line| line.starts_with("elephc-instr: {main} "))
+            .expect("main row");
+        assert!(
+            main.contains(
+                "incl_network=1 excl_network=0 incl_network_wait=2000 \
+                 excl_network_wait=0"
+            ),
+            "{out}"
+        );
         assert!(out.contains("elephc-instr-edge: {main} -> hot count=1 ns=40"), "{out}");
+    }
+
+    /// Network work in an exception handler stays on the catcher and its live callees.
+    #[test]
+    fn network_metrics_survive_exception_resynchronization() {
+        let mut s = State::default();
+        let root = s.enter_sim(0, 0, 0, 0, 0, 0);
+        let catcher = s.enter_sim(1, 10, 0, 0, 0, 0);
+        s.enter_sim(2, 20, 0, 0, 0, 0);
+        s.note_throw(30, 0, 0, 0, 0);
+
+        s.note_network();
+        s.note_network_wait(5);
+        let child = s.enter_sim(3, 40, 0, 0, 0, 0);
+        s.note_network();
+        s.note_network_wait(7);
+        s.exit_at(3, child, 50, 0, 0, 0, 0);
+
+        s.exit_at(1, catcher, 100, 0, 0, 0, 0);
+        s.exit_at(0, root, 110, 0, 0, 0, 0);
+
+        assert_eq!((s.fns[2].incl_network, s.fns[2].excl_network), (0, 0));
+        assert_eq!((s.fns[3].incl_network, s.fns[3].excl_network), (1, 1));
+        assert_eq!((s.fns[1].incl_network, s.fns[1].excl_network), (2, 1));
+        assert_eq!((s.fns[0].incl_network, s.fns[0].excl_network), (2, 0));
+        assert_eq!(s.fns[1].incl_network_wait, 12);
+        assert_eq!(s.fns[1].excl_network_wait, 5);
+        assert_eq!(s.fns[0].incl_network_wait, 12);
     }
 
     #[test]

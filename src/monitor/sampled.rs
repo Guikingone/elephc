@@ -51,8 +51,10 @@ pub(crate) fn build_call_graph(display: &[(Vec<(String, Kind)>, u64)]) -> crate:
                 retained_exclusive: 0,
                 wait_inclusive: 0,
                 wait_exclusive: 0,
-                network_ops: 0,
-                network_wait: 0,
+                network_inclusive: 0,
+                network_exclusive: 0,
+                network_wait_inclusive: 0,
+                network_wait_exclusive: 0,
                 causes,
             }
         })
@@ -200,7 +202,7 @@ pub(crate) fn probe_alloc_summary(text: &str) -> String {
     rows.sort_by(|a, b| b.1.cmp(&a.1));
     let total: u64 = rows.iter().map(|r| r.1).sum();
     let mut out = format!(
-        "\nallocations — {total} observed between samples; attribution is sampled, so it says\n\
+        "\nAllocations - {total} observed between samples; attribution is sampled, so it says\n\
          WHERE allocation happens rather than how much each function allocated. The first\n\
          baseline and allocations after the final sample are outside this total.\n\n"
     );

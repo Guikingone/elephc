@@ -609,7 +609,10 @@ cannot contaminate each other. The event consumer owns its capture-window gate,
 and must publish an active-window callback when that state is not represented
 by the exact-capture word. Bridge-side timing must avoid clock reads outside
 either active window, while trace propagation stays scoped to an exact trace
-context. Steady-state dormant paths must not allocate per operation.
+context. Count only actual external operations, not maintenance calls such as
+connection upkeep. Measured wait must exclude time spent in user callbacks so
+network-bound diagnostics describe the driver boundary rather than PHP work.
+Steady-state dormant paths must not allocate per operation.
 
 Set `whole_archive: true` only when the staticlib has link-time side effects that
 must survive (e.g. a provider registration) or owns the program entry point (like

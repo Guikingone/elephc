@@ -132,6 +132,25 @@ impl EventHooks {
         unsafe { function() };
     }
 
+    /// Sends one measured wait duration to the installed event consumer.
+    ///
+    /// Callers use this when part of a larger timed boundary must be excluded,
+    /// such as PHP callback execution nested inside a curl transfer.
+    pub fn note_wait(self, ns: u64) {
+        if self.wait_fn == 0 {
+            return;
+        }
+        let function = unsafe {
+            std::mem::transmute::<usize, unsafe extern "C" fn(u64)>(self.wait_fn)
+        };
+        unsafe { function(ns) };
+    }
+
+    /// Reports a measured boundary after removing nested user-code time.
+    pub fn note_wait_excluding(self, elapsed_ns: u64, user_code_ns: u64) {
+        self.note_wait(elapsed_ns.saturating_sub(user_code_ns));
+    }
+
     /// Runs `body` and reports its elapsed nanoseconds only while monitoring is active.
     pub fn timed<T>(self, body: impl FnOnce() -> T) -> T {
         if self.wait_fn == 0 || !self.is_active() {
@@ -140,10 +159,7 @@ impl EventHooks {
         let started = Instant::now();
         let output = body();
         let elapsed = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
-        let function = unsafe {
-            std::mem::transmute::<usize, unsafe extern "C" fn(u64)>(self.wait_fn)
-        };
-        unsafe { function(elapsed) };
+        self.note_wait(elapsed);
         output
     }
 }
@@ -183,6 +199,7 @@ mod tests {
 
     static OPERATIONS: AtomicU64 = AtomicU64::new(0);
     static WAIT: AtomicU64 = AtomicU64::new(0);
+    static EXCLUDED_WAIT: AtomicU64 = AtomicU64::new(0);
     static WINDOW_ACTIVE: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
 
@@ -199,6 +216,11 @@ mod tests {
     /// Records one fixture wait duration through the runtime slot shape.
     unsafe extern "C" fn wait(ns: u64) {
         WAIT.fetch_add(ns, Ordering::Relaxed);
+    }
+
+    /// Records wait for the callback-exclusion fixture without sharing test state.
+    unsafe extern "C" fn excluded_wait(ns: u64) {
+        EXCLUDED_WAIT.fetch_add(ns, Ordering::Relaxed);
     }
 
     /// Verifies inactive hooks still forward events but avoid timed callbacks.
@@ -249,6 +271,17 @@ mod tests {
         assert_eq!(hooks.timed(|| 13), 13);
         assert!(WAIT.load(Ordering::Relaxed) > 0);
         WINDOW_ACTIVE.store(false, Ordering::Relaxed);
+    }
+
+    /// User callback time is removed without allowing an oversized value to wrap.
+    #[test]
+    fn wait_exclusion_is_saturating() {
+        EXCLUDED_WAIT.store(0, Ordering::Relaxed);
+        let hooks = EventHooks::new(false, 0, 0, excluded_wait as *const () as usize);
+        hooks.note_wait_excluding(1_000, 400);
+        assert_eq!(EXCLUDED_WAIT.load(Ordering::Relaxed), 600);
+        hooks.note_wait_excluding(100, 200);
+        assert_eq!(EXCLUDED_WAIT.load(Ordering::Relaxed), 600);
     }
 
     /// Verifies traceparent validation rejects injection and zero-identity shapes.

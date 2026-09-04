@@ -53,12 +53,16 @@ pub(crate) struct GraphNode {
     pub wait_inclusive: u64,
     #[serde(default)]
     pub wait_exclusive: u64,
-    /// Exact outgoing network operation count attributed to this function.
+    /// Exact inclusive/exclusive outgoing network operation counts.
     #[serde(default)]
-    pub network_ops: u64,
-    /// Exact nanoseconds blocked in outgoing network work by this function.
+    pub network_inclusive: u64,
+    #[serde(default, alias = "network_ops")]
+    pub network_exclusive: u64,
+    /// Exact inclusive/exclusive nanoseconds blocked in outgoing network work.
     #[serde(default)]
-    pub network_wait: u64,
+    pub network_wait_inclusive: u64,
+    #[serde(default, alias = "network_wait")]
+    pub network_wait_exclusive: u64,
     /// Runtime-cause breakdown of this function's exclusive time, most first.
     pub causes: Vec<(String, u64)>,
 }
@@ -385,11 +389,20 @@ pub(crate) fn render_dot(graph: &CallGraph) -> String {
         if node.alloc_inclusive > 0 {
             let _ = write!(label, "\\n{} allocs self", node.alloc_exclusive);
         }
-        if node.network_ops > 0 {
-            let _ = write!(label, "\\n{} network ops", node.network_ops);
+        if node.network_inclusive > 0 {
+            let _ = write!(
+                label,
+                "\\n{} network ops self, {} incl",
+                node.network_exclusive, node.network_inclusive
+            );
         }
-        if node.network_wait > 0 {
-            let _ = write!(label, "\\n{} network wait", fmt_ns_short(node.network_wait));
+        if node.network_wait_inclusive > 0 {
+            let _ = write!(
+                label,
+                "\\n{} network wait self, {} incl",
+                fmt_ns_short(node.network_wait_exclusive),
+                fmt_ns_short(node.network_wait_inclusive)
+            );
         }
         if let Some((cause, samples)) = node.causes.first() {
             let _ = write!(label, "\\n{}: {:.0}%", cause, graph.share(*samples));
@@ -471,8 +484,10 @@ pub(crate) fn render_html_frames(
                         "retExclN": node.retained_exclusive,
                         "waitInclN": node.wait_inclusive,
                         "waitExclN": node.wait_exclusive,
-                        "networkN": node.network_ops,
-                        "networkWaitN": node.network_wait,
+                        "networkInclN": node.network_inclusive,
+                        "networkExclN": node.network_exclusive,
+                        "networkWaitInclN": node.network_wait_inclusive,
+                        "networkWaitExclN": node.network_wait_exclusive,
                         "causes": node.causes.iter()
                             .map(|(c, s)| serde_json::json!({"name": c, "pct": g.share(*s)}))
                             .collect::<Vec<_>>(),
@@ -1171,8 +1186,8 @@ const DATA = __DATA_JSON__;
   const hasIo = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.ioInclN || 0) > 0));
   const hasRet = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.retInclN || 0) !== 0));
   const hasWait = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.waitInclN || 0) > 0));
-  const hasNetwork = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.networkN || 0) > 0));
-  const hasNetworkWait = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.networkWaitN || 0) > 0));
+  const hasNetwork = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.networkInclN || 0) > 0));
+  const hasNetworkWait = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.networkWaitInclN || 0) > 0));
   // Selectable cost dimensions (Blackfire-style). Availability depends on data.
   const METRICS = [
     { key: 'time',  label: 'Time',     icon: '⏱', on: !!DATA.exact },
@@ -1188,14 +1203,14 @@ const DATA = __DATA_JSON__;
   let frameIoTotal = 0, frameNetworkTotal = 0, frameCallMax = 1, frameRetMax = 1;
   function computeScales(fN) {
     frameIoTotal = 0; frameNetworkTotal = 0; frameCallMax = 1; frameRetMax = 1;
-    fN.forEach(n => { frameIoTotal += (n.ioExclN || 0); frameNetworkTotal += (n.networkN || 0); if ((n.calls || 0) > frameCallMax) frameCallMax = n.calls;
+    fN.forEach(n => { frameIoTotal += (n.ioExclN || 0); frameNetworkTotal += (n.networkExclN || 0); if ((n.calls || 0) > frameCallMax) frameCallMax = n.calls;
       const r = Math.abs(n.retInclN || 0); if (r > frameRetMax) frameRetMax = r; });
   }
   function nodeShare(n) {
     if (metric === 'mem') return n.allocExcl || 0;
     if (metric === 'io') return frameIoTotal ? 100 * (n.ioExclN || 0) / frameIoTotal : 0;
-    if (metric === 'network') return frameNetworkTotal ? 100 * (n.networkN || 0) / frameNetworkTotal : 0;
-    if (metric === 'networkWait') return waitShare(n.networkWaitN);
+    if (metric === 'network') return frameNetworkTotal ? 100 * (n.networkExclN || 0) / frameNetworkTotal : 0;
+    if (metric === 'networkWait') return waitShare(n.networkWaitExclN);
     if (metric === 'calls') return frameCallMax ? 100 * (n.calls || 0) / frameCallMax : 0;
     // Retained is signed; only net GROWTH is "hot" (a net release is cold).
     if (metric === 'ret') return frameRetMax ? 100 * Math.max(0, n.retExclN || 0) / frameRetMax : 0;
@@ -1219,8 +1234,8 @@ const DATA = __DATA_JSON__;
   function nodeInclShare(n) {
     if (metric === 'mem') return n.allocIncl || 0;
     if (metric === 'io') return frameIoTotal ? 100 * (n.ioInclN || 0) / frameIoTotal : 0;
-    if (metric === 'network') return frameNetworkTotal ? 100 * (n.networkN || 0) / frameNetworkTotal : 0;
-    if (metric === 'networkWait') return waitShare(n.networkWaitN);
+    if (metric === 'network') return frameNetworkTotal ? 100 * (n.networkInclN || 0) / frameNetworkTotal : 0;
+    if (metric === 'networkWait') return waitShare(n.networkWaitInclN);
     if (metric === 'calls') return frameCallMax ? 100 * (n.calls || 0) / frameCallMax : 0;
     if (metric === 'ret') return frameRetMax ? 100 * Math.max(0, n.retInclN || 0) / frameRetMax : 0;
     if (metric === 'wait') return waitShare(n.waitInclN);
@@ -1231,8 +1246,8 @@ const DATA = __DATA_JSON__;
   function metricValue(n) {
     if (metric === 'mem') return fmtK(n.allocExclN || 0);
     if (metric === 'io') return (n.ioExclN || 0) + ' q';
-    if (metric === 'network') return (n.networkN || 0) + ' ops';
-    if (metric === 'networkWait') return fmtNs(n.networkWaitN || 0);
+    if (metric === 'network') return (n.networkExclN || 0) + ' ops';
+    if (metric === 'networkWait') return fmtNs(n.networkWaitExclN || 0);
     if (metric === 'calls') return fmtK(n.calls || 0);
     if (metric === 'ret') return fmtSigned(n.retExclN || 0);
     if (metric === 'wait') return fmtNs(n.waitExclN || 0);
@@ -1241,8 +1256,8 @@ const DATA = __DATA_JSON__;
   function metricSub(n) {
     if (metric === 'mem') return 'incl ' + fmtK(n.allocInclN || 0) + ' allocs';
     if (metric === 'io') return 'incl ' + (n.ioInclN || 0) + ' q';
-    if (metric === 'network') return 'outgoing network operations';
-    if (metric === 'networkWait') return 'outgoing network wait';
+    if (metric === 'network') return 'incl ' + (n.networkInclN || 0) + ' network ops';
+    if (metric === 'networkWait') return 'incl network wait ' + fmtNs(n.networkWaitInclN || 0);
     if (metric === 'calls') return 'self ' + n.excl.toFixed(1) + '% time';
     if (metric === 'ret') return 'incl ' + fmtSigned(n.retInclN || 0) + ' retained';
     if (metric === 'wait') return 'non-DB ' + fmtNs(nonDbNs(n)) + ' · incl wait ' + fmtNs(n.waitInclN || 0);
@@ -1251,8 +1266,8 @@ const DATA = __DATA_JSON__;
   function nodeSub(n) {
     if (metric === 'mem') return fmtK(n.allocExclN || 0) + ' allocs · incl ' + n.allocIncl.toFixed(0) + '%';
     if (metric === 'io') return (n.ioExclN || 0) + ' queries';
-    if (metric === 'network') return (n.networkN || 0) + ' network ops';
-    if (metric === 'networkWait') return 'network wait ' + fmtNs(n.networkWaitN || 0);
+    if (metric === 'network') return (n.networkExclN || 0) + ' network ops · incl ' + (n.networkInclN || 0);
+    if (metric === 'networkWait') return 'network wait ' + fmtNs(n.networkWaitExclN || 0) + ' · incl ' + fmtNs(n.networkWaitInclN || 0);
     if (metric === 'calls') return (n.calls || 0) + ' calls';
     if (metric === 'ret') return fmtSigned(n.retExclN || 0) + ' retained · incl ' + fmtSigned(n.retInclN || 0);
     if (metric === 'wait') return 'wait ' + fmtNs(n.waitExclN || 0) + ' · non-DB ' + fmtNs(nonDbNs(n));
@@ -1415,8 +1430,14 @@ const DATA = __DATA_JSON__;
         html += '<div class="row"><span>queries incl</span><b>' + (n.ioInclN || 0) + '</b></div>';
         html += '<div class="row"><span>queries self</span><b>' + (n.ioExclN || 0) + '</b></div>';
       }
-      if (hasNetwork) html += '<div class="row"><span>network operations</span><b>' + (n.networkN || 0) + '</b></div>';
-      if (hasNetworkWait) html += '<div class="row"><span>network wait</span><b>' + fmtNs(n.networkWaitN || 0) + '</b></div>';
+      if (hasNetwork) {
+        html += '<div class="row"><span>network operations incl</span><b>' + (n.networkInclN || 0) + '</b></div>';
+        html += '<div class="row"><span>network operations self</span><b>' + (n.networkExclN || 0) + '</b></div>';
+      }
+      if (hasNetworkWait) {
+        html += '<div class="row"><span>network wait incl</span><b>' + fmtNs(n.networkWaitInclN || 0) + '</b></div>';
+        html += '<div class="row"><span>network wait self</span><b>' + fmtNs(n.networkWaitExclN || 0) + '</b></div>';
+      }
       n.causes.forEach(c => { html += '<div class="cause">' + esc(c.name) + ' — ' + c.pct.toFixed(1) + '%<div class="bar" style="width:' + Math.min(100, c.pct*2) + '%"></div></div>'; });
     }
     tip.innerHTML = html; tip.style.display = 'block';
@@ -1499,7 +1520,7 @@ const DATA = __DATA_JSON__;
     const head = metric === 'mem' ? (FRAMES[i].totalAllocs + ' allocations')
       : metric === 'io' ? (frameIoTotal + ' queries')
       : metric === 'network' ? (frameNetworkTotal + ' network operations')
-      : metric === 'networkWait' ? (() => { let w = 0; fN.forEach(n => { w += (n.networkWaitN || 0); });
+      : metric === 'networkWait' ? (() => { let w = 0; fN.forEach(n => { w += (n.networkWaitExclN || 0); });
           return fmtNs(w) + ' network wait of ' + fmtNs(FRAMES[i].total); })()
       : metric === 'ret' ? (fmtSigned(rootRet) + ' retained')
       : metric === 'wait' ? (() => { let w = 0; fN.forEach(n => { w += (n.waitExclN || 0); });
@@ -2413,8 +2434,10 @@ mod tests {
                     retained_exclusive: 0,
                     wait_inclusive: 0,
                     wait_exclusive: 0,
-                    network_ops: 0,
-                    network_wait: 0,
+                    network_inclusive: 0,
+                    network_exclusive: 0,
+                    network_wait_inclusive: 0,
+                    network_wait_exclusive: 0,
                     causes: vec![],
                 },
                 GraphNode {
@@ -2430,8 +2453,10 @@ mod tests {
                     retained_exclusive: 0,
                     wait_inclusive: 0,
                     wait_exclusive: 0,
-                    network_ops: 0,
-                    network_wait: 0,
+                    network_inclusive: 0,
+                    network_exclusive: 0,
+                    network_wait_inclusive: 0,
+                    network_wait_exclusive: 0,
                     causes: vec![("heap allocation".into(), 30), ("Mixed cell boxing".into(), 20)],
                 },
             ],
@@ -2647,8 +2672,10 @@ mod tests {
                 retained_exclusive: 0,
                 wait_inclusive: 0,
                 wait_exclusive: 0,
-                network_ops: 0,
-                network_wait: 0,
+                network_inclusive: 0,
+                network_exclusive: 0,
+                network_wait_inclusive: 0,
+                network_wait_exclusive: 0,
                 causes: vec![],
             }],
             edges: vec![],

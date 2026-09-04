@@ -527,7 +527,6 @@ pub extern "C" fn elephc_curl_easy_perform(id: i64) -> i32 {
             entry.callback_threw = false;
             // Opens a fresh callback-throw scope: the process-wide gate that suppresses
             // further callbacks after a throw must not survive into this transfer.
-            crate::callbacks::begin_transfer();
             // Zero the error buffer first: libcurl is not guaranteed to
             // write it on success (only documented to write it on error).
             entry.error_buf.iter_mut().for_each(|byte| *byte = 0);
@@ -535,12 +534,20 @@ pub extern "C" fn elephc_curl_easy_perform(id: i64) -> i32 {
         };
         let hooks = crate::monitoring::hooks();
         hooks.note_operation();
+        let measure_wait = hooks.is_active();
+        crate::callbacks::begin_transfer(measure_wait);
         // The table lock is NOT held across the blocking transfer: the write
         // callback (crate::php_layer::write_callback) re-locks the table
         // per chunk from the same thread, which would deadlock on a
         // non-reentrant `Mutex` otherwise. See this function's doc comment
         // for the resulting caller contract (no concurrent calls on `id`).
-        let code = hooks.timed(|| unsafe { easy::perform(curl) });
+        let started = measure_wait.then(std::time::Instant::now);
+        let code = unsafe { easy::perform(curl) };
+        let callback_ns = crate::callbacks::finish_transfer(measure_wait);
+        if let Some(started) = started {
+            let elapsed = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+            hooks.note_wait_excluding(elapsed, callback_ns);
+        }
         let mut guard = handles::lock_recover(handles::handles());
         let Some(entry) = guard.get_mut(&id) else {
             return 0;
@@ -991,7 +998,6 @@ pub extern "C" fn elephc_curl_easy_upkeep(id: i64) -> i32 {
             return 0;
         };
         let hooks = crate::monitoring::hooks();
-        hooks.note_operation();
         (hooks.timed(|| unsafe { easy::upkeep(entry.curl) }) == easy::CURLE_OK) as i32
     })
 }
@@ -1412,6 +1418,11 @@ pub(crate) unsafe fn refresh_monitor_traceparent(entry: &mut EasyEntry) {
     let Some(list) = (unsafe { build_slist(&headers) }) else {
         return;
     };
+    // An easy handle may already be attached to a multi handle here. Attachment does
+    // not start a transfer or make its options immutable: this refresh runs before
+    // `curl_multi_perform`, while neither libcurl nor a callback can be walking the old
+    // list. The accepted replacement becomes the live option before the old owned list
+    // is freed below.
     let code = unsafe { easy::setopt_slist(entry.curl, easy::CURLOPT_HTTPHEADER, list) };
     if code != easy::CURLE_OK {
         unsafe { easy::slist_free_all(list) };
