@@ -3345,6 +3345,103 @@ t("php://memory", "a+");
     );
 }
 
+/// A brigade holds each bucket AT MOST ONCE: appending one it already holds MOVES it.
+///
+/// php-src's own `filters/bug35916.phpt` appends the same bucket twice on purpose — that IS the
+/// bug it was written for — and expects the payload once. MEASURED on `php -n` 8.5.6 over a write
+/// filter given `"abc"`:
+///
+///     append the same bucket three times          php 'ABC'      elephc 'ABCABCABC'
+///     append, set data = "ZZZ", append again      php 'ZZZ'      elephc 'ZZZZZZ'
+///     append then PREPEND the same bucket         php 'abc'      elephc 'abcabc'
+///
+/// The middle row is what pins the rule down. php answers `'ZZZ'` and not `'abcZZZ'`, so the
+/// brigade never held two entries: one entry, rendered at flush time, showing whatever the object
+/// says by then. php's buckets are a linked list and appending an already-linked one moves it;
+/// elephc's brigade is an array, so the move is spelled out as take-out-then-put-back.
+///
+/// ⚠️ Buckets are compared by their OBJECT pointer, not by the Mixed cell carrying them: the cell
+/// is whatever the caller's local holds, while the object is the identity php tracks. And the
+/// take-out runs AFTER the caller's incref, so the count cannot reach zero on a bucket that is
+/// about to go straight back in.
+#[test]
+fn test_a_brigade_holds_each_bucket_once() {
+    let out = compile_and_run(
+        r#"<?php
+class Thrice extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = strtoupper($b->data);
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+            stream_bucket_append($out, $b);
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+class Rewritten extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+            $b->data = "ZZZ";
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+class Moved extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+            stream_bucket_prepend($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+class Two extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            $extra = stream_bucket_new($this->stream, "[x]");
+            stream_bucket_append($out, $b);
+            stream_bucket_append($out, $extra);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register('thrice', 'Thrice');
+stream_filter_register('rewritten', 'Rewritten');
+stream_filter_register('moved', 'Moved');
+stream_filter_register('two', 'Two');
+$p = tempnam(sys_get_temp_dir(), "bk");
+foreach (['thrice', 'rewritten', 'moved', 'two'] as $name) {
+    $f = fopen($p, "w");
+    stream_filter_append($f, $name, STREAM_FILTER_WRITE);
+    fwrite($f, "abc");
+    fclose($f);
+    echo $name, " => ", file_get_contents($p), "\n";
+}
+unlink($p);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // three appends of one bucket: one entry
+            "thrice => ABC\n",
+            // and the entry renders what the object says at flush time, not what it said first
+            "rewritten => ZZZ\n",
+            // a prepend of a bucket already held moves it rather than adding a second
+            "moved => abc\n",
+            // a genuinely DIFFERENT bucket still appends, which is the control
+            "two => abc[x]\n",
+        )
+    );
+}
+
 /// `stream_wrapper_register()` asks whether the name is DECLARED, not whether it can be built.
 ///
 /// php-src's own `streams/bug74951.phpt` registers a **trait** on purpose and expects that to

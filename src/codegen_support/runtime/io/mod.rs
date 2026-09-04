@@ -99,6 +99,7 @@ mod opendir_glob;
 mod socket_scheme;
 mod format_sockaddr;
 mod data_stream;
+mod brigade_remove;
 mod builtin_filter_id;
 mod iconv_spec_split;
 mod builtin_wrapper_index;
@@ -367,6 +368,7 @@ pub(crate) use pclose::emit_pclose;
 pub(crate) use popen::emit_popen;
 pub(crate) use opendir::emit_opendir;
 pub(crate) use glob_dir_next::{emit_glob_dir_next, emit_path_is_glob_url};
+pub(crate) use brigade_remove::emit_brigade_remove;
 pub(crate) use read_failed_notice::{
     emit_announce_read_fn_name, emit_clear_read_fn_name, emit_read_failed_notice,
 };
