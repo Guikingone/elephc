@@ -2577,3 +2577,37 @@ fn test_spl_autoload_call_with_literal_loads_class() {
     );
     assert_eq!(out, "forced");
 }
+
+/// Verifies member probes resolve a class-string through a runtime autoloader.
+///
+/// An autoloader registered from inside a class method is not one of the shapes the compile-time
+/// rule collector consumes, so it survives into the binary and the class exists only once the
+/// chain has run. PHP resolves the class-string argument of `method_exists()` with
+/// `zend_lookup_class`, which runs that chain, so the probe sees the class and its inherited
+/// methods; a name nothing can load still answers `false`, and reflecting on it still throws.
+/// Value-checked against `php -n`, which prints the same line.
+#[test]
+fn test_member_probes_autoload_a_runtime_registered_class_string() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loader.php",
+                "<?php\nclass RuntimeLoader {\n    private string $dir;\n    public function __construct(string $dir) { $this->dir = $dir; }\n    public function loadClass(string $class): void {\n        $path = $this->dir . \"/\" . $class . \".php\";\n        if (file_exists($path)) {\n            require $path;\n        }\n    }\n    public static function register(string $dir): void {\n        $loader = new RuntimeLoader($dir);\n        spl_autoload_register([$loader, \"loadClass\"], true, true);\n    }\n}\n",
+            ),
+            (
+                "lib/RuntimeBase.php",
+                "<?php\nclass RuntimeBase {\n    public function BaseWork(): string { return \"base\"; }\n}\n",
+            ),
+            (
+                "lib/RuntimeChild.php",
+                "<?php\nclass RuntimeChild extends RuntimeBase {\n    public function ChildWork(): string { return \"child\"; }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\nrequire __DIR__ . \"/loader.php\";\nRuntimeLoader::register(__DIR__ . \"/lib\");\n\n$cls = implode(\"\", [\"Runtime\", \"Child\"]);\necho (method_exists($cls, \"ChildWork\") ? \"C\" : \"c\");\necho (method_exists($cls, \"BaseWork\") ? \"B\" : \"b\");\necho (method_exists($cls, \"basework\") ? \"I\" : \"i\");\necho (method_exists($cls, \"missing\") ? \"M\" : \"m\");\necho \":\";\n$unknown = implode(\"\", [\"Runtime\", \"Absent\"]);\necho (method_exists($unknown, \"any\") ? \"U\" : \"u\");\necho \":\";\n$class = new ReflectionClass($cls);\necho $class->getName() . \":\";\necho ($class->hasMethod(\"basework\") ? \"H\" : \"h\") . \":\";\necho $class->getMethod(\"childwork\")->getName() . \":\";\ntry {\n    new ReflectionClass($unknown);\n    echo \"noexception\";\n} catch (ReflectionException $e) {\n    echo \"ReflectionException\";\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "CBIm:u:RuntimeChild:H:ChildWork:ReflectionException");
+}

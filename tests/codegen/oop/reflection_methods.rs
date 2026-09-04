@@ -299,3 +299,111 @@ echo (new ReflectionMethod(ReflectInvokeInferredTarget::class, "join"))->invoke(
     );
     assert_eq!(out, "AB");
 }
+
+/// Verifies reflected method names keep the case they were declared with.
+///
+/// Method tables are keyed case-insensitively, so a lookup by any spelling still finds the
+/// method, but `php -n` reports the declared spelling from every name-returning entry point:
+/// `getMethods()`, `getMethod()->getName()` and `ReflectionMethod::getName()` alike.
+#[test]
+fn test_reflection_method_names_keep_declared_case() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectCasePreservedTarget {
+    public function CamelCaseOne(): string { return "one"; }
+    public static function StaticTwo(): string { return "two"; }
+    public function lower(): string { return "l"; }
+}
+
+$class = new ReflectionClass(ReflectCasePreservedTarget::class);
+$names = [];
+foreach ($class->getMethods() as $method) {
+    $names[] = $method->getName();
+}
+sort($names);
+echo implode(",", $names) . ":";
+echo $class->getMethod("camelcaseone")->getName() . ":";
+echo $class->getMethod("CamelCaseOne")->getName() . ":";
+echo $class->getMethod("statictwo")->getName() . ":";
+echo (new ReflectionMethod(ReflectCasePreservedTarget::class, "camelcaseone"))->getName() . ":";
+echo (new ReflectionMethod(ReflectCasePreservedTarget::class, "CamelCaseOne"))->getName() . ":";
+echo $class->hasMethod("CAMELCASEONE") ? "H" : "h";
+"#,
+    );
+    assert_eq!(
+        out,
+        "CamelCaseOne,StaticTwo,lower:CamelCaseOne:CamelCaseOne:StaticTwo:CamelCaseOne:CamelCaseOne:H"
+    );
+}
+
+/// Verifies an inherited method reports the case its declaring class wrote it with.
+#[test]
+fn test_reflection_inherited_method_name_keeps_declaring_case() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectCaseParent {
+    public function InheritedOne(): string { return "p"; }
+}
+class ReflectCaseChild extends ReflectCaseParent {
+    public function OwnTwo(): string { return "c"; }
+}
+
+$class = new ReflectionClass(ReflectCaseChild::class);
+$names = [];
+foreach ($class->getMethods() as $method) {
+    $names[] = $method->getName();
+}
+sort($names);
+echo implode(",", $names) . ":";
+echo $class->getMethod("inheritedone")->getName() . ":";
+echo (new ReflectionMethod(ReflectCaseChild::class, "inheritedone"))->getDeclaringClass()->getName();
+"#,
+    );
+    assert_eq!(out, "InheritedOne,OwnTwo:InheritedOne:ReflectCaseParent");
+}
+
+/// Verifies an interface's reflected method names keep their declared case.
+#[test]
+fn test_reflection_interface_method_names_keep_declared_case() {
+    let out = compile_and_run(
+        r#"<?php
+interface ReflectCaseContract {
+    public function DoTheThing(): string;
+}
+
+$names = [];
+foreach ((new ReflectionClass(ReflectCaseContract::class))->getMethods() as $method) {
+    $names[] = $method->getName();
+}
+echo implode(",", $names) . ":";
+echo (new ReflectionClass(ReflectCaseContract::class))->getMethod("dothething")->getName();
+"#,
+    );
+    assert_eq!(out, "DoTheThing:DoTheThing");
+}
+
+/// Verifies a method a class gained from a trait keeps the trait's declared case.
+#[test]
+fn test_reflection_trait_method_names_keep_declared_case() {
+    let out = compile_and_run(
+        r#"<?php
+trait ReflectCaseHelper {
+    public function HelpMe(): string { return "h"; }
+}
+class ReflectCaseHelperUser {
+    use ReflectCaseHelper;
+}
+
+$class = new ReflectionClass(ReflectCaseHelperUser::class);
+$names = [];
+foreach ($class->getMethods() as $method) {
+    $names[] = $method->getName();
+}
+sort($names);
+echo implode(",", $names) . ":";
+echo $class->getMethod("helpme")->getName() . ":";
+echo (new ReflectionMethod(ReflectCaseHelperUser::class, "HELPME"))->getName();
+"#,
+    );
+    assert_eq!(out, "HelpMe:HelpMe:HelpMe");
+}

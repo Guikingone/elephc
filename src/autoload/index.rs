@@ -610,6 +610,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Verifies a classmap file the scan cannot parse is reported instead of silently dropped.
+    ///
+    /// The file contributes no classes either way, so without a diagnostic every class it
+    /// declares simply stops existing and the only message anyone sees points at a later use
+    /// site. The warning has to name the file and say what went wrong there.
+    #[test]
+    fn unparsable_classmap_file_is_reported_not_swallowed() {
+        let dir = manifest_test_dir();
+        let source_dir = dir.join("src");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            dir.join("composer.json"),
+            r#"{"autoload":{"classmap":["src/"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source_dir.join("Broken.php"),
+            "<?php\nclass Broken { public function x() { return @@@ ; } }\n",
+        )
+        .unwrap();
+        std::fs::write(source_dir.join("Fine.php"), "<?php\nclass Fine {}\n").unwrap();
+
+        let index = AutoloadIndex::from_project_root(&dir);
+
+        assert!(index.lookup("Broken").is_none());
+        assert!(index.lookup("Fine").is_some());
+        let messages = index
+            .warnings()
+            .iter()
+            .map(|warning| warning.message.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            messages.iter().any(|message| {
+                message.contains("autoload classmap")
+                    && message.contains("Broken.php")
+                    && message.contains("never compiled")
+            }),
+            "expected a diagnostic naming the unreadable classmap file, got {messages:?}"
+        );
+        assert!(
+            !messages.iter().any(|message| message.contains("Fine.php")),
+            "a file that parsed must not be reported, got {messages:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Implements the `glob_literal` operation for this module.
     #[test]
     fn glob_literal() {
