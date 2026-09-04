@@ -3299,6 +3299,55 @@ fclose($m3);
     assert_eq!(out, "SGVsbG8gV29ybGQ=|YWI=|YQ==");
 }
 
+/// `stream_socket_accept()` WAITS, even when the listening socket is non-blocking.
+///
+/// php's own gh8472. An omitted `$timeout` used to lower to the runtime helper's `-1`, which that
+/// helper reads as "skip the select, call accept() straight away". That is equivalent to waiting
+/// only while the listener BLOCKS; gh8472 sets it non-blocking first, so accept() answered EAGAIN
+/// the instant no connection happened to be queued yet and `stream_socket_accept()` returned
+/// `false`. The corpus test flipped between SAME and DIFF across runs with no code change — the
+/// race, not a port collision, which was the first thing I wrongly blamed.
+///
+/// php's documented default is the `default_socket_timeout` ini, 60 seconds, so that is what an
+/// omitted argument means now: gated behind the select in every case, which is what makes it wait.
+///
+/// The port is EPHEMERAL here where php-src hardcodes 9100: a fixed port makes the test fail for
+/// a reason that has nothing to do with what it checks.
+#[test]
+fn test_stream_socket_accept_waits_on_a_non_blocking_listener() {
+    let out = compile_and_run(
+        r#"<?php
+$server = stream_socket_server("tcp://127.0.0.1:0");
+$name = stream_socket_get_name($server, false);
+// The listener goes non-blocking BEFORE anyone connects: this is the whole point.
+stream_set_blocking($server, false);
+var_dump(stream_get_meta_data($server)['blocked']);
+$client = stream_socket_client("tcp://$name");
+$res = stream_socket_accept($server);
+var_dump($res !== false);
+stream_set_timeout($res, 1);
+stream_set_blocking($res, false);
+fwrite($client, str_repeat('0', 5));
+$read = [$res];
+$write = [];
+$except = [];
+if (stream_select($read, $write, $except, 1)) {
+    var_dump(fread($res, 4));
+    var_dump(fread($res, 4));
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(false)\n",  // the listener really is non-blocking
+            "bool(true)\n",   // and accept still produced a connection
+            "string(4) \"0000\"\n",
+            "string(1) \"0\"\n",
+        )
+    );
+}
+
 /// An unnamed Unix endpoint has NO name, and `stream_socket_get_name()` says `false`.
 ///
 /// php's own bug74556. MEASURED on `php -n` 8.5.6 over a `unix://` server/client pair: the

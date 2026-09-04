@@ -58,20 +58,32 @@ pub(super) fn lower_stream_get_contents_read_all(ctx: &mut FunctionContext<'_>) 
     abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");
 }
 
-/// Materializes `stream_socket_accept` timeout as microseconds or `-1`.
+/// php's `default_socket_timeout`, in microseconds: the wait an OMITTED `$timeout` gets.
+///
+/// NOT the helper's `-1`, which means "do not select at all, just call accept()". That is
+/// equivalent to waiting only while the listener is BLOCKING. php's own gh8472 sets the listener
+/// non-blocking first, and there accept() returns EAGAIN the instant no connection happens to be
+/// queued — so whether it succeeded depended on whether the client's connect had landed, and the
+/// corpus test flipped between SAME and DIFF across runs with no code change at all.
+///
+/// php does not wait forever either: `stream_socket_accept()` documents its default as the
+/// `default_socket_timeout` ini, 60 seconds, so that is what an omitted argument means here.
+const DEFAULT_SOCKET_TIMEOUT_US: i64 = 60 * 1_000_000;
+
+/// Materializes `stream_socket_accept` timeout as microseconds.
 pub(super) fn lower_stream_socket_accept_timeout(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     let Some(timeout) = inst.operands.get(1).copied() else {
-        emit_fd_result(ctx, -1);
+        emit_fd_result(ctx, DEFAULT_SOCKET_TIMEOUT_US);
         return Ok(());
     };
     if matches!(
         ctx.raw_value_php_type(timeout)?.codegen_repr(),
         PhpType::Void | PhpType::Never
     ) {
-        emit_fd_result(ctx, -1);
+        emit_fd_result(ctx, DEFAULT_SOCKET_TIMEOUT_US);
         return Ok(());
     }
     require_int(
