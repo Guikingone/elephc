@@ -313,28 +313,28 @@ pub(super) fn eval_reflection_constant_names(
 pub(super) fn eval_reflection_eval_constant_value(
     reflected_name: &str,
     constant_name: &str,
-    context: &ElephcEvalContext,
-) -> Option<RuntimeCellHandle> {
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if let Some(case) = context.enum_case(reflected_name, constant_name) {
-        return Some(case);
+        return Ok(Some(case));
     }
-    let (declaring_class, constant) = context.class_constant(reflected_name, constant_name)?;
-    context.class_constant_cell(&declaring_class, constant.name())
+    let Some((declaring_class, constant)) = context.class_constant(reflected_name, constant_name)
+    else {
+        return Ok(None);
+    };
+    eval_class_like_constant_cell(&declaring_class, &constant, context, values).map(Some)
 }
 
 /// Returns a materialized eval or AOT constant value for Reflection without visibility checks.
 pub(super) fn eval_reflection_constant_value(
     reflected_name: &str,
     constant_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if eval_reflection_class_like_exists(reflected_name, context) {
-        return Ok(eval_reflection_eval_constant_value(
-            reflected_name,
-            constant_name,
-            context,
-        ));
+        return eval_reflection_eval_constant_value(reflected_name, constant_name, context, values);
     }
     let runtime_class_name = reflected_name.trim_start_matches('\\');
     values.reflection_constant_value(runtime_class_name, constant_name)

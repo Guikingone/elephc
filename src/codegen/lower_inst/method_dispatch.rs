@@ -14,6 +14,11 @@ use crate::parser::ast::ExprKind;
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
+    if builtins::has_eval_context(ctx)
+        && boxed_reflection_receiver_needs_eval_bridge(ctx, object, &method_name)?
+    {
+        return builtins::lower_eval_method_call(ctx, inst, object, &method_name);
+    }
     if let Some((class_name, true)) = objects::nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_receiver_method_call(ctx, inst, object, &class_name, &method_name);
     }
@@ -169,6 +174,66 @@ fn reflection_class_runtime_metadata_method(class_name: &str) -> bool {
     )
 }
 
+/// Returns whether a boxed receiver carries a reflector whose metadata only the eval bridge holds.
+///
+/// The routing below reads one statically known class, so a receiver a narrowing left as a union
+/// never reached it: `?ReflectionClass` from a nullable return, or the `ReflectionClass|
+/// ReflectionMethod` a reassignment produces, is answered first by the nullable and boxed-receiver
+/// paths. What those reach is the synthesized reflection body, which reads generated AOT class
+/// metadata — empty for a class only the interpreter declared — so the same reflector that
+/// reported its name and `hasMethod()` correctly from its own slots listed no methods at all and
+/// threw "does not exist" from `getMethod()`. Requiring every arm to be a built-in reflector keeps
+/// this to reflection receivers, and the bridge hands back a call it does not own to native
+/// dispatch, so the arms it does not answer for keep their behaviour.
+fn boxed_reflection_receiver_needs_eval_bridge(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    method_name: &str,
+) -> Result<bool> {
+    let PhpType::Union(members) = objects::raw_value_php_type(ctx, object)? else {
+        return Ok(false);
+    };
+    let mut routed = false;
+    for member in members {
+        match member {
+            PhpType::Void | PhpType::False => {}
+            PhpType::Object(class_name) => {
+                if !builtin_reflection_class_name(&class_name) {
+                    return Ok(false);
+                }
+                routed |= reflection_class_runtime_metadata_method(&class_name)
+                    || reflection_function_callable_metadata_method(&class_name, method_name);
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(routed)
+}
+
+/// Returns whether a class name is one of the reflection classes the compiler itself declares.
+fn builtin_reflection_class_name(class_name: &str) -> bool {
+    matches!(
+        class_name.trim_start_matches('\\'),
+        "ReflectionAttribute"
+            | "ReflectionClass"
+            | "ReflectionClassConstant"
+            | "ReflectionEnum"
+            | "ReflectionEnumBackedCase"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionFunction"
+            | "ReflectionFunctionAbstract"
+            | "ReflectionIntersectionType"
+            | "ReflectionMethod"
+            | "ReflectionNamedType"
+            | "ReflectionObject"
+            | "ReflectionParameter"
+            | "ReflectionProperty"
+            | "ReflectionReference"
+            | "ReflectionType"
+            | "ReflectionUnionType"
+    )
+}
+
 /// Rejects the raw null-container representation before a static object method dispatch.
 pub(super) fn guard_static_method_receiver(
     ctx: &mut FunctionContext<'_>,
@@ -282,7 +347,23 @@ pub(super) fn lower_mixed_method_call(
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        lower_mixed_method_candidate_call(ctx, inst, receiver_reg, candidate, method_name)?;
+        // A reflector that arrives boxed is still a reflector: this arm is only reached once the
+        // receiver's runtime class matched, so it takes the same eval-bridge route a statically
+        // typed reflection receiver takes. The synthesized body it used to run answers from
+        // generated AOT class metadata, which holds nothing about a class only the interpreter
+        // declared, so `getMethods()` listed nothing and `getMethod()` threw "does not exist" for
+        // a method PHP finds. Every other candidate class keeps its direct call.
+        if builtins::has_eval_context(ctx)
+            && (reflection_class_runtime_metadata_method(&candidate.class_name)
+                || reflection_function_callable_metadata_method(
+                    &candidate.class_name,
+                    method_name,
+                ))
+        {
+            builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
+        } else {
+            lower_mixed_method_candidate_call(ctx, inst, receiver_reg, candidate, method_name)?;
+        }
         abi::emit_jump(ctx.emitter, &done_label);
     }
 

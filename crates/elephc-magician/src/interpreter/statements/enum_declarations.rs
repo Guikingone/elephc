@@ -338,6 +338,42 @@ pub(super) fn initialize_eval_declared_constants(
     Ok(())
 }
 
+/// Returns one class-like constant's runtime cell, building it on first read when needed.
+///
+/// Constant cells belong to the context that executed the declaration. A class-like declared
+/// inside a nested eval invocation — the `include` an autoloader performs, say — reaches every
+/// other context through `sync_global_eval_classes`, which copies the declaration and not the
+/// cells, so a later read there found the declaration with nothing behind it: `self::CONST` in a
+/// reflected parameter default killed the eval bridge and `ReflectionClass::getConstant()`
+/// answered `false`. A constant initializer is a constant expression, so evaluating it here under
+/// the declaring class's magic scope reproduces exactly what the declaring context stored; the
+/// result is cached under the declaring class, so every later read is a lookup again.
+pub(in crate::interpreter) fn eval_class_like_constant_cell(
+    declaring_class: &str,
+    constant: &EvalClassConstant,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(cell) = context.class_constant_cell(declaring_class, constant.name()) {
+        return Ok(cell);
+    }
+    let mut scope = ElephcEvalScope::new();
+    let value = eval_class_like_member_default(
+        declaring_class,
+        constant.trait_origin(),
+        constant.value(),
+        context,
+        &mut scope,
+        values,
+    )?;
+    if let Some(replaced) =
+        context.set_class_constant_cell(declaring_class, constant.name(), value)
+    {
+        values.release(replaced)?;
+    }
+    Ok(value)
+}
+
 /// Evaluates a class-like constant or property initializer with PHP magic scope.
 pub(super) fn eval_class_like_member_default(
     owner_name: &str,

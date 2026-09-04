@@ -680,3 +680,161 @@ echo $c === null ? "null" : $c->getName();
     );
     assert_eq!(out, "Dep");
 }
+
+/// Verifies a reflected parameter default reads a constant declared in an autoloaded interface.
+///
+/// The interface and the class are declared by different runtime `include`s, each running in its
+/// own eval context, and only the declaration crosses between contexts. Reading `self::CONST` from
+/// the context that reflects then found the declaration with no value behind it, which killed the
+/// eval bridge outright; `getConstant()` answered `false` from the same gap. `php -n` prints
+/// `generate|1|1|1`.
+#[test]
+fn test_autoloaded_interface_constant_is_readable_from_another_eval_context() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "contract.php",
+                r#"<?php
+interface AutoloadedConstantContract {
+    public const ABSOLUTE_PATH = 1;
+}
+"#,
+            ),
+            (
+                "target.php",
+                r#"<?php
+class AutoloadedConstantTarget implements AutoloadedConstantContract {
+    public function generate(string $name, int $referenceType = self::ABSOLUTE_PATH): string {
+        return $name . $referenceType;
+    }
+}
+"#,
+            ),
+            (
+                "entry.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    if ($class === 'AutoloadedConstantContract') {
+        require __DIR__ . '/contract.php';
+    }
+    if ($class === 'AutoloadedConstantTarget') {
+        require __DIR__ . '/target.php';
+    }
+});
+
+$name = 'AutoloadedConstantTarget';
+class_exists($name);
+$reflector = new ReflectionClass($name);
+$method = $reflector->getMethod('generate');
+echo $method->getName();
+echo '|' . $method->getParameters()[1]->getDefaultValue();
+echo '|' . $reflector->getConstant('ABSOLUTE_PATH');
+echo '|' . count($reflector->getMethods());
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "generate|1|1|1");
+}
+
+/// Verifies a reflector held in a boxed local still reports an autoloaded class's own methods.
+///
+/// Reassigning the reflector to the `ReflectionMethod` it produced — the shape a container's
+/// `getReflectionMethod()` uses — leaves the receiver boxed, which used to run the synthesized
+/// reflection body instead of the eval bridge. That body answers from generated class metadata,
+/// which holds nothing about a class the interpreter declared at runtime, so the same reflector
+/// that answered `hasMethod()` correctly listed no methods and refused `getMethod()`. `php -n`
+/// prints `camelCaseOne,plain|true|camelCaseOne|public`.
+#[test]
+fn test_boxed_reflector_lists_autoloaded_class_methods() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "members.php",
+                r#"<?php
+class AutoloadedMemberTarget {
+    public function camelCaseOne(): int { return 1; }
+    public function plain(): int { return 2; }
+}
+"#,
+            ),
+            (
+                "entry.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    if ($class === 'AutoloadedMemberTarget') {
+        require __DIR__ . '/members.php';
+    }
+});
+
+$name = 'AutoloadedMemberTarget';
+class_exists($name);
+$reflector = new ReflectionClass($name);
+$names = [];
+foreach ($reflector->getMethods() as $listed) {
+    $names[] = $listed->getName();
+}
+sort($names);
+$found = implode(',', $names) . '|' . ($reflector->hasMethod('camelCaseOne') ? 'true' : 'false');
+$reflector = $reflector->getMethod('camelCaseOne');
+echo $found . '|' . $reflector->getName() . '|' . ($reflector->isPublic() ? 'public' : 'other');
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "camelCaseOne,plain|true|camelCaseOne|public");
+}
+
+/// Verifies a reflector built inside one runtime include still reports its target in the next.
+///
+/// A reflector's target is registered per eval context under the object's runtime identity, so one
+/// built inside another eval frame — a runtime `include` here — carried no binding in the context
+/// that later reflected on it. Every eval-backed handler declined and the synthesized body
+/// answered instead, listing nothing for a class the interpreter declared. `php -n` prints
+/// `camelCaseOne,plain|camelCaseOne`.
+#[test]
+fn test_reflector_built_in_another_eval_frame_keeps_its_target() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "members.php",
+                r#"<?php
+class AutoloadedEvalMemberTarget {
+    public function camelCaseOne(): int { return 1; }
+    public function plain(): int { return 2; }
+}
+"#,
+            ),
+            (
+                "reflect.php",
+                r#"<?php
+return new ReflectionClass($name);
+"#,
+            ),
+            (
+                "entry.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    if ($class === 'AutoloadedEvalMemberTarget') {
+        require __DIR__ . '/members.php';
+    }
+});
+
+$name = 'AutoloadedEvalMemberTarget';
+class_exists($name);
+$reflector = require __DIR__ . '/reflect.php';
+$names = [];
+foreach ($reflector->getMethods() as $listed) {
+    $names[] = $listed->getName();
+}
+sort($names);
+echo implode(',', $names) . '|' . $reflector->getMethod('camelCaseOne')->getName();
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "camelCaseOne,plain|camelCaseOne");
+}

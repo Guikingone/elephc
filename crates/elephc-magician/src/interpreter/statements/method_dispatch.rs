@@ -67,6 +67,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             "[elephc-eval-trace] phase=method_dispatch method={method_name:?} identity={identity} dynamic_class={dynamic_class:?} runtime_class={runtime_class:?}",
         );
     }
+    eval_rebind_foreign_reflection_target(object, identity, context, values)?;
     if let Some(target) = context.closure_object_target(identity).cloned() {
         if let Some(result) =
             eval_closure_object_method_result(target, method_name, evaluated_args.clone(), context, values)?
@@ -916,4 +917,158 @@ pub(super) fn eval_closure_call_warning_null(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     values.warning(message)?;
     values.null()
+}
+
+/// Re-binds a synthetic Reflection object to this eval context when another context built it.
+///
+/// A reflector's target is registered per eval context under the object's runtime identity, and a
+/// reflector built inside a different eval invocation carries no registration in the context that
+/// later calls a method on it. Every eval-backed handler then declined for want of that binding
+/// and the call fell back to the synthesized body, which answers from generated AOT class
+/// metadata: on a class only the interpreter declared, `getMethods()` returned an empty array and
+/// `getMethod()` threw "does not exist" for a method PHP finds, while `getName()` and
+/// `hasMethod()` still answered correctly because they read the reflector's own slots. Those slots
+/// also carry the target, so the binding is recovered from the object here and restored before
+/// dispatch.
+fn eval_rebind_foreign_reflection_target(
+    object: RuntimeCellHandle,
+    identity: u64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let owner_class = runtime_object_class_name(object, values)?;
+    match owner_class.as_str() {
+        "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" => {
+            if context.eval_reflection_class_name(identity).is_some() {
+                return Ok(());
+            }
+            let Some(name) =
+                eval_reflection_slot_string(object, &owner_class, "__name", context, values)?
+            else {
+                return Ok(());
+            };
+            if !eval_context_declared_class_like(&name, context) {
+                return Ok(());
+            }
+            context.register_eval_reflection_class(identity, &name);
+        }
+        "ReflectionMethod" | "ReflectionProperty" => {
+            let is_method = owner_class == "ReflectionMethod";
+            let already_bound = if is_method {
+                context.eval_reflection_method(identity).is_some()
+            } else {
+                context.eval_reflection_property(identity).is_some()
+            };
+            if already_bound {
+                return Ok(());
+            }
+            let Some((declaring_class, name)) =
+                eval_reflection_member_slot_target(object, &owner_class, context, values)?
+            else {
+                return Ok(());
+            };
+            if !eval_context_declared_class_like(&declaring_class, context) {
+                return Ok(());
+            }
+            if is_method {
+                context.register_eval_reflection_method(identity, &declaring_class, &name);
+            } else {
+                context.register_eval_reflection_property(identity, &declaring_class, &name);
+            }
+        }
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
+            if context.eval_reflection_class_constant(identity).is_some() {
+                return Ok(());
+            }
+            let owner_kind = match owner_class.as_str() {
+                "ReflectionEnumUnitCase" => EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE,
+                "ReflectionEnumBackedCase" => EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE,
+                _ => EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
+            };
+            let Some((declaring_class, name)) =
+                eval_reflection_member_slot_target(object, &owner_class, context, values)?
+            else {
+                return Ok(());
+            };
+            if !eval_context_declared_class_like(&declaring_class, context) {
+                return Ok(());
+            }
+            context.register_eval_reflection_class_constant(
+                identity,
+                &declaring_class,
+                &name,
+                owner_kind,
+            );
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Returns whether the interpreter itself declared this class-like symbol.
+///
+/// Re-binding is confined to those. A reflector on a compiled class has metadata the generated
+/// tables answer, in places more completely than eval metadata does — the declaring file among
+/// them — so leaving it unbound keeps the answer it already had; the gap being closed is the
+/// class the generated tables know nothing about.
+fn eval_context_declared_class_like(name: &str, context: &ElephcEvalContext) -> bool {
+    context.has_class(name)
+        || context.has_interface(name)
+        || context.has_enum(name)
+        || context.has_trait(name)
+}
+
+/// Reads one reflected member's declaring class name and own name from the reflector's slots.
+///
+/// `__declaring_class` holds the member's `ReflectionClass`, which carries the class name in its
+/// own `__name` slot; a member whose declaring class was never materialized stores `false` there
+/// and cannot be re-bound, so it is left to the handlers that decline on a missing binding.
+fn eval_reflection_member_slot_target(
+    object: RuntimeCellHandle,
+    owner_class: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    let Some(name) = eval_reflection_slot_string(object, owner_class, "__name", context, values)?
+    else {
+        return Ok(None);
+    };
+    let declaring = eval_with_native_bridge_scope(owner_class, context, || {
+        values.property_get(object, "__declaring_class")
+    })?;
+    if values.type_tag(declaring)? != EVAL_TAG_OBJECT {
+        values.release(declaring)?;
+        return Ok(None);
+    }
+    let declaring_class =
+        eval_reflection_slot_string(declaring, "ReflectionClass", "__name", context, values)?;
+    values.release(declaring)?;
+    Ok(declaring_class.map(|declaring_class| (declaring_class, name)))
+}
+
+/// Reads one non-empty string slot from a synthetic Reflection object under its own class scope.
+///
+/// The slots are private to the synthesized Reflection classes, so the read runs in that class's
+/// scope the way every other native-bridge member read does.
+fn eval_reflection_slot_string(
+    object: RuntimeCellHandle,
+    owner_class: &str,
+    slot: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let value = eval_with_native_bridge_scope(owner_class, context, || {
+        values.property_get(object, slot)
+    })?;
+    if values.type_tag(value)? != EVAL_TAG_STRING {
+        values.release(value)?;
+        return Ok(None);
+    }
+    let bytes = values.string_bytes(value);
+    values.release(value)?;
+    let text = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    if text.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(text))
 }

@@ -309,9 +309,7 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
                 values,
             );
         }
-        return context
-            .class_constant_cell(&declaring_class, constant.name())
-            .ok_or(EvalStatus::RuntimeFatal);
+        return eval_class_like_constant_cell(&declaring_class, &constant, context, values);
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         if let Some((declaring_class, visibility)) =
