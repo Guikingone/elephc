@@ -407,3 +407,50 @@ echo (new ReflectionMethod(ReflectCaseHelperUser::class, "HELPME"))->getName();
     );
     assert_eq!(out, "HelpMe:HelpMe:HelpMe");
 }
+
+/// Verifies `hasMethod()` stays case-insensitive when the reflector reaches it as a union.
+///
+/// A receiver the checker cannot narrow to `ReflectionClass` — `ReflectionClass|false`, the shape
+/// `ContainerBuilder::getReflectionClass()` returns — is dispatched as a boxed `Mixed` value and
+/// therefore runs the synthesized method body instead of the eval bridge that a typed receiver
+/// reaches. That body compares against the private name index, whose two producers disagree on
+/// case: the compile-time materializer stores folded keys while the eval bridge stores the
+/// declared spelling. Folding only the argument answered `false` for every method not already
+/// written in lower case, so `php -n` said `true` and the binary said `false`.
+///
+/// `hasProperty()` sits beside it because PHP's property probe *is* case-sensitive: a fix that
+/// folded both probes would report `I` here instead of `i`, and a name nothing declares still
+/// answers `g`, so neither direction can be traded for the other.
+#[test]
+fn test_reflection_has_method_is_case_insensitive_through_a_union_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectMixedProbeBase {
+    public function InheritedMixedCase(): string { return "i"; }
+}
+class ReflectMixedProbeTarget extends ReflectMixedProbeBase {
+    public $CamelProp = 1;
+    public function CamelCaseOne(): string { return "one"; }
+    public static function StaticTwo(): string { return "two"; }
+    public function lower(): string { return "l"; }
+}
+
+function reflect_mixed_probe(string $class, bool $miss): ReflectionClass|false {
+    return $miss ? false : new ReflectionClass($class);
+}
+
+$r = reflect_mixed_probe(ReflectMixedProbeTarget::class, false);
+echo $r->hasMethod("CamelCaseOne") ? "A" : "a";
+echo $r->hasMethod("camelcaseone") ? "B" : "b";
+echo $r->hasMethod("CAMELCASEONE") ? "C" : "c";
+echo $r->hasMethod("StaticTwo") ? "D" : "d";
+echo $r->hasMethod("InheritedMixedCase") ? "E" : "e";
+echo $r->hasMethod("lower") ? "F" : "f";
+echo $r->hasMethod("NotDeclared") ? "G" : "g";
+echo ":";
+echo $r->hasProperty("CamelProp") ? "H" : "h";
+echo $r->hasProperty("camelprop") ? "I" : "i";
+"#,
+    );
+    assert_eq!(out, "ABCDEFg:Hi");
+}

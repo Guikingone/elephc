@@ -132,38 +132,64 @@ pub(super) fn builtin_reflection_class_int_method(method_name: &str, property: &
 }
 
 /// Returns a public `ReflectionClass` membership probe backed by a private string array.
+///
+/// A case-insensitive probe folds **both** sides of every comparison, the way its sibling
+/// `ReflectionClass::getMethod()` lookup does. Folding only the argument would silently require
+/// the private index to already be lower-case, and the two producers of that index do not agree:
+/// the compile-time materializer stores `php_symbol_key()` keys while the eval bridge stores the
+/// declared spelling, because the same list names the `ReflectionMethod` objects whose
+/// `getName()` must report the declared case. A probe that folds one side answers `false` for
+/// every method whose declaration is not already lower-case.
 pub(super) fn builtin_reflection_class_has_name_method(
     method_name: &str,
     property: &str,
     case_insensitive: bool,
 ) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
-    let name_arg = Expr::new(ExprKind::Variable("name".to_string()), dummy_span);
-    let needle = if case_insensitive {
-        Expr::new(
-            ExprKind::FunctionCall {
-                name: Name::unqualified("strtolower"),
-                args: vec![name_arg],
-            },
+    let name_arg = variable_expr("name", dummy_span);
+    let body = if case_insensitive {
+        let candidate_matches = binary_expr(
+            strtolower_call(variable_expr("candidate", dummy_span), dummy_span),
+            BinOp::Eq,
+            variable_expr("needle", dummy_span),
             dummy_span,
-        )
+        );
+        vec![
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "needle".to_string(),
+                    value: strtolower_call(name_arg, dummy_span),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property(property, dummy_span),
+                    key_var: None,
+                    value_var: "candidate".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: candidate_matches,
+                            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(false_bool()), dummy_span),
+        ]
     } else {
-        name_arg
+        let contains = function_call(
+            "in_array",
+            vec![name_arg, reflection_this_property(property, dummy_span)],
+            dummy_span,
+        );
+        vec![Stmt::new(StmtKind::Return(Some(contains)), dummy_span)]
     };
-    let haystack = Expr::new(
-        ExprKind::PropertyAccess {
-            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
-            property: property.to_string(),
-        },
-        dummy_span,
-    );
-    let contains = Expr::new(
-        ExprKind::FunctionCall {
-            name: Name::unqualified("in_array"),
-            args: vec![needle, haystack],
-        },
-        dummy_span,
-    );
     ClassMethod {
         name: method_name.to_string(),
         visibility: Visibility::Public,
@@ -178,7 +204,7 @@ pub(super) fn builtin_reflection_class_has_name_method(
         variadic_type: None,
         return_type: Some(TypeExpr::Int),
         by_ref_return: false,
-        body: vec![Stmt::new(StmtKind::Return(Some(contains)), dummy_span)],
+        body,
         span: dummy_span,
         attributes: Vec::new(),
     }
