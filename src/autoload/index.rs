@@ -12,12 +12,16 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
+use crate::errors::CompileWarning;
 use crate::parser::ast::{Stmt, StmtKind};
+use crate::span::Span;
 
 /// Compiled view of every autoload section found in the project.
 pub struct AutoloadIndex {
     fqn_to_path: HashMap<String, PathBuf>,
     files_to_include: Vec<PathBuf>,
+    /// Classmap files the scan could not read; each one hides every class it declares.
+    warnings: Vec<CompileWarning>,
 }
 
 impl AutoloadIndex {
@@ -28,6 +32,7 @@ impl AutoloadIndex {
             return Self {
                 fqn_to_path: HashMap::new(),
                 files_to_include: Vec::new(),
+                warnings: Vec::new(),
             };
         };
         let mut builder = IndexBuilder::default();
@@ -40,7 +45,13 @@ impl AutoloadIndex {
         AutoloadIndex {
             fqn_to_path: builder.fqn_to_path,
             files_to_include: builder.files_to_include,
+            warnings: builder.warnings,
         }
+    }
+
+    /// Diagnostics collected while building the index, one per unreadable classmap file.
+    pub fn warnings(&self) -> &[CompileWarning] {
+        &self.warnings
     }
 
     /// Look up the file path for a given fully-qualified class name.
@@ -145,6 +156,7 @@ fn manifest_has_autoload_section(path: &Path) -> bool {
 struct IndexBuilder {
     fqn_to_path: HashMap<String, PathBuf>,
     files_to_include: Vec<PathBuf>,
+    warnings: Vec<CompileWarning>,
 }
 
 impl IndexBuilder {
@@ -236,7 +248,7 @@ impl IndexBuilder {
                 continue;
             };
             let path = base_dir.join(path_str);
-            scan_classmap_path(&path, &mut self.fqn_to_path, excludes);
+            scan_classmap_path(&path, &mut self.fqn_to_path, excludes, &mut self.warnings);
         }
     }
 
@@ -371,24 +383,40 @@ fn walk_psr0(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
 
 // --- classmap scanner ---
 
+/// Builds the warning reported for one classmap file the index could not read.
+fn classmap_scan_warning(path: &Path, reason: &str) -> CompileWarning {
+    // The diagnostic is about a file outside the entry program, so it has no position in it;
+    // the message carries the path instead.
+    CompileWarning::new(
+        Span::dummy(),
+        &format!(
+            "autoload classmap: '{}' could not be indexed ({}); every class it declares stays \
+             undefined and is never compiled",
+            path.display(),
+            reason
+        ),
+    )
+}
+
 /// Recursively scan a classmap path, descending into directories and
 /// skipping excluded paths, then index all discovered PHP files.
 fn scan_classmap_path(
     path: &Path,
     index: &mut HashMap<String, PathBuf>,
     excludes: &[String],
+    warnings: &mut Vec<CompileWarning>,
 ) {
     if is_excluded(path, excludes) {
         return;
     }
     if path.is_file() {
-        scan_classmap_file(path, index);
+        scan_classmap_file(path, index, warnings);
     } else if path.is_dir() {
         let Ok(entries) = std::fs::read_dir(path) else {
             return;
         };
         for entry in entries.flatten() {
-            scan_classmap_path(&entry.path(), index, excludes);
+            scan_classmap_path(&entry.path(), index, excludes, warnings);
         }
     }
 }
@@ -622,19 +650,40 @@ mod tests {
 }
 
 /// Parses a PHP/LFC source file and indexes all class/interface/trait/enum declarations found.
-fn scan_classmap_file(path: &Path, index: &mut HashMap<String, PathBuf>) {
+///
+/// A file this pass cannot read, lex, or parse contributes no classes, and every class it
+/// declares then looks undefined to the rest of the compile — a demand for one of them resolves
+/// to nothing and the class is simply never compiled. That is invisible at the use site, so each
+/// failure is reported as a warning naming the file and the reason instead of being swallowed.
+fn scan_classmap_file(
+    path: &Path,
+    index: &mut HashMap<String, PathBuf>,
+    warnings: &mut Vec<CompileWarning>,
+) {
     if !crate::source::is_discoverable_source_path(path) {
         return;
     }
-    let Ok(content) = crate::source::read_physical_source(path) else {
-        return;
+    let content = match crate::source::read_physical_source(path) {
+        Ok(content) => content,
+        Err(error) => {
+            warnings.push(classmap_scan_warning(path, &error.to_string()));
+            return;
+        }
     };
     let mode = crate::source::SourceMode::from_path(path);
-    let Ok(tokens) = crate::lexer::tokenize_with_mode(&content, mode) else {
-        return;
+    let tokens = match crate::lexer::tokenize_with_mode(&content, mode) {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            warnings.push(classmap_scan_warning(path, &error.message));
+            return;
+        }
     };
-    let Ok(ast) = crate::parser::parse_with_mode(&tokens, mode) else {
-        return;
+    let ast = match crate::parser::parse_with_mode(&tokens, mode) {
+        Ok(ast) => ast,
+        Err(error) => {
+            warnings.push(classmap_scan_warning(path, &error.message));
+            return;
+        }
     };
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut current_namespace: Option<String> = None;

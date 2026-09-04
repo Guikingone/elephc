@@ -9,6 +9,37 @@
 
 use super::*;
 
+/// Returns a method's declared spelling for one case-insensitive method key.
+///
+/// Method tables are keyed by `php_symbol_key`, so the key has lost the case the method was
+/// written with, while PHP's `ReflectionMethod::getName()` reports the declaration's own
+/// spelling — the lookup is case-insensitive, the answer is not. `method_decls` keeps the source
+/// spelling for classes and interfaces alike, so it is the authority here; a key no declaration
+/// claims (a compiler-synthesized member) keeps the key as its name.
+pub(super) fn reflection_declared_method_name(
+    ctx: &FunctionContext<'_>,
+    declaring_class_name: &str,
+    method_key: &str,
+    is_static: bool,
+) -> Option<String> {
+    let declaring_class_name = declaring_class_name.trim_start_matches('\\');
+    let declarations = ctx
+        .module
+        .class_infos
+        .get(declaring_class_name)
+        .map(|info| info.method_decls.as_slice())
+        .or_else(|| {
+            ctx.module
+                .interface_infos
+                .get(declaring_class_name)
+                .map(|info| info.method_decls.as_slice())
+        })?;
+    declarations
+        .iter()
+        .find(|method| method.is_static == is_static && php_symbol_key(&method.name) == method_key)
+        .map(|method| method.name.clone())
+}
+
 /// Builds ReflectionMethod array entries for the methods visible on one class.
 pub(super) fn reflection_class_method_members(
     ctx: &FunctionContext<'_>,
@@ -69,8 +100,15 @@ pub(super) fn reflection_class_method_member(
     );
     let prototype_member =
         reflection_class_method_prototype_member(ctx, class_name, info, &method_key, flags)?;
+    let declared_name = reflection_declared_method_name(
+        ctx,
+        declaring_class_name.as_deref().unwrap_or(class_name),
+        &method_key,
+        flags.is_static,
+    )
+    .unwrap_or_else(|| method_key.clone());
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
-        name: method_key.clone(),
+        name: declared_name.clone(),
         declaring_class_name: declaring_class_name.clone(),
         attr_names: attr_names.clone(),
         attr_args: attr_args.clone(),
@@ -101,7 +139,7 @@ pub(super) fn reflection_class_method_member(
         source_defaults.as_deref(),
     )?;
     Ok(Some(ReflectionListedMember {
-        name: method_key.clone(),
+        name: declared_name,
         declaring_class_name,
         attr_names,
         attr_args,
@@ -169,8 +207,11 @@ pub(super) fn reflection_interface_method_member(
         info.late_static_method_returns.get(&method_key)
     };
     let type_metadata = reflection_method_return_type_metadata(sig, late_static_return);
+    let declared_name =
+        reflection_declared_method_name(ctx, &declaring_class_name, &method_key, is_static)
+            .unwrap_or_else(|| method_key.clone());
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
-        name: method_key.clone(),
+        name: declared_name.clone(),
         declaring_class_name: Some(declaring_class_name.clone()),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
@@ -197,7 +238,7 @@ pub(super) fn reflection_interface_method_member(
         source_defaults.as_deref(),
     )?;
     Ok(Some(ReflectionListedMember {
-        name: method_key,
+        name: declared_name,
         declaring_class_name: Some(declaring_class_name),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
@@ -256,8 +297,14 @@ pub(super) fn reflection_trait_method_member(
     let required_parameter_count = reflection_required_parameter_count(&info.signature);
     let type_metadata = reflection_return_type_metadata(&info.signature);
     let is_generator = reflection_method_is_generator(ctx, trait_name, &method_key);
+    // A trait's retained method map is keyed case-insensitively; the declared-name list beside it
+    // is what PHP reports from `getName()`.
+    let declared_name = reflection_trait_method_names(ctx, trait_name)
+        .into_iter()
+        .find(|name| php_symbol_key(name) == method_key)
+        .unwrap_or_else(|| method_key.clone());
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
-        name: method_key.clone(),
+        name: declared_name.clone(),
         declaring_class_name: Some(trait_name.to_string()),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
@@ -278,7 +325,7 @@ pub(super) fn reflection_trait_method_member(
         None,
     )?;
     Ok(Some(ReflectionListedMember {
-        name: method_key,
+        name: declared_name,
         declaring_class_name: Some(trait_name.to_string()),
         attr_names: Vec::new(),
         attr_args: Vec::new(),

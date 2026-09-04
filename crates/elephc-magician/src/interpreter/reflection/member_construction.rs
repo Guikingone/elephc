@@ -72,6 +72,24 @@ pub(super) fn eval_reflection_method_single_target_arg(
     Ok(arg.value)
 }
 
+/// Resolves the declared spelling of one AOT method from the generated reflection name table.
+///
+/// A method is looked up case-insensitively but reported with the case it was declared with, so
+/// the requested spelling cannot be trusted as the answer. The generated name table carries the
+/// declaration's own case, so the matching entry is the name PHP would report; a class with no
+/// table rows at all (nothing generated for it) falls back to what the caller asked for.
+pub(super) fn eval_reflection_aot_declared_method_name(
+    reflected_name: &str,
+    requested_method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let names = eval_reflection_aot_member_names(EVAL_REFLECTION_OWNER_METHOD, reflected_name, values)?;
+    Ok(names
+        .into_iter()
+        .find(|name| name.eq_ignore_ascii_case(requested_method_name))
+        .unwrap_or_else(|| requested_method_name.to_string()))
+}
+
 /// Builds a `ReflectionMethod` object when the reflected method exists in eval or AOT metadata.
 pub(super) fn eval_reflection_method_object_result_if_exists(
     class_name: &str,
@@ -89,7 +107,11 @@ pub(super) fn eval_reflection_method_object_result_if_exists(
             context,
             values,
         )? {
-            let method_name = requested_method_name.to_ascii_lowercase();
+            let method_name = eval_reflection_aot_declared_method_name(
+                &reflected_name,
+                requested_method_name,
+                values,
+            )?;
             return eval_reflection_member_object_result(
                 EVAL_REFLECTION_OWNER_METHOD,
                 &method_name,

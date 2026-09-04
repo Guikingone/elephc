@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Shared member-existence logic for `property_exists()` lives here.
+//! - A class-string target is resolved through the SPL autoload chain first, the way PHP's
+//!   `zend_lookup_class` does, so both probes see a class that is only ever named as a string.
 
 eval_builtin! {
     contract: "method_exists",
@@ -20,6 +22,7 @@ use super::super::{
     eval_object_class_metadata_name, eval_resolved_class_metadata_name,
     eval_runtime_property_access_metadata, eval_same_class_metadata_name,
 };
+use super::eval_spl_autoload_class;
 use super::get_object_vars::eval_object_public_property_exists;
 
 /// Dispatches direct eval calls for the `method_exists` symbol builtin.
@@ -68,12 +71,37 @@ pub(in crate::interpreter) fn eval_member_exists_result(
         return Err(EvalStatus::RuntimeFatal);
     };
     let member = eval_class_metadata_name(*member, values)?;
+    eval_autoload_member_exists_target(*target, context, values)?;
     let exists = match name {
         "method_exists" => eval_method_exists_target(*target, &member, context, values)?,
         "property_exists" => eval_property_exists_target(*target, &member, context, values)?,
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     values.bool_value(exists)
+}
+
+/// Resolves a class-name string target through the autoload chain before the member lookup.
+///
+/// PHP resolves the class-string argument of `method_exists()` and `property_exists()` with
+/// `zend_lookup_class`, the same resolution `new $name` and `class_exists($name)` use, so a
+/// registered autoloader runs and a class the program only ever names as a string becomes
+/// visible to both probes. Without this the probes answer from whatever metadata happens to be
+/// loaded already and report `false` for a class that PHP would have loaded on demand. An object
+/// target carries its own class, so it never reaches the autoloader.
+fn eval_autoload_member_exists_target(
+    target: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if values.type_tag(target)? != EVAL_TAG_STRING {
+        return Ok(());
+    }
+    let class_name = eval_resolved_class_metadata_name(target, context, values)?;
+    if class_name.is_empty() || eval_class_relation_name_exists(&class_name, context, values)? {
+        return Ok(());
+    }
+    let _ = eval_spl_autoload_class(&class_name, context, values)?;
+    Ok(())
 }
 
 /// Resolves a `method_exists()` target and applies PHP object-vs-string lookup rules.

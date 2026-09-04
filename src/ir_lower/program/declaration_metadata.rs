@@ -158,6 +158,10 @@ pub(super) fn collect_declared_trait_uses(program: &Program) -> HashMap<String, 
 }
 
 /// Collects direct PHP method names declared by each trait in source order.
+///
+/// The declared spelling is kept: PHP matches a trait method case-insensitively but reports it
+/// from `ReflectionMethod::getName()` exactly as it was written, and every consumer of this list
+/// re-keys with `php_symbol_key` before it looks anything up.
 pub(super) fn collect_declared_trait_method_names(program: &Program) -> HashMap<String, Vec<String>> {
     let mut methods = HashMap::new();
     for stmt in program {
@@ -171,7 +175,7 @@ pub(super) fn collect_declared_trait_method_names(program: &Program) -> HashMap<
                     name.clone(),
                     trait_methods
                         .iter()
-                        .map(|method| php_symbol_key(&method.name))
+                        .map(|method| method.name.clone())
                         .collect(),
                 );
             }

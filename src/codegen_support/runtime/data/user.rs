@@ -1405,7 +1405,7 @@ fn emit_eval_reflection_method_lookup_data(
                 &mut entries,
                 &mut index,
                 class_name,
-                method_name,
+                declared_method_name(method_name, false, &[declaring_info, class_info]),
                 flags,
                 declaring_class,
             );
@@ -1428,13 +1428,17 @@ fn emit_eval_reflection_method_lookup_data(
                 &mut entries,
                 &mut index,
                 class_name,
-                method_name,
+                declared_method_name(method_name, true, &[declaring_info, class_info]),
                 flags,
                 declaring_class,
             );
         }
     }
 
+    let interface_infos = sorted_interfaces
+        .iter()
+        .map(|(name, info)| (name.as_str(), *info))
+        .collect::<HashMap<_, _>>();
     for (interface_name, interface_info) in sorted_interfaces {
         let mut methods = interface_info.methods.keys().collect::<Vec<_>>();
         methods.sort();
@@ -1444,12 +1448,20 @@ fn emit_eval_reflection_method_lookup_data(
                 interface_info,
                 method_name,
             );
+            let declaring_info = interface_infos
+                .get(declaring_interface)
+                .copied()
+                .unwrap_or(interface_info);
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 interface_name,
-                method_name,
+                declared_interface_method_name(
+                    method_name,
+                    false,
+                    &[declaring_info, interface_info],
+                ),
                 eval_reflection_interface_method_flags(false),
                 declaring_interface,
             );
@@ -1463,12 +1475,20 @@ fn emit_eval_reflection_method_lookup_data(
                 interface_info,
                 method_name,
             );
+            let declaring_info = interface_infos
+                .get(declaring_interface)
+                .copied()
+                .unwrap_or(interface_info);
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 interface_name,
-                method_name,
+                declared_interface_method_name(
+                    method_name,
+                    true,
+                    &[declaring_info, interface_info],
+                ),
                 eval_reflection_interface_method_flags(true),
                 declaring_interface,
             );
@@ -1490,6 +1510,53 @@ fn emit_eval_reflection_method_lookup_data(
         out.push_str(&format!("    .quad {}\n", declaring_label));
         out.push_str(&format!("    .quad {}\n", declaring_len));
     }
+}
+
+/// Returns a class method's declared spelling for one case-insensitive method key.
+///
+/// `ClassInfo::methods` is keyed by `php_symbol_key`, so the key has lost the case the method
+/// was written with, while PHP's `ReflectionMethod::getName()` and `getMethods()` report the
+/// declaration's own spelling. `method_decls` still carries it, so the emitted row takes its
+/// name from there; the runtime scanners match the row with `__rt_strcasecmp`, so a lowercased
+/// request still finds it. Candidates are tried in order — the declaring class first, then the
+/// reflected class — because an inherited method is only declared in the ancestor's list. A key
+/// no declaration claims (a compiler-synthesized member) keeps the key as its name.
+fn declared_method_name<'a>(
+    method_key: &'a str,
+    is_static: bool,
+    candidates: &[&'a ClassInfo],
+) -> &'a str {
+    candidates
+        .iter()
+        .find_map(|info| declared_name_in(&info.method_decls, method_key, is_static))
+        .unwrap_or(method_key)
+}
+
+/// Returns an interface method's declared spelling for one case-insensitive method key.
+///
+/// Interface method tables are keyed the same way class tables are, so they lose the declared
+/// case identically; `InterfaceInfo::method_decls` is the case-preserving source.
+fn declared_interface_method_name<'a>(
+    method_key: &'a str,
+    is_static: bool,
+    candidates: &[&'a InterfaceInfo],
+) -> &'a str {
+    candidates
+        .iter()
+        .find_map(|info| declared_name_in(&info.method_decls, method_key, is_static))
+        .unwrap_or(method_key)
+}
+
+/// Finds the declaration whose case-insensitive key matches and returns its written name.
+fn declared_name_in<'a>(
+    method_decls: &'a [crate::parser::ast::ClassMethod],
+    method_key: &str,
+    is_static: bool,
+) -> Option<&'a str> {
+    method_decls
+        .iter()
+        .find(|method| method.is_static == is_static && php_symbol_key(&method.name) == method_key)
+        .map(|method| method.name.as_str())
 }
 
 /// Adds one eval ReflectionMethod lookup row and its backing string labels.

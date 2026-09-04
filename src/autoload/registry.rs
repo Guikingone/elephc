@@ -38,7 +38,12 @@ impl Registry {
     /// non-foldable `require_once` statements.
     pub fn build(project_root: &Path, program: Program) -> (Self, Program) {
         let psr4 = AutoloadIndex::from_project_root(project_root);
-        let (program, rules, warnings) = collect_register_calls(program);
+        // The index's own diagnostics come first: a classmap file it could not read hides every
+        // class in it, and that has to be visible before anything downstream reports the class
+        // as merely undefined.
+        let mut warnings = psr4.warnings().to_vec();
+        let (program, rules, rule_warnings) = collect_register_calls(program);
+        warnings.extend(rule_warnings);
         // Synthesise alias subclasses after closure collection so the
         // alias decls don't get confused with autoloader sources.
         let program = super::alias::collect_aliases(program);

@@ -1163,18 +1163,11 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
         if !eval_reflection_member_matches_filter(&member, filter) {
             continue;
         }
-        let reflected_name = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-            name.to_ascii_lowercase()
-        } else {
-            name.clone()
-        };
-        let member_object = eval_reflection_member_object_result(
-            owner_kind,
-            &reflected_name,
-            &member,
-            context,
-            values,
-        )?;
+        // `names` comes from the AOT reflection member table, which carries each member's
+        // declared spelling; PHP reports that spelling from `getName()` for methods exactly as
+        // it does for properties, so neither kind is folded here.
+        let member_object =
+            eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
         result = values.array_set(result, key, member_object)?;
         index += 1;
