@@ -297,6 +297,7 @@ pub fn execute_reflection_new_object_outcome(
             name: None,
             value,
             ref_target: None,
+            owned: false,
         })
         .collect();
     match eval_reflection_owner_new_object(name, evaluated_args, context, values) {
@@ -324,6 +325,7 @@ pub fn execute_context_try_new_object_outcome(
             name: None,
             value,
             ref_target: None,
+            owned: false,
         })
         .collect::<Vec<_>>();
     match eval_reflection_owner_new_object(name, evaluated_args.clone(), context, values) {
@@ -489,6 +491,7 @@ fn eval_bridge_positional_args(
                 name: None,
                 value,
                 ref_target,
+                owned: false,
             })
         })
         .collect()

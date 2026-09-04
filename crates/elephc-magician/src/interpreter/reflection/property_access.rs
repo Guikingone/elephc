@@ -91,6 +91,7 @@ pub(super) fn eval_reflection_instance_property_set_value(
                     name: None,
                     value,
                     ref_target: None,
+                    owned: false,
                 }],
                 context,
                 values,

@@ -20,18 +20,23 @@ pub(super) fn eval_indexed_array(
     let mut array = values.array_new(elements.len())?;
     for (index, element) in elements.iter().enumerate() {
         let index = values.int(index as i64)?;
-        let (value, target) = match element {
-            EvalArrayElement::Value(element) => (eval_expr(element, context, scope, values)?, None),
+        let (value, owned, target) = match element {
+            EvalArrayElement::Value(element) => (
+                eval_expr(element, context, scope, values)?,
+                eval_expr_is_owning_temporary(element),
+                None,
+            ),
             EvalArrayElement::Reference(element) => {
                 let (value, target) =
                     eval_reference_array_element_value(element, context, scope, values)?;
-                (value, Some(target))
+                (value, false, Some(target))
             }
             EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
                 return Err(EvalStatus::UnsupportedConstruct);
             }
         };
         array = values.array_set(array, index, value)?;
+        settle_stored_array_element(value, owned, values)?;
         if let Some(target) = target {
             bind_array_element_reference(context, array, index, target, values)?;
         }
@@ -49,7 +54,7 @@ pub(super) fn eval_assoc_array(
     let mut array = values.assoc_new(elements.len())?;
     let mut next_key = None;
     for (element_index, element) in elements.iter().enumerate() {
-        let (key, value, target) = match element {
+        let (key, value, owned, target) = match element {
             EvalArrayElement::Value(value) => {
                 let key = match next_key {
                     Some(next_key) => next_key,
@@ -57,10 +62,11 @@ pub(super) fn eval_assoc_array(
                 };
                 let one = values.int(1)?;
                 next_key = Some(values.add(key, one)?);
+                let owned = eval_expr_is_owning_temporary(value);
                 let value = eval_expr(value, context, scope, values).map_err(|status| {
                     trace_array_literal_error("value", element_index, status, context)
                 })?;
-                (key, value, None)
+                (key, value, owned, None)
             }
             EvalArrayElement::Reference(value) => {
                 let key = match next_key {
@@ -71,34 +77,54 @@ pub(super) fn eval_assoc_array(
                 next_key = Some(values.add(key, one)?);
                 let (value, target) =
                     eval_reference_array_element_value(value, context, scope, values)?;
-                (key, value, Some(target))
+                (key, value, false, Some(target))
             }
             EvalArrayElement::KeyValue { key, value } => {
                 let key = eval_expr(key, context, scope, values).map_err(|status| {
                     trace_array_literal_error("key", element_index, status, context)
                 })?;
                 next_key = eval_array_next_key_after_explicit_key(key, next_key, values)?;
+                let owned = eval_expr_is_owning_temporary(value);
                 let value = eval_expr(value, context, scope, values).map_err(|status| {
                     trace_array_literal_error("value", element_index, status, context)
                 })?;
-                (key, value, None)
+                (key, value, owned, None)
             }
             EvalArrayElement::KeyReference { key, value } => {
                 let key = eval_expr(key, context, scope, values)?;
                 next_key = eval_array_next_key_after_explicit_key(key, next_key, values)?;
                 let (value, target) =
                     eval_reference_array_element_value(value, context, scope, values)?;
-                (key, value, Some(target))
+                (key, value, false, Some(target))
             }
         };
         array = values.array_set(array, key, value).map_err(|status| {
             trace_array_literal_error("store", element_index, status, context)
         })?;
+        settle_stored_array_element(value, owned, values)?;
         if let Some(target) = target {
             bind_array_element_reference(context, array, key, target, values)?;
         }
     }
     Ok(array)
+}
+
+/// Drops the builder's own reference on an element the literal has just stored.
+///
+/// `__elephc_eval_value_array_set` increfs the value before the setter consumes it, so the array
+/// holds its own reference the moment the store returns. An element expression that ALLOCATED its
+/// cell left a second reference with the builder, and nothing else can pay it: `[new Ref('x')]`
+/// kept its `Ref` alive for the rest of the process. An element that merely names storage somebody
+/// else owns — a variable, a property — is never released here, because that reference is theirs.
+fn settle_stored_array_element(
+    value: RuntimeCellHandle,
+    owned: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if owned {
+        values.release(value)?;
+    }
+    Ok(())
 }
 
 /// Emits the associative-array element stage that failed under opt-in runtime tracing.

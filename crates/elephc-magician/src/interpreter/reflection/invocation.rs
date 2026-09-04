@@ -38,6 +38,7 @@ pub(super) fn eval_reflection_method_forwarded_value_arg(arg: EvaluatedCallArg) 
         name: arg.name,
         value: arg.value,
         ref_target: None,
+        owned: arg.owned,
     }
 }
 

@@ -6,7 +6,13 @@
 //! - `crate::interpreter` execution, builtin, and call-dispatch helpers.
 //!
 //! Key details:
-//! - Runtime cells are opaque handles; these types do not own or release values by themselves.
+//! - Runtime cells are opaque handles; these types do not own or release values by themselves,
+//!   with one declared exception: `owned` records a reference the CALL MACHINERY still owes.
+//!   An argument read out of a spread container comes back owned from `array_get`
+//!   (`src/codegen_support/runtime/objects/mixed_array_get.rs`: every successful return is an
+//!   owned `Mixed*`), while every consumer treats `value` as borrowed. `owned` carries that debt
+//!   from the producer to the one place that can settle it — after the callee has been handed
+//!   the value — so the element is neither leaked nor freed while the callee still reads it.
 
 use crate::context::EvalReferenceTarget;
 use crate::value::RuntimeCellHandle;
@@ -34,6 +40,8 @@ pub(super) struct EvaluatedCallArg {
     pub(super) name: Option<String>,
     pub(super) value: RuntimeCellHandle,
     pub(super) ref_target: Option<EvalReferenceTarget>,
+    /// Whether the call machinery still owes one release on `value` after the call.
+    pub(super) owned: bool,
 }
 
 /// One method argument after PHP parameter-order binding and default materialization.
@@ -42,12 +50,16 @@ pub(super) struct BoundMethodArg {
     pub(super) value: RuntimeCellHandle,
     pub(super) ref_target: Option<EvalReferenceTarget>,
     pub(super) variadic_ref_targets: Vec<(RuntimeCellHandle, EvalReferenceTarget)>,
+    /// Whether the call machinery still owes one release on `value` after the call.
+    pub(super) owned: bool,
 }
 
 /// One native function argument list prepared for the descriptor invoker ABI.
 pub(super) struct BoundNativeFunctionArgs {
     pub(super) values: Vec<RuntimeCellHandle>,
     pub(super) ref_slots: Vec<BoundNativeFunctionRefSlot>,
+    /// Argument cells the caller still owes a release on once the invoker has returned.
+    pub(super) owned_temporaries: Vec<RuntimeCellHandle>,
 }
 
 /// One staged by-reference slot passed to a native function invoker.

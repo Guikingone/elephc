@@ -435,6 +435,7 @@ pub(super) fn eval_clear_evaluated_arg_ref_targets(
             name: arg.name,
             value: arg.value,
             ref_target: None,
+            owned: arg.owned,
         })
         .collect()
 }

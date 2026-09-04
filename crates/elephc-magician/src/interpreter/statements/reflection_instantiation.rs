@@ -113,6 +113,7 @@ pub(super) fn eval_reflection_constructor_by_value_args(
             name: arg.name,
             value: arg.value,
             ref_target: None,
+            owned: arg.owned,
         })
         .collect()
 }
@@ -255,6 +256,7 @@ pub(super) fn eval_reflection_attribute_evaluated_args(
                 name: arg.name().map(str::to_string),
                 value: eval_reflection_attribute_arg_value(arg.value(), values)?,
                 ref_target: None,
+                owned: false,
             })
         })
         .collect()

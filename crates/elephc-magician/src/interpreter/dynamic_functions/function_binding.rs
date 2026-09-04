@@ -97,6 +97,7 @@ fn bind_evaluated_native_function_args_with_mode(
                 &name,
                 arg.value,
                 arg.ref_target,
+                arg.owned,
                 by_ref_mode,
                 values,
             )?;
@@ -108,6 +109,7 @@ fn bind_evaluated_native_function_args_with_mode(
                 &mut next_positional,
                 arg.value,
                 arg.ref_target,
+                arg.owned,
                 by_ref_mode,
                 values,
             )?;
@@ -128,6 +130,7 @@ fn bind_evaluated_native_function_args_with_mode(
             value: materialize_native_callable_default(default, context, values)?,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
+            owned: false,
         });
     }
 
@@ -168,6 +171,7 @@ fn bind_evaluated_native_variadic_function_args(
                 &name,
                 arg.value,
                 arg.ref_target,
+                arg.owned,
                 by_ref_mode,
                 values,
             )?;
@@ -179,10 +183,12 @@ fn bind_evaluated_native_variadic_function_args(
                 &mut next_positional,
                 arg.value,
                 arg.ref_target,
+                arg.owned,
                 by_ref_mode,
                 values,
             )?;
         } else {
+            let owned = arg.owned;
             let ref_target = native_function_parameter_ref_target(
                 function,
                 Some(variadic_index),
@@ -194,6 +200,7 @@ fn bind_evaluated_native_variadic_function_args(
                 value: arg.value,
                 ref_target,
                 variadic_ref_targets: Vec::new(),
+                owned,
             });
         }
     }
@@ -212,6 +219,7 @@ fn bind_evaluated_native_variadic_function_args(
             value: materialize_native_callable_default(default, context, values)?,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
+            owned: false,
         });
     }
 
@@ -253,8 +261,31 @@ fn apply_native_function_arg_types(
         let Some(param_type) = function.param_type(param_index) else {
             continue;
         };
-        bound_arg.value = eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
+        let coerced = eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
+        settle_coerced_bound_arg(bound_arg, coerced, values)?;
     }
+    Ok(())
+}
+
+/// Replaces one bound argument with its coerced value, settling any release the caller still owed.
+///
+/// A coercion that returns a different cell abandons the value the binder was handed. When that
+/// value carried an owed release (a spread element read out of its container) the debt has to be
+/// paid here, because nothing downstream can still see the pre-coercion handle. The replacement is
+/// not adopted as owed: only its producer knows whether it is a fresh cell or a borrowed one.
+pub(in crate::interpreter) fn settle_coerced_bound_arg(
+    bound_arg: &mut BoundMethodArg,
+    coerced: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if coerced == bound_arg.value {
+        return Ok(());
+    }
+    if bound_arg.owned {
+        values.release(bound_arg.value)?;
+        bound_arg.owned = false;
+    }
+    bound_arg.value = coerced;
     Ok(())
 }
 
@@ -266,6 +297,7 @@ fn bind_native_function_named_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -281,6 +313,7 @@ fn bind_native_function_named_arg(
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
+        owned,
     });
     Ok(())
 }
@@ -293,6 +326,7 @@ fn bind_native_function_positional_arg(
     next_positional: &mut usize,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -309,6 +343,7 @@ fn bind_native_function_positional_arg(
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
+        owned,
     });
     *next_positional += 1;
     Ok(())
@@ -354,12 +389,16 @@ fn stage_native_function_invoker_args(
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
     let mut invoker_values = Vec::with_capacity(bound_args.len());
     let mut ref_slots = Vec::new();
+    let mut owned_temporaries = Vec::new();
     for (position, bound_arg) in bound_args.into_iter().enumerate() {
         let param_index = if variadic_index.is_some_and(|index| position >= index) {
             variadic_index.ok_or(EvalStatus::RuntimeFatal)?
         } else {
             position
         };
+        if bound_arg.owned {
+            owned_temporaries.push(bound_arg.value);
+        }
         if !function.param_by_ref(param_index) {
             invoker_values.push(bound_arg.value);
             continue;
@@ -439,6 +478,7 @@ fn stage_native_function_invoker_args(
     Ok(BoundNativeFunctionArgs {
         values: invoker_values,
         ref_slots,
+        owned_temporaries,
     })
 }
 

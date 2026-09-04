@@ -129,11 +129,13 @@ fn eval_array_walk_ref_result_from_scope(
                 name: None,
                 value,
                 ref_target: Some(ref_target),
+                owned: false,
             },
             EvaluatedCallArg {
                 name: None,
                 value: key,
                 ref_target: None,
+                owned: false,
             },
         ];
         let _ = eval_evaluated_callable_with_call_array_args(&callback, args, context, values)?;

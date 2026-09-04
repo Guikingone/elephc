@@ -45,6 +45,7 @@ pub(super) fn positional_evaluated_bound_args(
         .into_iter()
         .enumerate()
         .map(|(index, arg)| {
+            let owned = arg.owned;
             let ref_target = match signature {
                 Some(signature) => native_parameter_ref_target(
                     signature,
@@ -59,6 +60,7 @@ pub(super) fn positional_evaluated_bound_args(
                 value: arg.value,
                 ref_target,
                 variadic_ref_targets: Vec::new(),
+                owned,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -79,6 +81,27 @@ pub(in crate::interpreter) fn native_bound_arg_values(
     args: &[BoundMethodArg],
 ) -> Vec<RuntimeCellHandle> {
     args.iter().map(|arg| arg.value).collect()
+}
+
+/// Releases the bound-argument cells the caller still owed once the callee has been handed them.
+///
+/// A spread element comes out of `array_get` owned (`mixed_array_get.rs`: every successful return
+/// is an owned `Mixed*`) while the generated bridge only borrows what it is handed, so the debt
+/// outlives the call and is paid here. A callee that hands one of those cells back as its result
+/// transfers the reference to the caller instead, so a returned handle is never released.
+pub(in crate::interpreter) fn release_owned_bound_args(
+    bound_args: &[BoundMethodArg],
+    returned: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for bound_arg in bound_args {
+        if !bound_arg.owned || Some(bound_arg.value) == returned {
+            continue;
+        }
+        eval_release_value(context, values, bound_arg.value)?;
+    }
+    Ok(())
 }
 
 /// Returns whether native argument write-back has any caller storage to update.
@@ -129,6 +152,7 @@ pub(super) fn bind_native_signature_args(
             value: array,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
+            owned: false,
         });
     }
 
@@ -141,6 +165,7 @@ pub(super) fn bind_native_signature_args(
                 &name,
                 arg.value,
                 arg.ref_target,
+                arg.owned,
                 by_ref_mode,
                 values,
             )?;
@@ -153,6 +178,7 @@ pub(super) fn bind_native_signature_args(
                 &mut next_variadic_index,
                 arg.value,
                 arg.ref_target,
+                arg.owned,
                 by_ref_mode,
                 values,
             )?;
@@ -176,6 +202,7 @@ pub(super) fn bind_native_signature_args(
             value: materialize_native_callable_default(default, context, values)?,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
+            owned: false,
         });
     }
 
@@ -207,8 +234,9 @@ pub(super) fn apply_native_callable_bound_arg_types(
         if signature.param_variadic(position) {
             apply_native_callable_variadic_arg_type(param_type, bound_arg, context, values)?;
         } else {
-            bound_arg.value =
+            let coerced =
                 eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
+            settle_coerced_bound_arg(bound_arg, coerced, values)?;
         }
     }
     Ok(())
@@ -251,7 +279,8 @@ pub(super) fn copy_native_call_user_func_by_value_ref_args(
         if !signature.param_by_ref(param_index) || bound_arg.ref_target.is_some() {
             continue;
         }
-        bound_arg.value = copy_native_call_user_func_by_value_ref_arg(bound_arg.value, values)?;
+        let copy = copy_native_call_user_func_by_value_ref_arg(bound_arg.value, values)?;
+        settle_coerced_bound_arg(bound_arg, copy, values)?;
     }
     Ok(())
 }
@@ -296,6 +325,7 @@ pub(super) fn bind_native_positional_signature_arg(
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -306,7 +336,15 @@ pub(super) fn bind_native_positional_signature_arg(
             .ok_or(EvalStatus::RuntimeFatal)?;
         let ref_target =
             native_parameter_ref_target(signature, variadic_index, ref_target, by_ref_mode, values)?;
-        return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, values);
+        return bind_native_variadic_arg(
+            bound_args,
+            variadic_index,
+            key,
+            value,
+            ref_target,
+            owned,
+            values,
+        );
     }
     let param_index = *next_positional;
     if param_index >= bound_args.len() || bound_args[param_index].is_some() {
@@ -318,6 +356,7 @@ pub(super) fn bind_native_positional_signature_arg(
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
+        owned,
     });
     *next_positional += 1;
     Ok(())
@@ -331,6 +370,7 @@ pub(super) fn bind_native_named_signature_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -349,6 +389,7 @@ pub(super) fn bind_native_named_signature_arg(
             value,
             ref_target,
             variadic_ref_targets: Vec::new(),
+            owned,
         });
         return Ok(());
     }
@@ -418,6 +459,7 @@ pub(super) fn bind_native_variadic_arg(
     key: RuntimeCellHandle,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
@@ -426,6 +468,11 @@ pub(super) fn bind_native_variadic_arg(
     bound.value = array;
     if let Some(ref_target) = ref_target {
         bound.variadic_ref_targets.push((key, ref_target));
+    }
+    // `__elephc_eval_value_array_set` increfs the value before the setter consumes it, so the
+    // variadic array now holds its own reference and any release the caller owed is settled here.
+    if owned {
+        values.release(value)?;
     }
     Ok(())
 }

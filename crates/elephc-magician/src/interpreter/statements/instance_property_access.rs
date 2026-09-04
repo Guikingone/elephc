@@ -338,6 +338,7 @@ pub(in crate::interpreter) fn eval_property_set_result(
                         name: None,
                         value,
                         ref_target: None,
+                        owned: false,
                     }],
                     context,
                     values,

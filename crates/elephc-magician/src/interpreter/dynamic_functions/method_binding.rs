@@ -45,6 +45,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             value: array,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
+            owned: false,
         });
     }
 
@@ -59,6 +60,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                 &name,
                 arg.value,
                 arg.ref_target,
+                arg.owned,
                 by_ref_mode,
                 &mut variadic_named_args,
                 context,
@@ -75,6 +77,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                 &mut next_variadic_index,
                 arg.value,
                 arg.ref_target,
+                arg.owned,
                 by_ref_mode,
                 context,
                 values,
@@ -97,6 +100,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                 value: eval_method_parameter_default(default, context, values)?,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
+                owned: false,
             });
         }
         if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
@@ -153,6 +157,7 @@ fn bind_dynamic_positional_method_arg(
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -170,13 +175,14 @@ fn bind_dynamic_positional_method_arg(
         *next_variadic_index = next_variadic_index
             .checked_add(1)
             .ok_or(EvalStatus::RuntimeFatal)?;
-        let value = eval_variadic_method_parameter_value(
+        let coerced = eval_variadic_method_parameter_value(
             parameter_types,
             variadic_index,
             value,
             context,
             values,
         )?;
+        let owned = settle_coerced_variadic_value(value, coerced, owned, values)?;
         let ref_target = method_parameter_ref_target(
             params,
             parameter_is_by_ref,
@@ -190,8 +196,9 @@ fn bind_dynamic_positional_method_arg(
             bound_args,
             variadic_index,
             key,
-            value,
+            coerced,
             ref_target,
+            owned,
             values,
         );
     }
@@ -212,6 +219,7 @@ fn bind_dynamic_positional_method_arg(
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
+        owned,
     });
     *next_positional += 1;
     Ok(())
@@ -227,6 +235,7 @@ fn bind_dynamic_named_method_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     variadic_named_args: &mut std::collections::HashSet<String>,
     context: &mut ElephcEvalContext,
@@ -249,6 +258,7 @@ fn bind_dynamic_named_method_arg(
             value,
             ref_target,
             variadic_ref_targets: Vec::new(),
+            owned,
         });
         return Ok(());
     }
@@ -256,13 +266,15 @@ fn bind_dynamic_named_method_arg(
         return Err(EvalStatus::RuntimeFatal);
     }
     let key = values.string(name)?;
-    let value = eval_variadic_method_parameter_value(
+    let coerced = eval_variadic_method_parameter_value(
         parameter_types,
         variadic_index,
         value,
         context,
         values,
     )?;
+    let owned = settle_coerced_variadic_value(value, coerced, owned, values)?;
+    let value = coerced;
     let argument_number = variadic_index
         .and_then(|index| index.checked_add(1))
         .ok_or(EvalStatus::RuntimeFatal)?;
@@ -275,7 +287,27 @@ fn bind_dynamic_named_method_arg(
         by_ref_mode,
         values,
     )?;
-    bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, ref_target, values)
+    bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, ref_target, owned, values)
+}
+
+/// Settles the release owed on a variadic value that parameter coercion has replaced.
+///
+/// Returns the debt that survives onto the coerced cell: a coercion that answers the same handle
+/// keeps it, a coercion that builds a different cell pays the old debt here and adopts none, since
+/// only the coercion knows whether the replacement is fresh or borrowed.
+pub(in crate::interpreter) fn settle_coerced_variadic_value(
+    value: RuntimeCellHandle,
+    coerced: RuntimeCellHandle,
+    owned: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if coerced == value {
+        return Ok(owned);
+    }
+    if owned {
+        values.release(value)?;
+    }
+    Ok(false)
 }
 
 /// Returns the caller writeback target required by a by-reference method parameter.
@@ -373,6 +405,7 @@ fn bind_dynamic_variadic_arg(
     key: RuntimeCellHandle,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
@@ -380,6 +413,11 @@ fn bind_dynamic_variadic_arg(
     bound.value = values.array_set(bound.value, key, value)?;
     if let Some(ref_target) = ref_target {
         bound.variadic_ref_targets.push((key, ref_target));
+    }
+    // `__elephc_eval_value_array_set` increfs the value before the setter consumes it, so the
+    // variadic array now holds its own reference and any release the caller owed is settled here.
+    if owned {
+        values.release(value)?;
     }
     Ok(())
 }

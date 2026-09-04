@@ -171,6 +171,12 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
             values,
         ),
     };
+    let returned = return_result.as_ref().ok().copied();
+    let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
+    let return_result = match (return_result, arg_cleanup) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(value), Ok(())) => Ok(value),
+    };
     leave_dynamic_class_method_source(previous_source, context);
     context.pop_magic_scope();
     context.pop_called_class_scope();
@@ -304,6 +310,12 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
             values,
         ),
     };
+    let returned = return_result.as_ref().ok().copied();
+    let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
+    let return_result = match (return_result, arg_cleanup) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(value), Ok(())) => Ok(value),
+    };
     leave_dynamic_class_method_source(previous_source, context);
     context.pop_magic_scope();
     context.pop_called_class_scope();
@@ -321,6 +333,7 @@ pub(in crate::interpreter) fn positional_args(
             name: None,
             value,
             ref_target: None,
+            owned: false,
         })
         .collect()
 }

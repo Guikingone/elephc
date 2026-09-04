@@ -22,6 +22,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_values(
             name: None,
             value,
             ref_target: None,
+            owned: false,
         })
         .collect();
     eval_dynamic_function_with_evaluated_args(function, evaluated_args, context, values)
@@ -124,12 +125,13 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             values,
         ),
     };
-    let cleanup_result = release_activation_scope(
-        &mut function_scope,
-        return_result.as_ref().ok().copied(),
-        context,
-        values,
-    );
+    let returned = return_result.as_ref().ok().copied();
+    let scope_cleanup = release_activation_scope(&mut function_scope, returned, context, values);
+    let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
+    let cleanup_result = match (scope_cleanup, arg_cleanup) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(()), Ok(())) => Ok(()),
+    };
     context.pop_function();
     merge_activation_result(return_result, cleanup_result)
 }
@@ -442,12 +444,13 @@ fn eval_closure_with_optional_binding(
             values,
         ),
     };
-    let cleanup_result = release_activation_scope(
-        &mut function_scope,
-        return_result.as_ref().ok().copied(),
-        context,
-        values,
-    );
+    let returned = return_result.as_ref().ok().copied();
+    let scope_cleanup = release_activation_scope(&mut function_scope, returned, context, values);
+    let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
+    let cleanup_result = match (scope_cleanup, arg_cleanup) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(()), Ok(())) => Ok(()),
+    };
     if bound_class_pushed {
         context.pop_called_class_scope();
         context.pop_class_scope();

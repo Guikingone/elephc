@@ -442,21 +442,25 @@ fn eval_user_wrapper_stream_open_args(
             name: None,
             value: path,
             ref_target: None,
+            owned: false,
         },
         EvaluatedCallArg {
             name: None,
             value: mode,
             ref_target: None,
+            owned: false,
         },
         EvaluatedCallArg {
             name: None,
             value: options,
             ref_target: None,
+            owned: false,
         },
         EvaluatedCallArg {
             name: None,
             value: opened_path,
             ref_target: Some(EvalReferenceTarget::Cell { cell: opened_path }),
+            owned: false,
         },
     ])
 }

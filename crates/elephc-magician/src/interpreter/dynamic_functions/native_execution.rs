@@ -45,22 +45,52 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
         Ok(arg_array) => arg_array,
         Err(status) => {
             cleanup_native_function_ref_args(&bound_args, values)?;
+            release_native_function_owned_temporaries(&bound_args, None, context, values)?;
             return Err(status);
         }
     };
     let result = unsafe { function.call(arg_array) };
     if let Err(status) = values.release(arg_array) {
         cleanup_native_function_ref_args(&bound_args, values)?;
+        release_native_function_owned_temporaries(&bound_args, None, context, values)?;
         return Err(status);
     }
     let result = values.native_call_result(result);
     let writeback = write_back_native_function_ref_args(&bound_args, context, values);
-    match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(result), Ok(())) => {
+    let released = release_native_function_owned_temporaries(
+        &bound_args,
+        result.as_ref().ok().copied(),
+        context,
+        values,
+    );
+    match (result, writeback, released) {
+        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
+        (Ok(result), Ok(()), Ok(())) => {
             eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
         }
     }
+}
+
+/// Releases the argument cells the caller still owed once the native invoker has returned.
+///
+/// A spread element arrives from `array_get` with a reference the interpreter owns
+/// (`src/codegen_support/runtime/objects/mixed_array_get.rs`) while the invoker only borrows it:
+/// the temporary argument array took its own reference and gave it back above. The invoked
+/// function is allowed to hand one of those very cells back as its result, which transfers the
+/// reference to the caller instead, so a returned handle is never released here.
+fn release_native_function_owned_temporaries(
+    bound_args: &BoundNativeFunctionArgs,
+    returned: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for value in &bound_args.owned_temporaries {
+        if Some(*value) == returned {
+            continue;
+        }
+        eval_release_value(context, values, *value)?;
+    }
+    Ok(())
 }
 
 /// Builds the positional runtime array passed to descriptor-compatible native invokers.

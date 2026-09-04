@@ -980,13 +980,12 @@ echo "end\n";
 /// no destructor to observe: this program ended at `live_blocks=12` (880 bytes) before the release
 /// and ends at `live_blocks=8` (496 bytes) after it — four blocks, two per leaked container.
 ///
-/// The remaining eight are not this bug and are pinned deliberately so the number keeps its
-/// meaning: the eval context, scope, and module registration an `eval()` frame allocates once, plus
-/// the Mixed cell `__rt_mixed_array_get` freshly boxes for each spread element inside the
-/// interpreter. That interpreter cell is a separate, still-open leak — `append_unpacked_call_arg_values`
-/// releases the key it reads with `array_iter_key` and not the value it reads with `array_get`,
-/// which is why an object element spread this way still never destructs. Fixing that is what will
-/// drop this count further; a drop is not a regression of this release.
+/// The remaining six are not this bug and are pinned deliberately so the number keeps its meaning:
+/// the eval context, scope, and module registration an `eval()` frame allocates once. The count was
+/// eight while `append_unpacked_call_arg_values` still leaked the Mixed cell `__rt_mixed_array_get`
+/// freshly boxes for each spread element — one per spread — and dropped to six when that element
+/// debt started being paid after the call; that drop is the fix below, not a regression of this
+/// release.
 #[test]
 fn test_spread_call_under_an_eval_context_releases_its_boxed_container() {
     let out = compile_and_run_with_heap_debug(
@@ -1010,8 +1009,303 @@ echo "end\n";
     );
     assert_eq!(out.stdout, "scope end\ndestruct local\nend\n");
     assert!(
-        out.stderr.contains("live_blocks=8"),
-        "expected the two spread containers to be released, got: {}",
+        out.stderr.contains("live_blocks=6"),
+        "expected the two spread containers and their elements to be released, got: {}",
         out.stderr
+    );
+}
+
+/// A spread element read out of its container is released once the callee has been handed it.
+///
+/// `append_unpacked_call_arg_values` reads each element with `array_get`, which
+/// `src/codegen_support/runtime/objects/mixed_array_get.rs` documents as returning an OWNED cell on
+/// every path: it increfs a stored boxed cell, or freshly boxes a typed slot through
+/// `__rt_mixed_from_value`, which retains an object payload. Every consumer of the evaluated
+/// argument treated that cell as borrowed, so the reference was never given back and the object
+/// spread into the call outlived the program: php prints `destruct local`, elephc printed nothing.
+///
+/// Releasing it at the read is not the fix — on a typed slot the cell is fresh and the callee would
+/// be handed freed storage — so `EvaluatedCallArg::owned` carries the debt to the release that
+/// follows the call.
+#[test]
+fn test_object_spread_under_an_eval_context_destructs_its_element() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+}
+function takes(T $value): void { echo "takes {$value->name}\n"; }
+function run(): void {
+    eval('$seed = 1;');
+    $local = new T('local');
+    $args = [$local];
+    takes(...$args);
+    echo "after spread\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "takes local\nafter spread\ndestruct local\nend\n");
+}
+
+/// Spreading an array literal releases the element the literal put in it, not just the container.
+///
+/// `takes(...[$local])` spreads an owning temporary: the container box is released by
+/// `release_owned_call_arg_temporaries` on the AOT side, and the element cell `array_get` handed
+/// the interpreter is released after the call. Before the element half, php printed
+/// `destruct local` here and elephc printed nothing.
+#[test]
+fn test_object_array_literal_spread_under_an_eval_context_destructs_its_element() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+}
+function takes(T $value): void { echo "takes {$value->name}\n"; }
+function run(): void {
+    eval('$seed = 1;');
+    $local = new T('local');
+    takes(...[$local]);
+    echo "after spread\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "takes local\nafter spread\ndestruct local\nend\n");
+}
+
+/// Every element of a multi-element spread is released, not only the first.
+///
+/// The debt is per argument, so a two-object spread owes two releases. Both objects outlived the
+/// program before the fix; the order asserted here is the one `php -n` prints.
+#[test]
+fn test_two_object_spread_under_an_eval_context_destructs_both_elements() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+}
+function takes(T $first, T $second): void { echo "takes {$first->name} {$second->name}\n"; }
+function run(): void {
+    eval('$seed = 1;');
+    $one = new T('one');
+    $two = new T('two');
+    $args = [$one, $two];
+    takes(...$args);
+    echo "after spread\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "takes one two\nafter spread\ndestruct one\ndestruct two\nend\n"
+    );
+}
+
+/// A string key spreads as a named argument and still owes the same release.
+///
+/// `append_unpacked_call_arg_values` reads the value with `array_get` on the named branch too, and
+/// that branch binds through `bind_native_function_named_arg` rather than the positional one, so it
+/// is asserted separately.
+#[test]
+fn test_named_key_object_spread_under_an_eval_context_destructs_its_element() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+}
+function takes(T $value): void { echo "takes {$value->name}\n"; }
+function run(): void {
+    eval('$seed = 1;');
+    $args = ['value' => new T('named')];
+    takes(...$args);
+    echo "after spread\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "takes named\nafter spread\ndestruct named\nend\n");
+}
+
+/// A spread that follows a positional argument leaves both arguments balanced.
+///
+/// The positional argument is a borrowed local and owes nothing; the spread element owes one
+/// release. Mixing them proves the debt is tracked per argument and not per call.
+#[test]
+fn test_object_spread_after_a_positional_argument_destructs_both() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+}
+function takes(T $first, T $second): void { echo "takes {$first->name} {$second->name}\n"; }
+function run(): void {
+    eval('$seed = 1;');
+    $one = new T('one');
+    $two = new T('two');
+    $args = [$two];
+    takes($one, ...$args);
+    echo "after spread\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "takes one two\nafter spread\ndestruct one\ndestruct two\nend\n"
+    );
+}
+
+/// `call_user_func_array()` unpacks through the same reader and stays balanced.
+///
+/// `eval_array_call_arg_values` calls `append_unpacked_call_arg_values` directly, so the argument
+/// array it walks produces the same owned element cells. This shape was already balanced before the
+/// fix because `call_user_func_array` releases an array-literal argument of its own accord; it is
+/// asserted so the new release cannot turn that into a double release.
+#[test]
+fn test_call_user_func_array_with_an_object_element_destructs_it() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+}
+function takes(T $value): void { echo "takes {$value->name}\n"; }
+function run(): void {
+    eval('$seed = 1;');
+    $local = new T('local');
+    call_user_func_array('takes', [$local]);
+    echo "after call\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "takes local\nafter call\ndestruct local\nend\n");
+}
+
+/// Spreading arrays of objects into a variadic builtin keeps the objects balanced.
+///
+/// `array_merge(...$arrays)` binds each spread element into the builtin's variadic array, where the
+/// debt is settled at the store rather than after the call: `__elephc_eval_value_array_set` increfs
+/// the value before the setter consumes it, so the variadic array already holds its own reference.
+/// Releasing again after the call would free a live element, which is why this shape is asserted.
+#[test]
+fn test_object_arrays_spread_into_a_builtin_stay_balanced() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+}
+function run(): void {
+    eval('$seed = 1;');
+    $arrays = [[new T('one')], [new T('two')]];
+    $merged = array_merge(...$arrays);
+    echo "merged " . count($merged) . "\n";
+    unset($merged);
+    echo "after merge\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "merged 2\nafter merge\ndestruct one\ndestruct two\nend\n"
+    );
+}
+
+/// A spread into a by-reference parameter releases its element like any other.
+///
+/// Asserted as produced, and two lines here are a php divergence this change does NOT address and
+/// must not be read as parity: php binds the array element by reference, so it prints
+/// `takes local` / `destruct local` and then `after spread replaced`, while elephc finds no
+/// writeback target for a spread element, warns, and degrades the parameter to by-value — the
+/// caller's element is left untouched and the callee's replacement dies at the callee's scope exit.
+/// What this fixture pins is the balance: the final `destruct local` was absent before the element
+/// debt was paid, so the spread element outlived the program even in the degraded shape.
+#[test]
+fn test_object_spread_into_a_by_ref_parameter_destructs_its_element() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class T {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+}
+function takes(&$value): void { echo "takes {$value->name}\n"; $value = new T('replaced'); }
+function run(): void {
+    eval('$seed = 1;');
+    $args = [new T('local')];
+    takes(...$args);
+    echo "after spread {$args[0]->name}\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "takes local\ndestruct replaced\nafter spread local\ndestruct local\nend\n"
+    );
+}
+
+/// An array literal built inside interpreted code releases the elements it stored.
+///
+/// `eval_indexed_array` stores each element with `values.array_set`, and
+/// `__elephc_eval_value_array_set` increfs the value before the setter consumes it. An element
+/// expression that ALLOCATED its cell — here `new T('literal')` — therefore left a second reference
+/// with the literal builder that nothing paid: `unset($a)` freed the array and the object survived
+/// it, so php printed `destruct literal` and elephc printed nothing. The element is built by the
+/// interpreter rather than by AOT code only when the literal itself is interpreted, which is why
+/// the fixture puts it in a required file's closure.
+#[test]
+fn test_array_literal_element_built_by_interpreted_code_is_released_with_its_container() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+class T {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+}
+function run(): void {
+    $closure = require __DIR__ . '/dynamic.php';
+    $closure();
+    echo "run end\n";
+}
+run();
+echo "end\n";
+"#,
+            ),
+            (
+                "dynamic.php",
+                r#"<?php
+return function (): void {
+    $a = [new T('literal')];
+    echo "built " . count($a) . "\n";
+    unset($a);
+    echo "closure end\n";
+};
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(
+        out,
+        "built 1\ndestruct literal\nclosure end\nrun end\nend\n"
     );
 }

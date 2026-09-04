@@ -239,6 +239,16 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     } else {
         Ok(())
     };
+    let released = release_owned_bound_args(
+        &bound_args,
+        call_result.is_ok().then_some(result),
+        context,
+        values,
+    );
+    let writeback = match (writeback, released) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(()), Ok(())) => Ok(()),
+    };
     match (call_result, writeback) {
         (Err(status), _) => {
             if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
@@ -472,9 +482,11 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     } else {
         Ok(())
     };
-    match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(result), Ok(())) => eval_declared_native_return_value(
+    let released =
+        release_owned_bound_args(&bound_args, result.as_ref().ok().copied(), context, values);
+    match (result, writeback, released) {
+        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
+        (Ok(result), Ok(()), Ok(())) => eval_declared_native_return_value(
             return_type.as_ref(),
             Some(signature_owner),
             called_class_scope.or(Some(class_name)),

@@ -83,6 +83,7 @@ pub(in crate::interpreter) fn eval_call_arg_values(
                 name: Some(name.to_string()),
                 value,
                 ref_target,
+                owned: eval_expr_is_owning_temporary(arg.value()),
             });
             continue;
         }
@@ -98,10 +99,30 @@ pub(in crate::interpreter) fn eval_call_arg_values(
             name: None,
             value,
             ref_target,
+            owned: eval_expr_is_owning_temporary(arg.value()),
         });
     }
 
     Ok(evaluated_args)
+}
+
+/// Returns whether an expression builds a cell nobody else holds.
+///
+/// These shapes allocate: an array literal, an object construction, a clone. `eval_expr` answers
+/// them with a fresh cell at one reference, while the generated bridge only borrows what it is
+/// handed and `array_set` takes its own reference, so unless the consumer releases them the value
+/// survives the whole process — that is why `->args([new Ref('x')])` never destructed its `Ref`.
+/// Every other shape is deliberately absent: a variable, a property or a compound assignment
+/// answers storage somebody else owns, and releasing that would free a live cell.
+pub(in crate::interpreter) fn eval_expr_is_owning_temporary(expr: &EvalExpr) -> bool {
+    matches!(
+        expr,
+        EvalExpr::Array(_)
+            | EvalExpr::NewObject { .. }
+            | EvalExpr::DynamicNewObject { .. }
+            | EvalExpr::NewAnonymousClass { .. }
+            | EvalExpr::Clone(_)
+    )
 }
 
 /// Emits the source argument that failed under opt-in runtime tracing.
@@ -312,6 +333,12 @@ pub(in crate::interpreter) fn eval_array_call_arg_values(
 }
 
 /// Appends one unpacked array's values using PHP named-argument key semantics.
+///
+/// `array_get` answers an OWNED cell on every path — it increfs a stored boxed cell, or freshly
+/// boxes a typed slot through `__rt_mixed_from_value`, which retains an object payload
+/// (`src/codegen_support/runtime/objects/mixed_array_get.rs`). Releasing it here would hand the
+/// callee freed storage on the typed-slot path, so each element is marked `owned` and the debt
+/// travels on `EvaluatedCallArg` to the release point that follows the call.
 pub(in crate::interpreter) fn append_unpacked_call_arg_values(
     array: RuntimeCellHandle,
     evaluated_args: &mut Vec<EvaluatedCallArg>,
@@ -344,6 +371,7 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
                     name: None,
                     value,
                     ref_target,
+                    owned: true,
                 }
             }
             EVAL_TAG_STRING => {
@@ -369,6 +397,7 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
                     name: Some(name),
                     value,
                     ref_target,
+                    owned: true,
                 }
             }
             _ => {

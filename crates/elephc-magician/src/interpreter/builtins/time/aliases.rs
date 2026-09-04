@@ -57,6 +57,7 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_with_values(
             name: None,
             value,
             ref_target: None,
+            owned: false,
         })
         .collect();
     eval_date_procedural_alias_with_evaluated_args(name, evaluated_args, context, values)

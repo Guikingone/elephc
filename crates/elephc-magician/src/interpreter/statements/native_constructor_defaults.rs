@@ -144,6 +144,14 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
     } else {
         Ok(())
     };
+    // A constructor answers no value, so no argument cell can escape as its result.
+    let writeback = match (
+        writeback,
+        release_owned_bound_args(&bound_args, None, context, values),
+    ) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(()), Ok(())) => Ok(()),
+    };
     match (result, writeback) {
         (Err(status), _) => Err(trace_native_constructor_error(
             "construct",
@@ -322,6 +330,7 @@ pub(super) fn materialize_native_callable_object_default(
             name: arg.name.clone(),
             value: materialize_native_callable_default(&arg.value, context, values)?,
             ref_target: None,
+            owned: false,
         });
     }
     if let Err(err) = eval_native_constructor_with_evaluated_args(
