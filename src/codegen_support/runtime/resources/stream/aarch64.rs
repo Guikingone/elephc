@@ -536,6 +536,21 @@ fn emit_stream_close_backend(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x10");                                         // pass the owned descriptor to close
     emitter.instruction("cmp x0, #0");                                          // skip absent descriptors
     emitter.instruction("b.lt __rt_stream_close_backend_mark");                 // an absent descriptor needs no syscall
+    // -- forget this descriptor's filters BEFORE the kernel can hand its number to anyone else --
+    //
+    // The same argument the TLS shutdown above makes: doing it in the `fclose()` lowering covers
+    // only an explicit `fclose()`, and a stream released by refcount — a reassigned variable, a
+    // scope exit — closed the descriptor with its filter byte still set. The next `fopen()` got
+    // the recycled number and inherited a dead filter, so a plain `string.rot13` stream answered
+    // deflate. Bounded because the tables are 512 bytes indexed by descriptor.
+    emitter.instruction("mov x9, #512");                                        // the filter tables' bound
+    emitter.instruction("cmp x0, x9");
+    emitter.instruction("b.hs __rt_stream_close_backend_filters_done");         // a descriptor past the table indexes nothing
+    abi::emit_symbol_address(emitter, "x9", "_stream_read_filters");
+    emitter.instruction("strb wzr, [x9, x0]");                                  // clear the read filter for this descriptor
+    abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
+    emitter.instruction("strb wzr, [x9, x0]");                                  // and the write filter
+    emitter.label("__rt_stream_close_backend_filters_done");
     emitter.syscall(6);                                                         // close the native file or socket descriptor
     // `tmpfile()` owns the file its URI names, and php removes it exactly here: the path stays
     // reachable — `file_exists()`, `filesize()`, a second `fopen()` — for as long as the handle

@@ -3299,6 +3299,42 @@ fclose($m3);
     assert_eq!(out, "SGVsbG8gV29ybGQ=|YWI=|YQ==");
 }
 
+/// A stream released by its DESTRUCTOR must forget its filters, not leave them for the next fd.
+///
+/// `_stream_read_filters` / `_stream_write_filters` are 512-byte tables indexed BY DESCRIPTOR, and
+/// the clearing lived only in the `fclose()` builtin's own lowering. A stream released by refcount
+/// — a reassigned variable, a scope exit — closed its descriptor with the filter byte still set,
+/// the kernel handed that number to the next `fopen()`, and the new stream inherited a dead
+/// filter. MEASURED before the fix, with no `fclose()` anywhere in the program:
+///
+///     php    : 6e6f7071                 ("nopq", plain rot13)
+///     elephc : cacb2f2804000000ffff     = gzdeflate("grfg") — rot13 AND the dead deflate
+///
+/// Adding one `fclose()` made it answer php's bytes exactly, which is what proved the diagnosis.
+/// The fix moved the clearing into `__rt_stream_close_backend`, which every close path reaches —
+/// the same argument that helper already makes, in its own words, about the TLS shutdown.
+#[test]
+fn test_a_dropped_stream_does_not_leave_its_filter_to_the_next_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fopen('php://temp', 'wb+');
+stream_filter_append($f, 'zlib.deflate', STREAM_FILTER_WRITE);
+fwrite($f, "test");
+fflush($f);
+// No fclose(): reassigning is what releases it, and that is the whole point.
+$f = fopen('php://temp', 'wb+');
+$f = fopen('php://temp', 'wb+');
+stream_filter_append($f, 'string.rot13', STREAM_FILTER_WRITE);
+fwrite($f, "abcd");
+fflush($f);
+rewind($f);
+echo bin2hex(stream_get_contents($f)), "\n";
+"#,
+    );
+    // "nopq" and nothing else: no deflate framing, no sync-flush trailer.
+    assert_eq!(out, "6e6f7071\n");
+}
+
 /// `stream_socket_accept()` WAITS, even when the listening socket is non-blocking.
 ///
 /// php's own gh8472. An omitted `$timeout` used to lower to the runtime helper's `-1`, which that
