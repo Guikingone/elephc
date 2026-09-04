@@ -82,7 +82,34 @@ pub(crate) fn lower_stream_socket_client(
             abi::emit_call_label(ctx.emitter, "__rt_stream_socket_client");
         }
     }
+    // php says nothing at all when the connect was asked for as PERSISTENT: measured on `php -n`
+    // 8.5.6 against the four other spellings, which all warn. The `&$error_code` /
+    // `&$error_message` outputs below are still written — only the diagnostic is suppressed.
+    let quiet = ctx.next_label("ssc_persistent_quiet");
+    if let Some(flags) = inst.operands.get(4).copied() {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, result_reg);                            // the descriptor-or-(-1) outlives the flag test
+        require_int(
+            ctx.load_value_to_result(flags)?.codegen_repr(),
+            "stream_socket_client flags",
+        )?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("and x9, x0, #1");                      // STREAM_CLIENT_PERSISTENT is bit 0
+                abi::emit_pop_reg(ctx.emitter, "x0");
+                ctx.emitter.instruction(&format!("cbnz x9, {}", quiet));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("and rax, 1");                          // STREAM_CLIENT_PERSISTENT is bit 0
+                ctx.emitter.instruction("mov r9, rax");
+                abi::emit_pop_reg(ctx.emitter, "rax");
+                ctx.emitter.instruction("test r9, r9");
+                ctx.emitter.instruction(&format!("jnz {}", quiet));
+            }
+        }
+    }
     emit_socket_open_failure_warning(ctx, address, None, SOCKET_WARNING_CLIENT)?;
+    ctx.emitter.label(&quiet);
     store_socket_error_outputs(ctx, inst, 1, 2, true)?;
     box_stream_fd_or_false_result(ctx, "stream_socket_client");
     emit_record_stream_transport_after_boxed(ctx, Some(address), 0)?;

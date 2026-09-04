@@ -252,7 +252,7 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // A fill that buffers nothing — a pipe, a failed read, end of file — falls straight through
     // to the single-byte read below, which keeps every EOF and errno answer exactly where it was.
     emitter.instruction("ldr x0, [sp, #40]");                                   // the backend descriptor
-    emitter.instruction("bl __rt_stream_fd_is_regular");                        // S_ISREG: sockets, pipes and ttys read exactly what they are asked
+    emitter.instruction("bl __rt_stream_fd_is_bufferable");                     // a file, a socket or a fifo: php buffers all three
     emitter.instruction("cbz x0, __rt_fgets_read_one");
     emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
     emitter.instruction("bl __rt_stream_pending_fill");                         // x0 = bytes now held

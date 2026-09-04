@@ -39,6 +39,7 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stream_get_meta_data_linux_x86_64(emitter);
         emit_stream_fd_is_regular_x86_64(emitter);
+        emit_stream_fd_is_bufferable_x86_64(emitter);
         emit_stream_meta_has_api_flags_x86_64(emitter);
         emit_data_uri_params_x86_64(emitter);
         return;
@@ -265,6 +266,7 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the metadata hash pointer
 
     emit_stream_fd_is_regular_aarch64(emitter);
+    emit_stream_fd_is_bufferable_aarch64(emitter);
     emit_stream_meta_has_api_flags_aarch64(emitter);
     emit_data_uri_params_aarch64(emitter);
 }
@@ -476,6 +478,54 @@ fn emit_stream_fd_is_regular_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_sfir_no");
     emitter.instruction("mov x0, #0");                                          // not a regular file
     emitter.label("__rt_sfir_ret");
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // release the frame
+    emitter.instruction("ret");
+}
+
+/// Emits `__rt_stream_fd_is_bufferable(fd) -> 1|0`: may a read fill the stream's holding area?
+///
+/// The sibling of [`emit_stream_fd_is_regular_aarch64`], and deliberately NOT the same question.
+/// `seekable` asks S_ISREG; buffering asks whether php would keep a surplus, and php keeps one for
+/// a regular file, a SOCKET and a FIFO alike — measured through `unread_bytes`, which reports 15
+/// then 12 on all three after the same `fgets()` and `fread(3)`.
+///
+/// Character devices are excluded. A tty is the one backing where asking for a chunk and asking
+/// for a byte differ to the person typing, and nothing measured that.
+fn emit_stream_fd_is_bufferable_aarch64(emitter: &mut Emitter) {
+    let plat = emitter.platform;
+    let stat_buf = plat.stat_buf_size(emitter.target.arch);
+    let frame_size = (stat_buf + 32 + 15) & !15;
+    let save_offset = frame_size - 16;
+    let mode_off = plat.stat_mode_offset(emitter.target.arch);
+
+    emitter.blank();
+    emitter.comment("--- runtime: may a read buffer this descriptor (file, socket or fifo) ---");
+    emitter.label_global("__rt_stream_fd_is_bufferable");
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // stat buffer plus saved linkage
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish the helper frame pointer
+    emitter.instruction("add x1, sp, #0");                                      // second argument: the stat buffer
+    emitter.syscall(339);                                                       // fstat(fd, buf)
+    emitter.instruction("cmp x0, #0");                                          // did it succeed?
+    emitter.instruction("b.ne __rt_sfib_no");                                   // an unstattable descriptor buffers nothing
+    emitter.instruction(&plat.stat_mode_load_instr("w9", "sp", mode_off));      // load st_mode
+    emitter.instruction("and w9, w9, #0xF000");                                 // keep only the file-type bits (S_IFMT)
+    emitter.instruction("mov w10, #0x8000");                                    // S_IFREG
+    emitter.instruction("cmp w9, w10");
+    emitter.instruction("b.eq __rt_sfib_yes");
+    emitter.instruction("mov w10, #0xC000");                                    // S_IFSOCK
+    emitter.instruction("cmp w9, w10");
+    emitter.instruction("b.eq __rt_sfib_yes");
+    emitter.instruction("mov w10, #0x1000");                                    // S_IFIFO
+    emitter.instruction("cmp w9, w10");
+    emitter.instruction("b.eq __rt_sfib_yes");
+    emitter.label("__rt_sfib_no");
+    emitter.instruction("mov x0, #0");                                          // a tty or a device: read what was asked
+    emitter.instruction("b __rt_sfib_ret");
+    emitter.label("__rt_sfib_yes");
+    emitter.instruction("mov x0, #1");
+    emitter.label("__rt_sfib_ret");
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // release the frame
     emitter.instruction("ret");
@@ -1117,6 +1167,48 @@ fn emit_set_str_slots_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64, pt
     emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {}]", len_slot));    // value_hi = string length
     emitter.instruction("mov r9, 1");                                           // value tag = string
     emit_hash_put_x86(emitter, key_sym, key_len);
+}
+
+/// Emits the x86_64 `__rt_stream_fd_is_bufferable(fd) -> 1|0`.
+///
+/// See the AArch64 counterpart for the measurement. The `struct stat` shape is the hardcoded
+/// x86_64 one its S_ISREG sibling uses: `st_mode` at byte 24, not the 16 AArch64 Linux puts it at.
+fn emit_stream_fd_is_bufferable_x86_64(emitter: &mut Emitter) {
+    let stat_buf = 144usize;
+    let mode_off = 24usize;
+    let frame = (stat_buf + 16 + 15) & !15;
+    let buf_neg = stat_buf as i64;
+
+    emitter.blank();
+    emitter.comment("--- runtime: may a read buffer this descriptor (file, socket or fifo) ---");
+    emitter.label_global("__rt_stream_fd_is_bufferable");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
+    emitter.instruction(&format!("sub rsp, {}", frame));                        // reserve the stat buffer
+    emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc fstat() argument
+    emitter.instruction("call fstat");                                          // fstat(fd, buf)
+    emitter.instruction("cmp eax, 0");                                          // did it succeed?
+    emitter.instruction("jne __rt_sfib_no_x86");                                // an unstattable descriptor buffers nothing
+    emitter.instruction(&format!(
+        "mov eax, DWORD PTR [rbp - {}]",
+        buf_neg - mode_off as i64
+    ));                                                                         // load st_mode
+    emitter.instruction("and eax, 0xF000");                                     // keep only the file-type bits (S_IFMT)
+    emitter.instruction("cmp eax, 0x8000");                                     // S_IFREG
+    emitter.instruction("je __rt_sfib_yes_x86");
+    emitter.instruction("cmp eax, 0xC000");                                     // S_IFSOCK
+    emitter.instruction("je __rt_sfib_yes_x86");
+    emitter.instruction("cmp eax, 0x1000");                                     // S_IFIFO
+    emitter.instruction("je __rt_sfib_yes_x86");
+    emitter.label("__rt_sfib_no_x86");
+    emitter.instruction("xor eax, eax");                                        // a tty or a device: read what was asked
+    emitter.instruction("jmp __rt_sfib_ret_x86");
+    emitter.label("__rt_sfib_yes_x86");
+    emitter.instruction("mov eax, 1");
+    emitter.label("__rt_sfib_ret_x86");
+    emitter.instruction(&format!("add rsp, {}", frame));                        // release the frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");
 }
 
 /// Emits the x86_64 `__rt_stream_fd_is_regular(fd) -> 1|0`.

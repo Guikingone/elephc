@@ -34,15 +34,22 @@ pub(crate) fn lower_stream_wrapper_register(
     let protocol = expect_operand(inst, 0)?;
     let class = expect_operand(inst, 1)?;
     if let Some(class_name) = optional_const_string_operand(ctx, class)? {
-        if !crate::codegen::lower_inst::builtins::contains_folded(
-            ctx.module
-                .class_infos
-                .keys()
-                .filter(|name| {
-                    !crate::codegen::lower_inst::builtins::is_internal_synthetic_class_name(name)
-                }),
-            &class_name,
-        ) {
+        // php asks whether the NAME is declared, not whether it can be instantiated: a trait, an
+        // interface and an abstract class all register happily and fail at the open instead —
+        // MEASURED, and php-src's own `streams/bug74951.phpt` registers a trait on purpose. Only
+        // a name declared nowhere is the TypeError, so every declared type name counts here.
+        let declared = ctx
+            .module
+            .class_infos
+            .keys()
+            .chain(ctx.module.interface_infos.keys())
+            .chain(ctx.module.enum_infos.keys())
+            .chain(ctx.module.declared_interface_names.iter())
+            .chain(ctx.module.declared_trait_names.iter())
+            .filter(|name| {
+                !crate::codegen::lower_inst::builtins::is_internal_synthetic_class_name(name)
+            });
+        if !crate::codegen::lower_inst::builtins::contains_folded(declared, &class_name) {
             let location = ctx
                 .module
                 .source_path

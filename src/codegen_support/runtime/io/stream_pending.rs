@@ -660,6 +660,13 @@ pub fn emit_stream_pending_fill(emitter: &mut Emitter) {
             emitter.instruction("stp x29, x30, [sp, #32]");
             emitter.instruction("add x29, sp, #32");
             emitter.instruction("str x0, [sp, #0]");                            // the opaque stream handle
+            // The chunk below is handed to `__rt_stream_pending_put`, which needs a STATE to keep
+            // it on. A bare descriptor — `STDIN` is one — has none, and the put silently dropped
+            // a chunk the read had already consumed: measured, `readline()` on redirected stdin
+            // answered '' where php answers the first line. Ask before reading, not after.
+            emitter.instruction("bl __rt_stream_state");
+            emitter.instruction("cbz x0, __rt_spf_none");                       // nowhere to hold it: read nothing
+            emitter.instruction("ldr x0, [sp, #0]");
             emitter.instruction("bl __rt_stream_pending_held");
             emitter.instruction("cbnz x0, __rt_spf_done");                      // already holding: that IS the fill
             emitter.instruction("ldr x0, [sp, #0]");
@@ -698,6 +705,12 @@ pub fn emit_stream_pending_fill(emitter: &mut Emitter) {
             emitter.instruction("mov rbp, rsp");
             emitter.instruction("sub rsp, 32");
             emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // the opaque stream handle
+            // See the AArch64 arm: the chunk needs a STATE to be kept on, and a bare descriptor
+            // like STDIN has none. Ask before reading, or the read consumes bytes nothing keeps.
+            emitter.instruction("call __rt_stream_state");
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_spf_none_x86");                        // nowhere to hold it: read nothing
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
             emitter.instruction("call __rt_stream_pending_held");
             emitter.instruction("test rax, rax");
             emitter.instruction("jnz __rt_spf_done_x86");                       // already holding: that IS the fill

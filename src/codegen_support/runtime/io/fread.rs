@@ -302,7 +302,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_state");                                // only a stream with a STATE can hold a surplus
     emitter.instruction("cbz x0, __rt_fread_syscall_now");
     emitter.instruction("ldr x0, [sp, #32]");                                   // the resolved backend descriptor
-    emitter.instruction("bl __rt_stream_fd_is_regular");                        // S_ISREG: leave sockets, pipes and ttys alone
+    emitter.instruction("bl __rt_stream_fd_is_bufferable");                     // a file, a socket or a fifo: php buffers all three
     emitter.instruction("cbz x0, __rt_fread_syscall_now");
     emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
     emitter.instruction("bl __rt_stream_chunk_size");                           // x0 = what php would ask for
@@ -974,7 +974,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");
     emitter.instruction("jz __rt_fread_syscall_now_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the resolved backend descriptor
-    emitter.instruction("call __rt_stream_fd_is_regular");                      // S_ISREG: leave sockets, pipes and ttys alone
+    emitter.instruction("call __rt_stream_fd_is_bufferable");                   // a file, a socket or a fifo: php buffers all three
     emitter.instruction("test rax, rax");
     emitter.instruction("jz __rt_fread_syscall_now_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle

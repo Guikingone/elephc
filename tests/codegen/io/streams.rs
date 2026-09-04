@@ -3345,6 +3345,216 @@ t("php://memory", "a+");
     );
 }
 
+/// `stream_wrapper_register()` asks whether the name is DECLARED, not whether it can be built.
+///
+/// php-src's own `streams/bug74951.phpt` registers a **trait** on purpose and expects that to
+/// succeed, with the failure surfacing at the open. MEASURED on `php -n` 8.5.6 across five kinds:
+///
+///     trait T             register => true    fopen => false
+///     interface I         register => true    fopen => false
+///     abstract class A    register => true    fopen => false
+///     class Ok            register => true    fopen => true
+///     NoSuchClassAtAll    register => TypeError: … must be a valid class name, … given
+///
+/// elephc's compile-time fold searched `class_infos` alone, so a trait name — declared, just not
+/// a class — was refused with php's MISSING-name TypeError, and the program died where php prints
+/// a warning and carries on. The fold now searches every declared type name the module carries.
+///
+/// ⚠️ The two questions are genuinely different and php asks them in different places: "declared"
+/// at registration, "instantiable" at the open. Collapsing them into one is what made a valid
+/// php program fail to run at all.
+#[test]
+fn test_stream_wrapper_register_accepts_any_declared_type_name() {
+    let out = compile_and_run_capture(
+        r#"<?php
+trait Stream00ploiter {
+    public function s() {}
+    public function n($_) {}
+}
+var_dump(stream_wrapper_register('e0ploit', 'Stream00ploiter'));
+$s = fopen('e0ploit://', 'r');
+var_dump($s);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    // The registration succeeds and the OPEN is what fails, exactly as php orders it. Before this
+    // the program did not run at all: it died on the registration with php's missing-name
+    // TypeError.
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
+    // ⚠️ php also prints `Warning: fopen(e0ploit://): Failed to open stream: operation failed`
+    // here and elephc prints nothing. That warning belongs to the user-wrapper OPEN path, which
+    // has no diagnostic of its own for a class it cannot construct — a separate gap, asserted
+    // as the silence it currently is rather than left unstated.
+    assert_eq!(out.diagnostics, "");
+}
+
+/// A fill with nowhere to put the bytes must not READ them.
+///
+/// `__rt_stream_pending_fill` asks `__rt_fread` for a whole chunk and hands it to
+/// `__rt_stream_pending_put`, which keeps it on the stream's STATE. A handle with no state —
+/// `STDIN` is one, the bare descriptor 0 — dropped the chunk it had already consumed, so the
+/// input was gone and every later read answered nothing.
+///
+/// MEASURED, and it PREDATES the buffering work above. With `world\nsecond\nthird\n` on stdin:
+///
+///     php     'world'   'second\n'   'third\n'
+///     elephc  ''        false        ''
+///
+/// A regular file already took the fill path, so `prog < in.txt` was already losing its input; a
+/// PIPE did not, which is why the readline test — whose harness pipes — stayed green until the
+/// buffering gate began admitting fifos. One guard fixes both: resolve the state FIRST and answer
+/// zero before consuming anything.
+///
+/// ⚠️ Still divergent and deliberately not asserted here: php's `readline()` strips the trailing
+/// newline and elephc's keeps it. That is a `readline` defect, not a buffering one, and the
+/// existing `test_readline` hides it behind a `trim()`.
+#[test]
+fn test_a_stateless_stream_does_not_lose_its_input_to_the_fill() {
+    let out = compile_and_run_with_stdin(
+        r#"<?php
+// Three reads through three different builtins, all on the stateless STDIN descriptor. The
+// values are echoed between brackets rather than var_export'd: this harness compiles a smaller
+// builtin set and has no var_export.
+$line = fgets(STDIN);
+echo "line[", $line, "]\n";
+$chunk = fread(STDIN, 3);
+echo "chunk[", $chunk, "]\n";
+$rest = stream_get_contents(STDIN);
+echo "rest[", $rest, "]\n";
+"#,
+        "world\nsecond\nthird\n",
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "line[world\n]\n",
+            // the second line is still there: the fill did not swallow it
+            "chunk[sec]\n",
+            "rest[ond\nthird\n]\n",
+        )
+    );
+}
+
+/// A PERSISTENT client connect that fails says nothing at all.
+///
+/// php-src's own `streams/bug61115-2.phpt` is one line and expects no output:
+/// `stream_socket_client('abc', $var, $var, 0, STREAM_CLIENT_PERSISTENT);`. MEASURED on `php -n`
+/// 8.5.6 across five spellings of the same failing address:
+///
+///     stream_socket_client('abc')                                     Warning
+///     stream_socket_client('abc', $a, $b)                             Warning
+///     stream_socket_client('abc', $e, $f, 0, STREAM_CLIENT_CONNECT)   Warning
+///     stream_socket_client('abc', $var, $var, 0, ..._PERSISTENT)      SILENT
+///     stream_socket_client('abc', $c, $d, 0, ..._PERSISTENT)          SILENT
+///
+/// Two persistent spellings, one sharing a variable between both by-ref outputs and one not, so
+/// the discriminator is the FLAG rather than the aliasing. elephc warned for all five.
+///
+/// The flag is tested at RUN TIME: php's rule is about the value, and a caller may compute it.
+/// `STREAM_CLIENT_PERSISTENT` is bit 0, so one bit test decides it.
+///
+/// ⚠️ Still divergent, and out of this test's scope: php spells an unparseable address
+/// `Failed to parse address "abc"` where elephc says `Unknown error`, because nothing here reached
+/// a syscall to leave an errno behind. The two assertions below therefore look at the PRESENCE of
+/// the warning, not at its reason.
+#[test]
+fn test_a_persistent_client_connect_failure_is_quiet() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo "one\n";
+@stream_socket_client('abc', $a, $b);
+echo "two\n";
+stream_socket_client('abc', $var, $var, 0, STREAM_CLIENT_PERSISTENT);
+echo "three\n";
+stream_socket_client('abc', $c, $d, 0, STREAM_CLIENT_PERSISTENT);
+echo "four\n";
+stream_socket_client('abc', $e, $f, 0, STREAM_CLIENT_CONNECT);
+echo "five\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "one\ntwo\nthree\nfour\nfive\n");
+    // The first call is suppressed by `@` and the two persistent ones by the flag, so exactly one
+    // warning survives — the explicit STREAM_CLIENT_CONNECT.
+    assert_eq!(
+        out.diagnostics.matches("Unable to connect to abc").count(),
+        1,
+        "expected one warning, got: {}",
+        out.diagnostics
+    );
+}
+
+/// php buffers a SOCKET and a PIPE exactly as it buffers a file, and `unread_bytes` proves it.
+///
+/// php-src's own `streams/stream_get_meta_data_socket_variation{1,2,4}.phpt`. `unread_bytes` is
+/// what php has read but not yet handed out. MEASURED on `php -n` 8.5.6, the same three-step
+/// program on three backings:
+///
+///                        before   after fgets()   after fread(3)
+///     regular file          0          15              12
+///     socket pair           0          15              12
+///     pipe from popen()     0          15              12
+///
+/// elephc answered 15 and 12 for the FILE and 0, 0, 0 for the socket. The mechanism was all there
+/// — the same holding area, the same `unread_bytes` reader — and only the GATE differed: the
+/// buffered fill asked `__rt_stream_fd_is_regular`, whose comment says sockets, pipes and ttys
+/// "read exactly what they are asked".
+///
+/// That is true of the syscall and beside the point for the buffer. A blocking `read(fd, buf,
+/// 8192)` on a socket holding 23 bytes returns those 23 at once — which is exactly why php can
+/// buffer it — and reading one byte at a time blocks in precisely the same places. So the
+/// buffering gate got its own probe, `__rt_stream_fd_is_bufferable`, and `seekable` keeps
+/// `__rt_stream_fd_is_regular`: that one really is S_ISREG and nothing else.
+///
+/// ⚠️ Character devices are deliberately left out of the new probe. A tty is the one backing where
+/// asking for a chunk and asking for a byte differ to the person typing, and nothing measured it.
+#[test]
+fn test_a_socket_buffers_its_surplus_like_a_file() {
+    let out = compile_and_run(
+        r#"<?php
+function unread($h) { $m = stream_get_meta_data($h); return $m['unread_bytes']; }
+$server = stream_socket_server('tcp://127.0.0.1:0');
+$client = fsockopen('tcp://' . stream_socket_get_name($server, false));
+$socket = stream_socket_accept($server);
+fwrite($socket, "abcdefg\n1234567\nxyzxyz\n");
+echo "sock before   : ", unread($client), "\n";
+// One fgets reads a whole chunk and hands back one line; the rest stays on the stream.
+echo "sock fgets    : ", var_export(fgets($client), true), " ", unread($client), "\n";
+echo "sock fread(3) : ", var_export(fread($client, 3), true), " ", unread($client), "\n";
+fclose($socket);
+fclose($server);
+while (!feof($client)) { fread($client, 1); }
+echo "sock drained  : ", unread($client), "\n";
+fclose($client);
+// The same program on a regular file, which already behaved this way.
+$p = tempnam(sys_get_temp_dir(), "ur");
+file_put_contents($p, "abcdefg\n1234567\nxyzxyz\n");
+$f = fopen($p, "r");
+echo "file before   : ", unread($f), "\n";
+echo "file fgets    : ", var_export(fgets($f), true), " ", unread($f), "\n";
+echo "file fread(3) : ", var_export(fread($f, 3), true), " ", unread($f), "\n";
+fclose($f);
+unlink($p);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // nothing has been read yet, so nothing is held
+            "sock before   : 0\n",
+            // the chunk read 23 bytes and handed back 8: 15 stay
+            "sock fgets    : 'abcdefg\n' 15\n",
+            "sock fread(3) : '123' 12\n",
+            // draining the stream empties the buffer
+            "sock drained  : 0\n",
+            // and the file answers the same numbers, as it already did
+            "file before   : 0\n",
+            "file fgets    : 'abcdefg\n' 15\n",
+            "file fread(3) : '123' 12\n",
+        )
+    );
+}
+
 /// A read that FAILS says so, naming the function the USER called.
 ///
 /// php-src's own `streams/bug54946.phpt` reads a handle opened `"w"`. MEASURED on `php -n` 8.5.6,
