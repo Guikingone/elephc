@@ -1,11 +1,11 @@
 ---
-title: "ob_start() — internals"
+title: "ob_start() - internals"
 description: "Compiler internals for ob_start(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 353
 ---
 
-## `ob_start()` — internals
+## `ob_start()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "hypot() — internals"
+title: "hypot() - internals"
 description: "Compiler internals for hypot(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 580
 ---
 
-## `hypot()` — internals
+## `hypot()` - internals
 
 ## Where it lives
 

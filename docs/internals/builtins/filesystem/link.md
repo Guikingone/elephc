@@ -1,11 +1,11 @@
 ---
-title: "link() — internals"
+title: "link() - internals"
 description: "Compiler internals for link(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 287
 ---
 
-## `link()` — internals
+## `link()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "getprotobynumber() — internals"
+title: "getprotobynumber() - internals"
 description: "Compiler internals for getprotobynumber(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 337
 ---
 
-## `getprotobynumber()` — internals
+## `getprotobynumber()` - internals
 
 ## Where it lives
 

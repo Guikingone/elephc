@@ -1,11 +1,11 @@
 ---
-title: "readdir() — internals"
+title: "readdir() - internals"
 description: "Compiler internals for readdir(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 355
 ---
 
-## `readdir()` — internals
+## `readdir()` - internals
 
 ## Where it lives
 

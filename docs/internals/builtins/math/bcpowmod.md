@@ -1,11 +1,11 @@
 ---
-title: "bcpowmod() — internals"
+title: "bcpowmod() - internals"
 description: "Compiler internals for bcpowmod(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 561
 ---
 
-## `bcpowmod()` — internals
+## `bcpowmod()` - internals
 
 ## Where it lives
 

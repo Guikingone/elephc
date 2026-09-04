@@ -1,11 +1,11 @@
 ---
-title: "fpassthru() — internals"
+title: "fpassthru() - internals"
 description: "Compiler internals for fpassthru(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 322
 ---
 
-## `fpassthru()` — internals
+## `fpassthru()` - internals
 
 ## Where it lives
 

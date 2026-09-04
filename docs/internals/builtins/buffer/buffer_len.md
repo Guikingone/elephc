@@ -1,11 +1,11 @@
 ---
-title: "buffer_len() — internals"
+title: "buffer_len() - internals"
 description: "Compiler internals for buffer_len(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 73
 ---
 
-## `buffer_len()` — internals
+## `buffer_len()` - internals
 
 ## Where it lives
 

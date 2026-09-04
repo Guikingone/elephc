@@ -1,11 +1,11 @@
 ---
-title: "feof() — internals"
+title: "feof() - internals"
 description: "Compiler internals for feof(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 312
 ---
 
-## `feof()` — internals
+## `feof()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "rewind() — internals"
+title: "rewind() - internals"
 description: "Compiler internals for rewind(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 356
 ---
 
-## `rewind()` — internals
+## `rewind()` - internals
 
 ## Where it lives
 

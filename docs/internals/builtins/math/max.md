@@ -1,11 +1,11 @@
 ---
-title: "max() — internals"
+title: "max() - internals"
 description: "Compiler internals for max(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 588
 ---
 
-## `max()` — internals
+## `max()` - internals
 
 ## Where it lives
 

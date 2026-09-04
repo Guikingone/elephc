@@ -1,11 +1,11 @@
 ---
-title: "tanh() — internals"
+title: "tanh() - internals"
 description: "Compiler internals for tanh(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 602
 ---
 
-## `tanh()` — internals
+## `tanh()` - internals
 
 ## Where it lives
 

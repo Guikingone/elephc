@@ -1,11 +1,11 @@
 ---
-title: "method_exists() — internals"
+title: "method_exists() - internals"
 description: "Compiler internals for method_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 96
 ---
 
-## `method_exists()` — internals
+## `method_exists()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "bcceil() — internals"
+title: "bcceil() - internals"
 description: "Compiler internals for bcceil(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 553
 ---
 
-## `bcceil()` — internals
+## `bcceil()` - internals
 
 ## Where it lives
 

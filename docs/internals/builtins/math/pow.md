@@ -1,11 +1,11 @@
 ---
-title: "pow() — internals"
+title: "pow() - internals"
 description: "Compiler internals for pow(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 593
 ---
 
-## `pow()` — internals
+## `pow()` - internals
 
 ## Where it lives
 

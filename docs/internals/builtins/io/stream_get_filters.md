@@ -1,11 +1,11 @@
 ---
-title: "stream_get_filters() — internals"
+title: "stream_get_filters() - internals"
 description: "Compiler internals for stream_get_filters(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 371
 ---
 
-## `stream_get_filters()` — internals
+## `stream_get_filters()` - internals
 
 ## Where it lives
 

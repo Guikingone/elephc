@@ -1,11 +1,11 @@
 ---
-title: "stream_get_transports() — internals"
+title: "stream_get_transports() - internals"
 description: "Compiler internals for stream_get_transports(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 374
 ---
 
-## `stream_get_transports()` — internals
+## `stream_get_transports()` - internals
 
 ## Where it lives
 

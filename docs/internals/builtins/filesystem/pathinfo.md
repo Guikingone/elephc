@@ -1,11 +1,11 @@
 ---
-title: "pathinfo() — internals"
+title: "pathinfo() - internals"
 description: "Compiler internals for pathinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 291
 ---
 
-## `pathinfo()` — internals
+## `pathinfo()` - internals
 
 ## Where it lives
 

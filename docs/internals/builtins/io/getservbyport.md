@@ -1,11 +1,11 @@
 ---
-title: "getservbyport() — internals"
+title: "getservbyport() - internals"
 description: "Compiler internals for getservbyport(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 339
 ---
 
-## `getservbyport()` — internals
+## `getservbyport()` - internals
 
 ## Where it lives
 

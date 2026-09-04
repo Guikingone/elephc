@@ -1,11 +1,11 @@
 ---
-title: "bcmod() — internals"
+title: "bcmod() - internals"
 description: "Compiler internals for bcmod(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 558
 ---
 
-## `bcmod()` — internals
+## `bcmod()` - internals
 
 ## Where it lives
 

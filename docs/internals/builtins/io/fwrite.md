@@ -1,11 +1,11 @@
 ---
-title: "fwrite() — internals"
+title: "fwrite() - internals"
 description: "Compiler internals for fwrite(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 332
 ---
 
-## `fwrite()` — internals
+## `fwrite()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "dechex() — internals"
+title: "dechex() - internals"
 description: "Compiler internals for dechex(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 572
 ---
 
-## `dechex()` — internals
+## `dechex()` - internals
 
 ## Where it lives
 

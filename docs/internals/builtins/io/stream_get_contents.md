@@ -1,11 +1,11 @@
 ---
-title: "stream_get_contents() — internals"
+title: "stream_get_contents() - internals"
 description: "Compiler internals for stream_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 370
 ---
 
-## `stream_get_contents()` — internals
+## `stream_get_contents()` - internals
 
 ## Where it lives
 

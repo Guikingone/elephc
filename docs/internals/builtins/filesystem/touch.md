@@ -1,11 +1,11 @@
 ---
-title: "touch() — internals"
+title: "touch() - internals"
 description: "Compiler internals for touch(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 306
 ---
 
-## `touch()` — internals
+## `touch()` - internals
 
 ## Where it lives
 

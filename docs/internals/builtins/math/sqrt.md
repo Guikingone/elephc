@@ -1,11 +1,11 @@
 ---
-title: "sqrt() — internals"
+title: "sqrt() - internals"
 description: "Compiler internals for sqrt(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 600
 ---
 
-## `sqrt()` — internals
+## `sqrt()` - internals
 
 ## Where it lives
 

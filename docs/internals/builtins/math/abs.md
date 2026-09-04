@@ -1,11 +1,11 @@
 ---
-title: "abs() — internals"
+title: "abs() - internals"
 description: "Compiler internals for abs(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 546
 ---
 
-## `abs()` — internals
+## `abs()` - internals
 
 ## Where it lives
 

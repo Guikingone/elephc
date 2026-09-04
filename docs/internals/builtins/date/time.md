@@ -1,11 +1,11 @@
 ---
-title: "time() — internals"
+title: "time() - internals"
 description: "Compiler internals for time(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 243
 ---
 
-## `time()` — internals
+## `time()` - internals
 
 ## Where it lives
 

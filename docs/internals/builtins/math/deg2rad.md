@@ -1,11 +1,11 @@
 ---
-title: "deg2rad() — internals"
+title: "deg2rad() - internals"
 description: "Compiler internals for deg2rad(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 574
 ---
 
-## `deg2rad()` — internals
+## `deg2rad()` - internals
 
 ## Where it lives
 

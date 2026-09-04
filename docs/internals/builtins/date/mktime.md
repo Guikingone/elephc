@@ -1,11 +1,11 @@
 ---
-title: "mktime() — internals"
+title: "mktime() - internals"
 description: "Compiler internals for mktime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 239
 ---
 
-## `mktime()` — internals
+## `mktime()` - internals
 
 ## Where it lives
 
