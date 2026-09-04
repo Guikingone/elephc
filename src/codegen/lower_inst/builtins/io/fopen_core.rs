@@ -597,8 +597,26 @@ fn emit_dynamic_php_wrapper_branch(
     // A php:// URL built at run time can still carry a LITERAL mode, and `php://memory`/`temp`
     // resolve to a bare `tmpfile()` descriptor here exactly as they do on the literal-path side.
     // See the literal branch for why the flag goes on the descriptor rather than into the write.
-    if LiteralOpenMode::Operand(expect_operand(inst, 1)?).is_append(ctx)? {
+    let mode_operand = expect_operand(inst, 1)?;
+    if LiteralOpenMode::Operand(mode_operand).is_append(ctx)? {
         abi::emit_call_label(ctx.emitter, "__rt_fd_set_append");
+    } else {
+        // A mode that is not a compile-time literal has to be looked at AT RUN TIME. php-src's
+        // own `bug75031.phpt` passes it through a parameter — `function t($type, $mode) { fopen(
+        // $type, $mode); }` — and the compile-time fold answers "not append" for that, so the
+        // flag was never set and every write overwrote from the seek position instead of going
+        // to the end. MEASURED: `php://temp` in `a+` answers `helloworld`, elephc answered
+        // `world`, while the SAME program with a literal `"a+"` was already right.
+        //
+        // The descriptor is in the int result register and the string load clobbers it, so it is
+        // spilled across.
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.load_string_value_to_regs(mode_operand, "x1", "x2")?,
+            Arch::X86_64 => ctx.load_string_value_to_regs(mode_operand, "rsi", "rdx")?,
+        }
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_fd_set_append_if_mode");
     }
     box_stream_fd_or_false_result(ctx, "fopen_php_dynamic");
     // A run-time `php://temp` published the flag inside `__rt_php_wrapper_open`; burning it here

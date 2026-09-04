@@ -307,7 +307,7 @@ pub(crate) use filter_param_warning::emit_filter_param_warning;
 pub(crate) use filter_params::{emit_asf_params_load, emit_filter_absorb_params};
 pub(crate) use fsockopen_meta::emit_stream_record_fsockopen_meta;
 pub(crate) use resource_id_burn::emit_resource_id_burn;
-pub(crate) use fd_set_append::emit_fd_set_append;
+pub(crate) use fd_set_append::{emit_fd_set_append, emit_fd_set_append_if_mode};
 pub(crate) use stream_get_meta_data::emit_stream_get_meta_data;
 pub(crate) use stream_get_filters::emit_stream_get_filters;
 pub(crate) use stream_get_wrappers::emit_stream_get_wrappers;

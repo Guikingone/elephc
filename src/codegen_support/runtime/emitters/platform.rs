@@ -81,6 +81,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_closedir(emitter);
     io::emit_rewinddir(emitter);
     io::emit_fd_set_append(emitter);
+    io::emit_fd_set_append_if_mode(emitter);
     io::emit_resource_id_burn(emitter);
     io::emit_stream_record_fsockopen_meta(emitter);
     io::emit_filter_absorb_params(emitter);

@@ -3299,6 +3299,52 @@ fclose($m3);
     assert_eq!(out, "SGVsbG8gV29ybGQ=|YWI=|YQ==");
 }
 
+/// Append mode has to be read at RUN TIME, not folded at compile time.
+///
+/// php-src's own `bug75031.phpt` passes the mode through a parameter, which is what made this
+/// invisible: `function test_75031($type, $mode) { $fp = fopen($type, $mode); ... }`. The append
+/// flag was set on both `php://` open paths, but behind `LiteralOpenMode::is_append`, which folds
+/// the mode with `optional_const_string_operand` — a mode that is not a literal answers "not
+/// append", so the flag was never set and every write overwrote from the seek position.
+///
+/// MEASURED on `php -n` 8.5.6, the same program either way:
+///
+///     literal   fopen("php://temp", "a+")   => 'helloworld'   already right
+///     variable  $m = "a+"; fopen(..., $m)   => 'world'        wrong
+///
+/// A real file is unaffected — it gets `O_APPEND` from `open()` itself — which is why only the
+/// `tmpfile()`-backed `php://memory` and `php://temp` lost it.
+#[test]
+fn test_append_mode_survives_a_runtime_mode_string() {
+    let out = compile_and_run(
+        r#"<?php
+function t($type, $mode) {
+    $fp = fopen($type, $mode);
+    fwrite($fp, "hello");
+    fseek($fp, 0, SEEK_SET);
+    fwrite($fp, "world");
+    echo stream_get_contents($fp, -1, 0), "\n";
+    fclose($fp);
+}
+t("php://temp", "w+");
+t("php://memory", "w+");
+t("php://temp", "a+");
+t("php://memory", "a+");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // `w+` writes where the seek says
+            "world\n",
+            "world\n",
+            // `a+` writes at the END, whatever the seek says
+            "helloworld\n",
+            "helloworld\n",
+        )
+    );
+}
+
 /// php never asks a stream's source for more than ONE CHUNK, and a chunk of 1 skips the buffer.
 ///
 /// php-src's own `streams/stream_set_chunk_size.phpt`. MEASURED on `php -n` 8.5.6 against a

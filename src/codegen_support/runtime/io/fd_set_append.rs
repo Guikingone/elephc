@@ -17,6 +17,64 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+/// Emits `__rt_fd_set_append_if_mode(fd, mode_ptr, mode_len) -> fd`.
+///
+/// The same job as [`emit_fd_set_append`], decided at RUN TIME: php looks for an `a` ANYWHERE in
+/// the mode string, so `a`, `a+` and `ab+` all append. A mode that is a compile-time literal is
+/// still folded by the caller and reaches `__rt_fd_set_append` directly — this one exists for
+/// `fopen($path, $mode)`, where the flag was simply never set.
+///
+/// The descriptor arrives and leaves in the INT RESULT register (`x0` / `rax`), exactly as the
+/// unconditional helper does, so the two are interchangeable in an open sequence. The mode
+/// travels in `x1`/`x2` and `rsi`/`rdx`.
+pub fn emit_fd_set_append_if_mode(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: fd_set_append_if_mode ---");
+    emitter.label_global("__rt_fd_set_append_if_mode");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x9, #0");                                  // scan index
+            emitter.label("__rt_fdsaim_scan");
+            emitter.instruction("cmp x9, x2");                                  // every mode byte looked at?
+            emitter.instruction("b.ge __rt_fdsaim_no");                         // no `a`: leave the descriptor alone
+            emitter.instruction("ldrb w10, [x1, x9]");
+            emitter.instruction("cmp w10, #97");                                // 'a'
+            emitter.instruction("b.eq __rt_fdsaim_yes");
+            emitter.instruction("add x9, x9, #1");
+            emitter.instruction("b __rt_fdsaim_scan");
+            emitter.label("__rt_fdsaim_yes");
+            // CALLED, not branched to: macOS dead-strips at atom boundaries and a branch into
+            // another symbol's atom dies with it.
+            emitter.instruction("sub sp, sp, #16");
+            emitter.instruction("str x30, [sp, #0]");                           // preserve the return address
+            emitter.instruction("bl __rt_fd_set_append");                       // answers the same descriptor
+            emitter.instruction("ldr x30, [sp, #0]");
+            emitter.instruction("add sp, sp, #16");
+            emitter.label("__rt_fdsaim_no");
+            emitter.instruction("ret");                                         // the descriptor is already in x0
+        }
+        Arch::X86_64 => {
+            emitter.instruction("xor r9, r9");                                  // scan index
+            emitter.label("__rt_fdsaim_scan_x86");
+            emitter.instruction("cmp r9, rdx");                                 // every mode byte looked at?
+            emitter.instruction("jge __rt_fdsaim_no_x86");                      // no `a`: leave the descriptor alone
+            emitter.instruction("movzx r10d, BYTE PTR [rsi + r9]");
+            emitter.instruction("cmp r10b, 97");                                // 'a'
+            emitter.instruction("je __rt_fdsaim_yes_x86");
+            emitter.instruction("inc r9");
+            emitter.instruction("jmp __rt_fdsaim_scan_x86");
+            emitter.label("__rt_fdsaim_yes_x86");
+            // See the AArch64 arm: called, not jumped to. `sub rsp, 8` keeps the callee's own
+            // `call` on the 16-byte boundary System V requires — see `runtime::sysv_call_alignment`.
+            emitter.instruction("sub rsp, 8");
+            emitter.instruction("call __rt_fd_set_append");                     // answers the same descriptor
+            emitter.instruction("add rsp, 8");
+            emitter.label("__rt_fdsaim_no_x86");
+            emitter.instruction("ret");                                         // the descriptor is already in rax
+        }
+    }
+}
+
 /// Emits `__rt_fd_set_append(fd) -> fd`, adding `O_APPEND` to an open descriptor.
 ///
 /// The descriptor arrives and leaves in the INT RESULT register — `x0` on AArch64, `rax` on
