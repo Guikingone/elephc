@@ -8,6 +8,7 @@
 //! Key details:
 //! - Fixed symbols are cached across compilations, so only target-independent runtime data belongs here.
 
+use crate::codegen_support::runtime::io::read_failed_notice;
 use super::{
     ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, ARRAY_TO_STRING_MSG, BUFFER_ALLOC_SIZE_MSG,
     COPY_SOURCE_IS_DIR_MSG, FGC_READ_FAILED_HEAD, FGC_READ_FAILED_MID, RANGE_SIZE_MSG,
@@ -276,6 +277,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_fgc_filter_fail_tail", FGC_FILTER_FAIL_TAIL),
         ("_fgc_read_failed_head", FGC_READ_FAILED_HEAD),
         ("_fgc_read_failed_mid", FGC_READ_FAILED_MID),
+        ("_read_failed_notice_head", read_failed_notice::READ_FAILED_NOTICE_HEAD),
+        ("_read_failed_notice_mid", read_failed_notice::READ_FAILED_NOTICE_MID),
+        ("_read_fn_name_fread", read_failed_notice::READ_FN_NAME_FREAD),
+        ("_read_fn_name_sgc", read_failed_notice::READ_FN_NAME_STREAM_GET_CONTENTS),
         ("_diag_space", " "),
         ("_pf_w_head", PF_WARN_HEAD),
         ("_pf_w_locate_mid", PF_WARN_LOCATE_MID),
@@ -1921,6 +1926,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _ftp_auth_tls_cmd\n_ftp_auth_tls_cmd:\n    .ascii \"AUTH TLS\\x0d\\n\"\n");
     out.push_str(".globl _ftp_pbsz_cmd\n_ftp_pbsz_cmd:\n    .ascii \"PBSZ 0\\x0d\\n\"\n");
     out.push_str(".globl _ftp_prot_p_cmd\n_ftp_prot_p_cmd:\n    .ascii \"PROT P\\x0d\\n\"\n");
+    // Which php function a failed read or write belongs to. `__rt_fread` is reached by `fread()` and by
+    // `stream_get_contents()`, and php names the one the user called. Zero means `fread`, which
+    // keeps the common path free of any store: only a helper that is NOT fread writes here.
+    out.push_str(&comm_directive("_io_fail_fn_ptr", 8, target));
+    out.push_str(&comm_directive("_io_fail_fn_len", 8, target));
     out.push_str(&comm_directive("_recvfrom_addr_ptr", 8, target));
     out.push_str(&comm_directive("_recvfrom_addr_len", 8, target));
     out.push_str(&comm_directive("_accept_peer_ptr", 8, target));

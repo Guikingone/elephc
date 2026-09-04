@@ -337,6 +337,32 @@ pub fn emit_fread(emitter: &mut Emitter) {
         emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); // macOS: is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
     }
     emitter.instruction("b.eq __rt_fread_would_block");                         // a transient nonblocking miss is not EOF
+    // php says a failed read out loud, naming the function, the CHUNK size it asks its source
+    // for, the errno and the system's own text for it. A cold-path frame holds the errno across
+    // the two calls; x30 is free to clobber because every exit reloads it from the entry frame.
+    emitter.instruction("sub sp, sp, #16");                                     // ⚠️ every offset below is +16 for the length of this block
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("neg x0, x0");                                      // Linux answers -errno
+    }
+    emitter.instruction("str x0, [sp, #0]");                                    // park the errno
+    // `__rt_itoa` formats at `_concat_buf + _concat_off` without advancing it, and the held bytes
+    // this read still answers with begin exactly there. Push the offset past them and restore it.
+    emitter.instruction("ldr x9, [sp, #64]");                                   // what the holding area supplied (was [sp, #48])
+    emitter.instruction("str x9, [sp, #8]");                                    // remember how far the offset is pushed
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_concat_off");
+    emitter.instruction("ldr x11, [x10]");
+    emitter.instruction("add x11, x11, x9");
+    emitter.instruction("str x11, [x10]");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the opaque stream handle (was [sp, #0])
+    emitter.instruction("bl __rt_stream_chunk_size");                           // the count php names, not the syscall's
+    emitter.instruction("ldr x1, [sp, #0]");                                    // the errno
+    emitter.instruction("bl __rt_read_failed_notice");
+    emitter.instruction("ldr x9, [sp, #8]");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_concat_off");
+    emitter.instruction("ldr x11, [x10]");
+    emitter.instruction("sub x11, x11, x9");                                    // put the write offset back where it stood
+    emitter.instruction("str x11, [x10]");
+    emitter.instruction("add sp, sp, #16");                                     // offsets below are the frame's own again
     // A read that FAILED after the holding area already supplied bytes still answers those
     // bytes: php loses nothing it has already served out of its buffer.
     emitter.instruction("ldr x9, [sp, #48]");
@@ -1052,6 +1078,18 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the thread-local errno value
     emitter.instruction("cmp r10d, 11");                                        // is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
     emitter.instruction("je __rt_fread_would_block_x86");                       // transient nonblocking miss returns empty without EOF
+    // See the AArch64 counterpart: php names the function, the chunk size, the errno and its
+    // text. The 16 bytes keep the two calls on SysV's boundary; the slots are rbp-relative, so
+    // nothing below shifts. This arm holds back no bytes, so the concat offset needs no nudge.
+    emitter.instruction("movsxd r10, r10d");                                    // widen the errno before it outlives r10d
+    emitter.instruction("sub rsp, 16");
+    emitter.instruction("mov QWORD PTR [rsp], r10");                            // park the errno across the calls
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_chunk_size");                         // the count php names, not the syscall's
+    emitter.instruction("mov rdi, rax");
+    emitter.instruction("mov rsi, QWORD PTR [rsp]");                            // the errno
+    emitter.instruction("call __rt_read_failed_notice");
+    emitter.instruction("add rsp, 16");
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // php answers false for a read that fails
     emitter.instruction("jmp __rt_fread_failed_x86");                           // a FAILED read does not exhaust the stream
 

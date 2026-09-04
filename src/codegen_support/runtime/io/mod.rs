@@ -145,6 +145,7 @@ mod pclose;
 mod popen;
 mod opendir;
 mod glob_dir_next;
+pub(crate) mod read_failed_notice;
 mod readdir;
 mod closedir;
 mod rewinddir;
@@ -366,6 +367,9 @@ pub(crate) use pclose::emit_pclose;
 pub(crate) use popen::emit_popen;
 pub(crate) use opendir::emit_opendir;
 pub(crate) use glob_dir_next::{emit_glob_dir_next, emit_path_is_glob_url};
+pub(crate) use read_failed_notice::{
+    emit_announce_read_fn_name, emit_clear_read_fn_name, emit_read_failed_notice,
+};
 pub(crate) use readdir::emit_readdir;
 pub(crate) use closedir::emit_closedir;
 pub(crate) use rewinddir::emit_rewinddir;

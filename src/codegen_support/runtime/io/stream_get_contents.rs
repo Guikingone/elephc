@@ -14,6 +14,7 @@
 //! - The read-all loop uses `__rt_fread` so TLS sessions, filters, and wrapper
 //!   reads share one I/O dispatch path.
 
+use crate::codegen_support::runtime::io::read_failed_notice::READ_FN_NAME_STREAM_GET_CONTENTS;
 use crate::codegen_support::abi::emit_symbol_address;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -96,7 +97,13 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.label("__rt_stream_get_contents_chunk_default");
     emitter.instruction("mov x1, #4096");                                       // keep a defensive default for direct runtime callers
     emitter.label("__rt_stream_get_contents_chunk_loaded");
+    super::emit_announce_read_fn_name(
+        emitter,
+        "_read_fn_name_sgc",
+        READ_FN_NAME_STREAM_GET_CONTENTS.len(),
+    );                                                                          // php names the function the USER called
     emitter.instruction("bl __rt_fread");                                       // x1=chunk ptr, x2=chunk len
+    super::emit_clear_read_fn_name(emitter);                                    // a later plain fread() must not inherit it
     emitter.instruction("cbz x2, __rt_stream_get_contents_release_done");       // empty read stops the read-all loop
     emitter.instruction("str x1, [sp, #32]");                                   // save chunk pointer across the copy
     emitter.instruction("str x2, [sp, #40]");                                   // save chunk length across the copy
@@ -288,7 +295,13 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x1, x11");                                         // is the remaining cap smaller than the chunk size?
     emitter.instruction("csel x1, x1, x11, lt");                                // request min(remaining, chunk size)
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle for __rt_fread
+    super::emit_announce_read_fn_name(
+        emitter,
+        "_read_fn_name_sgc",
+        READ_FN_NAME_STREAM_GET_CONTENTS.len(),
+    );                                                                          // php names the function the USER called
     emitter.instruction("bl __rt_fread");                                       // x1=chunk ptr, x2=chunk len
+    super::emit_clear_read_fn_name(emitter);                                    // a later plain fread() must not inherit it
     emitter.instruction("cbz x2, __rt_stream_get_contents_bounded_release_done"); // empty read stops the bounded loop
     emitter.instruction("ldr x9, [sp, #32]");                                   // running result length
     emitter.instruction("ldr x10, [sp, #8]");                                   // requested byte cap
@@ -404,7 +417,13 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle for __rt_fread
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // read with the chunk size carried by the authoritative StreamState
+    super::emit_announce_read_fn_name(
+        emitter,
+        "_read_fn_name_sgc",
+        READ_FN_NAME_STREAM_GET_CONTENTS.len(),
+    );                                                                          // php names the function the USER called
     emitter.instruction("call __rt_fread");                                     // rax=chunk ptr, rdx=chunk len
+    super::emit_clear_read_fn_name(emitter);                                    // a later plain fread() must not inherit it
     emitter.instruction("test rdx, rdx");                                       // empty chunk?
     emitter.instruction("jz __rt_stream_get_contents_release_done_x86");        // empty read stops the read-all loop
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save chunk pointer across the copy
@@ -543,7 +562,13 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rsi, r10");                                        // is the remaining cap bigger than one chunk?
     emitter.instruction("cmovg rsi, r10");                                      // request min(remaining, chunk size)
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle for __rt_fread
+    super::emit_announce_read_fn_name(
+        emitter,
+        "_read_fn_name_sgc",
+        READ_FN_NAME_STREAM_GET_CONTENTS.len(),
+    );                                                                          // php names the function the USER called
     emitter.instruction("call __rt_fread");                                     // rax=chunk ptr, rdx=chunk len
+    super::emit_clear_read_fn_name(emitter);                                    // a later plain fread() must not inherit it
     emitter.instruction("test rdx, rdx");                                       // empty chunk?
     emitter.instruction("jz __rt_stream_get_contents_bounded_release_done_x86"); // empty read stops the bounded loop
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // running result length

@@ -594,10 +594,31 @@ pub(crate) fn lower_fgets(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.emitter.label(&bounded);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_fgets");
+    with_read_fn_name(ctx, "fgets", |ctx| {
+        abi::emit_call_label(ctx.emitter, "__rt_fgets");
+        Ok(())
+    })?;
     emit_advance_wrapper_position(ctx, stream, "fgets")?;
     box_stream_string_or_false_on_empty_result(ctx, "fgets");
     store_if_result(ctx, inst)
+}
+
+/// Names the php function a failed read belongs to, for the length of one runtime call.
+///
+/// php reports `Notice: fgets(): Read of 8192 bytes failed with errno=9 …` naming the function
+/// the USER called, and `fgets()` and `fgetc()` both reach `__rt_fread` through helpers of their
+/// own. The runtime reads the name out of `_io_fail_fn_ptr`, where zero stands for `fread` on the read side and `fwrite` on the write side, so
+/// only a builtin that is NOT fread writes anything — and it clears it again so a later plain
+/// `fread()` cannot inherit the name.
+pub(super) fn with_read_fn_name<F>(ctx: &mut FunctionContext<'_>, name: &str, emit_call: F) -> Result<()>
+where
+    F: FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+{
+    let (symbol, len) = ctx.data.add_string(name.as_bytes());
+    crate::codegen_support::runtime::io::emit_announce_read_fn_name(ctx.emitter, &symbol, len);
+    emit_call(ctx)?;
+    crate::codegen_support::runtime::io::emit_clear_read_fn_name(ctx.emitter);
+    Ok(())
 }
 
 /// Lowers `fgetc(stream)` and boxes the one-byte string or PHP false result.
@@ -608,7 +629,10 @@ pub(crate) fn lower_fgetc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque stream handle to the x86_64 fgetc helper
     }
-    abi::emit_call_label(ctx.emitter, "__rt_fgetc");
+    with_read_fn_name(ctx, "fgetc", |ctx| {
+        abi::emit_call_label(ctx.emitter, "__rt_fgetc");
+        Ok(())
+    })?;
     emit_advance_wrapper_position(ctx, stream, "fgetc")?;
     box_stream_string_or_false_on_empty_result(ctx, "fgetc");
     store_if_result(ctx, inst)
@@ -769,7 +793,10 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             abi::emit_pop_reg(ctx.emitter, "rdi");                               // restore the opaque stream handle into rdi
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_fgetcsv");                           // call the CSV row parser runtime
+    with_read_fn_name(ctx, "fgetcsv", |ctx| {
+        abi::emit_call_label(ctx.emitter, "__rt_fgetcsv");                       // call the CSV row parser runtime
+        Ok(())
+    })?;
     if arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                 // 0 (EOF), 1 (blank record), or the parsed row
     }

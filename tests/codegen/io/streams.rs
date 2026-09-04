@@ -3345,6 +3345,92 @@ t("php://memory", "a+");
     );
 }
 
+/// A read that FAILS says so, naming the function the USER called.
+///
+/// php-src's own `streams/bug54946.phpt` reads a handle opened `"w"`. MEASURED on `php -n` 8.5.6,
+/// every read builtin that reaches a real descriptor:
+///
+///     Notice: stream_get_contents(): Read of 8192 bytes failed with errno=9 Bad file descriptor
+///     Notice: fread(): …          Notice: fgets(): …          Notice: fgetc(): …
+///
+/// elephc answered the right VALUE for all four — `""`, `false`, `false`, `false` — and said
+/// nothing at all. `file_get_contents()` in this same runtime already composed the identical
+/// Notice: the rule was in the repo, applied on one side only. `feof()` stays silent, in php and
+/// here, and so does a read that simply reaches the end.
+///
+/// ⚠️ The byte count is the stream's CHUNK size, never the caller's request. Measured four ways:
+/// `fread($h, 5)` says 8192, `fread($h, 20000)` says 8192, and `stream_set_chunk_size($h, 100)`
+/// makes both `fread` and `stream_get_contents` say 100. So the chunk is asked for again at the
+/// failure rather than reusing the syscall's own count.
+///
+/// ⚠️ The NAME is the one the user wrote. `fread`, `fgets`, `fgetc` and `stream_get_contents` all
+/// land in `__rt_fread`, so the name travels in a global that zero-means-`fread`, set around the
+/// call by whoever is not fread and cleared again so a later plain `fread()` cannot inherit it.
+#[test]
+fn test_a_failed_read_reports_the_way_php_does() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$path = tempnam(sys_get_temp_dir(), "rdf");
+file_put_contents($path, "abcdefghij");
+function show(string $what, $v) { echo str_pad($what, 22); var_dump($v); }
+
+$f = fopen($path, "w");
+show("stream_get_contents", stream_get_contents($f));
+fclose($f);
+$f = fopen($path, "w");
+show("fread", fread($f, 5));
+fclose($f);
+$f = fopen($path, "w");
+show("fgets", fgets($f));
+fclose($f);
+$f = fopen($path, "w");
+show("fgetc", fgetc($f));
+fclose($f);
+// feof asks nothing of the descriptor, so php reports nothing for it.
+$f = fopen($path, "w");
+show("feof", feof($f));
+fclose($f);
+// A configured chunk is what the count follows, and it is not the caller's request.
+$f = fopen($path, "w");
+stream_set_chunk_size($f, 100);
+show("chunk 100", fread($f, 5));
+fclose($f);
+// A read that simply reaches the end is silent. The file is EMPTY by now: every open above was
+// "w", which truncates — MEASURED, php answers "" here too, it does not still hold the ten bytes.
+$g = fopen($path, "r");
+show("eof read", fread($g, 100));
+show("eof again", fread($g, 100));
+fclose($g);
+unlink($path);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "stream_get_contents   string(0) \"\"\n",
+            "fread                 bool(false)\n",
+            "fgets                 bool(false)\n",
+            "fgetc                 bool(false)\n",
+            "feof                  bool(false)\n",
+            "chunk 100             bool(false)\n",
+            "eof read              string(0) \"\"\n",
+            "eof again             string(0) \"\"\n",
+        )
+    );
+    assert_eq!(
+        out.diagnostics,
+        concat!(
+            "Notice: stream_get_contents(): Read of 8192 bytes failed with errno=9 Bad file descriptor\n",
+            "Notice: fread(): Read of 8192 bytes failed with errno=9 Bad file descriptor\n",
+            "Notice: fgets(): Read of 8192 bytes failed with errno=9 Bad file descriptor\n",
+            "Notice: fgetc(): Read of 8192 bytes failed with errno=9 Bad file descriptor\n",
+            // the count follows the CHUNK, not the five bytes asked for
+            "Notice: fread(): Read of 100 bytes failed with errno=9 Bad file descriptor\n",
+        )
+    );
+}
+
 /// `params['options']` gets php's THREE answers, not one.
 ///
 /// php-src's own `streams/bug44712.phpt` is `stream_context_set_params($ctx, ["options" => 1])`
