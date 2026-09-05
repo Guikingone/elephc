@@ -235,6 +235,11 @@ fn emit_attach_filter_node(
         }
         emit_filter_node_create(ctx, filter_id, user_object, has_params, NodeDirection::Fixed(1));
         emit_filter_node_link(ctx, STREAM_READ_FILTER_HEAD_OFFSET, prepend);
+        // php builds ONE filter for both chains and spends ONE resource id on it. The second node
+        // here is an implementation detail — only one handle ever reaches the program — so it
+        // shares the first one's id rather than taking another, which every later resource would
+        // otherwise be off by. See `__rt_resource_id_rewind`.
+        emit_rewind_shared_filter_id(ctx);
         emit_filter_node_create(ctx, filter_id, user_object, has_params, NodeDirection::Fixed(2));
         emit_filter_node_link(ctx, STREAM_WRITE_FILTER_HEAD_OFFSET, prepend);
         abi::emit_jump(ctx.emitter, &linked);
@@ -283,6 +288,27 @@ fn emit_attach_filter_node(
         }
     }
     Ok(())
+}
+
+/// Gives the read node's resource id back so the write node shares it.
+///
+/// Guarded on the node actually existing: a failed create took no id, and rewinding then would
+/// hand the NEXT resource an id php has already spent.
+fn emit_rewind_shared_filter_id(ctx: &mut FunctionContext<'_>) {
+    let skip = ctx.next_label("sf_share_id_skip");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp, #16]");                       // the node just created
+            ctx.emitter.instruction(&format!("cbz x9, {}", skip));              // it failed: no id was taken
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 16]");            // the node just created
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction(&format!("jz {}", skip));                   // it failed: no id was taken
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_rewind");
+    ctx.emitter.label(&skip);
 }
 
 /// Emits one `__rt_filter_create` call, reading its arguments out of the attach frame.

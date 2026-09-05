@@ -42,3 +42,47 @@ pub fn emit_resource_id_burn(emitter: &mut Emitter) {
         }
     }
 }
+
+/// Emits `__rt_resource_id_rewind()`, giving the last PHP-visible resource id back.
+///
+/// The counterpart of the burn above, and it exists for one caller: a filter attached in BOTH
+/// directions. php builds ONE filter and puts it in both chains, taking one id; elephc builds two
+/// nodes, so the second one would take a second id and every resource after it would be one
+/// higher than php's. MEASURED on `php -n` 8.5.6, `tmpfile()` then `stream_filter_prepend()`:
+///
+///     php     stream 4, filter 5, stream 6, filter 7
+///     elephc  stream 4, filter 6, stream 7, filter 9
+///
+/// Rewinding between the two creates makes the pair share one id, which is what php shows.
+/// The two nodes are an implementation detail — only one handle ever reaches the program — and
+/// the cursor is display-only: `_resource_id_next` feeds `var_dump()`, `(int) $handle` and
+/// `get_resource_id()`, never a lookup.
+///
+/// Clobbers only scratch registers, like the burn.
+pub fn emit_resource_id_rewind(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: resource_id_rewind ---");
+    emitter.label_global("__rt_resource_id_rewind");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_resource_id_next");
+            emitter.instruction("ldr x10, [x9]");                               // the next PHP-visible id
+            emitter.instruction("cmp x10, #1");                                 // never step below the first id
+            emitter.instruction("b.le __rt_rid_rewind_done");
+            emitter.instruction("sub x10, x10, #1");                            // the second node shares the first one's id
+            emitter.instruction("str x10, [x9]");
+            emitter.label("__rt_rid_rewind_done");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r10", "_resource_id_next");
+            emitter.instruction("mov r11, QWORD PTR [r10]");                    // the next PHP-visible id
+            emitter.instruction("cmp r11, 1");                                  // never step below the first id
+            emitter.instruction("jle __rt_rid_rewind_done_x86");
+            emitter.instruction("sub r11, 1");                                  // the second node shares the first one's id
+            emitter.instruction("mov QWORD PTR [r10], r11");
+            emitter.label("__rt_rid_rewind_done_x86");
+            emitter.instruction("ret");
+        }
+    }
+}

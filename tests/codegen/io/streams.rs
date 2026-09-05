@@ -22410,3 +22410,53 @@ echo "shadowed:", shadowed("arg"), "\n";
         ),
     );
 }
+
+/// A filter attached in BOTH directions spends ONE php resource id, not two.
+///
+/// php builds one filter and puts it in both chains. elephc builds two nodes — a chain link is
+/// per-node — and each was taking an id of its own, so every resource created after the first
+/// such attach was numbered one higher than php's, for the rest of the program. MEASURED on
+/// `php -n` 8.5.6 (a `tmpfile()` is `r+`, so an attach with no explicit mode takes BOTH chains):
+///
+///     step                          php   elephc (before)
+///     tmpfile()                      4      4
+///     stream_filter_prepend()        5      6
+///     tmpfile()                      6      7
+///     stream_filter_prepend()        7      9
+///     fopen('php://memory','w+')     9     11
+///     stream_filter_append()        10     13
+///
+/// The second node now shares the first one's id. Only one handle ever reaches the program, and
+/// the cursor is display-only — it feeds `var_dump()`, `(int) $handle` and `get_resource_id()`,
+/// never a lookup — so the pair sharing a number is exactly what php shows.
+///
+/// php-src's `filters/basic.phpt` differed by nothing else once `$GLOBALS` worked.
+#[test]
+fn test_a_filter_in_both_directions_spends_one_resource_id() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = tmpfile();
+var_dump($a);
+var_dump(stream_filter_prepend($a, 'string.rot13'));
+$b = tmpfile();
+var_dump($b);
+var_dump(stream_filter_prepend($b, 'string.toupper'));
+$c = fopen('php://memory', 'w+');
+var_dump($c);
+var_dump(stream_filter_append($c, 'string.rot13'));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "resource(4) of type (stream)\n",
+            "resource(5) of type (stream filter)\n",
+            "resource(6) of type (stream)\n",
+            "resource(7) of type (stream filter)\n",
+            // php burns one opening `php://memory`, which elephc already matched.
+            "resource(9) of type (stream)\n",
+            "resource(10) of type (stream filter)\n",
+        ),
+    );
+}
