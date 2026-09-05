@@ -57,6 +57,7 @@ mod dynamic_calls;
 mod dynamic_property_store;
 mod enums;
 mod expressions;
+mod foreach_object;
 mod functions_namespaces;
 mod include_reflection;
 mod method_arguments;

@@ -518,11 +518,10 @@ pub(super) fn eval_reflection_object_dynamic_property_names(
     // else, so the slot scan above cannot see it. The overlay also holds every DECLARED
     // property, which the visibility filter removes, leaving exactly the undeclared ones.
     //
-    // These are sorted because the overlay is a hash map: PHP reports dynamic properties in
-    // the order they were created, and reproducing that needs an insertion-ordered store in
-    // the context. Sorting at least makes the answer deterministic instead of arbitrary.
+    // The overlay reports its names in creation order, which is the order PHP lists dynamic
+    // properties in, so they are appended as they come.
     let identity = values.object_identity(object)?;
-    let mut overlay_names: Vec<String> = context
+    let overlay_names: Vec<String> = context
         .dynamic_property_storage_names(identity)
         .into_iter()
         .filter(|property_name| {
@@ -530,7 +529,6 @@ pub(super) fn eval_reflection_object_dynamic_property_names(
         })
         .filter(|property_name| !names.contains(property_name))
         .collect();
-    overlay_names.sort();
     names.extend(overlay_names);
     Ok(names)
 }

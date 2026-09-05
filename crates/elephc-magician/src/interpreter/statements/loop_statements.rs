@@ -200,9 +200,15 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
             }
             result
         }
-        EVAL_TAG_OBJECT if value_by_ref => Err(EvalStatus::RuntimeFatal),
         EVAL_TAG_OBJECT => execute_foreach_object_stmt(
-            array, key_name, value_name, body, context, scope, values,
+            array,
+            key_name,
+            value_name,
+            value_by_ref,
+            body,
+            context,
+            scope,
+            values,
         ),
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -285,6 +291,7 @@ pub(super) fn execute_foreach_object_stmt(
     object: RuntimeCellHandle,
     key_name: Option<&str>,
     value_name: &str,
+    value_by_ref: bool,
     body: &[EvalStmt],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -317,7 +324,116 @@ pub(super) fn execute_foreach_object_stmt(
             _ => Err(EvalStatus::RuntimeFatal),
         };
     }
-    Err(EvalStatus::RuntimeFatal)
+    execute_foreach_plain_object_stmt(
+        object,
+        key_name,
+        value_name,
+        value_by_ref,
+        body,
+        context,
+        scope,
+        values,
+    )
+}
+
+/// Iterates the properties of an object that implements neither Iterator interface.
+///
+/// PHP walks the properties VISIBLE FROM THE CALLING SCOPE: from outside the class only the
+/// public ones, from inside a method the private and protected ones as well. That is the same
+/// rule `get_object_vars()` follows, so this asks that builtin for the set rather than
+/// re-deriving it — the two cannot then disagree about the same object, and the ordering,
+/// visibility and dynamic-property handling are all decided in one place.
+///
+/// Measured against `php -n` 8.5.6 on a class with a private, a protected and a public property
+/// plus three dynamic ones added out of alphabetical order: from outside the loop yields
+/// `pub=u;zeta=z;alpha=a;mid=m;` and from inside a method `secret=s;prot=p;pub=u;zeta=z;alpha=a;mid=m;`.
+pub(super) fn execute_foreach_plain_object_stmt(
+    object: RuntimeCellHandle,
+    key_name: Option<&str>,
+    value_name: &str,
+    value_by_ref: bool,
+    body: &[EvalStmt],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    let properties = eval_get_object_vars_result(&[object], context, values)?;
+    if !value_by_ref {
+        let result = execute_foreach_array_stmt(
+            properties, None, key_name, value_name, false, body, context, scope, values,
+        );
+        values.release(properties)?;
+        return result;
+    }
+    let result = execute_foreach_object_by_ref_stmt(
+        object, properties, key_name, value_name, body, context, scope, values,
+    );
+    values.release(properties)?;
+    result
+}
+
+/// Runs `foreach ($object as $k => &$v)`, aliasing the loop variable to each property.
+///
+/// The names come from the same visible-property snapshot the by-value arm iterates, so the two
+/// forms cannot disagree about which properties a scope sees. Each binding then targets the
+/// PROPERTY rather than the snapshot's copy, which is what makes an assignment inside the body
+/// reach the object: `php -n` 8.5.6 leaves `{"a":10,"b":20,"c":30}` after a loop that multiplies
+/// each value by ten.
+fn execute_foreach_object_by_ref_stmt(
+    object: RuntimeCellHandle,
+    properties: RuntimeCellHandle,
+    key_name: Option<&str>,
+    value_name: &str,
+    body: &[EvalStmt],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    let access_scope = context.execution_scope();
+    let len = values.array_len(properties)?;
+    for index in 0..len {
+        let key = values.array_iter_key(properties, index)?;
+        let property = String::from_utf8(values.string_bytes(key)?)
+            .map_err(|_| EvalStatus::RuntimeFatal)?;
+        let value = values.array_get(properties, key)?;
+        if let Some(key_name) = key_name {
+            for replaced in set_scope_cell(
+                context,
+                scope,
+                key_name.to_string(),
+                key,
+                ScopeCellOwnership::Owned,
+            )? {
+                values.release(replaced)?;
+            }
+        } else {
+            values.release(key)?;
+        }
+        let target = EvalReferenceTarget::ObjectProperty {
+            object,
+            property,
+            access_scope: access_scope.clone(),
+        };
+        let replaced: Vec<RuntimeCellHandle> = scope
+            .rebind_reference(value_name.to_string(), value, ScopeCellOwnership::Borrowed)
+            .into_iter()
+            .collect();
+        scope.set_reference_target(value_name.to_string(), target);
+        for replaced in replaced {
+            values.release(replaced)?;
+        }
+        match execute_statements(body, context, scope, values)? {
+            EvalControl::None | EvalControl::Continue(1) => {}
+            EvalControl::Break(1) => break,
+            EvalControl::Break(level) => return Ok(EvalControl::Break(level - 1)),
+            EvalControl::Continue(level) => return Ok(EvalControl::Continue(level - 1)),
+            EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
+            EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
+            EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
+        }
+    }
+    Ok(EvalControl::None)
 }
 
 /// Drives one Iterator object through PHP's `foreach` method-call sequence.

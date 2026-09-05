@@ -25,6 +25,7 @@ mod eval_callable_ref_errors;
 mod eval_callables;
 mod eval_closures;
 mod eval_dynamic_properties;
+mod eval_foreach_object;
 mod eval_constructors;
 mod eval_heredoc;
 mod eval_reflection_invocation;

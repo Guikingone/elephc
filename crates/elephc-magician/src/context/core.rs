@@ -63,6 +63,12 @@ pub struct ElephcEvalContext {
     pub(super) dynamic_destructing_objects: HashSet<u64>,
     pub(super) dynamic_destructed_objects: HashSet<u64>,
     pub(super) dynamic_property_values: HashMap<(u64, String), RuntimeCellHandle>,
+    /// Overlay property names per object in the order they were first written.
+    ///
+    /// PHP reports an object's dynamic properties in creation order, and the overlay map
+    /// above cannot answer that. Everything that ENUMERATES an object reads its order from
+    /// here, so the answer is PHP's rather than a hash order or an alphabetical stand-in.
+    pub(super) dynamic_property_order: HashMap<u64, Vec<String>>,
     pub(super) dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
     pub(super) array_element_aliases: HashMap<(u64, EvalArrayReferenceKey), EvalReferenceTarget>,
     pub(super) array_cursors: HashMap<usize, EvalArrayCursor>,
@@ -150,6 +156,7 @@ impl ElephcEvalContext {
             dynamic_destructing_objects: HashSet::new(),
             dynamic_destructed_objects: HashSet::new(),
             dynamic_property_values: HashMap::new(),
+            dynamic_property_order: HashMap::new(),
             dynamic_property_aliases: HashMap::new(),
             array_element_aliases: HashMap::new(),
             array_cursors: HashMap::new(),
@@ -238,6 +245,7 @@ impl ElephcEvalContext {
             dynamic_destructing_objects: HashSet::new(),
             dynamic_destructed_objects: HashSet::new(),
             dynamic_property_values: HashMap::new(),
+            dynamic_property_order: HashMap::new(),
             dynamic_property_aliases: HashMap::new(),
             array_element_aliases: HashMap::new(),
             array_cursors: HashMap::new(),

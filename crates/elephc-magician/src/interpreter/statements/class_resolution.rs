@@ -602,22 +602,34 @@ pub(super) fn eval_dynamic_class_allocate_object(
             };
             let storage_name = eval_instance_property_storage_name(class.name(), property);
             if let Some(value) = value {
-                // The overlay is where reads look, and the object's own slot is where every
-                // enumerator looks: `print_r`, `var_dump`, `json_encode`, `foreach` and the
-                // `(array)` cast all walk the slots. Writing the default to both at
-                // construction is what keeps those agreeing with `$object->property`, instead
-                // of each enumerator needing to learn about a second store.
+                // The overlay is where reads look, and the object's own slot is where the
+                // enumerators look: `print_r`, `var_dump`, `json_encode` and the `(array)` cast
+                // all walk the slots. Mirroring the default there is what keeps those agreeing
+                // with `$object->property`, instead of each enumerator learning about a second
+                // store. TWO INDEPENDENT CONDITIONS GOVERN THAT MIRROR — whether to attempt it,
+                // and what a missing slot means.
                 //
-                // THE SLOT WRITE IS BEST-EFFORT, AND HAS TO BE. An eval class that extends an
-                // AOT class is backed by an instance of THAT class, whose slots were fixed at
-                // compile time, so a property the eval class declares and its native parent does
-                // not has no slot to receive it. Symfony's dumped container is exactly that
-                // shape — `App_KernelDevDebugContainer extends Container` declaring `$targetDir`,
-                // `$parameters` and `$getService` — and treating the missing slot as a failure
-                // aborted the allocation and killed every warm-container request. The overlay
-                // below still takes the value, and `$object->property` still reads it; only the
-                // enumerators lose sight of a property their backing object cannot hold anyway.
-                let _ = values.property_set(object, &storage_name, value);
+                // WHETHER: only a PUBLIC property is mirrored. `json_encode()` exports an
+                // object's public properties and walks the slots to find them, and this
+                // interpreter mangles a private storage name but leaves a protected one plain, so
+                // a protected property in the slots is indistinguishable from a public one and
+                // would be exported. `php -n` 8.5.6 encodes a class with a private, a protected,
+                // a public and a dynamic property as `{"c":"3","d":"4"}`. The readers that SHOULD
+                // see non-public properties — reflection, `get_object_vars()` from inside the
+                // class, `print_r` — all take them from the class metadata plus the overlay,
+                // never from a raw slot walk, so nothing loses sight of them.
+                //
+                // A MISSING SLOT: the write is BEST-EFFORT and has to be. An eval class that
+                // extends an AOT class is backed by an instance of THAT class, whose slots were
+                // fixed at compile time, so a property the eval class declares and its native
+                // parent does not has no slot to receive it. Symfony's dumped container is
+                // exactly that shape — `App_KernelDevDebugContainer extends Container` declaring
+                // `$targetDir`, `$parameters` and `$getService` — and treating the missing slot as
+                // a failure aborted the allocation and killed every warm-container request. The
+                // overlay below still takes the value and `$object->property` still reads it.
+                if property.visibility() == EvalVisibility::Public {
+                    let _ = values.property_set(object, &storage_name, value);
+                }
                 if let Some(replaced) =
                     context.set_dynamic_property_value(identity, &storage_name, value)
                 {

@@ -259,15 +259,12 @@ impl ElephcEvalContext {
         self.closure_objects.remove(&identity);
         self.dynamic_destructing_objects.remove(&identity);
         self.dynamic_destructed_objects.remove(&identity);
-        let property_keys = self
-            .dynamic_property_values
-            .keys()
-            .filter(|(object, _)| *object == identity)
-            .cloned()
-            .collect::<Vec<_>>();
-        let property_values = property_keys
+        let property_values = self
+            .dynamic_property_order
+            .remove(&identity)
+            .unwrap_or_default()
             .into_iter()
-            .filter_map(|key| self.dynamic_property_values.remove(&key))
+            .filter_map(|property| self.dynamic_property_values.remove(&(identity, property)))
             .collect();
         self.dynamic_property_aliases
             .retain(|(object, _), _| *object != identity);
@@ -299,6 +296,14 @@ impl ElephcEvalContext {
         let previous = self
             .dynamic_property_values
             .insert((identity, storage_property_name.to_string()), value);
+        if previous.is_none() {
+            // First write of this name on this object fixes its position. PHP reports dynamic
+            // properties in creation order, and overwriting a property does not move it.
+            self.dynamic_property_order
+                .entry(identity)
+                .or_default()
+                .push(storage_property_name.to_string());
+        }
         previous.filter(|previous| *previous != value)
     }
 
@@ -308,8 +313,15 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) -> Option<RuntimeCellHandle> {
-        self.dynamic_property_values
-            .remove(&(identity, storage_property_name.to_string()))
+        let removed = self
+            .dynamic_property_values
+            .remove(&(identity, storage_property_name.to_string()));
+        if removed.is_some() {
+            if let Some(order) = self.dynamic_property_order.get_mut(&identity) {
+                order.retain(|name| name != storage_property_name);
+            }
+        }
+        removed
     }
 
     /// Returns property names and cells that need retaining for a shallow object clone.
@@ -317,10 +329,11 @@ impl ElephcEvalContext {
         &self,
         identity: u64,
     ) -> Vec<(String, RuntimeCellHandle)> {
-        self.dynamic_property_values
-            .iter()
-            .filter_map(|((object, property), value)| {
-                (*object == identity).then(|| (property.clone(), *value))
+        self.dynamic_property_storage_names(identity)
+            .into_iter()
+            .filter_map(|property| {
+                self.dynamic_property_value(identity, &property)
+                    .map(|value| (property, value))
             })
             .collect()
     }
@@ -333,13 +346,13 @@ impl ElephcEvalContext {
     /// Anything that enumerates or probes an object's properties has to consult this too, or it
     /// reports a dynamic property as absent.
     ///
-    /// The order is the map's, which is not PHP's insertion order; callers that present these
-    /// to a program sort them so the answer is at least deterministic.
+    /// The order is the order the properties were first written, which is the order PHP
+    /// reports them in, so a caller can present these to a program as they come.
     pub fn dynamic_property_storage_names(&self, identity: u64) -> Vec<String> {
-        self.dynamic_property_values
-            .keys()
-            .filter_map(|(object, property)| (*object == identity).then(|| property.clone()))
-            .collect()
+        self.dynamic_property_order
+            .get(&identity)
+            .map(|order| order.clone())
+            .unwrap_or_default()
     }
 
     /// Removes this context from the process-local dynamic object destructor registry.

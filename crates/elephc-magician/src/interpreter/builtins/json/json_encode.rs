@@ -367,11 +367,26 @@ fn eval_json_encode_append_object(
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
     let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
     output.push(b'{');
+    // PHP serialises an object's PUBLIC properties only, whatever scope the call is made from.
+    // A non-public declared property lives in the object's slots under a mangled name — a
+    // private one as `\0Class\0name`, a protected one as `\0*\0name` — so the NUL is what marks
+    // it as not for export. `php -n` 8.5.6 encodes a class with a private, a protected, a
+    // public and a dynamic property as `{"c":"3","d":"4"}`.
+    let mut keys = Vec::new();
     let len = values.object_property_len(value)?;
-    if pretty && len > 0 {
+    for position in 0..len {
+        let key = values.object_property_iter_key(value, position)?;
+        let key_bytes = values.string_bytes(key)?;
+        values.release(key)?;
+        if !key_bytes.contains(&0) {
+            keys.push(key_bytes);
+        }
+    }
+    let emitted = keys.len();
+    if pretty && emitted > 0 {
         output.push(b'\n');
     }
-    for position in 0..len {
+    for (position, key_bytes) in keys.into_iter().enumerate() {
         if position > 0 {
             output.push(b',');
             if pretty {
@@ -381,8 +396,6 @@ fn eval_json_encode_append_object(
         if pretty {
             eval_json_encode_pretty_indent(output, depth + 1);
         }
-        let key = values.object_property_iter_key(value, position)?;
-        let key_bytes = values.string_bytes(key)?;
         eval_json_encode_append_string(
             &key_bytes,
             flags & !EVAL_JSON_NUMERIC_CHECK,
@@ -404,7 +417,7 @@ fn eval_json_encode_append_object(
             output,
         )?;
     }
-    if pretty && len > 0 {
+    if pretty && emitted > 0 {
         output.push(b'\n');
         eval_json_encode_pretty_indent(output, depth);
     }

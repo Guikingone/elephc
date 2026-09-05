@@ -283,11 +283,13 @@ pub(in crate::interpreter) fn eval_property_set_result(
     let mut storage_property_name = property_name.to_string();
     let mut declared_property_found = false;
     let mut declared_property_is_private = false;
+    let mut declared_property_is_public = false;
     if let Some((declaring_class, property)) =
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
         declared_property_found = true;
         declared_property_is_private = property.visibility() == EvalVisibility::Private;
+        declared_property_is_public = property.visibility() == EvalVisibility::Public;
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
             if eval_magic_property_set(
                 object,
@@ -484,20 +486,28 @@ pub(in crate::interpreter) fn eval_property_set_result(
         return Ok(());
     }
     // Mirror the value into the object's own slot as well. The overlay is what reads consult,
-    // but every enumerator walks the slots, so a property written only to the overlay is
-    // invisible to `print_r`, `var_dump`, `json_encode`, `foreach` and the `(array)` cast.
-    // Keeping the two in step at the single write point is what lets those keep reading one
-    // store, instead of teaching each of them about two.
+    // but the enumerators walk the slots, so a property written only to the overlay is
+    // invisible to `print_r`, `var_dump`, `json_encode` and the `(array)` cast. Keeping the two
+    // in step at the single write point is what lets those keep reading one store. TWO
+    // INDEPENDENT CONDITIONS GOVERN THAT MIRROR — whether to attempt it, and what a missing slot
+    // means.
     //
-    // THE MIRROR IS BEST-EFFORT, AND HAS TO BE. An eval class that extends an AOT class is
-    // backed by an instance of THAT class, whose slots were fixed at compile time, so a property
-    // the eval class declares and its native parent does not has no slot to receive it. Symfony's
-    // dumped container is exactly that shape — `App_KernelDevDebugContainer extends Container`
-    // writing `$this->targetDir` and its promoted `$buildParameters` — and treating the missing
-    // slot as a failure turned every warm-container request into `eval() runtime failed`. The
-    // overlay below still takes the value and `$object->property` still reads it; the enumerators
-    // lose sight only of a property the backing object could never have held.
-    let _ = values.property_set(object, &storage_property_name, value);
+    // WHETHER: a DECLARED non-public property is deliberately left out, matching the same rule at
+    // construction. `json_encode()` exports public properties by walking the slots, and this
+    // interpreter leaves a protected storage name unmangled, so a protected property in the slots
+    // would be exported where `php -n` 8.5.6 omits it. An UNDECLARED property is always public in
+    // PHP, so it is always mirrored.
+    //
+    // A MISSING SLOT: the write is BEST-EFFORT and has to be. An eval class that extends an AOT
+    // class is backed by an instance of THAT class, whose slots were fixed at compile time, so a
+    // property the eval class declares and its native parent does not has no slot to receive it.
+    // Symfony's dumped container is exactly that shape — `App_KernelDevDebugContainer extends
+    // Container` writing `$this->targetDir` and its promoted `$buildParameters` — and treating the
+    // missing slot as a failure turned every warm-container request into `eval() runtime failed`.
+    // The overlay below still takes the value and `$object->property` still reads it.
+    if !declared_property_found || declared_property_is_public {
+        let _ = values.property_set(object, &storage_property_name, value);
+    }
     let stored = values.retain(value)?;
     let replaced = context.set_dynamic_property_value(identity, &storage_property_name, stored);
     if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {

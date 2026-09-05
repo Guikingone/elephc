@@ -319,15 +319,14 @@ fn eval_add_dynamic_object_vars(
     // overlay is where it lives, and the same two filters apply — a declared storage name is
     // not a dynamic property, and a mangled name is not visible under any circumstances.
     //
-    // Sorted because the overlay is a hash map. PHP reports dynamic properties in creation
-    // order, which needs an insertion-ordered store in the context to reproduce.
+    // The overlay reports its names in creation order, which is the order PHP lists dynamic
+    // properties in, so they are appended as they come.
     let identity = values.object_identity(object)?;
-    let mut overlay_names: Vec<String> = context
+    let overlay_names: Vec<String> = context
         .dynamic_property_storage_names(identity)
         .into_iter()
         .filter(|key_name| !key_name.contains('\0') && !storage_keys.contains(key_name))
         .collect();
-    overlay_names.sort();
     for key_name in overlay_names {
         if !emitted_keys.insert(key_name.clone()) {
             continue;

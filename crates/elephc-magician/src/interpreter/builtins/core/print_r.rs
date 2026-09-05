@@ -313,9 +313,17 @@ fn eval_debug_dynamic_object_properties(
                 continue;
             }
             let alias = context.dynamic_property_alias(identity, &storage_name).cloned();
+            // Alias, then overlay, then slot — the order every other reader uses. The overlay
+            // holds every declared property of an eval object, while only the PUBLIC ones are
+            // mirrored into the slots, so reading the slot alone loses a private or protected
+            // value. `php -n` 8.5.6 prints `[a:Z:private] => 1` and `[b:protected] => 2`, with
+            // their values, for a class carrying both.
             let value = match &alias {
                 Some(target) => eval_reference_target_value(target, context, values)?,
-                None => values.property_get(object, &storage_name)?,
+                None => match context.dynamic_property_value(identity, &storage_name) {
+                    Some(stored) => values.retain(stored)?,
+                    None => values.property_get(object, &storage_name)?,
+                },
             };
             if property.visibility() == EvalVisibility::Public {
                 emitted_public_names.insert(property.name().to_string());
