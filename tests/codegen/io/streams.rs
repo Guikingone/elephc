@@ -22202,3 +22202,71 @@ var_dump(file_get_contents('sayobj://'));
         out.diagnostics
     );
 }
+
+/// A bounded `stream_get_contents()` keeps what it READ, not what it was allowed to read.
+///
+/// The accumulation buffer is sized towards the CAP, doubling as chunks land, and the publish that
+/// ends the read can only shrink a SCRATCH window — a heap-backed block keeps whatever it grew to,
+/// and the string handed back owns it. MEASURED through php-src's `streams/bug78326.phpt`:
+/// `stream_get_contents($f, 1000000)` on a ONE-BYTE file, a thousand times, keeps a thousand
+/// one-byte strings in php and a thousand cap-sized blocks here — `Fatal error: heap memory
+/// exhausted` where php answers `int(1000)`.
+///
+/// The threshold was exactly the initial capacity, which is what named the cause: a cap of 8192
+/// was fine and 8193 was not, because only a cap ABOVE it ever grows the buffer at all.
+///
+///     maxlen   1000 iterations, before      after
+///     10       ok                           ok
+///     8192     ok                           ok
+///     16384    heap memory exhausted        ok
+///     1000000  heap memory exhausted        ok
+///
+/// php reallocs down at the end and so does this. The VALUES were never wrong and are asserted
+/// here across the sizes that decide whether the buffer grows at all.
+#[test]
+fn test_a_bounded_read_keeps_only_what_it_read() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$path = __DIR__ . "/sgc_probe.tmp";
+file_put_contents($path, str_repeat("abcdefghij", 3000)); // 30000 bytes
+foreach ([1, 8191, 8192, 8193, 20000, 40000] as $max) {
+    $f = fopen($path, 'r');
+    $got = stream_get_contents($f, $max);
+    echo $max, ":", strlen($got), ":", substr($got, -4), "\n";
+    fclose($f);
+}
+$f = fopen($path, 'r');
+echo "offset:", strlen(stream_get_contents($f, 12000, 5)), "\n";
+fclose($f);
+unlink($path);
+
+// The shape that exhausted the heap: a huge cap over a one-byte stream, a thousand times.
+$tiny = __DIR__ . "/sgc_tiny.tmp";
+$t = fopen($tiny, 'w+');
+fwrite($t, '.');
+$chunks = array();
+for ($i = 0; $i < 1000; ++$i) {
+    rewind($t);
+    $chunks[] = stream_get_contents($t, 1000000);
+}
+fclose($t);
+unlink($tiny);
+echo "kept:", count($chunks), ":", strlen($chunks[0]), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "1:1:a\n",
+            "8191:8191:hija\n",
+            "8192:8192:ijab\n",
+            "8193:8193:jabc\n",
+            "20000:20000:ghij\n",
+            // A cap past the end of the stream reads the stream, not the cap.
+            "40000:30000:ghij\n",
+            "offset:12000\n",
+            "kept:1000:1\n",
+        ),
+    );
+}

@@ -138,6 +138,8 @@ pub use atoi::emit_atoi;
 pub use strcopy::emit_strcopy;
 /// Emit string copy helper.
 pub use concat_scratch::emit_concat_scratch;
+/// The shared concat scratch capacity, for helpers that classify a reservation by address.
+pub(crate) use concat_scratch::CONCAT_BUF_CAPACITY;
 pub use str_persist::emit_str_persist;
 /// Emit string persistence helper.
 pub use str_inc_dec::{emit_mixed_inc_dec, emit_str_inc_dec};

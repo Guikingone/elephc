@@ -16,6 +16,7 @@
 
 use crate::codegen_support::runtime::io::read_failed_notice::READ_FN_NAME_STREAM_GET_CONTENTS;
 use crate::codegen_support::abi::emit_symbol_address;
+use crate::codegen_support::runtime::strings::CONCAT_BUF_CAPACITY;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Initial capacity of the AArch64 read-all accumulator; it doubles as needed.
@@ -339,6 +340,34 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #40]");                                   // final empty chunk pointer
     emitter.instruction("bl __rt_decref_any");                                  // release it if it is heap-backed
     emitter.label("__rt_stream_get_contents_bounded_done");
+    // -- give back the capacity the read did not need --
+    //
+    // The accumulation buffer is sized for the CAP, doubling towards it as chunks land, and the
+    // publish below can only shrink a SCRATCH window: a heap-backed block keeps whatever it grew
+    // to, and the string handed back owns it. MEASURED, php-src's `streams/bug78326.phpt`:
+    // `stream_get_contents($f, 1000000)` on a ONE-BYTE file, a thousand times, keeps a thousand
+    // one-byte strings in php and a thousand cap-sized heap blocks here — `Fatal error: heap
+    // memory exhausted` where php answers `int(1000)`. The threshold was exactly the initial
+    // capacity: a cap of 8192 was fine and 8193 was not, because only a cap ABOVE it ever grows.
+    //
+    // php reallocs down at the end and so does this: `__rt_concat_grow` allocates, copies the
+    // prefix and frees the old block, which shrinks as readily as it grows.
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the accumulation buffer
+    emit_symbol_address(emitter, "x9", "_concat_buf");
+    emitter.instruction("sub x10, x0, x9");                                     // its offset inside the shared scratch, if it is there
+    emitter.instruction(&format!("mov x11, #{}", CONCAT_BUF_CAPACITY));
+    emitter.instruction("cmp x10, x11");                                        // unsigned, so a heap pointer wraps high
+    emitter.instruction("b.lo __rt_sgc_bounded_no_shrink");                     // a scratch window is given back by the publish below
+    emitter.instruction("ldr x11, [sp, #56]");                                  // the capacity it grew to
+    emitter.instruction("ldr x12, [sp, #32]");                                  // the bytes actually accumulated
+    emitter.instruction("cmp x11, x12");
+    emitter.instruction("b.ls __rt_sgc_bounded_no_shrink");                     // already the right size
+    emitter.instruction("mov x1, x12");                                         // preserve every accumulated byte
+    emitter.instruction("cmp x12, #0");
+    emitter.instruction("csinc x2, x12, xzr, ne");                              // and ask for at least one, never a zero-byte block
+    emitter.instruction("bl __rt_concat_grow");                                 // move into a right-sized block, freeing the oversized one
+    emitter.instruction("str x0, [sp, #24]");                                   // the result now lives there
+    emitter.label("__rt_sgc_bounded_no_shrink");
     emitter.instruction("ldr x1, [sp, #24]");                                   // return the accumulation buffer pointer
     emitter.instruction("ldr x2, [sp, #32]");                                   // return the accumulated result length
     emitter.instruction("bl __rt_concat_publish");                              // shrink the claimed window down to the bytes actually accumulated
@@ -607,6 +636,26 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // final empty chunk pointer
     emitter.instruction("call __rt_decref_any");                                // release the empty chunk if it is heap-backed
     emitter.label("__rt_stream_get_contents_bounded_done_x86");
+    // See the AArch64 counterpart for php's rule and the measurement behind it.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the accumulation buffer
+    emit_symbol_address(emitter, "r8", "_concat_buf");
+    emitter.instruction("mov r9, rax");
+    emitter.instruction("sub r9, r8");                                          // its offset inside the shared scratch, if it is there
+    emitter.instruction(&format!("cmp r9, {}", CONCAT_BUF_CAPACITY));           // unsigned, so a heap pointer wraps high
+    emitter.instruction("jb __rt_sgc_bounded_no_shrink_x86");                   // a scratch window is given back by the publish below
+    emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // the capacity it grew to
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // the bytes actually accumulated
+    emitter.instruction("cmp r10, r11");
+    emitter.instruction("jbe __rt_sgc_bounded_no_shrink_x86");                  // already the right size
+    emitter.instruction("mov rdi, r11");                                        // preserve every accumulated byte
+    emitter.instruction("mov rsi, r11");                                        // and ask for exactly that many…
+    emitter.instruction("test rsi, rsi");
+    emitter.instruction("jnz __rt_sgc_bounded_shrink_x86");
+    emitter.instruction("mov rsi, 1");                                          // …never a zero-byte block
+    emitter.label("__rt_sgc_bounded_shrink_x86");
+    emitter.instruction("call __rt_concat_grow");                               // move into a right-sized block, freeing the oversized one
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // the result now lives there
+    emitter.label("__rt_sgc_bounded_no_shrink_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return the accumulation buffer pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // return the accumulated result length
     emitter.instruction("call __rt_concat_publish");                            // shrink the claimed window down to the bytes actually accumulated
