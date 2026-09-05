@@ -30683,6 +30683,51 @@ echo class_exists('MissingWithoutAutoload', false) ? 'yes' : 'no', '|';
     assert_eq!(out, "loader:MissingWithAutoload|no|no|done");
 }
 
+/// Verifies `interface_exists()`, `trait_exists()` and `enum_exists()` run the same loader chain.
+///
+/// Oracle: `php -n` 8.5.6 prints `iface=y;trait=y;enum=y;calls=1;noAuto=n;callsAfter=1;done`. PHP
+/// keeps ONE callback registry for classes, interfaces, traits and enums, and all four probes ask
+/// it: the loader runs once here because the file it includes declares all three symbols, and the
+/// `false` form never asks. These three evaluated their `$autoload` argument and then threw it
+/// away, so an optional Symfony component that is present but not yet loaded answered false —
+/// `interface_exists()` is what every DI pass calls to decide whether a component is installed.
+#[test]
+fn test_interface_trait_and_enum_exists_run_the_registered_loaders() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "lazy.php",
+                "<?php\ninterface ProbeLazyIface {}\ntrait ProbeLazyTrait {}\nenum ProbeLazyEnum { case Ready; }\n",
+            ),
+            (
+                "loaded.php",
+                r#"<?php
+$calls = 0;
+spl_autoload_register(function ($name) use (&$calls) {
+    $calls = $calls + 1;
+    include __DIR__ . '/lazy.php';
+});
+echo 'iface=', interface_exists('ProbeLazyIface') ? 'y' : 'n', ';';
+echo 'trait=', trait_exists('ProbeLazyTrait') ? 'y' : 'n', ';';
+echo 'enum=', enum_exists('ProbeLazyEnum') ? 'y' : 'n', ';';
+echo 'calls=', $calls, ';';
+echo 'noAuto=', interface_exists('ProbeNeverIface', false) ? 'y' : 'n', ';';
+echo 'callsAfter=', $calls, ';';
+"#,
+            ),
+            (
+                "main.php",
+                "<?php\n$path = __DIR__ . '/loaded.php';\ninclude $path;\necho 'done';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "iface=y;trait=y;enum=y;calls=1;noAuto=n;callsAfter=1;done"
+    );
+}
+
 /// Verifies a Throwable raised inside an autoloader reaches the interpreted code that asked.
 ///
 /// Oracle: `php -n` 8.5.6 prints the asserted line and exits 0. This is Symfony's
