@@ -208,7 +208,7 @@ fn validate_instruction_placement(function: &Function) -> Result<(), ValidationE
 /// Validates instruction operands, result metadata, immediates, effects, and dominance.
 fn validate_instructions(
     function: &Function,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         for (index, inst_id) in block.instructions.iter().enumerate() {
@@ -409,7 +409,7 @@ fn validate_instruction_operands(
     inst_index: u32,
     _inst_id: InstId,
     inst: &Instruction,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     for operand in &inst.operands {
         validate_use(function, *operand, block, Some(inst_index), dominators)?;
@@ -975,7 +975,7 @@ fn check_first_heap(
 /// Validates all block terminators and their CFG edge argument contracts.
 fn validate_terminators(
     function: &Function,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         let Some(term) = &block.terminator else {
@@ -1046,7 +1046,7 @@ fn validate_switch_case(
     function: &Function,
     source_block: BlockId,
     case: &SwitchCase,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     validate_branch_args(function, case.target, &case.args)?;
     validate_terminator_uses(function, source_block, &case.args, dominators)
@@ -1057,7 +1057,7 @@ fn validate_return(
     function: &Function,
     block: BlockId,
     value: Option<ValueId>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     if matches!(function.return_php_type, PhpType::Never) {
         return Err(ValidationError::NeverFunctionReturns);
@@ -1096,7 +1096,7 @@ fn validate_terminator_uses(
     function: &Function,
     block: BlockId,
     values: &[ValueId],
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     for value in values {
         validate_use(function, *value, block, None, dominators)?;
@@ -1173,7 +1173,7 @@ fn validate_use(
     value: ValueId,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> Result<(), ValidationError> {
     let Some(value_ref) = function.value(value) else {
         return Err(ValidationError::UnknownValue(value));
@@ -1196,23 +1196,16 @@ fn definition_dominates_use(
     def: ValueDef,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &Dominators,
 ) -> bool {
     match def {
         ValueDef::BlockParam { block, .. } => {
-            block == use_block
-                || dominators
-                    .get(&use_block)
-                    .map(|set| set.contains(&block))
-                    .unwrap_or(false)
+            block == use_block || dominators.dominates(block, use_block)
         }
         ValueDef::Instruction { block, index, .. } if block == use_block => use_inst_index
             .map(|use_index| index < use_index)
             .unwrap_or(true),
-        ValueDef::Instruction { block, .. } => dominators
-            .get(&use_block)
-            .map(|set| set.contains(&block))
-            .unwrap_or(false),
+        ValueDef::Instruction { block, .. } => dominators.dominates(block, use_block),
     }
 }
 
@@ -1228,7 +1221,7 @@ fn definition_dominates_use(
 /// a later pass forwards into the loop. Unreachable blocks themselves still
 /// resolve to `{self}` (no reachable predecessor), so genuine uses inside dead
 /// code remain flagged until they are neutralized.
-fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
+fn compute_dominators(function: &Function) -> Dominators {
     let predecessors = compute_predecessors(function);
     let reachable = reachable_from_entry(function, &predecessors);
     let block_count = function.blocks.len();
@@ -1261,7 +1254,7 @@ fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>>
             }
         }
     }
-    dominator_bitsets_to_map(function, &dominators)
+    Dominators { bitsets: dominators }
 }
 
 /// Converts reachable predecessor block ids into dense block indices for bitset dominator scans.
@@ -1324,22 +1317,56 @@ fn bitset_and_assign(left: &mut [u64], right: &[u64]) {
     }
 }
 
-/// Converts dense dominator bitsets back to the validator's public block-id map.
-fn dominator_bitsets_to_map(
-    function: &Function,
-    dominators: &[Vec<u64>],
-) -> HashMap<BlockId, HashSet<BlockId>> {
-    let mut map = HashMap::with_capacity(function.blocks.len());
-    for (block_index, block) in function.blocks.iter().enumerate() {
-        let mut set = HashSet::new();
-        for (candidate_index, candidate) in function.blocks.iter().enumerate() {
-            if block_bit_is_set(&dominators[block_index], candidate_index) {
-                set.insert(candidate.id);
-            }
-        }
-        map.insert(block.id, set);
+/// Dominator sets for one function, kept as the dense per-block bitsets the fixed point
+/// already computes.
+///
+/// The fixed point below produces one `Vec<u64>` bitset per block, indexed by block index;
+/// `validate_function_shape` has already proven `blocks[i].id == BlockId::from_raw(i)` before
+/// `compute_dominators` runs, so a block id IS its bitset index. The validator only ever asks
+/// one question of this structure — "does A dominate B?" — which the bitset answers with one
+/// bounds-checked load and a shift.
+///
+/// This used to be materialized into a `HashMap<BlockId, HashSet<BlockId>>` by walking every
+/// (block, candidate) pair, i.e. O(blocks^2) SipHash insertions per validated function, on a
+/// path `validate_lowered_module` takes unconditionally in release. The map was never mutated
+/// and never iterated: only `definition_dominates_use` read it, one membership test at a time.
+struct Dominators {
+    /// One dominator bitset per block, addressed by block index.
+    bitsets: Vec<Vec<u64>>,
+}
+
+impl Dominators {
+    /// Returns whether `candidate` is in `block`'s dominator set.
+    ///
+    /// Out-of-range ids answer `false` on both sides, which is exactly what the
+    /// `HashMap::get(..).map(|set| set.contains(..)).unwrap_or(false)` chain this replaces did:
+    /// the map only ever held keys for real blocks, and a set only ever held real block ids
+    /// (`set_block_bit` is called only with in-range indices, and the trailing bits of the last
+    /// word are masked out of `full_block_bitset`, so a padding bit is never set).
+    fn dominates(&self, candidate: BlockId, block: BlockId) -> bool {
+        self.bitsets
+            .get(block.as_raw() as usize)
+            .is_some_and(|bits| block_bit_is_set(bits, candidate.as_raw() as usize))
     }
-    map
+
+    /// Materializes the block-id map this analysis used to return.
+    ///
+    /// Test-only: it exists so the bitset accessor can be differentially compared against the
+    /// shape it replaced, on the same function, for every (block, candidate) pair.
+    #[cfg(test)]
+    fn to_block_id_map(&self, function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
+        let mut map = HashMap::with_capacity(function.blocks.len());
+        for (block_index, block) in function.blocks.iter().enumerate() {
+            let mut set = HashSet::new();
+            for (candidate_index, candidate) in function.blocks.iter().enumerate() {
+                if block_bit_is_set(&self.bitsets[block_index], candidate_index) {
+                    set.insert(candidate.id);
+                }
+            }
+            map.insert(block.id, set);
+        }
+        map
+    }
 }
 
 /// Returns whether a block index is present in a dominator bitset.
@@ -1448,5 +1475,177 @@ fn ownership_compatible(ir_type: IrType, php_type: &PhpType, ownership: Ownershi
         !matches!(ownership, Ownership::NonHeap)
     } else {
         matches!(ownership, Ownership::NonHeap)
+    }
+}
+
+#[cfg(test)]
+mod dominator_bitset_tests {
+    use super::*;
+    use crate::ir::Builder;
+
+    /// Asserts the bitset accessor and the block-id map it replaced answer identically for
+    /// every ordered pair of blocks in `function`.
+    fn assert_old_and_new_agree(function: &Function) {
+        let dominators = compute_dominators(function);
+        let map = dominators.to_block_id_map(function);
+        for block in &function.blocks {
+            for candidate in &function.blocks {
+                let old = map
+                    .get(&block.id)
+                    .map(|set| set.contains(&candidate.id))
+                    .unwrap_or(false);
+                let new = dominators.dominates(candidate.id, block.id);
+                assert_eq!(
+                    old, new,
+                    "dominates({:?}, {:?}) disagrees with the block-id map",
+                    candidate.id, block.id
+                );
+            }
+        }
+        // An id past the last block answers false on both sides, as the map lookup did.
+        let past_end = BlockId::from_raw(function.blocks.len() as u32);
+        assert!(!dominators.dominates(past_end, function.entry));
+        assert!(!dominators.dominates(function.entry, past_end));
+    }
+
+    /// Builds a four-block diamond: `entry` branches to `then`/`els`, both branch to `merge`.
+    fn diamond() -> Function {
+        let mut function = Function::new("diamond".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            let then_block = builder.create_named_block("then", vec![]);
+            let else_block = builder.create_named_block("els", vec![]);
+            let merge = builder.create_named_block("merge", vec![]);
+            builder.set_entry(entry);
+
+            builder.position_at_end(entry);
+            let cond = builder.emit_const_i64(1);
+            builder.terminate(Terminator::CondBr {
+                cond,
+                then_target: then_block,
+                then_args: vec![],
+                else_target: else_block,
+                else_args: vec![],
+            });
+
+            builder.position_at_end(then_block);
+            builder.terminate(Terminator::Br {
+                target: merge,
+                args: vec![],
+            });
+
+            builder.position_at_end(else_block);
+            builder.terminate(Terminator::Br {
+                target: merge,
+                args: vec![],
+            });
+
+            builder.position_at_end(merge);
+            let result = builder.emit_const_i64(0);
+            builder.terminate(Terminator::Return {
+                value: Some(result),
+            });
+        }
+        function
+    }
+
+    /// Builds a four-block loop: `entry -> header`, `header -> body | exit`, `body -> header`.
+    fn loop_with_backedge() -> Function {
+        let mut function = Function::new("looped".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            let header = builder.create_named_block("header", vec![]);
+            let body = builder.create_named_block("body", vec![]);
+            let exit = builder.create_named_block("exit", vec![]);
+            builder.set_entry(entry);
+
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Br {
+                target: header,
+                args: vec![],
+            });
+
+            builder.position_at_end(header);
+            let cond = builder.emit_const_i64(1);
+            builder.terminate(Terminator::CondBr {
+                cond,
+                then_target: body,
+                then_args: vec![],
+                else_target: exit,
+                else_args: vec![],
+            });
+
+            builder.position_at_end(body);
+            builder.terminate(Terminator::Br {
+                target: header,
+                args: vec![],
+            });
+
+            builder.position_at_end(exit);
+            let result = builder.emit_const_i64(0);
+            builder.terminate(Terminator::Return {
+                value: Some(result),
+            });
+        }
+        function
+    }
+
+    /// Pins the diamond's dominance facts so the differential comparison cannot pass by both
+    /// sides being wrong in the same way.
+    #[test]
+    fn diamond_dominance_facts_are_pinned() {
+        let function = diamond();
+        let dominators = compute_dominators(&function);
+        let entry = function.blocks[0].id;
+        let then_block = function.blocks[1].id;
+        let else_block = function.blocks[2].id;
+        let merge = function.blocks[3].id;
+        assert!(dominators.dominates(entry, merge), "entry dominates the merge");
+        assert!(dominators.dominates(merge, merge), "dominance is reflexive");
+        assert!(
+            !dominators.dominates(then_block, merge),
+            "one arm never dominates the merge"
+        );
+        assert!(
+            !dominators.dominates(else_block, merge),
+            "one arm never dominates the merge"
+        );
+        assert!(
+            !dominators.dominates(merge, entry),
+            "a successor never dominates the entry"
+        );
+    }
+
+    /// The bitset accessor answers exactly what the materialized map answered, on a diamond.
+    #[test]
+    fn diamond_dominance_matches_the_block_id_map() {
+        assert_old_and_new_agree(&diamond());
+    }
+
+    /// The bitset accessor answers exactly what the materialized map answered, on a loop whose
+    /// back edge exercises the fixed point's intersection step.
+    #[test]
+    fn loop_dominance_matches_the_block_id_map() {
+        let function = loop_with_backedge();
+        assert_old_and_new_agree(&function);
+        let dominators = compute_dominators(&function);
+        let entry = function.blocks[0].id;
+        let header = function.blocks[1].id;
+        let body = function.blocks[2].id;
+        let exit = function.blocks[3].id;
+        assert!(
+            dominators.dominates(entry, body),
+            "the entry dominates the loop body"
+        );
+        assert!(
+            dominators.dominates(header, exit),
+            "the header dominates the loop exit"
+        );
+        assert!(
+            !dominators.dominates(body, header),
+            "the back edge does not dominate the header"
+        );
     }
 }
