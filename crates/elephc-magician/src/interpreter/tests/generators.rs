@@ -265,6 +265,181 @@ foreach ($g() as $v) { echo $v; }"#
     );
 }
 
+/// Verifies a `finally` runs after a `try` body that yielded and completed.
+///
+/// `php -n` 8.5.6 prints `abfin;after;`: both values come out of the try body, the finally runs
+/// when the body ends, and the statement after the try still runs.
+#[test]
+fn a_finally_runs_after_a_try_body_that_yielded() {
+    assert_eq!(
+        out(
+            br#"function t1() {
+    try { yield 'a'; yield 'b'; } finally { echo "fin;"; }
+    echo "after;";
+}
+foreach (t1() as $v) { echo $v; }"#
+        ),
+        "abfin;after;",
+    );
+}
+
+/// Verifies a throw raised after a resumption reaches the catch clause covering it.
+///
+/// `php -n` 8.5.6 prints `1,caught:boom;3,fin;`: the generator suspends inside the `try`, the
+/// throw on the NEXT resumption is caught by the clause that was open when it suspended, the
+/// catch body yields in its turn, and the finally runs last.
+#[test]
+fn a_throw_after_a_resumption_reaches_the_catch_that_covered_the_yield() {
+    assert_eq!(
+        out(
+            br#"function t2() {
+    try { yield 1; throw new RuntimeException("boom"); yield 2; }
+    catch (RuntimeException $e) { echo "caught:"; echo $e->getMessage(); echo ";"; yield 3; }
+    finally { echo "fin;"; }
+}
+foreach (t2() as $v) { echo $v; echo ","; }"#
+        ),
+        "1,caught:boom;3,fin;",
+    );
+}
+
+/// Verifies an unmatched throw runs the `finally` and then carries on outward.
+///
+/// `php -n` 8.5.6 prints `1fin;` and then the exception escapes the generator uncaught.
+#[test]
+fn an_unmatched_throw_runs_the_finally_before_leaving_the_generator() {
+    let (output, status) = throws(
+        br#"function t9() {
+    try { yield 1; throw new RuntimeException("boom"); }
+    catch (LogicException $e) { echo "wrong;"; }
+    finally { echo "fin;"; }
+}
+foreach (t9() as $v) { echo $v; }"#,
+    );
+    assert_eq!(output, "1fin;");
+    assert_eq!(status, EvalStatus::UncaughtThrowable);
+}
+
+/// Verifies a `try` opened inside a loop runs its `finally` on every pass.
+///
+/// `php -n` 8.5.6 prints `1f1;2f2;`.
+#[test]
+fn a_try_inside_a_loop_runs_its_finally_every_pass() {
+    assert_eq!(
+        out(
+            br#"function t7() {
+    foreach ([1, 2] as $i) {
+        try { yield $i; } finally { echo "f"; echo $i; echo ";"; }
+    }
+}
+foreach (t7() as $v) { echo $v; }"#
+        ),
+        "1f1;2f2;",
+    );
+}
+
+/// Verifies a `return` inside a `try` runs the `finally` and still reports its value.
+///
+/// `php -n` 8.5.6 prints `1fin8;ret=R`: the returned expression is evaluated first, the finally
+/// runs next, and `getReturn()` still answers what the `return` computed.
+#[test]
+fn a_return_inside_a_try_runs_the_finally_and_keeps_its_value() {
+    assert_eq!(
+        out(
+            br#"function t8() {
+    try { yield 1; return 'R'; } finally { echo "fin8;"; }
+}
+$g = t8();
+foreach ($g as $v) { echo $v; }
+echo "ret="; echo $g->getReturn();"#
+        ),
+        "1fin8;ret=R",
+    );
+}
+
+/// Verifies a `break` out of a loop runs the `finally` of the `try` it leaves.
+///
+/// `php -n` 8.5.6 prints `1fin;|after` for the same shape: leaving the loop leaves the try, so
+/// its finally runs on the way out.
+#[test]
+fn a_break_out_of_a_try_inside_a_loop_runs_the_finally() {
+    assert_eq!(
+        out(
+            br#"function t10() {
+    foreach ([1, 2] as $i) {
+        try { yield $i; if ($i == 1) { break; } } finally { echo "fin;"; }
+    }
+    echo "|after";
+}
+foreach (t10() as $v) { echo $v; }"#
+        ),
+        "1fin;|after",
+    );
+}
+
+/// Verifies abandoning a generator mid-iteration still runs the `finally` it was suspended in.
+///
+/// `php -n` 8.5.6 prints `1fin3;|after` for this shape: dropping the last reference to a
+/// suspended generator runs the `finally` of the `try` its yield was inside.
+///
+/// The reference is dropped with `unset` rather than by abandoning a `foreach`, because a
+/// `foreach` subject that is a temporary is never released by the loop at all — a pre-existing
+/// ownership gap that predates generators and would make this test measure that instead.
+#[test]
+fn abandoning_a_generator_runs_the_finally_it_was_suspended_in() {
+    assert_eq!(
+        out(
+            br#"function t3() {
+    try { yield 1; yield 2; } finally { echo "fin3;"; }
+}
+$g = t3();
+echo $g->current();
+unset($g);
+echo "|after";"#
+        ),
+        "1fin3;|after",
+    );
+}
+
+/// Verifies nested `finally` blocks run innermost first when a generator is abandoned.
+///
+/// `php -n` 8.5.6 prints `1inner;outer;|after2`.
+#[test]
+fn abandoning_a_generator_unwinds_nested_finallys_innermost_first() {
+    assert_eq!(
+        out(
+            br#"function nested() {
+    try { try { yield 1; } finally { echo "inner;"; } } finally { echo "outer;"; }
+}
+$h = nested();
+echo $h->current();
+unset($h);
+echo "|after2";"#
+        ),
+        "1inner;outer;|after2",
+    );
+}
+
+/// Verifies a generator that never started runs no `finally` when it is destroyed.
+///
+/// `php -n` 8.5.6 prints `created;|after3`: the body never entered the `try`, so there is
+/// nothing to unwind.
+#[test]
+fn destroying_a_generator_that_never_started_runs_no_finally() {
+    assert_eq!(
+        out(
+            br#"function unfinished() {
+    try { yield 1; } finally { echo "never-abandoned;"; }
+}
+$g = unfinished();
+echo "created;";
+unset($g);
+echo "|after3";"#
+        ),
+        "created;|after3",
+    );
+}
+
 /// Verifies a `switch` inside a generator matches, falls through and breaks as PHP does.
 ///
 /// `php -n` 8.5.6 prints `two,two-b,end,|other,end,` — the matched arm runs, `break` leaves the

@@ -92,8 +92,25 @@ pub(super) fn eval_dynamic_destructor_for_release(
     eval_dynamic_destructor_for_object_cell(identity, object, context, values).map(|_| ())
 }
 
-/// Calls a dynamic eval `__destruct()` hook for an already-boxed object cell.
+/// Runs whatever a released eval object owes before the runtime frees it.
+///
+/// A Generator owes the `finally` blocks of every `try` it is still suspended inside, which is
+/// how PHP answers an abandoned `foreach`; an ordinary dynamic object owes its `__destruct()`.
 pub(crate) fn eval_dynamic_destructor_for_object_cell(
+    identity: u64,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if context.has_eval_generator(identity) {
+        eval_generator_finalize(identity, context, values)?;
+        return Ok(true);
+    }
+    eval_dynamic_destruct_method_for_object_cell(identity, object, context, values)
+}
+
+/// Calls a dynamic eval `__destruct()` hook for an already-boxed object cell.
+fn eval_dynamic_destruct_method_for_object_cell(
     identity: u64,
     object: RuntimeCellHandle,
     context: &mut ElephcEvalContext,

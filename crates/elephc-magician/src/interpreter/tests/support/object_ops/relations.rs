@@ -14,6 +14,8 @@ pub(super) fn fake_runtime_exception_like_class(class_name: &str) -> bool {
         "Exception",
         "JsonException",
         "ReflectionException",
+        "RuntimeException",
+        "LogicException",
         "Error",
         "ArithmeticError",
         "DivisionByZeroError",
@@ -60,7 +62,13 @@ pub(super) fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exc
         return fake_runtime_exception_like_class(class_name);
     }
     if target_class.eq_ignore_ascii_case("Exception") {
-        return ["Exception", "JsonException", "ReflectionException"]
+        return [
+            "Exception",
+            "JsonException",
+            "ReflectionException",
+            "RuntimeException",
+            "LogicException",
+        ]
             .iter()
             .any(|known| class_name.eq_ignore_ascii_case(known));
     }

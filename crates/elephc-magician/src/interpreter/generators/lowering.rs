@@ -24,6 +24,12 @@ use crate::parser::{EVAL_YIELD_FROM_INTRINSIC, EVAL_YIELD_INTRINSIC};
 /// not part of it and PHP identifiers cannot contain a NUL.
 pub(super) const EVAL_GENERATOR_SENT_SLOT: &str = "\0generator\0sent";
 
+/// The reserved scope name a `return` inside a `try` parks its value in.
+///
+/// PHP evaluates the returned expression before running the `finally` blocks, so the value has
+/// to survive them rather than be recomputed after.
+const EVAL_GENERATOR_RETURN_SLOT: &str = "\0generator\0return";
+
 /// Lowers one function body, or refuses a yield this lowering does not model.
 pub(super) fn lower_generator_body(
     body: &[EvalStmt],
@@ -33,6 +39,8 @@ pub(super) fn lower_generator_body(
         loops: Vec::new(),
         foreach_slots: 0,
         subject_slots: 0,
+        thrown_slots: 0,
+        regions: Vec::new(),
     };
     lowering.lower_statements(body)?;
     lowering.steps.push(EvalGeneratorStep::Return(None));
@@ -51,6 +59,9 @@ struct LoopLabels {
     /// PHP counts a switch as one level for BOTH keywords and makes `continue` inside a switch
     /// behave like `break`, so a continue that lands here takes the break edge.
     is_switch: bool,
+    /// How many `try` regions were open when this level opened, so an exit knows how many
+    /// `finally` blocks it has to run on the way out.
+    region_depth: usize,
 }
 
 /// Accumulates the step list while walking the body.
@@ -60,6 +71,10 @@ struct Lowering {
     foreach_slots: usize,
     /// Number of `switch` and `match` subjects lowered so far, used to name their scope slots.
     subject_slots: usize,
+    /// Number of `try` regions opened so far, used to name their thrown-value slots.
+    thrown_slots: usize,
+    /// The `finally` body of every `try` region currently open, innermost last.
+    regions: Vec<Vec<EvalStmt>>,
 }
 
 /// Returns the reserved scope name holding one lowered `switch` or `match` subject.
@@ -76,7 +91,7 @@ impl Lowering {
     fn lower_statements(&mut self, body: &[EvalStmt]) -> Result<(), EvalStatus> {
         let mut pending: Vec<EvalStmt> = Vec::new();
         for statement in body {
-            if statement_needs_lowering(statement) {
+            if self.statement_needs_lowering_here(statement) {
                 self.flush(&mut pending);
                 self.lower_statement(statement)?;
             } else {
@@ -85,6 +100,15 @@ impl Lowering {
         }
         self.flush(&mut pending);
         Ok(())
+    }
+
+    /// Returns whether this statement must be lowered where it currently stands.
+    ///
+    /// Inside a `try`, a `return` is one of them even with no yield in sight: run atomically it
+    /// would finish the generator straight from the chunk and PHP's `finally` would never run.
+    fn statement_needs_lowering_here(&self, statement: &EvalStmt) -> bool {
+        (!self.regions.is_empty() && statement_contains_return(statement))
+            || statement_needs_lowering(statement)
     }
 
     /// Emits the batched yield-free statements as one atomic step.
@@ -103,14 +127,12 @@ impl Lowering {
             EvalStmt::Return(Some(expr)) if expression_contains_yield(expr) => {
                 let slot = EVAL_GENERATOR_SENT_SLOT.to_string();
                 self.lower_yield_expr(expr, Some(slot.clone()))?;
+                self.unwind_regions_to(0)?;
                 self.steps
                     .push(EvalGeneratorStep::Return(Some(EvalExpr::LoadVar(slot))));
                 Ok(())
             }
-            EvalStmt::Return(value) => {
-                self.steps.push(EvalGeneratorStep::Return(value.clone()));
-                Ok(())
-            }
+            EvalStmt::Return(value) => self.lower_return(value.as_ref()),
             EvalStmt::Break(level) => self.lower_loop_exit(*level, true),
             EvalStmt::Continue(level) => self.lower_loop_exit(*level, false),
             EvalStmt::If {
@@ -134,10 +156,185 @@ impl Lowering {
                 body,
             } => self.lower_foreach(array, key_name.as_deref(), value_name, *value_by_ref, body),
             EvalStmt::Switch { expr, cases } => self.lower_switch(expr, cases),
-            // A `yield` inside `try` needs the frame to model handler state, which this lowering
-            // does not do yet. Refusing keeps a half-modelled suspension from silently skipping
-            // a `finally`.
+            EvalStmt::Try {
+                body,
+                catches,
+                finally_body,
+            } => self.lower_try(body, catches, finally_body),
             _ => Err(EvalStatus::UnsupportedConstruct),
+        }
+    }
+
+    /// Lowers a `try`/`catch`/`finally` whose body, handlers or finally contain a yield.
+    ///
+    /// The region is data on the frame rather than a Rust stack frame, so a generator suspended
+    /// inside a `try` still knows which handler covers it when something resumes it later. The
+    /// `finally` body is emitted once per EXIT EDGE — normal completion, each catch clause, and
+    /// the unhandled path — because PHP runs it on every one of them and a shared copy would
+    /// need a return address the step list has nowhere to put.
+    fn lower_try(
+        &mut self,
+        body: &[EvalStmt],
+        catches: &[EvalCatch],
+        finally_body: &[EvalStmt],
+    ) -> Result<(), EvalStatus> {
+        let body_slot = self.next_thrown_slot();
+        let enter = self.steps.len();
+        self.steps.push(EvalGeneratorStep::EnterTry {
+            handler: usize::MAX,
+            finally_entry: usize::MAX,
+            thrown_slot: body_slot.clone(),
+        });
+        self.regions.push(finally_body.to_vec());
+        self.lower_statements(body)?;
+        self.regions.pop();
+        self.steps.push(EvalGeneratorStep::LeaveTry);
+        self.lower_statements(finally_body)?;
+        let mut to_after = vec![self.steps.len()];
+        self.steps.push(EvalGeneratorStep::Jump(usize::MAX));
+
+        let handler = self.steps.len();
+        self.patch_enter_try(enter, handler);
+        // A throw from inside a catch body still has to run the `finally`, so the dispatch runs
+        // inside a region of its own.
+        let catch_slot = self.next_thrown_slot();
+        let catch_enter = self.steps.len();
+        self.steps.push(EvalGeneratorStep::EnterTry {
+            handler: usize::MAX,
+            finally_entry: usize::MAX,
+            thrown_slot: catch_slot.clone(),
+        });
+        let mut body_patches: Vec<Vec<usize>> = Vec::new();
+        for catch in catches {
+            let mut matched: Vec<usize> = Vec::new();
+            for class_name in &catch.class_names {
+                let skip = self.steps.len();
+                self.steps.push(EvalGeneratorStep::JumpIfFalse {
+                    condition: EvalExpr::InstanceOf {
+                        value: Box::new(EvalExpr::LoadVar(body_slot.clone())),
+                        target: EvalInstanceOfTarget::ClassName(class_name.clone()),
+                    },
+                    target: usize::MAX,
+                });
+                matched.push(self.steps.len());
+                self.steps.push(EvalGeneratorStep::Jump(usize::MAX));
+                let next_test = self.steps.len();
+                self.patch_jump(skip, next_test);
+            }
+            body_patches.push(matched);
+        }
+        // No clause matched: leave the catch region, run the finally, and raise onward.
+        self.steps.push(EvalGeneratorStep::LeaveTry);
+        self.lower_statements(finally_body)?;
+        self.steps.push(EvalGeneratorStep::Rethrow {
+            thrown_slot: body_slot.clone(),
+        });
+
+        let mut body_starts: Vec<usize> = Vec::new();
+        for catch in catches {
+            body_starts.push(self.steps.len());
+            if let Some(var_name) = &catch.var_name {
+                self.steps.push(EvalGeneratorStep::Run(vec![EvalStmt::StoreVar {
+                    name: var_name.clone(),
+                    value: EvalExpr::LoadVar(body_slot.clone()),
+                }]));
+            }
+            self.regions.push(finally_body.to_vec());
+            self.lower_statements(&catch.body)?;
+            self.regions.pop();
+            self.steps.push(EvalGeneratorStep::LeaveTry);
+            self.lower_statements(finally_body)?;
+            to_after.push(self.steps.len());
+            self.steps.push(EvalGeneratorStep::Jump(usize::MAX));
+        }
+
+        let catch_handler = self.steps.len();
+        self.patch_enter_try(catch_enter, catch_handler);
+        self.lower_statements(finally_body)?;
+        self.steps.push(EvalGeneratorStep::Rethrow {
+            thrown_slot: catch_slot,
+        });
+
+        // A generator destroyed while suspended inside this region runs its `finally` from here,
+        // which is why the block is emitted a last time with no exit edge of its own.
+        let unwind = self.steps.len();
+        self.lower_statements(finally_body)?;
+        self.steps.push(EvalGeneratorStep::EndUnwind);
+        self.patch_finally_entry(enter, unwind);
+        self.patch_finally_entry(catch_enter, unwind);
+
+        let after = self.steps.len();
+        for (patches, start) in body_patches.into_iter().zip(body_starts) {
+            for patch in patches {
+                self.patch_jump(patch, start);
+            }
+        }
+        for patch in to_after {
+            self.patch_jump(patch, after);
+        }
+        Ok(())
+    }
+
+    /// Lowers a `return`, running the `finally` of every `try` region it leaves.
+    ///
+    /// PHP evaluates the returned expression FIRST and only then runs the finally blocks, so the
+    /// value is parked in a reserved slot rather than re-evaluated after them: a `finally` that
+    /// changes what the expression reads must not change what was already returned.
+    fn lower_return(&mut self, value: Option<&EvalExpr>) -> Result<(), EvalStatus> {
+        if self.regions.is_empty() {
+            self.steps.push(EvalGeneratorStep::Return(value.cloned()));
+            return Ok(());
+        }
+        let Some(value) = value else {
+            self.unwind_regions_to(0)?;
+            self.steps.push(EvalGeneratorStep::Return(None));
+            return Ok(());
+        };
+        let slot = EVAL_GENERATOR_RETURN_SLOT.to_string();
+        self.steps.push(EvalGeneratorStep::Run(vec![EvalStmt::StoreVar {
+            name: slot.clone(),
+            value: value.clone(),
+        }]));
+        self.unwind_regions_to(0)?;
+        self.steps
+            .push(EvalGeneratorStep::Return(Some(EvalExpr::LoadVar(slot))));
+        Ok(())
+    }
+
+    /// Returns a fresh reserved scope name for one `try` region's thrown value.
+    fn next_thrown_slot(&mut self) -> String {
+        let slot = format!("\0generator\0thrown\0{}", self.thrown_slots);
+        self.thrown_slots += 1;
+        slot
+    }
+
+    /// Emits the `LeaveTry` and `finally` copies for every region left by an early exit.
+    ///
+    /// PHP runs a `finally` when control jumps out of its `try`, so a `return`, `break` or
+    /// `continue` that crosses one has to carry the block with it. `depth` is the number of
+    /// regions that stay open.
+    fn unwind_regions_to(&mut self, depth: usize) -> Result<(), EvalStatus> {
+        // The region stack itself is NOT popped: the lowering keeps emitting code that is still
+        // lexically inside these regions, and only the jump about to be emitted leaves them.
+        let bodies: Vec<Vec<EvalStmt>> = self.regions[depth..].iter().rev().cloned().collect();
+        for finally_body in bodies {
+            self.steps.push(EvalGeneratorStep::LeaveTry);
+            self.lower_statements(&finally_body)?;
+        }
+        Ok(())
+    }
+
+    /// Points one emitted `EnterTry` at its catch dispatch.
+    fn patch_enter_try(&mut self, index: usize, target: usize) {
+        if let Some(EvalGeneratorStep::EnterTry { handler, .. }) = self.steps.get_mut(index) {
+            *handler = target;
+        }
+    }
+
+    /// Points one emitted `EnterTry` at its destruction-time `finally` copy.
+    fn patch_finally_entry(&mut self, index: usize, target: usize) {
+        if let Some(EvalGeneratorStep::EnterTry { finally_entry, .. }) = self.steps.get_mut(index) {
+            *finally_entry = target;
         }
     }
 
@@ -191,6 +388,7 @@ impl Lowering {
             continue_patches: Vec::new(),
             break_patches: Vec::new(),
             is_switch: true,
+            region_depth: self.regions.len(),
         });
         let mut body_starts: Vec<usize> = Vec::new();
         for case in cases {
@@ -369,6 +567,9 @@ impl Lowering {
             return Err(EvalStatus::UnsupportedConstruct);
         }
         let index = depth - level;
+        // Leaving a loop or switch also leaves every `try` opened inside it, and PHP runs each
+        // of their `finally` blocks on the way out.
+        self.unwind_regions_to(self.loops[index].region_depth)?;
         let patch = self.steps.len();
         self.steps.push(EvalGeneratorStep::Jump(usize::MAX));
         // PHP counts a `switch` as one level for `continue` too, and a `continue` that lands on
@@ -425,6 +626,7 @@ impl Lowering {
             continue_patches: Vec::new(),
             break_patches: Vec::new(),
             is_switch: false,
+            region_depth: self.regions.len(),
         });
         self.lower_statements(body)?;
         self.steps.push(EvalGeneratorStep::Jump(top));
@@ -445,6 +647,7 @@ impl Lowering {
             continue_patches: Vec::new(),
             break_patches: Vec::new(),
             is_switch: false,
+            region_depth: self.regions.len(),
         });
         self.lower_statements(body)?;
         let test = self.steps.len();
@@ -483,6 +686,7 @@ impl Lowering {
             continue_patches: Vec::new(),
             break_patches: Vec::new(),
             is_switch: false,
+            region_depth: self.regions.len(),
         });
         self.lower_statements(body)?;
         let continue_target = self.steps.len();
@@ -530,6 +734,7 @@ impl Lowering {
             continue_patches: Vec::new(),
             break_patches: Vec::new(),
             is_switch: false,
+            region_depth: self.regions.len(),
         });
         self.lower_statements(body)?;
         self.steps.push(EvalGeneratorStep::Jump(top));
@@ -570,6 +775,44 @@ impl Lowering {
 /// `continue` that would otherwise escape the atomic chunk it was batched into.
 fn statement_needs_lowering(statement: &EvalStmt) -> bool {
     statement_escapes_with_loop_exit(statement, 0) || statement_contains_yield(statement)
+}
+
+/// Returns whether a `return` appears anywhere inside this statement.
+///
+/// A closure body is not searched: it belongs to another function, and its `return` never leaves
+/// the generator. Statements are the only thing walked here because the eval IR keeps a closure
+/// inside an EXPRESSION, so a statement walk cannot descend into one by accident.
+fn statement_contains_return(statement: &EvalStmt) -> bool {
+    match statement {
+        EvalStmt::Return(_) => true,
+        EvalStmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            then_branch.iter().any(statement_contains_return)
+                || else_branch.iter().any(statement_contains_return)
+        }
+        EvalStmt::While { body, .. }
+        | EvalStmt::DoWhile { body, .. }
+        | EvalStmt::For { body, .. }
+        | EvalStmt::Foreach { body, .. } => body.iter().any(statement_contains_return),
+        EvalStmt::Switch { cases, .. } => cases
+            .iter()
+            .any(|case| case.body.iter().any(statement_contains_return)),
+        EvalStmt::Try {
+            body,
+            catches,
+            finally_body,
+        } => {
+            body.iter().any(statement_contains_return)
+                || catches
+                    .iter()
+                    .any(|catch| catch.body.iter().any(statement_contains_return))
+                || finally_body.iter().any(statement_contains_return)
+        }
+        _ => false,
+    }
 }
 
 /// Returns whether a `break` or `continue` inside this statement leaves it.

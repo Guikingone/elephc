@@ -49,6 +49,35 @@ pub enum EvalGeneratorStep {
         value_name: String,
         exit: usize,
     },
+    /// Open a `try` region: a throw raised before the matching `LeaveTry` stores the thrown
+    /// value in `thrown_slot` and continues at `handler` instead of ending the generator.
+    EnterTry {
+        handler: usize,
+        /// Step index of a standalone copy of this region's `finally`, run when a suspended
+        /// generator is destroyed instead of resumed.
+        finally_entry: usize,
+        thrown_slot: String,
+    },
+    /// Close the innermost `try` region because control left it without raising.
+    LeaveTry,
+    /// Re-raise the value a handler stored, once its `finally` copy has run.
+    Rethrow { thrown_slot: String },
+    /// End one region's destruction-time `finally` copy.
+    EndUnwind,
+}
+
+/// One `try` region a generator body is currently inside.
+///
+/// A suspended generator can be resumed anywhere, so the regions it is inside cannot live on the
+/// Rust stack of whatever called `next()`. They live on the frame, which is what makes a `yield`
+/// inside a `try` possible at all.
+pub struct EvalGeneratorRegion {
+    /// Step index of the catch dispatch for this region.
+    pub handler: usize,
+    /// Step index of this region's destruction-time `finally` copy.
+    pub finally_entry: usize,
+    /// Scope name the thrown value is stored under before the handler runs.
+    pub thrown_slot: String,
 }
 
 /// A lowered generator body plus the number of foreach slots its frame must hold.
@@ -118,6 +147,8 @@ pub struct EvalGeneratorFrame {
     pub current_value: Option<RuntimeCellHandle>,
     pub return_value: Option<RuntimeCellHandle>,
     pub foreach_slots: Vec<Option<(RuntimeCellHandle, usize)>>,
+    /// The `try` regions the body is currently inside, innermost last.
+    pub regions: Vec<EvalGeneratorRegion>,
     pub delegate: Option<EvalGeneratorDelegate>,
     /// The scope name the next `send()` value is stored under, set by the suspended yield.
     pub pending_send_slot: Option<String>,
