@@ -251,17 +251,76 @@ fn execute_program_match_skips_unselected_results() {
 
     assert_eq!(values.get(result), FakeValue::String("two".to_string()));
 }
-/// Verifies match expressions without a matching arm or default fail at runtime.
+/// Verifies a match with no matching arm raises PHP's catchable `\UnhandledMatchError`.
+///
+/// `php -n` 8.5.6 prints `UnhandledMatchError:Unhandled match case 3`. This used to be a bare
+/// `RuntimeFatal`, which is a different thing entirely: PHP's error is an `\Error` subclass a
+/// program can catch, so a fatal in its place turns a handled branch into a dead process.
 #[test]
-fn execute_program_match_without_default_fails_on_miss() {
-    let program = parse_fragment(br#"return match (3) { 1 => "one", 2 => "two" };"#)
-        .expect("parse eval fragment");
+fn execute_program_match_without_default_raises_unhandled_match_error() {
+    let program = parse_fragment(
+        br#"try { $x = match (3) { 1 => "one", 2 => "two" }; }
+catch (\UnhandledMatchError $e) { echo get_class($e); echo ":"; echo $e->getMessage(); }
+return true;"#,
+    )
+    .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let result = execute_program(&program, &mut scope, &mut values);
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert_eq!(values.output, "UnhandledMatchError:Unhandled match case 3");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies the unmatched subject is named the way PHP names it in the message.
+///
+/// `php -n` 8.5.6 prints, for each subject in turn:
+/// `'x'` · `'exactly16chars!...'` · `9` · `1.0` · `true` · `false` · `NULL` · `of type array`.
+/// A readable literal is spelled out, a string is single-quoted and cut to 15 characters, and a
+/// value with no literal is named by type instead.
+///
+/// The float rule is PHP's `(string)` conversion plus the `.0` that conversion drops, so
+/// `1.0` prints as `1.0` while `1.0E+20` is already spelled with a dot and stays as it is. Only
+/// `1.0` is exercised here: the fake runtime renders `-0.0` as `0` and `0.1 + 0.2` as
+/// `0.30000000000000004`, where PHP's precision-14 conversion gives `-0` and `0.3`, so those two
+/// would pin the harness's float formatting rather than this message.
+#[test]
+fn execute_program_match_error_names_the_subject_the_way_php_does() {
+    let program = parse_fragment(
+        br#"function miss($v) {
+    try { $x = match ($v) { 'zzz' => 1 }; }
+    catch (\UnhandledMatchError $e) { echo $e->getMessage(); echo ";"; }
+}
+miss("x");
+miss("exactly16chars!!");
+miss(9);
+miss(1.0);
+miss(true);
+miss(false);
+miss(null);
+miss([1, 2]);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        concat!(
+            "Unhandled match case 'x';",
+            "Unhandled match case 'exactly16chars!...';",
+            "Unhandled match case 9;",
+            "Unhandled match case 1.0;",
+            "Unhandled match case true;",
+            "Unhandled match case false;",
+            "Unhandled match case NULL;",
+            "Unhandled match case of type array;",
+        )
+    );
 }
 /// Verifies PHP keyword logical operators use PHP precedence and short-circuiting.
 #[test]

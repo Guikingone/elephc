@@ -511,7 +511,76 @@ pub(in crate::interpreter) fn eval_match_expr(
             }
         }
     }
-    default
-        .map(|expr| eval_expr(expr, context, scope, values))
-        .unwrap_or(Err(EvalStatus::RuntimeFatal))
+    if let Some(expr) = default {
+        return eval_expr(expr, context, scope, values);
+    }
+    eval_throw_unhandled_match_error(subject, context, values)
+}
+
+/// Raises PHP's `\UnhandledMatchError` for a `match` no arm accepted.
+///
+/// This used to be a bare `RuntimeFatal`, which is not the same thing at all: PHP's error is a
+/// `\Error` subclass a program can CATCH, and Symfony's enum and routing code does exactly that.
+/// A fatal in its place turns a handled branch into a dead process.
+fn eval_throw_unhandled_match_error<T>(
+    subject: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let description = eval_unhandled_match_subject(subject, values)?;
+    let error = values.new_object("UnhandledMatchError")?;
+    let message = values.string(&format!("Unhandled match case {description}"))?;
+    let code = values.int(0)?;
+    values.construct_object(error, vec![message, code])?;
+    context.set_pending_throw(error);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
+/// Renders the unmatched subject the way PHP names it in the error message.
+///
+/// Measured with `php -n` 8.5.6: an int, float, bool or null is spelled out, a string is
+/// single-quoted and cut to 15 characters with a trailing `...`, and anything with no readable
+/// literal — an array, an object, a resource — is named by TYPE instead. A float reuses PHP's
+/// own `(string)` conversion and then regains the `.0` that conversion drops, which is the one
+/// difference between the two spellings: `(string)1.0` is `1` but the message says `1.0`.
+fn eval_unhandled_match_subject(
+    subject: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    match values.type_tag(subject)? {
+        EVAL_TAG_NULL => Ok("NULL".to_string()),
+        EVAL_TAG_BOOL => Ok(if values.truthy(subject)? { "true" } else { "false" }.to_string()),
+        EVAL_TAG_FLOAT => {
+            let text = eval_scalar_text(subject, values)?;
+            let plain = !text.contains(['.', 'E', 'N', 'F']);
+            Ok(if plain { format!("{text}.0") } else { text })
+        }
+        EVAL_TAG_INT => eval_scalar_text(subject, values),
+        EVAL_TAG_STRING => {
+            let text = eval_scalar_text(subject, values)?;
+            let cut: String = text.chars().take(15).collect();
+            Ok(if cut.chars().count() < text.chars().count() {
+                format!("'{cut}...'")
+            } else {
+                format!("'{cut}'")
+            })
+        }
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => Ok("of type array".to_string()),
+        EVAL_TAG_RESOURCE => Ok("of type resource".to_string()),
+        EVAL_TAG_OBJECT => {
+            let class = values.object_class_name(subject)?;
+            let class = eval_scalar_text(class, values)?;
+            Ok(format!("of type {class}"))
+        }
+        _ => Ok("of type mixed".to_string()),
+    }
+}
+
+/// Reads one value's PHP string conversion as UTF-8 text.
+fn eval_scalar_text(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }

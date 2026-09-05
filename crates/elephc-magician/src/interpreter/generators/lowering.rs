@@ -32,6 +32,7 @@ pub(super) fn lower_generator_body(
         steps: Vec::new(),
         loops: Vec::new(),
         foreach_slots: 0,
+        subject_slots: 0,
     };
     lowering.lower_statements(body)?;
     lowering.steps.push(EvalGeneratorStep::Return(None));
@@ -41,10 +42,15 @@ pub(super) fn lower_generator_body(
     })
 }
 
-/// Where a `break` and a `continue` jump to inside one lowered loop.
+/// Where a `break` and a `continue` jump to inside one lowered loop or switch.
 struct LoopLabels {
     continue_patches: Vec<usize>,
     break_patches: Vec<usize>,
+    /// A `switch` is a break level but not a continue target.
+    ///
+    /// PHP counts a switch as one level for BOTH keywords and makes `continue` inside a switch
+    /// behave like `break`, so a continue that lands here takes the break edge.
+    is_switch: bool,
 }
 
 /// Accumulates the step list while walking the body.
@@ -52,6 +58,17 @@ struct Lowering {
     steps: Vec<EvalGeneratorStep>,
     loops: Vec<LoopLabels>,
     foreach_slots: usize,
+    /// Number of `switch` and `match` subjects lowered so far, used to name their scope slots.
+    subject_slots: usize,
+}
+
+/// Returns the reserved scope name holding one lowered `switch` or `match` subject.
+///
+/// PHP evaluates the subject exactly once and compares it against each arm, so it has to be
+/// stored somewhere the comparison steps can read it back. The name cannot collide with a PHP
+/// variable because PHP identifiers cannot contain a NUL.
+fn subject_slot_name(index: usize) -> String {
+    format!("\0generator\0subject\0{index}")
 }
 
 impl Lowering {
@@ -116,11 +133,192 @@ impl Lowering {
                 value_by_ref,
                 body,
             } => self.lower_foreach(array, key_name.as_deref(), value_name, *value_by_ref, body),
-            // A `yield` inside `try`/`switch` needs the frame to model handler and arm state,
-            // which this lowering does not do yet. Refusing keeps a half-modelled suspension
-            // from silently skipping a `finally`.
+            EvalStmt::Switch { expr, cases } => self.lower_switch(expr, cases),
+            // A `yield` inside `try` needs the frame to model handler state, which this lowering
+            // does not do yet. Refusing keeps a half-modelled suspension from silently skipping
+            // a `finally`.
             _ => Err(EvalStatus::UnsupportedConstruct),
         }
+    }
+
+    /// Lowers a `switch` whose arms contain a yield.
+    ///
+    /// PHP evaluates the subject once, compares it loosely against each `case` in source order,
+    /// enters the first match, and then FALLS THROUGH the remaining bodies until a `break`. The
+    /// layout below keeps that exactly: every test comes first and jumps into a single run of
+    /// bodies laid out in source order, so falling out of one body lands in the next.
+    fn lower_switch(
+        &mut self,
+        subject: &EvalExpr,
+        cases: &[EvalSwitchCase],
+    ) -> Result<(), EvalStatus> {
+        let slot = subject_slot_name(self.subject_slots);
+        self.subject_slots += 1;
+        self.steps.push(EvalGeneratorStep::Run(vec![EvalStmt::StoreVar {
+            name: slot.clone(),
+            value: subject.clone(),
+        }]));
+        let mut body_patches: Vec<usize> = Vec::new();
+        let mut default_patch: Option<usize> = None;
+        for case in cases {
+            match &case.condition {
+                Some(condition) => {
+                    let skip = self.steps.len();
+                    self.steps.push(EvalGeneratorStep::JumpIfFalse {
+                        condition: EvalExpr::Binary {
+                            op: EvalBinOp::LooseEq,
+                            left: Box::new(EvalExpr::LoadVar(slot.clone())),
+                            right: Box::new(condition.clone()),
+                        },
+                        target: usize::MAX,
+                    });
+                    body_patches.push(self.steps.len());
+                    self.steps.push(EvalGeneratorStep::Jump(usize::MAX));
+                    let next_test = self.steps.len();
+                    self.patch_jump(skip, next_test);
+                }
+                None => {
+                    // A `default` is tested last however it is written, so its jump is emitted
+                    // after every `case` test rather than in source position.
+                    body_patches.push(usize::MAX);
+                    default_patch = Some(body_patches.len() - 1);
+                }
+            }
+        }
+        let no_match_patch = self.steps.len();
+        self.steps.push(EvalGeneratorStep::Jump(usize::MAX));
+        self.loops.push(LoopLabels {
+            continue_patches: Vec::new(),
+            break_patches: Vec::new(),
+            is_switch: true,
+        });
+        let mut body_starts: Vec<usize> = Vec::new();
+        for case in cases {
+            body_starts.push(self.steps.len());
+            self.lower_statements(&case.body)?;
+        }
+        let after = self.steps.len();
+        for (index, patch) in body_patches.iter().enumerate() {
+            if *patch != usize::MAX {
+                self.patch_jump(*patch, body_starts[index]);
+            }
+        }
+        match default_patch {
+            Some(index) => self.patch_jump(no_match_patch, body_starts[index]),
+            None => self.patch_jump(no_match_patch, after),
+        }
+        let labels = self.loops.pop().ok_or(EvalStatus::RuntimeFatal)?;
+        for patch in labels.break_patches.into_iter().chain(labels.continue_patches) {
+            self.patch_jump(patch, after);
+        }
+        Ok(())
+    }
+
+    /// Lowers a `match` expression whose arm values contain a yield.
+    ///
+    /// `match` compares STRICTLY, evaluates exactly one arm, and raises `\UnhandledMatchError`
+    /// when nothing matches. The no-match edge re-runs the original expression through the
+    /// ordinary evaluator with the arms it can evaluate removed, so the error object, its
+    /// message and its class come from the one place that already builds them.
+    fn lower_match(
+        &mut self,
+        subject: &EvalExpr,
+        arms: &[EvalMatchArm],
+        default: Option<&EvalExpr>,
+        into: Option<String>,
+    ) -> Result<(), EvalStatus> {
+        let slot = subject_slot_name(self.subject_slots);
+        self.subject_slots += 1;
+        self.steps.push(EvalGeneratorStep::Run(vec![EvalStmt::StoreVar {
+            name: slot.clone(),
+            value: subject.clone(),
+        }]));
+        let mut arm_patches: Vec<usize> = Vec::new();
+        for arm in arms {
+            let mut matched: Vec<usize> = Vec::new();
+            for pattern in &arm.patterns {
+                let skip = self.steps.len();
+                self.steps.push(EvalGeneratorStep::JumpIfFalse {
+                    condition: EvalExpr::Binary {
+                        op: EvalBinOp::StrictEq,
+                        left: Box::new(EvalExpr::LoadVar(slot.clone())),
+                        right: Box::new(pattern.clone()),
+                    },
+                    target: usize::MAX,
+                });
+                matched.push(self.steps.len());
+                self.steps.push(EvalGeneratorStep::Jump(usize::MAX));
+                let next_pattern = self.steps.len();
+                self.patch_jump(skip, next_pattern);
+            }
+            arm_patches.push(matched.len());
+            for patch in matched {
+                arm_patches.push(patch);
+            }
+        }
+        let no_match = self.steps.len();
+        self.steps.push(EvalGeneratorStep::Jump(usize::MAX));
+        let mut arm_starts: Vec<usize> = Vec::new();
+        let mut end_patches: Vec<usize> = Vec::new();
+        for arm in arms {
+            arm_starts.push(self.steps.len());
+            self.lower_match_value(&arm.value, into.clone())?;
+            end_patches.push(self.steps.len());
+            self.steps.push(EvalGeneratorStep::Jump(usize::MAX));
+        }
+        let default_start = self.steps.len();
+        match default {
+            Some(value) => {
+                self.lower_match_value(value, into.clone())?;
+            }
+            None => {
+                // No arm matched and there is no default: PHP raises `\UnhandledMatchError`.
+                // Replaying the subject through an arm-less `match` lets the ordinary evaluator
+                // build that error, message included, instead of duplicating it here.
+                self.steps.push(EvalGeneratorStep::Run(vec![EvalStmt::Expr(
+                    EvalExpr::Match {
+                        subject: Box::new(EvalExpr::LoadVar(slot.clone())),
+                        arms: Vec::new(),
+                        default: None,
+                    },
+                )]));
+            }
+        }
+        let after = self.steps.len();
+        self.patch_jump(no_match, default_start);
+        for patch in end_patches {
+            self.patch_jump(patch, after);
+        }
+        let mut cursor = 0;
+        for start in arm_starts {
+            let count = arm_patches[cursor];
+            cursor += 1;
+            for _ in 0..count {
+                self.patch_jump(arm_patches[cursor], start);
+                cursor += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Emits one `match` arm's value, which may itself be the yield that suspends.
+    fn lower_match_value(
+        &mut self,
+        value: &EvalExpr,
+        into: Option<String>,
+    ) -> Result<(), EvalStatus> {
+        if expression_contains_yield(value) {
+            return self.lower_yield_expr(value, into);
+        }
+        let statement = match into {
+            Some(name) => EvalStmt::StoreVar {
+                name,
+                value: value.clone(),
+            },
+            None => EvalStmt::Expr(value.clone()),
+        };
+        self.steps.push(EvalGeneratorStep::Run(vec![statement]));
+        Ok(())
     }
 
     /// Lowers one expression that carries a yield in a position this lowering models.
@@ -154,6 +352,11 @@ impl Lowering {
                 });
                 Ok(())
             }
+            EvalExpr::Match {
+                subject,
+                arms,
+                default,
+            } => self.lower_match(subject, arms, default.as_deref(), into),
             _ => Err(EvalStatus::UnsupportedConstruct),
         }
     }
@@ -168,7 +371,9 @@ impl Lowering {
         let index = depth - level;
         let patch = self.steps.len();
         self.steps.push(EvalGeneratorStep::Jump(usize::MAX));
-        if is_break {
+        // PHP counts a `switch` as one level for `continue` too, and a `continue` that lands on
+        // one leaves the switch exactly as `break` would.
+        if is_break || self.loops[index].is_switch {
             self.loops[index].break_patches.push(patch);
         } else {
             self.loops[index].continue_patches.push(patch);
@@ -219,6 +424,7 @@ impl Lowering {
         self.loops.push(LoopLabels {
             continue_patches: Vec::new(),
             break_patches: Vec::new(),
+            is_switch: false,
         });
         self.lower_statements(body)?;
         self.steps.push(EvalGeneratorStep::Jump(top));
@@ -238,6 +444,7 @@ impl Lowering {
         self.loops.push(LoopLabels {
             continue_patches: Vec::new(),
             break_patches: Vec::new(),
+            is_switch: false,
         });
         self.lower_statements(body)?;
         let test = self.steps.len();
@@ -275,6 +482,7 @@ impl Lowering {
         self.loops.push(LoopLabels {
             continue_patches: Vec::new(),
             break_patches: Vec::new(),
+            is_switch: false,
         });
         self.lower_statements(body)?;
         let continue_target = self.steps.len();
@@ -321,6 +529,7 @@ impl Lowering {
         self.loops.push(LoopLabels {
             continue_patches: Vec::new(),
             break_patches: Vec::new(),
+            is_switch: false,
         });
         self.lower_statements(body)?;
         self.steps.push(EvalGeneratorStep::Jump(top));
@@ -360,8 +569,61 @@ impl Lowering {
 /// A statement is lowered when it contains a suspension point, or when it is a `break` or a
 /// `continue` that would otherwise escape the atomic chunk it was batched into.
 fn statement_needs_lowering(statement: &EvalStmt) -> bool {
-    matches!(statement, EvalStmt::Break(_) | EvalStmt::Continue(_))
-        || statement_contains_yield(statement)
+    statement_escapes_with_loop_exit(statement, 0) || statement_contains_yield(statement)
+}
+
+/// Returns whether a `break` or `continue` inside this statement leaves it.
+///
+/// A `break`/`continue` that stays inside its own loop or switch is the ordinary evaluator's
+/// business and the whole statement can be run atomically. One that targets an ENCLOSING lowered
+/// loop cannot: the step list owns that jump, so the statement has to be lowered even when it
+/// holds no yield at all. `depth` counts the breakable levels between the keyword and the
+/// statement being tested, which is exactly what PHP's level argument counts.
+fn statement_escapes_with_loop_exit(statement: &EvalStmt, depth: u32) -> bool {
+    match statement {
+        EvalStmt::Break(level) | EvalStmt::Continue(level) => (*level).max(1) > depth,
+        EvalStmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            then_branch
+                .iter()
+                .any(|inner| statement_escapes_with_loop_exit(inner, depth))
+                || else_branch
+                    .iter()
+                    .any(|inner| statement_escapes_with_loop_exit(inner, depth))
+        }
+        EvalStmt::While { body, .. }
+        | EvalStmt::DoWhile { body, .. }
+        | EvalStmt::For { body, .. }
+        | EvalStmt::Foreach { body, .. } => body
+            .iter()
+            .any(|inner| statement_escapes_with_loop_exit(inner, depth + 1)),
+        EvalStmt::Switch { cases, .. } => cases.iter().any(|case| {
+            case.body
+                .iter()
+                .any(|inner| statement_escapes_with_loop_exit(inner, depth + 1))
+        }),
+        EvalStmt::Try {
+            body,
+            catches,
+            finally_body,
+        } => {
+            body.iter()
+                .any(|inner| statement_escapes_with_loop_exit(inner, depth))
+                || catches.iter().any(|catch| {
+                    catch
+                        .body
+                        .iter()
+                        .any(|inner| statement_escapes_with_loop_exit(inner, depth))
+                })
+                || finally_body
+                    .iter()
+                    .any(|inner| statement_escapes_with_loop_exit(inner, depth))
+        }
+        _ => false,
+    }
 }
 
 /// Returns whether a statement contains a yield anywhere inside it.
@@ -439,6 +701,18 @@ pub(super) fn expression_contains_yield(expr: &EvalExpr) -> bool {
             expression_contains_yield(left) || expression_contains_yield(right)
         }
         EvalExpr::Unary { expr, .. } => expression_contains_yield(expr),
+        EvalExpr::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            expression_contains_yield(subject)
+                || arms.iter().any(|arm| {
+                    arm.patterns.iter().any(expression_contains_yield)
+                        || expression_contains_yield(&arm.value)
+                })
+                || default.as_deref().is_some_and(expression_contains_yield)
+        }
         _ => false,
     }
 }

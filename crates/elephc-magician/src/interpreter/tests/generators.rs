@@ -264,3 +264,130 @@ foreach ($g() as $v) { echo $v; }"#
         "56",
     );
 }
+
+/// Verifies a `switch` inside a generator matches, falls through and breaks as PHP does.
+///
+/// `php -n` 8.5.6 prints `two,two-b,end,|other,end,` — the matched arm runs, `break` leaves the
+/// switch rather than the generator, and the statement after the switch still yields.
+#[test]
+fn a_switch_arm_can_yield_and_break_leaves_only_the_switch() {
+    assert_eq!(
+        out(
+            br#"function s1($n) {
+    switch ($n) {
+        case 1: yield 'one'; break;
+        case 2: yield 'two'; yield 'two-b'; break;
+        default: yield 'other';
+    }
+    yield 'end';
+}
+foreach (s1(2) as $v) { echo $v; echo ","; }
+echo "|";
+foreach (s1(9) as $v) { echo $v; echo ","; }"#
+        ),
+        "two,two-b,end,|other,end,",
+    );
+}
+
+/// Verifies an arm without `break` falls into the next arm's body, and a miss runs nothing.
+///
+/// `php -n` 8.5.6 prints `low,three,|four,|`: `case 1` is empty and falls into `case 2`, whose
+/// body falls on into `case 3` because neither breaks; `case 4` is last and yields alone; and
+/// `7` matches no arm at all in a switch with no `default`.
+#[test]
+fn a_switch_arm_without_break_falls_into_the_next_one() {
+    assert_eq!(
+        out(
+            br#"function s2($n) {
+    switch ($n) {
+        case 1:
+        case 2: yield 'low';
+        case 3: yield 'three'; break;
+        case 4: yield 'four';
+    }
+}
+foreach (s2(1) as $v) { echo $v; echo ","; }
+echo "|";
+foreach (s2(4) as $v) { echo $v; echo ","; }
+echo "|";
+foreach (s2(7) as $v) { echo $v; echo ","; }"#
+        ),
+        "low,three,|four,|",
+    );
+}
+
+/// Verifies `continue 2` counts the switch as a level and reaches the enclosing loop.
+///
+/// `php -n` 8.5.6 prints `13`: the switch is one level, so `continue 2` skips the rest of the
+/// loop body for `2` only.
+#[test]
+fn continue_two_from_a_switch_reaches_the_enclosing_loop() {
+    assert_eq!(
+        out(
+            br#"function s3() {
+    foreach ([1, 2, 3] as $i) {
+        switch ($i) {
+            case 2: continue 2;
+        }
+        yield $i;
+    }
+}
+foreach (s3() as $v) { echo $v; }"#
+        ),
+        "13",
+    );
+}
+
+/// Verifies a `match` arm can be the yield that suspends, and `send()` becomes the arm's value.
+///
+/// `php -n` 8.5.6 prints `a,r=S` for the matched arm and `d,r=T` for the default: the generator
+/// suspends inside the arm, and what `send()` delivers is what the whole `match` evaluates to.
+#[test]
+fn a_match_arm_can_be_the_yield_that_suspends() {
+    assert_eq!(
+        out(
+            br#"function m1($n) {
+    $r = match ($n) { 1 => yield 'a', 2 => yield 'b', default => yield 'd' };
+    yield 'r=' . $r;
+}
+$g = m1(1);
+echo $g->current(); echo ",";
+$g->send('S');
+echo $g->current(); echo ";";
+$h = m1(7);
+echo $h->current(); echo ",";
+$h->send('T');
+echo $h->current();"#
+        ),
+        "a,r=S;d,r=T",
+    );
+}
+
+/// Verifies an arm with no yield still produces its value, and a miss raises PHP's error.
+///
+/// `php -n` 8.5.6 prints `r=plain` for the plain arm and raises
+/// `UnhandledMatchError: Unhandled match case 9` when nothing matches.
+#[test]
+fn a_match_without_a_matching_arm_raises_unhandled_match_error() {
+    assert_eq!(
+        out(
+            br#"function m2($n) {
+    $r = match ($n) { 1 => yield 'x', 2 => 'plain' };
+    yield 'r=' . $r;
+}
+$g = m2(2);
+echo $g->current();"#
+        ),
+        "r=plain",
+    );
+    let (output, status) = throws(
+        br#"function m3($n) {
+    $r = match ($n) { 1 => yield 'x', 2 => 'plain' };
+    yield 'r=' . $r;
+}
+$g = m3(9);
+echo $g->current();"#,
+    );
+    assert_eq!(output, "");
+    assert_eq!(status, EvalStatus::UncaughtThrowable);
+}

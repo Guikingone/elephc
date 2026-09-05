@@ -19,6 +19,7 @@ pub(super) fn fake_runtime_exception_like_class(class_name: &str) -> bool {
         "DivisionByZeroError",
         "ValueError",
         "TypeError",
+        "UnhandledMatchError",
     ]
     .iter()
     .any(|known| class_name.eq_ignore_ascii_case(known))
@@ -70,6 +71,7 @@ pub(super) fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exc
             "DivisionByZeroError",
             "ValueError",
             "TypeError",
+            "UnhandledMatchError",
         ]
             .iter()
             .any(|known| class_name.eq_ignore_ascii_case(known));
