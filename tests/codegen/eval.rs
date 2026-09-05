@@ -31038,6 +31038,74 @@ include $piece;
     assert_eq!(out, "74d;2;hit:11;miss;1,2,3,4/2,3,2,3;55;2");
 }
 
+/// Verifies a runtime include destructures into every target shape PHP accepts.
+///
+/// Twelve Symfony files were refused for these: a property target
+/// (`cache/Adapter/PhpArrayAdapter.php:357`), a keyed pattern
+/// (`http-kernel/DataCollector/DumpDataCollector.php:91`), an element target
+/// (`http-foundation/ServerBag.php:67`), a keyed pattern in `foreach`
+/// (`event-dispatcher/Debug/TraceableEventDispatcher.php:160`) and a property as the `foreach` KEY
+/// (`dependency-injection/Compiler/ResolveInvalidReferencesPass.php:45`).
+///
+/// The last group is why this is a value test and not a parse test: PHP evaluates the subject of a
+/// list assignment EXACTLY ONCE, so the closure counter must read 1, and a hole must consume its
+/// position, so `[$first, , $third] = [1, 2, 3]` must give `13` and not `12`.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6) running the included file directly:
+/// `98;m1n2;AB;123;pq;56;13;781`.
+#[test]
+fn test_eval_include_destructures_into_every_target_php_accepts() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-destructure-shapes-piece.php";
+file_put_contents($piece, '<?php
+class S3Bag
+{
+    public $key;
+    public $x;
+    public $y;
+
+    public function take(array $pair): string
+    {
+        [$this->x, $this->y] = $pair;
+        return $this->x . $this->y;
+    }
+
+    public function walk(array $map): string
+    {
+        $out = "";
+        foreach ($map as $this->key => $value) {
+            $out .= $this->key . $value;
+        }
+        return $out;
+    }
+}
+
+$bag = new S3Bag();
+echo $bag->take([9, 8]), ";";
+echo $bag->walk(["m" => 1, "n" => 2]), ";";
+["a" => $a, "b" => $b] = ["a" => "A", "b" => "B"];
+echo $a, $b, ";";
+[[$p, $q], $r] = [[1, 2], 3];
+echo $p, $q, $r, ";";
+$slot = [];
+[$slot["u"], $slot["v"]] = ["p", "q"];
+echo $slot["u"], $slot["v"], ";";
+foreach ([["k" => 5], ["k" => 6]] as ["k" => $only]) { echo $only; }
+echo ";";
+[$first, , $third] = [1, 2, 3];
+echo $first, $third, ";";
+$calls = 0;
+$maker = function () use (&$calls) { $calls = $calls + 1; return [7, 8]; };
+[$m, $n] = $maker();
+echo $m, $n, $calls;
+');
+include $piece;
+"#,
+    );
+    assert_eq!(out, "98;m1n2;AB;123;pq;56;13;781");
+}
+
 /// Reference value captured from `php -n` (PHP 8.5.6): `marked;yes`.
 #[test]
 fn test_eval_include_declares_a_class_behind_an_attribute_with_a_trailing_comma() {

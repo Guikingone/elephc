@@ -847,6 +847,57 @@ fn parse_fragment_accepts_a_spread_inside_an_array_literal() {
     );
     parse_fragment(br#"return ["a" => 1, ...$rest];"#).expect("the keyed form should parse");
 }
+/// Verifies a destructuring pattern PHP accepts parses, whatever its targets.
+///
+/// `EvalStmt::ArrayDestructure` names its targets by scope name and is kept for the shape it can
+/// carry; every richer pattern lowers to one read of the subject plus one ordinary assignment per
+/// element. `[$this->keys, $this->values] = $values;` sits at
+/// `symfony/cache/Adapter/PhpArrayAdapter.php:357`, and the keyed form at
+/// `http-kernel/DataCollector/DumpDataCollector.php:91`.
+#[test]
+fn parse_fragment_accepts_every_destructuring_target_shape() {
+    let program = parse_fragment(br#"[$a, , $b] = $v;"#).expect("the plain form should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ArrayDestructure {
+            targets: vec![Some("a".to_string()), None, Some("b".to_string())],
+            value: EvalExpr::LoadVar("v".to_string()),
+        }]
+    );
+    for source in [
+        br#"[$this->keys, $this->values] = $values;"# as &[u8],
+        br#"["name" => $name, "line" => $line] = $context;"#,
+        br#"[[$a, $b], $c] = $v;"#,
+        br#"[$headers["u"], $headers["p"]] = $exploded;"#,
+        br#"[$first, , $this->third] = $v;"#,
+    ] {
+        parse_fragment(source).unwrap_or_else(|error| {
+            panic!("should parse {}: {error:?}", String::from_utf8_lossy(source))
+        });
+    }
+    parse_fragment(br#"[f(), $b] = $v;"#).expect_err("a call is not an assignable target");
+}
+/// Verifies a `foreach` key or value target may be any lvalue or a destructuring pattern.
+///
+/// `foreach ($container->getDefinitions() as $this->currentId => $definition)` sits at
+/// `dependency-injection/Compiler/ResolveInvalidReferencesPass.php:45`, and
+/// `foreach ($infos as ['info' => $info, 'count' => $count])` at
+/// `event-dispatcher/Debug/TraceableEventDispatcher.php:160`.
+#[test]
+fn parse_fragment_accepts_foreach_targets_beyond_a_plain_variable() {
+    for source in [
+        br#"foreach ($m as $this->currentId => $definition) { echo $definition; }"# as &[u8],
+        br#"foreach ($m as ["info" => $info, "count" => $count]) { echo $info; }"#,
+        br#"foreach ($m as $k => [$a, $b]) { echo $a; }"#,
+        br#"foreach ($m as $rows["k"]) { echo 1; }"#,
+    ] {
+        parse_fragment(source).unwrap_or_else(|error| {
+            panic!("should parse {}: {error:?}", String::from_utf8_lossy(source))
+        });
+    }
+    parse_fragment(br#"foreach ($m as [$a] => $v) { echo $v; }"#)
+        .expect_err("a destructuring pattern is not a key target in PHP");
+}
 /// Verifies PHP echo comma lists lower to one EvalIR echo statement per expression.
 #[test]
 fn parse_fragment_accepts_echo_comma_list_source() {

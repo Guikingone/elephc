@@ -10,6 +10,8 @@
 //!   lower to the same EvalIR as the brace form.
 
 use super::*;
+use super::assignments::{plain_variable_destructure_targets, EvalDestructureElement};
+use crate::parser::expressions::precedence::is_assignment_target;
 
 impl Parser {
     /// Parses `do { ... } while (expr);`.
@@ -143,28 +145,46 @@ impl Parser {
             return Err(EvalParseError::UnexpectedToken);
         }
         self.advance();
-        let (first_value_name, first_targets, first_by_ref) = self.parse_foreach_value_target()?;
-        let (key_name, value_name, targets, value_by_ref) = if matches!(self.current(), TokenKind::FatArrow) {
-            self.advance();
-            if first_targets.is_some() || first_by_ref {
-                return Err(EvalParseError::ExpectedVariable);
-            }
-            let (value_name, targets, value_by_ref) = self.parse_foreach_value_target()?;
-            (Some(first_value_name), value_name, targets, value_by_ref)
-        } else {
-            (None, first_value_name, first_targets, first_by_ref)
-        };
+        let (first_target, first_by_ref) = self.parse_foreach_target()?;
+        let (key_target, value_target, value_by_ref) =
+            if matches!(self.current(), TokenKind::FatArrow) {
+                self.advance();
+                if first_by_ref || matches!(first_target, EvalForeachTarget::Pattern(_)) {
+                    return Err(self.fail(EvalParseError::ExpectedVariable));
+                }
+                let (value_target, value_by_ref) = self.parse_foreach_target()?;
+                (Some(first_target), value_target, value_by_ref)
+            } else {
+                (None, first_target, first_by_ref)
+            };
         self.expect(TokenKind::RParen)?;
         let mut body = self.parse_statement_body_or_alternative("endforeach")?;
-        if let Some(targets) = targets {
-            body.insert(
-                0,
-                EvalStmt::ArrayDestructure {
-                    targets,
-                    value: EvalExpr::LoadVar(value_name.clone()),
-                },
-            );
+        // Only a plain scope variable can be the name `EvalStmt::Foreach` binds. Every other
+        // target — a property on the key side, a destructuring pattern on the value side — binds a
+        // HIDDEN name instead and is copied into place by statements at the head of the body. That
+        // is the shape foreach destructuring has always used here; this widens it to the key and
+        // to element targets PHP accepts, `foreach ($map as $this->currentId => $definition)` in
+        // `dependency-injection/Compiler/ResolveInvalidReferencesPass.php` above all.
+        let value_name = match &value_target {
+            EvalForeachTarget::Variable(name) => name.clone(),
+            _ => FOREACH_VALUE_BINDING_NAME.to_string(),
+        };
+        let value_writes = self.foreach_target_writes(&value_target, &value_name)?;
+        for statement in value_writes.into_iter().rev() {
+            body.insert(0, statement);
         }
+        let key_name = match key_target {
+            None => None,
+            Some(EvalForeachTarget::Variable(name)) => Some(name),
+            Some(target) => {
+                let hidden = FOREACH_KEY_BINDING_NAME.to_string();
+                let writes = self.foreach_target_writes(&target, &hidden)?;
+                for statement in writes.into_iter().rev() {
+                    body.insert(0, statement);
+                }
+                Some(hidden)
+            }
+        };
         Ok(vec![EvalStmt::Foreach {
             array,
             key_name,
@@ -174,39 +194,79 @@ impl Parser {
         }])
     }
 
-    /// Parses a simple variable or a short-array destructuring foreach value target.
-    fn parse_foreach_value_target(
-        &mut self,
-    ) -> Result<(String, Option<Vec<Option<String>>>, bool), EvalParseError> {
+    /// Parses one `foreach` target: a scope variable, another lvalue, or a destructuring pattern.
+    fn parse_foreach_target(&mut self) -> Result<(EvalForeachTarget, bool), EvalParseError> {
         let by_ref = self.consume(TokenKind::Ampersand);
-        if let TokenKind::DollarIdent(value_name) = self.current() {
-            let value_name = value_name.clone();
-            self.advance();
-            return Ok((value_name, None, by_ref));
+        if let TokenKind::DollarIdent(name) = self.current() {
+            if !matches!(
+                self.peek(),
+                TokenKind::Arrow | TokenKind::LBracket | TokenKind::DoubleColon
+            ) {
+                let name = name.clone();
+                self.advance();
+                return Ok((EvalForeachTarget::Variable(name), by_ref));
+            }
         }
         if by_ref {
             return Err(EvalParseError::ExpectedVariable);
         }
-        self.expect(TokenKind::LBracket)?;
-        let mut targets = Vec::new();
-        while !self.consume(TokenKind::RBracket) {
-            if self.consume(TokenKind::Comma) {
-                targets.push(None);
-                continue;
-            }
-            let TokenKind::DollarIdent(name) = self.current() else {
-                return Err(EvalParseError::ExpectedVariable);
-            };
-            targets.push(Some(name.clone()));
-            self.advance();
-            if self.consume(TokenKind::RBracket) {
-                break;
-            }
-            self.expect(TokenKind::Comma)?;
+        if matches!(self.current(), TokenKind::LBracket) {
+            return Ok((
+                EvalForeachTarget::Pattern(self.parse_destructure_pattern()?),
+                false,
+            ));
         }
-        if targets.is_empty() {
-            return Err(EvalParseError::UnexpectedToken);
+        let target = self.parse_expr()?;
+        if !is_assignment_target(&target) {
+            return Err(self.fail(EvalParseError::ExpectedVariable));
         }
-        Ok(("\0elephc_foreach_destructure".to_string(), Some(targets), false))
+        Ok((EvalForeachTarget::Lvalue(target), false))
+    }
+
+    /// Returns the statements that copy one bound `foreach` name into its real target.
+    fn foreach_target_writes(
+        &mut self,
+        target: &EvalForeachTarget,
+        bound_name: &str,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        match target {
+            EvalForeachTarget::Variable(_) => Ok(Vec::new()),
+            EvalForeachTarget::Lvalue(target) => Ok(vec![EvalStmt::Expr(EvalExpr::Assign {
+                target: Box::new(target.clone()),
+                value: Box::new(EvalExpr::LoadVar(bound_name.to_string())),
+            })]),
+            EvalForeachTarget::Pattern(elements) => {
+                if let Some(targets) = plain_variable_destructure_targets(elements) {
+                    return Ok(vec![EvalStmt::ArrayDestructure {
+                        targets,
+                        value: EvalExpr::LoadVar(bound_name.to_string()),
+                    }]);
+                }
+                let mut statements = Vec::new();
+                self.push_destructure_element_writes(elements, bound_name, &mut statements)?;
+                Ok(statements)
+            }
+        }
     }
 }
+
+/// The three shapes a `foreach` target takes.
+enum EvalForeachTarget {
+    /// A plain scope variable, which `EvalStmt::Foreach` binds by name.
+    Variable(String),
+    /// Any other assignable expression, copied out of a hidden name at the head of the body.
+    Lvalue(EvalExpr),
+    /// A destructuring pattern, lowered at the head of the body.
+    Pattern(Vec<EvalDestructureElement>),
+}
+
+/// The scope name a `foreach` value target that is not a plain variable is bound to.
+///
+/// The leading NUL byte cannot appear in a PHP variable name, which is what keeps the binding out
+/// of the visible scope. One fixed name is enough for any nesting: the statements that copy it
+/// into the real target run at the HEAD of the body, before any inner loop can rebind it, and
+/// nothing reads it afterwards.
+const FOREACH_VALUE_BINDING_NAME: &str = "\0elephc_foreach_destructure";
+
+/// The scope name a `foreach` key target that is not a plain variable is bound to.
+const FOREACH_KEY_BINDING_NAME: &str = "\0elephc_foreach_key";

@@ -8,6 +8,7 @@
 //! - Compound assignment and property targets lower directly into explicit EvalIR statement variants.
 
 use super::*;
+use crate::parser::expressions::precedence::is_assignment_target;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 impl Parser {
@@ -15,30 +16,140 @@ impl Parser {
     pub(in crate::parser) fn parse_array_destructure_stmt(
         &mut self,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let pattern = self.parse_destructure_pattern()?;
+        self.expect(TokenKind::Equal)?;
+        let value = self.parse_expr()?;
+        self.expect_semicolon()?;
+        if let Some(targets) = plain_variable_destructure_targets(&pattern) {
+            return Ok(vec![EvalStmt::ArrayDestructure { targets, value }]);
+        }
+        let subject = next_destructure_subject_name();
+        let mut statements = vec![EvalStmt::StoreVar {
+            name: subject.clone(),
+            value,
+        }];
+        self.push_destructure_element_writes(&pattern, &subject, &mut statements)?;
+        Ok(statements)
+    }
+
+    /// Parses one PHP list-assignment pattern, holes and keys and nesting included.
+    ///
+    /// It cannot go through `parse_array_literal()`: a pattern admits a HOLE, `[$a, , $b] = $v`,
+    /// which is not a value literal, and its elements are assignment targets rather than values.
+    pub(super) fn parse_destructure_pattern(
+        &mut self,
+    ) -> Result<Vec<EvalDestructureElement>, EvalParseError> {
         self.expect(TokenKind::LBracket)?;
-        let mut targets = Vec::new();
-        while !self.consume(TokenKind::RBracket) {
+        let mut elements = Vec::new();
+        loop {
+            if self.consume(TokenKind::RBracket) {
+                break;
+            }
             if self.consume(TokenKind::Comma) {
-                targets.push(None);
+                elements.push(EvalDestructureElement::Skip);
                 continue;
             }
-            let TokenKind::DollarIdent(name) = self.current() else {
-                return Err(EvalParseError::ExpectedVariable);
-            };
-            targets.push(Some(name.clone()));
-            self.advance();
+            elements.push(self.parse_destructure_element()?);
             if self.consume(TokenKind::RBracket) {
                 break;
             }
             self.expect(TokenKind::Comma)?;
         }
-        if targets.is_empty() {
-            return Err(EvalParseError::UnexpectedToken);
+        if elements.is_empty() {
+            return Err(self.fail(EvalParseError::UnexpectedToken));
         }
-        self.expect(TokenKind::Equal)?;
-        let value = self.parse_expr()?;
-        self.expect_semicolon()?;
-        Ok(vec![EvalStmt::ArrayDestructure { targets, value }])
+        Ok(elements)
+    }
+
+    /// Parses one element of a destructuring pattern: an optional key, then a target or a nesting.
+    fn parse_destructure_element(&mut self) -> Result<EvalDestructureElement, EvalParseError> {
+        if matches!(self.current(), TokenKind::LBracket) {
+            let elements = self.parse_destructure_pattern()?;
+            return Ok(EvalDestructureElement::Nested { key: None, elements });
+        }
+        let first = self.parse_expr()?;
+        if !self.consume(TokenKind::FatArrow) {
+            return Ok(EvalDestructureElement::Target {
+                key: None,
+                target: first,
+            });
+        }
+        if matches!(self.current(), TokenKind::LBracket) {
+            let elements = self.parse_destructure_pattern()?;
+            return Ok(EvalDestructureElement::Nested {
+                key: Some(first),
+                elements,
+            });
+        }
+        let target = self.parse_expr()?;
+        Ok(EvalDestructureElement::Target {
+            key: Some(first),
+            target,
+        })
+    }
+
+    /// Appends one assignment per element of a destructuring pattern, recursing into nested ones.
+    ///
+    /// `EvalStmt::ArrayDestructure` names its targets by SCOPE NAME, which is every target the
+    /// vendor tree used until `[$this->keys, $this->values] = $values;` in
+    /// `symfony/cache/Adapter/PhpArrayAdapter.php`. PHP's list assignment takes any assignable
+    /// expression, an explicit key and a nested pattern; lowering to one read of the subject plus
+    /// one ordinary assignment per element reproduces all three. The subject is evaluated ONCE,
+    /// into a name whose leading NUL no PHP variable can carry, which is what PHP guarantees and
+    /// the convention the `foreach` destructuring target already used; each element becomes
+    /// `EvalExpr::Assign`, which writes through any lvalue the general location machinery accepts.
+    ///
+    /// The positional index counts EVERY keyless element, holes included, because that is what
+    /// `[$first, , $third] = [1, 2, 3]` means.
+    pub(super) fn push_destructure_element_writes(
+        &mut self,
+        elements: &[EvalDestructureElement],
+        subject: &str,
+        statements: &mut Vec<EvalStmt>,
+    ) -> Result<(), EvalParseError> {
+        let mut position = 0i64;
+        for element in elements {
+            let key = match element {
+                EvalDestructureElement::Skip => {
+                    position += 1;
+                    continue;
+                }
+                EvalDestructureElement::Target { key, .. }
+                | EvalDestructureElement::Nested { key, .. } => match key {
+                    Some(key) => key.clone(),
+                    None => {
+                        let key = EvalExpr::Const(EvalConst::Int(position));
+                        position += 1;
+                        key
+                    }
+                },
+            };
+            let read = EvalExpr::ArrayGet {
+                array: Box::new(EvalExpr::LoadVar(subject.to_string())),
+                index: Box::new(key),
+            };
+            match element {
+                EvalDestructureElement::Skip => unreachable!("a hole continues above"),
+                EvalDestructureElement::Nested { elements, .. } => {
+                    let nested = next_destructure_subject_name();
+                    statements.push(EvalStmt::StoreVar {
+                        name: nested.clone(),
+                        value: read,
+                    });
+                    self.push_destructure_element_writes(elements, &nested, statements)?;
+                }
+                EvalDestructureElement::Target { target, .. } => {
+                    if !is_assignment_target(target) {
+                        return Err(self.fail(EvalParseError::ExpectedVariable));
+                    }
+                    statements.push(EvalStmt::Expr(EvalExpr::Assign {
+                        target: Box::new(target.clone()),
+                        value: Box::new(read),
+                    }));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Parses the optional first clause of a `for` loop.
@@ -791,6 +902,57 @@ fn eval_expr_binds_a_reference(expr: &EvalExpr) -> bool {
             | EvalExpr::DynamicStaticPropertyGet { .. }
             | EvalExpr::DynamicStaticPropertyNameGet { .. }
     )
+}
+
+/// One element of a PHP list-assignment pattern, as written.
+pub(super) enum EvalDestructureElement {
+    /// A hole, `[$a, , $b] = $v`, which consumes a position and assigns nothing.
+    Skip,
+    /// An assignable expression, with the explicit key that selects its element when there is one.
+    Target {
+        key: Option<EvalExpr>,
+        target: EvalExpr,
+    },
+    /// A pattern of its own, `[[$a, $b], $c] = $v`.
+    Nested {
+        key: Option<EvalExpr>,
+        elements: Vec<EvalDestructureElement>,
+    },
+}
+
+/// Returns the plain scope names of a destructuring pattern, or None when it holds anything else.
+///
+/// `EvalStmt::ArrayDestructure` names its targets by scope name and is kept for the shape it can
+/// carry — `[$a, , $b] = $v` — because that statement evaluates the subject without a hidden
+/// variable. Everything richer goes through the lowering above.
+pub(super) fn plain_variable_destructure_targets(
+    elements: &[EvalDestructureElement],
+) -> Option<Vec<Option<String>>> {
+    if elements.is_empty() {
+        return None;
+    }
+    elements
+        .iter()
+        .map(|element| match element {
+            EvalDestructureElement::Skip => Some(None),
+            EvalDestructureElement::Target {
+                key: None,
+                target: EvalExpr::LoadVar(name),
+            } => Some(Some(name.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Returns a scope name for one hidden destructuring subject.
+///
+/// The leading NUL byte cannot appear in a PHP variable name, so the subject is invisible to user
+/// code, the same convention `next_reference_binding_name()` and the `foreach` destructuring
+/// target already use.
+fn next_destructure_subject_name() -> String {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("\0elephc_destructure_subject:{id}")
 }
 
 /// Returns a scope name for one hidden reference binding.
