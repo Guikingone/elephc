@@ -2821,6 +2821,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owned_index_read_temp(value) {
             return true;
         }
+        if let Some(source) = self.gradual_union_param_guard_source(value.value) {
+            // The guard FORWARDS its operand, so it owns exactly what the operand owned.
+            let source_php_type = self.builder.value_php_type(source);
+            return self.value_is_owning_temporary(LoweredValue {
+                value: source,
+                ir_type: value_ir_type(&source_php_type),
+            });
+        }
         if self.value_is_borrowed_gradual_nominal_guard(value.value) {
             return false;
         }
@@ -3184,6 +3192,35 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
             && matches!(result_type, PhpType::Callable)
+    }
+
+    /// Returns the operand a gradual UNION parameter guard forwards, when `value` is one.
+    ///
+    /// `guard_gradual_union_param` emits a `RuntimeCall` carrying an `Immediate::TypeName` — the
+    /// only producer of that immediate — for an argument whose declared parameter is a scalar/null
+    /// union such as `?string`. Codegen (`lower_gradual_union_param_guard`) checks the boxed value's
+    /// active tag against the declared members and, on the accepted path, hands BACK THE SAME CELL:
+    /// it never acquires and never allocates. The result's PHP type is a union, so
+    /// `Ownership::for_php_type` marks it `MaybeOwned` and the generic `Op::RuntimeCall` arm of
+    /// `value_is_owning_temporary` then classified it as an owning temporary. The call-argument
+    /// cleanup therefore released a cell the guard had only borrowed: for `new H($n)` with a
+    /// `?string` parameter and a branch-retyped `$n`, the constructor's `prop_set` incref and that
+    /// spurious release cancelled out, so the caller frame's own release at scope exit freed the
+    /// cell while the object's property still pointed at it. The property then read recycled
+    /// memory — `int(9223372036854775806)` once the free list overwrote the tag word.
+    ///
+    /// Because the guard is a pure forward, its ownership is exactly its operand's: an owning
+    /// temporary source (a `mixed` call result) still transfers through it and must be released
+    /// after the call, while a borrowed local load must not be.
+    fn gradual_union_param_guard_source(&self, value: ValueId) -> Option<ValueId> {
+        let inst = self.builder.value_defining_instruction(value)?;
+        if inst.op != Op::RuntimeCall
+            || !matches!(inst.immediate, Some(Immediate::TypeName(_)))
+            || inst.operands.len() != 1
+        {
+            return None;
+        }
+        inst.operands.first().copied()
     }
 
     /// Returns whether a nullable nominal guard forwards its input Mixed cell unchanged.
