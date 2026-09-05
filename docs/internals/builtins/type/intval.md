@@ -1,11 +1,11 @@
 ---
-title: "intval() — internals"
+title: "intval() - internals"
 description: "Compiler internals for intval(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 862
 ---
 
-## `intval()` — internals
+## `intval()` - internals
 
 ## Where it lives
 

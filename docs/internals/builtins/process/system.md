@@ -1,11 +1,11 @@
 ---
-title: "system() — internals"
+title: "system() - internals"
 description: "Compiler internals for system(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 728
 ---
 
-## `system()` — internals
+## `system()` - internals
 
 ## Where it lives
 

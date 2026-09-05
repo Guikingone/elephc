@@ -1,11 +1,11 @@
 ---
-title: "spl_autoload_functions() — internals"
+title: "spl_autoload_functions() - internals"
 description: "Compiler internals for spl_autoload_functions(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 742
 ---
 
-## `spl_autoload_functions()` — internals
+## `spl_autoload_functions()` - internals
 
 ## Where it lives
 

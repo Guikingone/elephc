@@ -1,11 +1,11 @@
 ---
-title: "usleep() — internals"
+title: "usleep() - internals"
 description: "Compiler internals for usleep(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 729
 ---
 
-## `usleep()` — internals
+## `usleep()` - internals
 
 ## Where it lives
 

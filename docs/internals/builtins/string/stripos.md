@@ -1,11 +1,11 @@
 ---
-title: "stripos() — internals"
+title: "stripos() - internals"
 description: "Compiler internals for stripos(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 829
 ---
 
-## `stripos()` — internals
+## `stripos()` - internals
 
 ## Where it lives
 

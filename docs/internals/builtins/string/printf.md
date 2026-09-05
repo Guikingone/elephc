@@ -1,11 +1,11 @@
 ---
-title: "printf() — internals"
+title: "printf() - internals"
 description: "Compiler internals for printf(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 809
 ---
 
-## `printf()` — internals
+## `printf()` - internals
 
 ## Where it lives
 

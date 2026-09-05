@@ -1,11 +1,11 @@
 ---
-title: "gzcompress() — internals"
+title: "gzcompress() - internals"
 description: "Compiler internals for gzcompress(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 765
 ---
 
-## `gzcompress()` — internals
+## `gzcompress()` - internals
 
 ## Where it lives
 

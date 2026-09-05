@@ -1,11 +1,11 @@
 ---
-title: "wordwrap() — internals"
+title: "wordwrap() - internals"
 description: "Compiler internals for wordwrap(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 852
 ---
 
-## `wordwrap()` — internals
+## `wordwrap()` - internals
 
 ## Where it lives
 

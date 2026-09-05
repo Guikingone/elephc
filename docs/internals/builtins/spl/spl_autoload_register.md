@@ -1,11 +1,11 @@
 ---
-title: "spl_autoload_register() — internals"
+title: "spl_autoload_register() - internals"
 description: "Compiler internals for spl_autoload_register(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 743
 ---
 
-## `spl_autoload_register()` — internals
+## `spl_autoload_register()` - internals
 
 ## Where it lives
 

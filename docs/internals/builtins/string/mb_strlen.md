@@ -1,11 +1,11 @@
 ---
-title: "mb_strlen() — internals"
+title: "mb_strlen() - internals"
 description: "Compiler internals for mb_strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 799
 ---
 
-## `mb_strlen()` — internals
+## `mb_strlen()` - internals
 
 ## Where it lives
 

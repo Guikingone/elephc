@@ -1,11 +1,11 @@
 ---
-title: "strrev() — internals"
+title: "strrev() - internals"
 description: "Compiler internals for strrev(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 835
 ---
 
-## `strrev()` — internals
+## `strrev()` - internals
 
 ## Where it lives
 

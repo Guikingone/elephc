@@ -1,11 +1,11 @@
 ---
-title: "parse_url() — internals"
+title: "parse_url() - internals"
 description: "Compiler internals for parse_url(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 808
 ---
 
-## `parse_url()` — internals
+## `parse_url()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "ucfirst() — internals"
+title: "ucfirst() - internals"
 description: "Compiler internals for ucfirst(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 846
 ---
 
-## `ucfirst()` — internals
+## `ucfirst()` - internals
 
 ## Where it lives
 

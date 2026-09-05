@@ -1,11 +1,11 @@
 ---
-title: "urlencode() — internals"
+title: "urlencode() - internals"
 description: "Compiler internals for urlencode(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 849
 ---
 
-## `urlencode()` — internals
+## `urlencode()` - internals
 
 ## Where it lives
 

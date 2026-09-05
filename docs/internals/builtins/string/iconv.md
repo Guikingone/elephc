@@ -1,11 +1,11 @@
 ---
-title: "iconv() — internals"
+title: "iconv() - internals"
 description: "Compiler internals for iconv(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 781
 ---
 
-## `iconv()` — internals
+## `iconv()` - internals
 
 ## Where it lives
 

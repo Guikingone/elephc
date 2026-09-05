@@ -1,11 +1,11 @@
 ---
-title: "boolval() — internals"
+title: "boolval() - internals"
 description: "Compiler internals for boolval(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 853
 ---
 
-## `boolval()` — internals
+## `boolval()` - internals
 
 ## Where it lives
 

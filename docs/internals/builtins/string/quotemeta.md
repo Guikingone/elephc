@@ -1,11 +1,11 @@
 ---
-title: "quotemeta() — internals"
+title: "quotemeta() - internals"
 description: "Compiler internals for quotemeta(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 811
 ---
 
-## `quotemeta()` — internals
+## `quotemeta()` - internals
 
 ## Where it lives
 

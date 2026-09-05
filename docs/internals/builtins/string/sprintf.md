@@ -1,11 +1,11 @@
 ---
-title: "sprintf() — internals"
+title: "sprintf() - internals"
 description: "Compiler internals for sprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 816
 ---
 
-## `sprintf()` — internals
+## `sprintf()` - internals
 
 ## Where it lives
 

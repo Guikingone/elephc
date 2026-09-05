@@ -1,11 +1,11 @@
 ---
-title: "base64_encode() — internals"
+title: "base64_encode() - internals"
 description: "Compiler internals for base64_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 756
 ---
 
-## `base64_encode()` — internals
+## `base64_encode()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "strlen() — internals"
+title: "strlen() - internals"
 description: "Compiler internals for strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 831
 ---
 
-## `strlen()` — internals
+## `strlen()` - internals
 
 ## Where it lives
 
