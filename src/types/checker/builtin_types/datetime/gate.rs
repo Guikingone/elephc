@@ -72,13 +72,18 @@ pub(crate) const DATETIME_CLASS_NAMES: &[&str] = &[
 /// open the gate for every program that calls anything through a variable.
 pub(crate) fn program_may_reference_datetime(program: &[Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
-    // NOT widened for `usage.includes_runtime_php`, though a runtime include can certainly write
-    // `new DateTimeImmutable(…)`. Measured with the gate opened: the include still dies at
-    // `native_constructor_error stage=construct class="DateTimeImmutable"`, because the eval
-    // bridge builds constructor helpers and allocation metadata for the 25 builtin throwables and
-    // nothing else. Opening this alone costs the date/time checker surface on every
-    // runtime-include program and changes nothing observable; both halves move together.
-    if usage.introspects {
+    // WIDENED for `usage.includes_runtime_php`: a runtime include can write
+    // `new DateTimeImmutable(…)`, and registering the family is what gives the eval bridge
+    // something to construct. Opening this alone was measured to change nothing observable — the
+    // include still died at
+    // `Fatal error: eval() runtime failed: could not construct class "DateTimeImmutable"` —
+    // because construction also needs the constructor lowered into EIR and the class name present
+    // in `_classes_by_name`. The date/time family already had the first of those:
+    // `ir_lower::builtin_datetime::lower_eval_date_alias_methods_if_needed` lowers
+    // `__construct` for DateTime, DateTimeImmutable, DateTimeZone and DateInterval whenever an
+    // eval fragment may reach dates, and a runtime include is such a fragment. The allocation half
+    // is `codegen::runtime_metadata::classes::seed_runtime_eval_constructible_class_names`.
+    if usage.introspects || usage.includes_runtime_php {
         return true;
     }
     if DATETIME_PRODUCING_BUILTINS

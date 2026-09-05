@@ -110,7 +110,26 @@ fn lower_eval_date_alias_methods_if_needed(
     if !module_uses_eval(module) {
         return;
     }
-    if !eval_fragments_may_reach_dates(module) {
+    // THE AUTHORITY IS THE BRIDGE FLAG, and scanning for eval OPS alone was not it.
+    // `required_runtime_features.eval_bridge` is what `lowered_runtime_features` sets for every
+    // route into the interpreter: a bridge-requiring `eval`, `extract`, `spl_autoload_register`,
+    // and — the case this echelon opened the date/time checker gate for — a
+    // `RuntimeCall(DynamicInclude)`, an `include`/`require` whose path is not a literal.
+    // `eval_fragments_may_reach_dates` matches `Op::Eval*` and the `eval` language construct, and
+    // a runtime include is NEITHER: it lowers to `Op::RuntimeCall`. So a program whose only
+    // bridge user was `include $path` answered false here even with the gate open, and the date
+    // classes were registered and allocatable but had no constructor to run —
+    // `codegen::eval_constructor_helpers` builds a dispatch slot only for a `__construct` that
+    // reached EIR.
+    //
+    // Measured, `php -n` 8.5.6 as the oracle: a runtime-included file doing
+    // `new DateTimeImmutable("2020-01-02 03:04:05")` then `new DateInterval("P1D")` printed
+    // `Fatal error: eval() runtime failed` and exited 1, where PHP printed
+    // `2020-01-02;2020-01-03;done`. Under `ELEPHC_EVAL_TRACE=1` the binary named the depth
+    // exactly: `phase=native_constructor stage=signature class="DateTimeImmutable"
+    // details=Some((2, 2, 0, true))` — the signature was known and bridge-supported — followed by
+    // `phase=native_constructor_error stage=construct`. Signature present, body absent.
+    if !module.required_runtime_features.eval_bridge && !eval_fragments_may_reach_dates(module) {
         return;
     }
     let mut methods = eval_date_alias_builtin_datetime_methods(module);

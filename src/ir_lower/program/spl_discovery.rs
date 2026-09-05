@@ -48,9 +48,61 @@ pub(super) fn lower_referenced_builtin_spl_methods(
     }
 }
 
+/// Adds the builtin SPL surface a runtime include or an `eval` fragment can name.
+///
+/// WHY A SCAN CANNOT FIND THESE. Every other producer in `referenced_builtin_spl_methods` reads an
+/// EIR instruction: an `ObjectNew` with a class immediate, a `MethodCall` with a receiver type.
+/// Text that arrives at RUN TIME has no instruction to read — `include $path` lowers to one
+/// `RuntimeCall(DynamicInclude)` and the `new ArrayObject(…)` inside the included file is not in
+/// this module at all. So the surface has to be forced, exactly as
+/// `ir_lower::builtin_datetime::lower_eval_date_alias_methods_if_needed` forces the date aliases.
+///
+/// WHY THE INTERPRETER CANNOT COVER FOR US, which is what makes SPL different from Reflection.
+/// `ir_lower::reflection` notes that Reflection values owned by the bridge "are dispatched by
+/// Magician, whose interpreter exposes the complete Reflection surface without forcing those
+/// bodies into AOT" — the magician owns `crates/elephc-magician/src/interpreter/reflection/`. It
+/// owns no SPL implementation. An `ArrayObject` the interpreter builds is an AOT object, allocated
+/// by `__rt_new_by_name` and initialized by the AOT `__construct`, so if that body never reached
+/// EIR there is nothing to run.
+///
+/// THE GATE IS THE BRIDGE FLAG. `required_runtime_features.eval_bridge` is the same authority the
+/// date/time pass now reads, and it is already set for every route into the interpreter —
+/// a bridge-requiring `eval`, `extract`, `spl_autoload_register`, and `DynamicInclude`. A program
+/// with none of them keeps paying nothing: the loop below is skipped, and the class family was
+/// never registered by `builtin_spl_classes::program_may_reference_spl` in the first place, so
+/// `module.class_infos` holds none of these names to iterate.
+///
+/// WHAT IT FORCES is what the `DynamicObjectNewMixed` arm below already forces for `new $c`: the
+/// constructor, plus `push_builtin_spl_metadata_methods` — the interface and vtable methods a
+/// constructed object needs even when nothing calls them by name. Promising more than `new $c`
+/// already promises would be a new claim; promising less would allocate an object whose runtime
+/// class-id dispatch jumps through a null vtable slot.
+///
+/// Measured, `php -n` 8.5.6 as the oracle: a runtime-included file doing
+/// `new ArrayObject([1,2,3])` then `new SplFixedArray(2)` printed
+/// `Fatal error: eval() runtime failed: could not construct class "ArrayObject"` before the
+/// checker gate opened — the ALLOCATION failing, one layer above this — and then a bare
+/// `Fatal error: eval() runtime failed` with the gate open and this pass absent, which
+/// `ELEPHC_EVAL_TRACE=1` resolves to `phase=native_constructor_error stage=construct`. PHP prints
+/// `3;a;done`.
+fn push_eval_bridge_builtin_spl_methods(methods: &mut Vec<(String, String)>, module: &Module) {
+    if !module.required_runtime_features.eval_bridge {
+        return;
+    }
+    let construct_key = php_method_key("__construct");
+    for class_name in module.class_infos.keys() {
+        if !is_dynamic_new_mixed_metadata_candidate(class_name) {
+            continue;
+        }
+        push_supported_builtin_spl_method_for_receiver(methods, module, class_name, &construct_key);
+        push_builtin_spl_metadata_methods(methods, module, class_name);
+    }
+}
+
 /// Finds builtin SPL methods whose symbols are required by already-lowered EIR.
 pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
     let mut methods = Vec::new();
+    push_eval_bridge_builtin_spl_methods(&mut methods, module);
     for function in module
         .functions
         .iter()

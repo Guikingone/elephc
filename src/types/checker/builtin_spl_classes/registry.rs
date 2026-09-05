@@ -92,15 +92,18 @@ const PHAR_CLASS_NAMES: &[&str] = &["Phar", "PharData", "PharFileInfo"];
 /// `PharFileInfo extends SplFileInfo`, so gating Phar separately would imply the SPL gate anyway.
 pub(crate) fn program_may_reference_spl(program: &[crate::parser::ast::Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
-    // NOT widened for `usage.includes_runtime_php`, though a runtime include can certainly write
-    // `new ArrayObject(…)`. Measured: opening this gate alone changes nothing a program can
-    // observe, because the eval bridge has no constructor helper and no allocation metadata for
-    // the SPL classes — `codegen::eval_constructor_helpers` builds those for the 25 builtin
-    // throwables and nothing else — so the include still dies, one layer deeper, at
-    // `native_constructor_error stage=construct`. Opening it would buy every runtime-include
-    // program the SPL checker surface for no change in behaviour. Both halves move together or
-    // neither does.
-    if usage.introspects {
+    // WIDENED for `usage.includes_runtime_php`, because a runtime include can write
+    // `new ArrayObject(…)` and the interpreter has no SPL implementation of its own to fall back
+    // on — unlike Reflection, whose bodies the magician owns outright. Registering the family is
+    // only the FIRST of three halves, and opening it alone was measured to change nothing: the
+    // include then died one layer deeper, at
+    // `Fatal error: eval() runtime failed: could not construct class "ArrayObject"`. The other
+    // two are `ir_lower::program::spl_discovery::lower_eval_spl_methods_if_needed`, which forces
+    // the constructors into EIR so `eval_constructor_helpers` can build a dispatch slot for them,
+    // and `codegen::runtime_metadata::classes::seed_runtime_eval_constructible_class_names`,
+    // which puts the names in `_classes_by_name` so `__rt_new_by_name` can allocate one. All
+    // three move together; any one of them alone is a fatal at a different depth.
+    if usage.introspects || usage.includes_runtime_php {
         return true;
     }
     // `unserialize` names its class inside the DATA, where no static walk can read it, exactly as
