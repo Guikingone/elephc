@@ -200,7 +200,7 @@ fn parse_fragment_rejects_legacy_var_modifier_combinations() {
         b"class DynEvalBadReadonlyVar { readonly var $value; }",
     ] {
         assert_eq!(
-            parse_fragment(source),
+            parse_fragment_error(source),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }

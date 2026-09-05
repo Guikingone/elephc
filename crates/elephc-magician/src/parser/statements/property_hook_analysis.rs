@@ -46,6 +46,9 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
             eval_expr_uses_this_property(target, property_name)
                 || eval_expr_uses_this_property(source, property_name)
         }
+        EvalStmt::VarReferenceBind { source, .. } => {
+            eval_expr_uses_this_property(source, property_name)
+        }
         EvalStmt::Break(_)
         | EvalStmt::Continue(_)
         | EvalStmt::ClassDecl(_)

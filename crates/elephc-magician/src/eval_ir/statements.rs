@@ -89,6 +89,15 @@ pub enum EvalStmt {
         target: String,
         source: String,
     },
+    /// Binds a variable to a non-variable lvalue source, as in `$x = &$this->p;`.
+    ///
+    /// `ReferenceAssign` covers the variable-to-variable case, where PHP aliases two scope
+    /// names; this variant covers every other assignable source PHP accepts after `=&`
+    /// (properties, static properties, array elements, and their dynamic-name forms).
+    VarReferenceBind {
+        target: String,
+        source: EvalExpr,
+    },
     PropertyReferenceBind {
         object: EvalExpr,
         property: String,

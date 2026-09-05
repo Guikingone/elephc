@@ -207,6 +207,10 @@ pub(in crate::interpreter) fn execute_stmt(
             }
             Ok(EvalControl::None)
         }
+        EvalStmt::VarReferenceBind { target, source } => {
+            eval_var_reference_bind(target, source, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
         stmt @ (
             EvalStmt::PropertyReferenceBind { .. }
             | EvalStmt::DynamicPropertyReferenceBind { .. }

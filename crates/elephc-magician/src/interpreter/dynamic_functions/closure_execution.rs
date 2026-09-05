@@ -682,6 +682,7 @@ fn visit_static_var_declarations(
             | EvalStmt::PropertyIncDec { .. }
             | EvalStmt::PropertySet { .. }
             | EvalStmt::ReferenceAssign { .. }
+            | EvalStmt::VarReferenceBind { .. }
             | EvalStmt::Return(_)
             | EvalStmt::StaticPropertyArrayAppend { .. }
             | EvalStmt::StaticPropertyArraySet { .. }

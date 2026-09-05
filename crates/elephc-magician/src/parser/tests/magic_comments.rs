@@ -101,7 +101,7 @@ fn parse_fragment_skips_comments_and_preserves_line_metadata() {
 #[test]
 fn parse_fragment_rejects_unterminated_block_comment() {
     assert_eq!(
-        parse_fragment(b"/* open").unwrap_err(),
+        parse_fragment_error(b"/* open").unwrap_err(),
         EvalParseError::UnterminatedComment
     );
 }

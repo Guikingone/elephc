@@ -295,7 +295,7 @@ trait DynEvalOuterTrait {
 #[test]
 fn parse_fragment_rejects_new_without_class_name() {
     assert_eq!(
-        parse_fragment(b"return new ();"),
+        parse_fragment_error(b"return new ();"),
         Err(EvalParseError::UnexpectedToken)
     );
 }
@@ -304,7 +304,7 @@ fn parse_fragment_rejects_new_without_class_name() {
 fn parse_fragment_rejects_expression_keywords_as_unsupported_constructs() {
     for source in [b"return yield 1;" as &[u8]] {
         assert_eq!(
-            parse_fragment(source),
+            parse_fragment_error(source),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }
@@ -313,7 +313,7 @@ fn parse_fragment_rejects_expression_keywords_as_unsupported_constructs() {
 #[test]
 fn parse_fragment_rejects_missing_semicolon() {
     assert_eq!(
-        parse_fragment(b"$x = 1"),
+        parse_fragment_error(b"$x = 1"),
         Err(EvalParseError::ExpectedSemicolon)
     );
 }

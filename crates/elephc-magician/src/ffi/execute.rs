@@ -14,7 +14,7 @@ use super::util::clear_result;
 #[cfg(not(test))]
 use super::util::write_outcome;
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ElephcEvalScope, ABI_VERSION};
-use crate::errors::{EvalParseError, EvalStatus};
+use crate::errors::{report_fatal_diagnostic, EvalParseDiagnostic, EvalStatus};
 use crate::eval_ir;
 #[cfg(not(test))]
 use crate::interpreter;
@@ -78,8 +78,9 @@ unsafe fn execute_eval_inner(
     let program = match parse_cache::parse_fragment_cached(code) {
         Ok(program) => program,
         Err(err) => {
-            let status = err.clone().status().code();
+            let status = err.status().code();
             trace_eval_parse_error(ctx, code, &err, status);
+            report_eval_parse_error(ctx, &err);
             return status;
         }
     };
@@ -112,6 +113,21 @@ unsafe fn trace_eval_input(ctx: *const ElephcEvalContext, code: &[u8]) {
     });
 }
 
+/// Prints the PHP parse diagnostic for a fragment the interpreter could not parse.
+///
+/// The generated status handler cannot name the file, the line or the token — the assembly it
+/// emits carries a fixed string — so the side that owns the parser prints the diagnostic and
+/// the generated code only exits.
+///
+/// # Safety
+/// `ctx` must be null or a valid eval context handle supplied to the FFI entry point.
+unsafe fn report_eval_parse_error(ctx: *const ElephcEvalContext, error: &EvalParseDiagnostic) {
+    let (file, _, line, _) = unsafe { ctx.as_ref() }
+        .map(ElephcEvalContext::call_site)
+        .unwrap_or_else(|| (String::new(), String::new(), 0, None));
+    report_fatal_diagnostic(&error.eval_message(&file, line));
+}
+
 /// Emits the precise parser failure while preserving the original ABI status.
 ///
 /// # Safety
@@ -119,7 +135,7 @@ unsafe fn trace_eval_input(ctx: *const ElephcEvalContext, code: &[u8]) {
 unsafe fn trace_eval_parse_error(
     ctx: *const ElephcEvalContext,
     code: &[u8],
-    error: &EvalParseError,
+    error: &EvalParseDiagnostic,
     status: i32,
 ) {
     if !eval_trace_enabled() {

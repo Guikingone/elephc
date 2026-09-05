@@ -12,7 +12,7 @@
 //!   partially lowering ambiguous syntax.
 
 use super::cursor::split_first_name_segment;
-use crate::errors::EvalParseError;
+use crate::errors::{EvalParseDiagnostic, EvalParseError};
 use crate::eval_ir::EvalProgram;
 use crate::lexer::{Token, TokenKind};
 use std::collections::HashMap;
@@ -34,6 +34,13 @@ pub(super) struct Parser {
     pub(super) namespace: String,
     pub(super) imports: NamespaceImports,
     pub(super) allow_use_imports: bool,
+    /// Where the failing token sits, when the cursor has already moved past it.
+    ///
+    /// A recursive-descent rule can consume several tokens before it discovers that the shape
+    /// it just read is not assignable, so the cursor at the point the error surfaces is not
+    /// always the token PHP names. This parser never backtracks, so exactly one error is ever
+    /// created per fragment and the first stamp is the one that describes it.
+    pub(super) error_pos: Option<usize>,
 }
 
 /// A parsed PHP name plus whether it used a leading global namespace separator.
@@ -122,18 +129,49 @@ impl Parser {
             namespace: String::new(),
             imports: NamespaceImports::default(),
             allow_use_imports: true,
+            error_pos: None,
         }
     }
 
+    /// Records the current token as the one a failure should name, then returns that failure.
+    pub(super) fn fail(&mut self, error: EvalParseError) -> EvalParseError {
+        self.fail_at(self.pos, error)
+    }
+
+    /// Records a specific token as the one a failure should name, then returns that failure.
+    pub(super) fn fail_at(&mut self, pos: usize, error: EvalParseError) -> EvalParseError {
+        if self.error_pos.is_none() {
+            self.error_pos = Some(pos);
+        }
+        error
+    }
+
+    /// Returns the token index a diagnostic should name for the failure just reported.
+    fn failing_token_pos(&self) -> usize {
+        self.error_pos.unwrap_or(self.pos)
+    }
+
     /// Parses a complete eval fragment until EOF.
-    pub(super) fn parse_program(mut self) -> Result<EvalProgram, EvalParseError> {
+    ///
+    /// The cursor stops on the token the grammar could not accept, so the failure is turned
+    /// into a positioned diagnostic here rather than at any of the hundreds of sites that
+    /// return a bare `EvalParseError`.
+    pub(super) fn parse_program(mut self) -> Result<EvalProgram, EvalParseDiagnostic> {
         let mut statements = Vec::new();
         while !matches!(self.current(), TokenKind::Eof) {
             match self.parse_stmt() {
                 Ok(parsed) => statements.extend(parsed),
                 Err(error) => {
                     self.trace_parse_error(&error);
-                    return Err(error);
+                    let pos = self.failing_token_pos();
+                    return Err(EvalParseDiagnostic::new(
+                        error,
+                        self.token_lines.get(pos).copied().unwrap_or(1),
+                        self.tokens
+                            .get(pos)
+                            .unwrap_or(&TokenKind::Eof)
+                            .php_description(),
+                    ));
                 }
             }
         }

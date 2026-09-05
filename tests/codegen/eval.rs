@@ -5063,13 +5063,110 @@ fn test_eval_null_argument_is_empty_fragment() {
     assert_eq!(out, "");
 }
 
+/// Compiles one fixture that must die on a PHP parse error and returns its standard output.
+///
+/// PHP prints a parse diagnostic on standard output, not standard error — measured with
+/// `php -n` 8.5.6 — and elephc does the same now that the eval bridge names the file, the line
+/// and the failing token instead of printing one constant from generated assembly.
+fn compile_and_run_expect_parse_error(source: &str) -> String {
+    let output = compile_and_run_capture(source);
+    assert!(
+        !output.success,
+        "fixture should have failed; stdout was: {}",
+        output.stdout
+    );
+    output.stdout
+}
+
+/// Verifies a broken included file names the file, the line and the token like PHP does.
+///
+/// The whole diagnostic is pinned, not a fragment of it: the fixture echoes the path it wrote
+/// so the expected text can be rebuilt byte for byte.
+///
+/// Reference output captured from `php -n` (PHP 8.5.6) on the same fixture, exit status 255:
+/// `<piece>\n` then `\nParse error: syntax error, unexpected identifier "bar" in <piece> on
+/// line 3\n`.
+#[test]
+fn test_eval_include_parse_error_names_the_file_the_line_and_the_token() {
+    let out = compile_and_run_expect_parse_error(
+        r#"<?php
+$piece = __DIR__ . "/eval-broken-include.php";
+file_put_contents($piece, "<?php\n\$ok = 1;\nfoo bar;\n");
+echo $piece . "\n";
+include $piece;
+echo "unreachable";
+"#,
+    );
+    let piece = out.lines().next().expect("fixture echoes the include path");
+    assert_eq!(
+        out,
+        format!(
+            "{piece}\n\nParse error: syntax error, unexpected identifier \"bar\" in {piece} on line 3\n"
+        ),
+        "the include parse diagnostic did not match the one php -n prints"
+    );
+}
+
+/// Verifies a broken `eval()` string names the calling file, its line and the fragment line.
+///
+/// PHP reports the file and line of the `eval()` call itself, then `: eval()'d code on line n`
+/// for the line inside the fragment.
+///
+/// Reference output captured from `php -n` (PHP 8.5.6) on the same fixture, exit status 255:
+/// `<file>\n` then `\nParse error: syntax error, unexpected identifier "bar" in <file>(3) :
+/// eval()'d code on line 2\n`.
+#[test]
+fn test_eval_parse_error_names_the_call_site_and_the_fragment_line() {
+    let out = compile_and_run_expect_parse_error(
+        "<?php\necho __FILE__ . \"\\n\";\neval(\"\\$ok = 1;\\nfoo bar;\\n\");\necho \"unreachable\";\n",
+    );
+    let file = out.lines().next().expect("fixture echoes its own path");
+    assert_eq!(
+        out,
+        format!(
+            "{file}\n\nParse error: syntax error, unexpected identifier \"bar\" in {file}(3) : eval()'d code on line 2\n"
+        ),
+        "the eval parse diagnostic did not match the one php -n prints"
+    );
+}
+
+/// Verifies the reported line is the file line even when PHP code follows inline HTML.
+///
+/// Parsing runs on the bytes after `<?php`, so a fragment line is the file line only for the
+/// block that opens the file; every later block needs the newlines before it added back.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): the diagnostic names `on line 6`.
+#[test]
+fn test_eval_include_parse_error_line_survives_leading_inline_html() {
+    let out = compile_and_run_expect_parse_error(
+        r#"<?php
+$piece = __DIR__ . "/eval-broken-html-include.php";
+file_put_contents($piece, "one\ntwo\nthree\n<?php\n\$ok = 1;\nfoo bar;\n");
+echo $piece . "\n";
+include $piece;
+echo "unreachable";
+"#,
+    );
+    let piece = out.lines().next().expect("fixture echoes the include path");
+    assert!(
+        out.contains(&format!(
+            "Parse error: syntax error, unexpected identifier \"bar\" in {piece} on line 6\n"
+        )),
+        "the diagnostic did not name the file line of the failing token: {out}"
+    );
+}
+
 /// Verifies non-string scalar eval arguments are coerced before runtime parsing.
+///
+/// `php -n` 8.5.6 answers `syntax error, unexpected end of file` for the fragment `123`,
+/// which is the same reason clause asserted here.
 #[test]
 fn test_eval_integer_argument_is_coerced_then_parse_checked() {
-    let err = compile_and_run_expect_failure("<?php eval(123);");
+    let out = compile_and_run_expect_parse_error("<?php eval(123);");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
-        "stderr did not contain eval parse diagnostic: {err}"
+        out.contains("Parse error: syntax error, unexpected end of file")
+            && out.contains(" : eval()'d code on line 1"),
+        "stdout did not contain the eval parse diagnostic: {out}"
     );
 }
 
@@ -5928,7 +6025,7 @@ echo $items["name"];
 /// outer `$v`, and `test_eval_nested_eval_return_value_is_expression_result` just below.
 #[test]
 fn test_eval_nested_eval_uses_same_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run_expect_parse_error(
         r#"<?php
 $x = 1;
 eval('eval("$x = $x + 4;");');
@@ -5936,9 +6033,9 @@ echo $x;
 "#,
     );
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        out.contains("Parse error: syntax error, unexpected token \"=\""),
         "the interpolated fragment assigns to a literal and must be refused, as reference PHP \
-         refuses it; stderr was: {err}"
+         refuses it with `syntax error, unexpected token \"=\"`; stdout was: {out}"
     );
 }
 
@@ -10195,12 +10292,16 @@ fn test_eval_missing_dynamic_constant_fetch_fails() {
 }
 
 /// Verifies invalid eval fragments report the dedicated parse-error diagnostic.
+///
+/// `php -n` 8.5.6 answers `Unclosed '('` here, from a bracket-matching pass this parser does
+/// not run; the shape asserted is elephc's own reason clause for the truncated fragment.
 #[test]
 fn test_eval_parse_error_reports_eval_parse_diagnostic() {
-    let err = compile_and_run_expect_failure("<?php eval('if (');");
+    let out = compile_and_run_expect_parse_error("<?php eval('if (');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
-        "stderr did not contain eval parse-error diagnostic: {err}"
+        out.contains("Parse error: syntax error, unexpected end of file")
+            && out.contains(" : eval()'d code on line 1"),
+        "stdout did not contain the eval parse-error diagnostic: {out}"
     );
 }
 
@@ -10217,11 +10318,12 @@ fn assert_eval_failure_contains(source: &str, expected: &str) -> String {
 /// Verifies eval parse failures retain their stable user-facing diagnostic.
 #[test]
 fn test_eval_error_contract_reports_parse_failure() {
-    let stderr = assert_eval_failure_contains(
-        "<?php eval('if (');",
-        "Parse error: eval() fragment is invalid",
+    let stdout = compile_and_run_expect_parse_error("<?php eval('if (');");
+    assert!(
+        stdout.contains("Parse error: syntax error, unexpected end of file"),
+        "stdout did not contain the eval parse diagnostic: {stdout}"
     );
-    assert_no_rust_panic_leaked(&stderr);
+    assert_no_rust_panic_leaked(&stdout);
 }
 
 /// Verifies unsupported eval syntax retains its stable user-facing diagnostic.
@@ -10271,11 +10373,15 @@ echo eval('return define("EvalErrorContractConst", 2) ? "bad" : "ok";');
 /// Verifies malformed input, builtin failure, and non-callables do not leak Rust panics.
 #[test]
 fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
+    // The parse diagnostic now travels on standard output, where PHP writes it, so it is
+    // checked separately from the rows whose fatals are still written to standard error.
+    let parse_stdout = compile_and_run_expect_parse_error("<?php eval('if (');");
+    assert!(
+        parse_stdout.contains("Parse error: syntax error, unexpected end of file"),
+        "stdout did not contain the eval parse diagnostic: {parse_stdout}"
+    );
+    assert_no_rust_panic_leaked(&parse_stdout);
     for (source, expected) in [
-        (
-            "<?php eval('if (');",
-            "Parse error: eval() fragment is invalid",
-        ),
         (
             "<?php eval('clamp(5, 10, 0);');",
             "Fatal error: eval() runtime failed",
@@ -29819,6 +29925,122 @@ echo eval('return include "eval-plain-piece.txt";');
     assert_eq!(out, "OT:RAW1");
 }
 
+/// Verifies a runtime-included file may bind a reference to a property of `$this`.
+///
+/// `$knownTagVersions = &$this->knownTagVersions;` sits at
+/// `vendor/symfony/cache/Adapter/TagAwareAdapter.php:290` and refused to parse, which killed the
+/// whole Symfony request: the interpreter's parser accepted only a plain variable after `=&`,
+/// while PHP accepts any assignable expression.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): `a,b;a,b,c;done`.
+#[test]
+fn test_eval_include_binds_a_reference_to_an_object_property() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-ref-source-bind.php";
+file_put_contents($piece, '<?php
+class RefBagInc {
+    public array $known = ["a"];
+    public function share(): array {
+        $shared = &$this->known;
+        $shared[] = "b";
+        return $this->known;
+    }
+}
+$bag = new RefBagInc();
+echo implode(",", $bag->share());
+echo ";";
+$alias = &$bag->known;
+$alias[] = "c";
+echo implode(",", $bag->known);
+');
+include $piece;
+echo ";done";
+"#,
+    );
+    assert_eq!(out, "a,b;a,b,c;done");
+}
+
+/// Verifies `eval()` binds a reference to every assignable source PHP accepts after `=&`.
+///
+/// Object property, array element, static property and nested array element each name storage
+/// the interpreter can alias; before this they were all `Parse error: eval() fragment is
+/// invalid`, because the grammar demanded a bare `$name`.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): `a,b;9,2;1,2;7;done`.
+#[test]
+fn test_eval_binds_a_reference_to_every_assignable_source() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class RefBagEval { public array $known = ["a"]; }
+$bag = new RefBagEval();
+$alias = &$bag->known;
+$alias[] = "b";
+echo implode(",", $bag->known);
+echo ";";
+$a = [1, 2];
+$r = &$a[0];
+$r = 9;
+echo implode(",", $a);
+echo ";";
+class RefStatEval { public static array $v = [1]; }
+$s = &RefStatEval::$v;
+$s[] = 2;
+echo implode(",", RefStatEval::$v);
+echo ";";
+$n = ["k" => ["deep" => 1]];
+$d = &$n["k"]["deep"];
+$d = 7;
+echo $n["k"]["deep"];
+');
+echo ";done";
+"#,
+    );
+    assert_eq!(out, "a,b;9,2;1,2;7;done");
+}
+
+/// Verifies variable-to-variable aliasing keeps PHP's symmetric semantics.
+///
+/// This is the one reference source that must NOT travel through the new lvalue path: PHP
+/// aliases two scope names, so writing either name is visible through the other, which the
+/// scope's named-alias table models and a one-way write-back to a reference target does not.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): `2:9:9`.
+#[test]
+fn test_eval_variable_reference_alias_stays_symmetric() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = 1;
+$b = &$a;
+$a = 2;
+echo $b;
+echo ":";
+$b = 9;
+echo $a;
+echo ":";
+echo $b;');
+"#,
+    );
+    assert_eq!(out, "2:9:9");
+}
+
+/// Verifies a reference source that names no storage is refused as an unsupported construct.
+///
+/// `php -n` 8.5.6 accepts `$x = &f();` — it emits `Notice: Only variables should be assigned by
+/// reference` and assigns by value — while a function returning a real reference aliases its
+/// result. The interpreter can do neither, so it refuses the fragment instead of lowering a
+/// binding that would silently degrade to a by-value assignment.
+#[test]
+fn test_eval_reference_to_a_call_result_is_refused_as_unsupported() {
+    let err = compile_and_run_expect_failure(
+        "<?php eval('function eval_ref_src() { return 1; } $x = &eval_ref_src();');",
+    );
+    assert!(
+        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+        "stderr did not contain the unsupported-construct diagnostic: {err}"
+    );
+}
+
 /// Verifies repeated string-key writes from included code keep an `array`-declared
 /// property keyed.
 ///
@@ -30145,12 +30367,17 @@ echo $x;
 }
 
 /// Verifies the eval bridge maps PHP opening tags inside fragments to parse diagnostics.
+///
+/// `php -n` 8.5.6 lexes the tag as text and answers
+/// `syntax error, unexpected token "<", expecting end of file`; this parser refuses the whole
+/// tag, so it names `token "<?php"` in the same reason clause.
 #[test]
 fn test_eval_fragment_with_php_opening_tag_reports_parse_error() {
-    let err = compile_and_run_expect_failure("<?php eval('<?php echo 1;');");
+    let out = compile_and_run_expect_parse_error("<?php eval('<?php echo 1;');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
-        "stderr did not contain eval parse diagnostic: {err}"
+        out.contains("Parse error: syntax error, unexpected token \"<?php\"")
+            && out.contains(" : eval()'d code on line 1"),
+        "stdout did not contain the eval parse diagnostic: {out}"
     );
 }
 

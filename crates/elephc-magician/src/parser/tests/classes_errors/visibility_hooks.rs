@@ -281,7 +281,7 @@ fn parse_fragment_retains_property_set_hook_parameter_type() {
 #[test]
 fn parse_fragment_rejects_untyped_explicit_property_set_hook_parameter_for_typed_property() {
     assert_eq!(
-        parse_fragment(
+        parse_fragment_error(
             br#"class DynEvalUntypedSetParamHooked {
     public string $value {
         set($raw) => $raw;

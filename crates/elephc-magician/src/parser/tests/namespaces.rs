@@ -198,7 +198,7 @@ return Alias(LocalValue, OTHER, new BoxAlias\Inner(), new Thing());"#,
 #[test]
 fn parse_fragment_rejects_mixed_kind_typed_grouped_use_imports() {
     assert_eq!(
-        parse_fragment(br#"use function Lib\{target, const VALUE};"#),
+        parse_fragment_error(br#"use function Lib\{target, const VALUE};"#),
         Err(EvalParseError::UnexpectedToken)
     );
 }
@@ -262,7 +262,7 @@ function dyn() { return alias(); }"#,
 #[test]
 fn parse_fragment_rejects_use_import_inside_function_body() {
     assert_eq!(
-        parse_fragment(br#"function dyn() { use function Lib\target; }"#),
+        parse_fragment_error(br#"function dyn() { use function Lib\target; }"#),
         Err(EvalParseError::UnsupportedConstruct)
     );
 }

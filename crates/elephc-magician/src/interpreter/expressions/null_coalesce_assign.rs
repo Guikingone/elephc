@@ -141,6 +141,32 @@ pub(super) fn eval_assign(
     Ok(assigned)
 }
 
+/// Binds a variable to a non-variable lvalue's persistent PHP reference target.
+///
+/// `$x = &$y;` aliases two scope names and stays on `set_reference_alias()`; every other PHP
+/// reference source — a property, a static property, an array element, their dynamic-name forms
+/// — names storage outside the scope, so the variable is rebound as a borrowed view of the
+/// source's current cell plus the reference target that later writes travel back through.
+pub(in crate::interpreter) fn eval_var_reference_bind(
+    name: &str,
+    source: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let (source_target, source_value) = eval_reference_source(source, context, scope, values)?;
+    let replaced = scope.rebind_reference(
+        name.to_string(),
+        source_value,
+        ScopeCellOwnership::Borrowed,
+    );
+    scope.set_reference_target(name.to_string(), source_target);
+    if let Some(replaced) = replaced {
+        eval_release_value(context, values, replaced)?;
+    }
+    Ok(())
+}
+
 /// Binds an array element lvalue to a persistent PHP reference source expression.
 pub(in crate::interpreter) fn eval_array_reference_bind(
     target: &EvalExpr,

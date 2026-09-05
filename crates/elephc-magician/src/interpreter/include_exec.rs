@@ -27,7 +27,11 @@ pub(super) fn eval_nested_eval(
     };
     let code = eval_expr(code, context, scope, values)?;
     let code = values.string_bytes(code)?;
-    let program = parse_fragment_cached(&code).map_err(EvalParseError::status)?;
+    let program = parse_fragment_cached(&code).map_err(|diagnostic| {
+        let (file, _, line, _) = context.call_site();
+        report_fatal_diagnostic(&diagnostic.eval_message(&file, line));
+        diagnostic.status()
+    })?;
     context.push_include_execution(false);
     let result = execute_program_with_context(context, program.as_ref(), scope, values);
     context.pop_include_execution();
@@ -128,8 +132,15 @@ fn eval_execute_include_bytes(
         eval_echo_include_bytes(&bytes[cursor..tag_start], values)?;
         let close = crate::lexer::find_php_close_tag(bytes, code_start);
         let code_end = close.unwrap_or(bytes.len());
-        match eval_execute_include_code(&bytes[code_start..code_end], path, context, scope, values)?
-        {
+        let line_offset = eval_include_line_offset(bytes, code_start);
+        match eval_execute_include_code(
+            &bytes[code_start..code_end],
+            path,
+            line_offset,
+            context,
+            scope,
+            values,
+        )? {
             EvalControl::None => {}
             EvalControl::ReturnVoid => return values.null(),
             EvalControl::Return(value) => return Ok(value),
@@ -150,18 +161,39 @@ fn eval_execute_include_bytes(
     values.int(1)
 }
 
+/// Returns how many lines of an included file precede one PHP code block.
+///
+/// Parsing sees only the bytes after `<?php`, so a fragment line equals the file line only for
+/// the block that opens the file. Every later block, and any block that follows inline HTML,
+/// needs the newlines before it added back before a diagnostic can name PHP's file line.
+fn eval_include_line_offset(bytes: &[u8], code_start: usize) -> i64 {
+    i64::try_from(
+        bytes[..code_start.min(bytes.len())]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count(),
+    )
+    .unwrap_or(0)
+}
+
 /// Parses and executes one PHP code block from an included file.
 fn eval_execute_include_code(
     code: &[u8],
     path: &std::path::Path,
+    line_offset: i64,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     trace_include_fragment("input", code, path, context, None);
-    let program = parse_fragment_cached(code).map_err(|error| {
-        trace_include_fragment("parse_error", code, path, context, Some(&error));
-        error.status()
+    let program = parse_fragment_cached(code).map_err(|diagnostic| {
+        trace_include_fragment("parse_error", code, path, context, Some(&diagnostic));
+        report_fatal_diagnostic(
+            &diagnostic
+                .with_line_offset(line_offset)
+                .include_message(&path.to_string_lossy()),
+        );
+        diagnostic.status()
     })?;
     let previous = context.call_site();
     let file = path.to_string_lossy().into_owned();
@@ -192,7 +224,7 @@ fn trace_include_fragment(
     code: &[u8],
     path: &std::path::Path,
     context: &ElephcEvalContext,
-    error: Option<&EvalParseError>,
+    error: Option<&EvalParseDiagnostic>,
 ) {
     if std::env::var_os(EVAL_TRACE_ENV).is_none() {
         return;

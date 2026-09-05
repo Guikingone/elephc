@@ -8,6 +8,7 @@
 //! - Compound assignment and property targets lower directly into explicit EvalIR statement variants.
 
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 impl Parser {
     /// Parses short array destructuring assignment into ordered optional variable targets.
@@ -121,7 +122,7 @@ impl Parser {
         if self.consume(TokenKind::RBracket) {
             self.expect(TokenKind::Equal)?;
             if self.consume(TokenKind::Ampersand) {
-                let source = self.parse_expr()?;
+                let source = self.parse_reference_source_expr()?;
                 return Ok(vec![EvalStmt::ArrayAppendReferenceBind { name, source }]);
             }
             let value = self.parse_expr()?;
@@ -160,7 +161,7 @@ impl Parser {
         {
             self.advance();
             self.advance();
-            let source = self.parse_expr()?;
+            let source = self.parse_reference_source_expr()?;
             return Ok(vec![EvalStmt::ArrayReferenceBind { target, source }]);
         }
         let Some(op) = assignment_op(self.current()) else {
@@ -168,7 +169,7 @@ impl Parser {
         };
         self.advance();
         if op.is_none() && self.consume(TokenKind::Ampersand) {
-            let source = self.parse_expr()?;
+            let source = self.parse_reference_source_expr()?;
             return Ok(vec![EvalStmt::ArrayReferenceBind { target, source }]);
         }
         let value = self.parse_expr()?;
@@ -202,17 +203,19 @@ impl Parser {
         self.advance();
         if op.is_none() && matches!(self.current(), TokenKind::Ampersand) {
             self.advance();
-            let TokenKind::DollarIdent(source) = self.current() else {
-                return Err(EvalParseError::ExpectedVariable);
-            };
-            let source = source.clone();
-            self.advance();
+            let source = self.parse_reference_source_name()?;
             if require_semicolon {
                 self.expect_semicolon()?;
             }
-            return Ok(vec![EvalStmt::ReferenceAssign {
-                target: name,
-                source,
+            return Ok(vec![match source {
+                ReferenceSource::Variable(source) => EvalStmt::ReferenceAssign {
+                    target: name,
+                    source,
+                },
+                ReferenceSource::Lvalue(source) => EvalStmt::VarReferenceBind {
+                    target: name,
+                    source,
+                },
             }]);
         }
         let value = self.parse_expr()?;
@@ -272,19 +275,16 @@ impl Parser {
         };
         self.advance();
         if op.is_none() && self.consume(TokenKind::Ampersand) {
-            let TokenKind::DollarIdent(source) = self.current() else {
-                return Err(EvalParseError::ExpectedVariable);
-            };
-            let source = source.clone();
-            self.advance();
+            let (mut stmts, source) = self.parse_reference_source_via_alias()?;
             if require_semicolon {
                 self.expect_semicolon()?;
             }
-            return Ok(vec![EvalStmt::StaticPropertyReferenceBind {
+            stmts.push(EvalStmt::StaticPropertyReferenceBind {
                 class_name,
                 property,
                 source,
-            }]);
+            });
+            return Ok(stmts);
         }
         let value = self.parse_expr()?;
         if require_semicolon {
@@ -360,19 +360,16 @@ impl Parser {
         };
         self.advance();
         if op.is_none() && self.consume(TokenKind::Ampersand) {
-            let TokenKind::DollarIdent(source) = self.current() else {
-                return Err(EvalParseError::ExpectedVariable);
-            };
-            let source = source.clone();
-            self.advance();
+            let (mut stmts, source) = self.parse_reference_source_via_alias()?;
             if require_semicolon {
                 self.expect_semicolon()?;
             }
-            return Ok(vec![EvalStmt::DynamicStaticPropertyReferenceBind {
+            stmts.push(EvalStmt::DynamicStaticPropertyReferenceBind {
                 class_name,
                 property,
                 source,
-            }]);
+            });
+            return Ok(stmts);
         }
         let value = self.parse_expr()?;
         if require_semicolon {
@@ -584,17 +581,17 @@ impl Parser {
             }
             return Ok(vec![EvalStmt::Expr(target)]);
         };
+        // A target that turns out not to be assignable is only discovered after the whole
+        // right-hand side has been read, so remember the operator PHP names in that diagnostic.
+        let operator_pos = self.pos;
         self.advance();
         if op.is_none() && self.consume(TokenKind::Ampersand) {
-            let TokenKind::DollarIdent(source) = self.current() else {
-                return Err(EvalParseError::ExpectedVariable);
-            };
-            let source = source.clone();
-            self.advance();
+            let (mut stmts, source) = self.parse_reference_source_via_alias()?;
             if require_semicolon {
                 self.expect_semicolon()?;
             }
-            return property_reference_bind_stmt(target, source).map(|stmt| vec![stmt]);
+            stmts.push(property_reference_bind_stmt(target, source)?);
+            return Ok(stmts);
         }
         let value = self.parse_expr()?;
         if require_semicolon {
@@ -683,7 +680,96 @@ impl Parser {
                     value,
                 }])
             }
-            _ => Err(EvalParseError::UnexpectedToken),
+            _ => Err(self.fail_at(operator_pos, EvalParseError::UnexpectedToken)),
         }
     }
+
+    /// Parses the source of a `= &` reference binding.
+    ///
+    /// PHP accepts any assignable expression after `=&`, not just a plain variable. The
+    /// interpreter's reference machinery can alias every storage shape `eval_call_arg_value()`
+    /// resolves to an `EvalReferenceTarget`: a variable, an array element (including a nested
+    /// one), an object property, a static property, and their dynamic-name forms. Anything else
+    /// — a call, a literal, an operator expression — names no storage, so it is reported as an
+    /// unsupported construct instead of being lowered into a binding that would silently degrade
+    /// to a by-value assignment.
+    pub(in crate::parser) fn parse_reference_source_expr(
+        &mut self,
+    ) -> Result<EvalExpr, EvalParseError> {
+        let source = self.parse_expr()?;
+        if eval_expr_binds_a_reference(&source) {
+            Ok(source)
+        } else {
+            Err(EvalParseError::UnsupportedConstruct)
+        }
+    }
+
+    /// Parses a `= &` source and splits it into the plain-variable and general-lvalue cases.
+    ///
+    /// The variable-to-variable case stays on `EvalStmt::ReferenceAssign` because PHP aliases
+    /// two scope names symmetrically there — writing either name updates both — which the
+    /// scope's named-alias table models and a one-way `EvalReferenceTarget` write-back does not.
+    fn parse_reference_source_name(&mut self) -> Result<ReferenceSource, EvalParseError> {
+        match self.parse_reference_source_expr()? {
+            EvalExpr::LoadVar(name) => Ok(ReferenceSource::Variable(name)),
+            source => Ok(ReferenceSource::Lvalue(source)),
+        }
+    }
+
+    /// Parses a `= &` source and lowers a non-variable one through a hidden binding variable.
+    ///
+    /// `PropertyReferenceBind` and its static-property siblings identify their source by scope
+    /// name, and each resolves it through `scope.reference_target()` first. Binding the general
+    /// lvalue to a hidden name first therefore hands those statements the exact reference target
+    /// they need without teaching each one to evaluate an expression.
+    fn parse_reference_source_via_alias(
+        &mut self,
+    ) -> Result<(Vec<EvalStmt>, String), EvalParseError> {
+        match self.parse_reference_source_name()? {
+            ReferenceSource::Variable(name) => Ok((Vec::new(), name)),
+            ReferenceSource::Lvalue(source) => {
+                let target = next_reference_binding_name();
+                Ok((
+                    vec![EvalStmt::VarReferenceBind {
+                        target: target.clone(),
+                        source,
+                    }],
+                    target,
+                ))
+            }
+        }
+    }
+}
+
+/// The two shapes a `= &` source lowers to.
+enum ReferenceSource {
+    /// A plain variable, aliased by name in the scope.
+    Variable(String),
+    /// Any other assignable expression, aliased through its reference target.
+    Lvalue(EvalExpr),
+}
+
+/// Returns whether an expression names storage PHP can bind a reference to.
+fn eval_expr_binds_a_reference(expr: &EvalExpr) -> bool {
+    matches!(
+        expr,
+        EvalExpr::LoadVar(_)
+            | EvalExpr::ArrayGet { .. }
+            | EvalExpr::PropertyGet { .. }
+            | EvalExpr::DynamicPropertyGet { .. }
+            | EvalExpr::StaticPropertyGet { .. }
+            | EvalExpr::DynamicStaticPropertyGet { .. }
+            | EvalExpr::DynamicStaticPropertyNameGet { .. }
+    )
+}
+
+/// Returns a scope name for one hidden reference binding.
+///
+/// The leading NUL byte cannot appear in a PHP variable name, so the binding is invisible to
+/// user code the way `eval_property_reference_alias_name()` already keeps property aliases out
+/// of the visible scope.
+fn next_reference_binding_name() -> String {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("\0elephc_reference_source:{id}")
 }

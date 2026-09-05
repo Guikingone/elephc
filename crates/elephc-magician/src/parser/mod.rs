@@ -20,18 +20,28 @@ mod statements;
 #[cfg(test)]
 mod tests;
 
-use crate::errors::EvalParseError;
+use crate::errors::{EvalParseDiagnostic, EvalParseError};
 use crate::eval_ir::EvalProgram;
 use crate::lexer::{contains_php_open_tag, tokenize};
 use state::Parser;
 
 /// Parses an eval fragment into by-name EvalIR statements.
-pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseError> {
+///
+/// Failures carry the fragment line and the failing token so callers can name them the way PHP
+/// does; the three failures detected before the parser sees a token are reported at the
+/// fragment's last line, which is where PHP reports an unterminated literal too.
+pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic> {
     if contains_php_open_tag(code) {
-        return Err(EvalParseError::PhpOpenTag);
+        return Err(EvalParseDiagnostic::at_source_end(
+            EvalParseError::PhpOpenTag,
+            code,
+            "token \"<?php\"",
+        ));
     }
-    let source = normalize_binary_string_literals(code)?;
-    let tokens = tokenize(&source)?;
+    let source = normalize_binary_string_literals(code)
+        .map_err(|error| EvalParseDiagnostic::at_source_end(error, code, "character"))?;
+    let tokens = tokenize(&source)
+        .map_err(|error| EvalParseDiagnostic::at_source_end(error, code, "end of file"))?;
     Parser::new(tokens, code.len()).parse_program()
 }
 

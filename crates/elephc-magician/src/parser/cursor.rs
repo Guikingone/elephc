@@ -14,12 +14,12 @@ use crate::eval_ir::{EvalBinOp, EvalConst, EvalExpr, EvalStmt};
 use crate::lexer::TokenKind;
 
 impl Parser {
-    /// Consumes `expected` or returns a parse error.
+    /// Consumes `expected` or returns a parse error naming the token that stopped it.
     pub(super) fn expect(&mut self, expected: TokenKind) -> Result<(), EvalParseError> {
         if self.consume(expected) {
             Ok(())
         } else {
-            Err(EvalParseError::UnexpectedToken)
+            Err(self.fail(EvalParseError::UnexpectedToken))
         }
     }
 
@@ -28,7 +28,7 @@ impl Parser {
         if self.consume_semicolon() {
             Ok(())
         } else {
-            Err(EvalParseError::ExpectedSemicolon)
+            Err(self.fail(EvalParseError::ExpectedSemicolon))
         }
     }
 

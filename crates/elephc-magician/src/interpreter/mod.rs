@@ -37,7 +37,7 @@ use crate::context::{
     EvalArrayReferenceKey, EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget,
     EvalReferenceTarget, NativeCallableDefault, NativeCallableSignature, NativeFunction,
 };
-use crate::errors::{EvalParseError, EvalStatus};
+use crate::errors::{report_fatal_diagnostic, EvalParseDiagnostic, EvalStatus};
 use crate::eval_ir::{
     EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch,
     EvalCastType, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst,

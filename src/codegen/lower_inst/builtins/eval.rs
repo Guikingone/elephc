@@ -36,7 +36,8 @@ use super::super::{
 const EVAL_STATUS_PARSE_ERROR: i64 = 1;
 const EVAL_STATUS_UNCAUGHT_THROWABLE: i64 = 3;
 const EVAL_STATUS_UNSUPPORTED: i64 = 4;
-const EVAL_PARSE_ERROR_MESSAGE: &str = "Parse error: eval() fragment is invalid\n";
+/// PHP's process exit status for a parse error, measured with `php -n` 8.5.6.
+const EVAL_PARSE_ERROR_EXIT_STATUS: u32 = 255;
 const EVAL_UNSUPPORTED_MESSAGE: &str =
     "Fatal error: eval() fragment uses an unsupported construct\n";
 const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";

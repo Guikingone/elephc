@@ -21,7 +21,7 @@ pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
     emit_branch_if_eval_status(ctx, EVAL_STATUS_UNSUPPORTED, &unsupported_label);
     emit_eval_fatal_message(ctx, EVAL_RUNTIME_FATAL_MESSAGE);
     ctx.emitter.label(&parse_error_label);
-    emit_eval_fatal_message(ctx, EVAL_PARSE_ERROR_MESSAGE);
+    emit_eval_parse_error_exit(ctx);
     ctx.emitter.label(&throwable_label);
     emit_eval_throw_current(ctx);
     ctx.emitter.label(&unsupported_label);
@@ -62,6 +62,16 @@ pub(super) fn eval_mixed_unbox_low_payload_reg(ctx: &FunctionContext<'_>) -> &'s
         Arch::AArch64 => "x1",
         Arch::X86_64 => "rdi",
     }
+}
+
+/// Exits after the bridge has already printed the PHP parse diagnostic.
+///
+/// The message names the file, the line and the failing token, none of which a constant in the
+/// generated assembly can carry, so `libelephc-magician` prints it on standard output — where
+/// `php -n` 8.5.6 prints it — before returning the parse-error status. Only the exit is left
+/// here, and it uses PHP's own status for a parse error.
+pub(super) fn emit_eval_parse_error_exit(ctx: &mut FunctionContext<'_>) {
+    abi::emit_exit(ctx.emitter, EVAL_PARSE_ERROR_EXIT_STATUS);
 }
 
 /// Emits an eval diagnostic message and exits the process.

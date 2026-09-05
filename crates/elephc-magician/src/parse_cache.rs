@@ -12,7 +12,7 @@
 //!   declarations, scope entries, or context-derived magic-constant values.
 //! - Large fragments bypass the cache to avoid pinning one-off source strings.
 
-use crate::errors::EvalParseError;
+use crate::errors::EvalParseDiagnostic;
 use crate::eval_ir::EvalProgram;
 use crate::parser;
 use std::collections::{HashMap, VecDeque};
@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 const EVAL_PARSE_CACHE_CAPACITY: usize = 256;
 const MAX_CACHEABLE_FRAGMENT_BYTES: usize = 64 * 1024;
 
-type CachedParseResult = Result<Arc<EvalProgram>, EvalParseError>;
+type CachedParseResult = Result<Arc<EvalProgram>, EvalParseDiagnostic>;
 
 static EVAL_PARSE_CACHE: OnceLock<Mutex<EvalParseCache>> = OnceLock::new();
 
@@ -100,6 +100,12 @@ impl EvalParseCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::EvalParseError;
+
+    /// Builds one positioned parse diagnostic for a cache test.
+    fn diagnostic(error: EvalParseError) -> EvalParseDiagnostic {
+        EvalParseDiagnostic::new(error, 1, "end of file")
+    }
 
     /// Verifies repeated successful parses reuse the stored EvalIR allocation.
     #[test]
@@ -123,11 +129,11 @@ mod tests {
         let mut cache = EvalParseCache::new(4);
         let source = b"<?php echo 1;";
 
-        cache.insert(source.to_vec(), Err(EvalParseError::PhpOpenTag));
+        cache.insert(source.to_vec(), Err(diagnostic(EvalParseError::PhpOpenTag)));
 
         assert_eq!(
             cache.lookup(source),
-            Some(Err(EvalParseError::PhpOpenTag))
+            Some(Err(diagnostic(EvalParseError::PhpOpenTag)))
         );
     }
 
@@ -136,9 +142,9 @@ mod tests {
     fn cache_evicts_oldest_fragment() {
         let mut cache = EvalParseCache::new(2);
 
-        cache.insert(b"return 1;".to_vec(), Err(EvalParseError::UnexpectedToken));
-        cache.insert(b"return 2;".to_vec(), Err(EvalParseError::UnexpectedEof));
-        cache.insert(b"return 3;".to_vec(), Err(EvalParseError::InvalidNumber));
+        cache.insert(b"return 1;".to_vec(), Err(diagnostic(EvalParseError::UnexpectedToken)));
+        cache.insert(b"return 2;".to_vec(), Err(diagnostic(EvalParseError::UnexpectedEof)));
+        cache.insert(b"return 3;".to_vec(), Err(diagnostic(EvalParseError::InvalidNumber)));
 
         assert!(cache.lookup(b"return 1;").is_none());
         assert!(cache.lookup(b"return 2;").is_some());
@@ -150,7 +156,7 @@ mod tests {
     fn zero_capacity_cache_stores_nothing() {
         let mut cache = EvalParseCache::new(0);
 
-        cache.insert(b"return 1;".to_vec(), Err(EvalParseError::UnexpectedToken));
+        cache.insert(b"return 1;".to_vec(), Err(diagnostic(EvalParseError::UnexpectedToken)));
 
         assert!(cache.lookup(b"return 1;").is_none());
     }

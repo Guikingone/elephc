@@ -363,6 +363,112 @@ fn parse_fragment_accepts_reference_assignment_source() {
     );
 }
 
+/// Verifies a property source lowers to the general lvalue reference binding.
+///
+/// `$knownTagVersions = &$this->knownTagVersions;` is the Symfony `TagAwareAdapter` line that
+/// this grammar refused; the plain-variable case above must stay on `ReferenceAssign`, because
+/// only that statement aliases two scope names symmetrically.
+#[test]
+fn parse_fragment_accepts_a_property_as_a_reference_source() {
+    let program = parse_fragment(b"$shared = &$this->known;").expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::VarReferenceBind {
+            target: "shared".to_string(),
+            source: EvalExpr::PropertyGet {
+                object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                property: "known".to_string(),
+            },
+        }]
+    );
+}
+
+/// Verifies a static-property source lowers to the general lvalue reference binding.
+#[test]
+fn parse_fragment_accepts_a_static_property_as_a_reference_source() {
+    let program = parse_fragment(b"$shared = &Registry::$items;").expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::VarReferenceBind {
+            target: "shared".to_string(),
+            source: EvalExpr::StaticPropertyGet {
+                class_name: "Registry".to_string(),
+                property: "items".to_string(),
+            },
+        }]
+    );
+}
+
+/// Verifies a reference source that names no storage is refused, not silently copied.
+///
+/// PHP accepts `&f()` and either aliases a by-reference return or warns and assigns by value.
+/// The interpreter can do neither, so it reports an unsupported construct rather than lowering
+/// a binding whose behavior would differ from PHP's without saying so.
+#[test]
+fn parse_fragment_rejects_a_non_lvalue_reference_source() {
+    assert_eq!(
+        parse_fragment_error(b"$shared = &make_it();"),
+        Err(EvalParseError::UnsupportedConstruct)
+    );
+    assert_eq!(
+        parse_fragment_error(b"$shared = &1;"),
+        Err(EvalParseError::UnsupportedConstruct)
+    );
+}
+
+/// Verifies a plain-variable source still lowers a property target to exactly one statement.
+///
+/// The hidden-binding desugaring must apply only to a source that is not a bare variable;
+/// `$box->value =& $source;` has to keep producing the single `PropertyReferenceBind` whose
+/// source is the caller's own scope name.
+#[test]
+fn parse_fragment_keeps_one_statement_for_a_plain_variable_property_bind() {
+    let program = parse_fragment(b"$box->value =& $source;").expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::PropertyReferenceBind {
+            object: EvalExpr::LoadVar("box".to_string()),
+            property: "value".to_string(),
+            source: "source".to_string(),
+        }]
+    );
+}
+
+/// Verifies a property target accepts a general lvalue source through a hidden binding.
+///
+/// `PropertyReferenceBind` names its source by scope name and resolves it through
+/// `scope.reference_target()`, so binding the lvalue to a hidden name first hands it the exact
+/// target without teaching that statement to evaluate an expression.
+#[test]
+fn parse_fragment_binds_a_property_target_to_a_property_source() {
+    let program =
+        parse_fragment(b"$clone->known = &$this->known;").expect("fragment should parse");
+    let statements = program.statements();
+    assert_eq!(statements.len(), 2, "expected a hidden binding then the bind");
+    let EvalStmt::VarReferenceBind { target, source } = &statements[0] else {
+        panic!("first statement should bind the source to a hidden name: {statements:?}");
+    };
+    assert!(
+        target.starts_with('\0'),
+        "the hidden binding must be invisible to user code: {target:?}"
+    );
+    assert_eq!(
+        source,
+        &EvalExpr::PropertyGet {
+            object: Box::new(EvalExpr::LoadVar("this".to_string())),
+            property: "known".to_string(),
+        }
+    );
+    assert_eq!(
+        &statements[1],
+        &EvalStmt::PropertyReferenceBind {
+            object: EvalExpr::LoadVar("clone".to_string()),
+            property: "known".to_string(),
+            source: target.clone(),
+        }
+    );
+}
+
 /// Verifies nested array elements can bind to an existing variable reference.
 #[test]
 fn parse_fragment_accepts_array_reference_assignment_source() {

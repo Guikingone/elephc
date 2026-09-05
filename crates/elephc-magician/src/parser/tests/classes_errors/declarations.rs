@@ -161,7 +161,7 @@ fn parse_fragment_rejects_invalid_type_atom_forms() {
         b"class DynEvalBadStaticPromoted { public function __construct(public static $value) {} }",
     ] {
         assert_eq!(
-            parse_fragment(source),
+            parse_fragment_error(source),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }
@@ -177,7 +177,7 @@ fn parse_fragment_rejects_reserved_class_constant_name() {
         b"enum DynEvalBadEnumConstName { const class = 1; }",
     ] {
         assert_eq!(
-            parse_fragment(source),
+            parse_fragment_error(source),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }
@@ -195,7 +195,7 @@ fn parse_fragment_rejects_reserved_class_like_declaration_names() {
         b"enum bool { case Ready; }",
     ] {
         assert_eq!(
-            parse_fragment(source),
+            parse_fragment_error(source),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }
@@ -247,7 +247,7 @@ fn parse_fragment_rejects_reserved_unqualified_class_like_reference_names() {
         b"try {} catch (match $e) {}",
     ] {
         assert_eq!(
-            parse_fragment(source),
+            parse_fragment_error(source),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }

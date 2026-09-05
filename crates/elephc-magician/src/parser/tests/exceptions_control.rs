@@ -321,7 +321,7 @@ fn parse_fragment_accepts_unset_source() {
 #[test]
 fn parse_fragment_rejects_opening_tag() {
     assert_eq!(
-        parse_fragment(b"<?php echo 1;"),
+        parse_fragment_error(b"<?php echo 1;"),
         Err(EvalParseError::PhpOpenTag)
     );
 }
