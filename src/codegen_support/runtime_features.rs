@@ -108,6 +108,16 @@ pub struct RuntimeFeatures {
     pub directory_resource: bool,
 }
 
+/// Every `RuntimeFeatures` field is a `bool`, so the struct is exactly one byte per feature and
+/// `size_of` counts its fields. Tying that count to `RuntimeFeatures::CACHE_KEY_BIT_COUNT` is what
+/// makes "every feature reaches the runtime cache key" true BY CONSTRUCTION rather than by a
+/// hand-kept list: a feature added to the struct fails this assertion until it is given a bit in
+/// `cache_key_bits` and a variant in `single_feature_variants`.
+const _: () = assert!(
+    std::mem::size_of::<RuntimeFeatures>() == RuntimeFeatures::CACHE_KEY_BIT_COUNT as usize,
+    "every RuntimeFeatures field must own a cache-key bit",
+);
+
 impl RuntimeFeatures {
     /// Packs the feature set into the bits that identify one runtime object.
     ///
@@ -137,6 +147,57 @@ impl RuntimeFeatures {
             | ((self.generator as u64) << 9)
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
+            // The four introspection switches gate emission in
+            // `codegen_support::runtime::emitters` exactly the way `regex` does, but were absent
+            // from this key: a program that needs `__rt_class_exists` and one that does not named
+            // the SAME cache entry, so whichever compiled first published its runtime object and
+            // the other one linked it. Missing symbol or dead weight depending on which way round
+            // the cache was filled.
+            | ((self.const_introspection as u64) << 12)
+            | ((self.class_introspection as u64) << 13)
+            | ((self.class_relation_introspection as u64) << 14)
+            | ((self.class_methods_introspection as u64) << 15)
+    }
+
+    /// Number of feature bits `cache_key_bits` packs, which is also the number of fields.
+    ///
+    /// `runtime_cache::identity` puts the relocation and library-boundary modes in bits 62/63,
+    /// so appending features here stays free until bit 62.
+    pub const CACHE_KEY_BIT_COUNT: u32 = 16;
+
+    /// Returns one variant per field, each with exactly that field set and every other clear.
+    ///
+    /// The list cannot silently fall behind the struct: its length is `CACHE_KEY_BIT_COUNT`,
+    /// which the assertion below pins to `size_of::<RuntimeFeatures>()`. Every field is a
+    /// `bool`, so the struct is one byte per feature and its size IS its field count — adding a
+    /// feature fails the build until it is given a bit in `cache_key_bits` and a variant here.
+    #[cfg(test)]
+    pub(crate) fn single_feature_variants(
+    ) -> [(&'static str, Self); Self::CACHE_KEY_BIT_COUNT as usize] {
+        [
+            ("regex", Self { regex: true, ..Self::none() }),
+            ("mb_strlen", Self { mb_strlen: true, ..Self::none() }),
+            ("phar_archive", Self { phar_archive: true, ..Self::none() }),
+            ("descriptor_invoker", Self { descriptor_invoker: true, ..Self::none() }),
+            ("eval_bridge", Self { eval_bridge: true, ..Self::none() }),
+            ("eval_scope", Self { eval_scope: true, ..Self::none() }),
+            ("web", Self { web: true, ..Self::none() }),
+            ("pdo_udf", Self { pdo_udf: true, ..Self::none() }),
+            ("fiber", Self { fiber: true, ..Self::none() }),
+            ("generator", Self { generator: true, ..Self::none() }),
+            ("popen_resource", Self { popen_resource: true, ..Self::none() }),
+            ("directory_resource", Self { directory_resource: true, ..Self::none() }),
+            ("const_introspection", Self { const_introspection: true, ..Self::none() }),
+            ("class_introspection", Self { class_introspection: true, ..Self::none() }),
+            (
+                "class_relation_introspection",
+                Self { class_relation_introspection: true, ..Self::none() },
+            ),
+            (
+                "class_methods_introspection",
+                Self { class_methods_introspection: true, ..Self::none() },
+            ),
+        ]
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
