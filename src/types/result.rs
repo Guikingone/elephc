@@ -103,6 +103,10 @@ pub struct CheckResult {
     /// class overrides without one. php raises these while LINKING the class, so they are
     /// emitted from the main prologue rather than at any call site.
     pub tentative_return_deprecations: Vec<(u32, String)>,
+    /// `(line, message)` for the ONE incompatible declaration php stops the script on. php
+    /// links every class in the file before it runs a statement, so this aborts before any
+    /// output — including output written above the offending class.
+    pub link_time_fatal: Option<(u32, String)>,
     /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed at that position, so EIR lowering abandons the old frame slot (after releasing
     /// its value) instead of null-storing into it.

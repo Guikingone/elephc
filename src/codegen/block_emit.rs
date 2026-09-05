@@ -1030,6 +1030,7 @@ fn emit_main_function(
     }
     emit_http_response_header_deprecation(&mut ctx);
     emit_tentative_return_deprecations(&mut ctx);
+    emit_link_time_fatal(&mut ctx);
     // Enum cases are NOT initialized here any more: each case now materializes on
     // its first evaluation through `super::enum_singletons`, so a case that user
     // code never touches allocates nothing and burns no object handle — which is
@@ -1094,6 +1095,56 @@ fn emit_tentative_return_deprecations(ctx: &mut FunctionContext<'_>) {
         }
         abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
     }
+}
+
+/// php's tail for a fatal it raises with no PHP frame on the stack.
+///
+/// MEASURED on `php -n` 8.5.6: an incompatible declaration prints the message, then this, then
+/// exits 255. It goes out RAW rather than through `__rt_diag_warning`, because that channel
+/// appends php's ` in FILE on line N` to every piece that carries a newline and php appends it to
+/// the message only.
+const LINK_TIME_FATAL_TRACE: &str = "Stack trace:\n#0 {main}\n";
+
+/// Emits the incompatible-declaration fatal php stops the script on, and stops the program.
+///
+/// php links every class in the file before it runs a statement, so nothing the script itself
+/// would print comes first — MEASURED, an `echo` above the offending class produces nothing. The
+/// main prologue is elephc's equivalent of that moment, and everything below this in `main` is
+/// unreachable once the fatal is emitted.
+fn emit_link_time_fatal(ctx: &mut FunctionContext<'_>) {
+    let Some((line, message)) = ctx.module.link_time_fatal.clone() else {
+        return;
+    };
+    let (label, len) = ctx.data.add_string(message.as_bytes());
+    // BEFORE the message registers are loaded: the publisher works through scratch registers.
+    super::lower_inst::publish_diagnostic_line(ctx, line);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+
+    let (trace_label, trace_len) = ctx.data.add_string(LINK_TIME_FATAL_TRACE.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x0", &trace_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", trace_len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &trace_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", trace_len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+    // 255 is php's own status for a fatal, and `emit_exit` carries the output-buffer flush every
+    // other fatal termination already relies on.
+    abi::emit_exit(ctx.emitter, 255);
 }
 
 fn emit_http_response_header_deprecation(ctx: &mut FunctionContext<'_>) {

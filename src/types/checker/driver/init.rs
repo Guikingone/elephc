@@ -231,6 +231,7 @@ impl Checker {
             string_incdec_locals: HashSet::new(),
             widened_scalar_locals: HashSet::new(),
             tentative_return_deprecations: Vec::new(),
+            link_time_fatal: None,
             strict_locals: false,
             local_conditional_depth: 0,
             local_binding_depth: HashMap::new(),

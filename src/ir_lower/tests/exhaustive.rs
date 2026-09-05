@@ -144,6 +144,7 @@ fn dummy_check_result() -> CheckResult {
         string_incdec_locals: Default::default(),
         widened_scalar_locals: Default::default(),
         tentative_return_deprecations: Default::default(),
+        link_time_fatal: Default::default(),
         local_bind_kill_sites: Default::default(),
         local_retype_sites: Default::default(),
         mixed_storage_store_sites: Default::default(),

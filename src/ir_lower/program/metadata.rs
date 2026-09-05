@@ -30,6 +30,7 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.declared_trait_names = collect_declared_trait_names(program);
     module.declared_trait_source_lines = collect_declared_trait_source_lines(program);
     module.tentative_return_deprecations = check_result.tentative_return_deprecations.clone();
+    module.link_time_fatal = check_result.link_time_fatal.clone();
     module.declared_trait_uses = collect_declared_trait_uses(program);
     module.declared_trait_method_names = collect_declared_trait_method_names(program);
     module.declared_trait_methods = collect_declared_trait_methods(program);

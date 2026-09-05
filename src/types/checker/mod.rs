@@ -301,6 +301,8 @@ pub(crate) struct Checker {
     pub widened_scalar_locals: HashSet<(String, String)>,
     /// php's tentative-return deprecations, computed while linking and emitted at startup.
     pub tentative_return_deprecations: Vec<(u32, String)>,
+    /// php's incompatible-declaration fatal, computed while linking and emitted at startup.
+    pub link_time_fatal: Option<(u32, String)>,
     /// Mirrors `CheckOptions::strict_locals` for the duration of the check. When set, the
     /// permissive local-retype path in `merge_local_assignment_type` and the branch-divergent
     /// `Mixed`-storage marking in `mixed_storage_scan::run_mixed_storage_scan` both step aside
@@ -881,6 +883,7 @@ pub fn check_types_with_options(
         string_incdec_locals: checker.string_incdec_locals,
         widened_scalar_locals: checker.widened_scalar_locals,
         tentative_return_deprecations: checker.tentative_return_deprecations,
+        link_time_fatal: checker.link_time_fatal,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,

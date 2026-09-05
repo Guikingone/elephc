@@ -13272,6 +13272,12 @@ echo fread($f, 64);
 }
 
 /// Verifies compiled PHP output for user stream filter params exposed on `$this`.
+///
+/// The filter is written with php's own signature. It used to read `filter(string $data): string`,
+/// which php REFUSES to link at all — `Declaration of ParamFilter::filter(string $data): string
+/// must be compatible with php_user_filter::filter(...)`, exit 255 — so the assertion below was
+/// measured against a program php never runs. The bucket-brigade body produces the same
+/// `<|hello>` on `php -n` 8.5.6, so what the test is about is unchanged.
 #[test]
 fn test_user_stream_filter_params_are_exposed_on_this() {
     let out = compile_and_run(
@@ -13282,8 +13288,13 @@ class ParamFilter extends php_user_filter {
         return true;
     }
 
-    public function filter(string $data): string {
-        return $data . $this->params["suffix"];
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $bucket->data = $bucket->data . $this->params["suffix"];
+            $consumed += $bucket->datalen;
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
     }
 }
 stream_filter_register("user.params", "ParamFilter");
@@ -22458,5 +22469,217 @@ var_dump(stream_filter_append($c, 'string.rot13'));
             "resource(9) of type (stream)\n",
             "resource(10) of type (stream filter)\n",
         ),
+    );
+}
+
+
+/// A `php_user_filter` override php REFUSES must stop the program the way php stops it.
+///
+/// php links every class in the file before it runs a statement, so an incompatible declaration
+/// prints its fatal and exits 255 with nothing of the program's own output — MEASURED on `php -n`
+/// 8.5.6, including the `echo` above the class, which produces nothing. elephc accepted all four
+/// shapes below in silence and ran the script to completion, so php-src's `php_user_filter_01`,
+/// `_02` and `_03` — which are nothing BUT this fatal — differed by their whole output.
+///
+/// The four shapes are php's four reasons, one assertion each:
+/// - `Short` declares fewer parameters than the parent;
+/// - `ByValue` drops the `&` on `$consumed`;
+/// - `Extra` adds a REQUIRED parameter the parent does not pass;
+/// - `Narrow` types `$closing` `int` where the parent says `bool`.
+#[test]
+fn test_an_incompatible_user_filter_override_is_phps_link_time_fatal() {
+    let parent = "php_user_filter::filter($in, $out, &$consumed, bool $closing): int";
+    for (name, declaration, rendered) in [
+        (
+            "Short",
+            "function filter($in, $out, &$consumed): int {}",
+            "Short::filter($in, $out, &$consumed): int",
+        ),
+        (
+            "ByValue",
+            "function filter($in, $out, $consumed, $closing): int {}",
+            "ByValue::filter($in, $out, $consumed, $closing): int",
+        ),
+        (
+            "Extra",
+            "function filter($in, $out, &$consumed, $closing, $extra): int {}",
+            "Extra::filter($in, $out, &$consumed, $closing, $extra): int",
+        ),
+        (
+            "Narrow",
+            "function filter($in, $out, &$consumed, int $closing): int {}",
+            "Narrow::filter($in, $out, &$consumed, int $closing): int",
+        ),
+    ] {
+        let out = compile_and_run_capture(&format!(
+            "<?php\necho \"never printed\";\nclass {name} extends php_user_filter\n{{\n    {declaration}\n}}\necho \"nor this\";\n"
+        ));
+        assert_eq!(
+            out.exit_code,
+            Some(255),
+            "{name}: php exits 255 on a link-time fatal, got {:?} stdout={:?} diagnostics={:?}",
+            out.exit_code,
+            out.stdout,
+            out.diagnostics
+        );
+        let expected = format!("Fatal error: Declaration of {rendered} must be compatible with {parent}");
+        assert!(
+            out.diagnostics.contains(&expected),
+            "{name}: missing `{expected}` in diagnostics={:?}",
+            out.diagnostics
+        );
+        // php's tail for a fatal raised with no PHP frame on the stack.
+        assert!(
+            out.stdout.contains("Stack trace:\n#0 {main}"),
+            "{name}: missing php's stack-trace tail, stdout={:?}",
+            out.stdout
+        );
+        // Linking happens before the first statement: neither echo runs, not even the one ABOVE
+        // the class declaration.
+        assert!(
+            !out.stdout.contains("never printed") && !out.stdout.contains("nor this"),
+            "{name}: the script ran anyway, stdout={:?}",
+            out.stdout
+        );
+    }
+}
+
+/// The shapes php ACCEPTS must still link, so the fatal above cannot be a blanket refusal.
+///
+/// Each is a widening php allows and elephc must not mistake for the narrowing it rejects:
+/// an untyped or `mixed` parameter where the parent declares one, `?bool` where it declares
+/// `bool`, an OPTIONAL extra parameter, renamed parameters, an added default, and a variadic that
+/// collects the tail. MEASURED on `php -n` 8.5.6: every one of these prints `ok`.
+#[test]
+fn test_a_widened_user_filter_override_still_links() {
+    for (name, declaration) in [
+        ("Exact", "function filter($in, $out, &$consumed, bool $closing): int { return PSFS_PASS_ON; }"),
+        ("Untyped", "function filter($in, $out, &$consumed, $closing): int { return PSFS_PASS_ON; }"),
+        ("Mixed", "function filter(mixed $in, $out, mixed &$consumed, mixed $closing): int { return PSFS_PASS_ON; }"),
+        ("Nullable", "function filter($in, $out, &$consumed, ?bool $closing): int { return PSFS_PASS_ON; }"),
+        ("Optional", "function filter($in, $out, &$consumed, $closing, $extra = 1): int { return PSFS_PASS_ON; }"),
+        ("Renamed", "function filter($a, $b, &$c, $d): int { return PSFS_PASS_ON; }"),
+        ("Defaulted", "function filter($in, $out, &$consumed, $closing = false): int { return PSFS_PASS_ON; }"),
+        ("Variadic", "function filter($in, $out, &$consumed, ...$rest): int { return PSFS_PASS_ON; }"),
+    ] {
+        let out = compile_and_run_capture(&format!(
+            "<?php\nclass {name} extends php_user_filter\n{{\n    {declaration}\n}}\necho \"ok\";\n"
+        ));
+        assert!(out.success, "{name}: program failed: {}", out.stderr);
+        assert_eq!(out.stdout, "ok", "{name}: diagnostics={:?}", out.diagnostics);
+        assert!(
+            !out.diagnostics.contains("must be compatible"),
+            "{name}: php links this, got diagnostics={:?}",
+            out.diagnostics
+        );
+    }
+}
+
+/// `static`, `abstract` and a non-public access level each get php's OWN message, in php's order.
+///
+/// MEASURED on `php -n` 8.5.6 with methods where several refusals apply at once: `static` wins
+/// over `abstract`, which wins over the access level, which wins over the signature. Each case
+/// below is deliberately ALSO one parameter short, so a check in the wrong order would answer
+/// `Declaration of ... must be compatible with ...` instead — which is what elephc did for the
+/// abstract shape before these three messages existed.
+#[test]
+fn test_php_names_static_abstract_and_access_level_before_the_signature() {
+    for (class_prefix, declaration, expected) in [
+        (
+            "",
+            "static function filter($in, $out): int {}",
+            "Cannot make non static method php_user_filter::filter() static in class Sub",
+        ),
+        (
+            "abstract ",
+            "abstract function filter($in, $out): int;",
+            "Cannot make non abstract method php_user_filter::filter() abstract in class Sub",
+        ),
+        (
+            "",
+            "private function filter($in, $out): int {}",
+            "Access level to Sub::filter() must be public (as in class php_user_filter)",
+        ),
+        (
+            "",
+            "protected function onCreate($var): bool {}",
+            "Access level to Sub::onCreate() must be public (as in class php_user_filter)",
+        ),
+    ] {
+        let out = compile_and_run_capture(&format!(
+            "<?php\n{class_prefix}class Sub extends php_user_filter\n{{\n    {declaration}\n}}\necho \"never printed\";\n"
+        ));
+        assert_eq!(
+            out.exit_code,
+            Some(255),
+            "`{expected}`: php exits 255, got {:?} stdout={:?}",
+            out.exit_code,
+            out.stdout
+        );
+        assert!(
+            out.diagnostics.contains(expected),
+            "missing `{expected}` in diagnostics={:?}",
+            out.diagnostics
+        );
+        // The signature message is the one php does NOT print for these.
+        assert!(
+            !out.diagnostics.contains("must be compatible with"),
+            "`{expected}`: php names the modifier, not the signature, got diagnostics={:?}",
+            out.diagnostics
+        );
+    }
+}
+
+/// The tentative-return notice fires for a WRONG declared return type, not only for a missing one.
+///
+/// php's rule is covariance: the notice is silent when the child's return type is a SUBTYPE of the
+/// tentative one and raised otherwise. elephc only ever looked at whether a return type was
+/// declared, so `filter(): float` and `onClose(): mixed` — both notices in php — were silent here.
+///
+/// MEASURED on `php -n` 8.5.6, subtypes included: `never` satisfies all three, and `true` and
+/// `false` satisfy `bool`.
+#[test]
+fn test_a_wrong_return_type_gets_the_tentative_notice_and_a_subtype_does_not() {
+    let out = compile_and_run_capture(
+        r####"<?php
+class Wrong extends php_user_filter
+{
+    function filter($in, $out, &$consumed, $closing): float { return 0.0; }
+    function onClose(): mixed { return null; }
+}
+class Subtype extends php_user_filter
+{
+    function filter($in, $out, &$consumed, $closing): never { throw new Exception("x"); }
+    function onCreate(): true { return true; }
+    function onClose(): never { throw new Exception("x"); }
+}
+echo "declared";
+"####,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "declared");
+    for expected in [
+        "Return type of Wrong::filter($in, $out, &$consumed, $closing): float should either be \
+         compatible with php_user_filter::filter($in, $out, &$consumed, bool $closing): int",
+        "Return type of Wrong::onClose(): mixed should either be compatible with \
+         php_user_filter::onClose(): void",
+    ] {
+        assert!(
+            out.diagnostics.contains(expected),
+            "missing `{expected}` in diagnostics={}",
+            out.diagnostics
+        );
+    }
+    // `never`, `true`: subtypes, and php says nothing about them.
+    assert!(
+        !out.diagnostics.contains("Subtype::"),
+        "a subtype return satisfies the tentative one, got diagnostics={}",
+        out.diagnostics
+    );
+    assert_eq!(
+        out.diagnostics.matches("Return type of").count(),
+        2,
+        "one notice per incompatible return, got diagnostics={}",
+        out.diagnostics
     );
 }
