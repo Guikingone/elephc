@@ -242,9 +242,21 @@ impl EvalParameterType {
 
     /// Creates one eval method parameter type from intersection variants.
     pub fn intersection(variants: Vec<EvalParameterTypeVariant>) -> Self {
+        Self::intersection_allowing_null(variants, false)
+    }
+
+    /// Creates one eval parameter type from intersection variants that may also accept null.
+    ///
+    /// PHP 8.2's disjunctive normal form types write a parenthesized intersection inside a union,
+    /// and `(A&B)|null` is the shape the standard library and Symfony use: every atom must match,
+    /// or the value is null.
+    pub fn intersection_allowing_null(
+        variants: Vec<EvalParameterTypeVariant>,
+        allows_null: bool,
+    ) -> Self {
         Self {
             variants,
-            allows_null: false,
+            allows_null,
             kind: EvalParameterTypeKind::Intersection,
         }
     }

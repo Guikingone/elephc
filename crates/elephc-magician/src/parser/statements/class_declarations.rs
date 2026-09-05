@@ -126,6 +126,14 @@ impl Parser {
         is_readonly_class: bool,
     ) -> Result<ParsedClassBody, EvalParseError> {
         self.expect(TokenKind::LBrace)?;
+        self.in_class_scope(|parser| parser.parse_class_body_member_list(is_readonly_class))
+    }
+
+    /// Parses one class body's member list up to its closing brace.
+    fn parse_class_body_member_list(
+        &mut self,
+        is_readonly_class: bool,
+    ) -> Result<ParsedClassBody, EvalParseError> {
         let mut constants = Vec::new();
         let mut properties = Vec::new();
         let mut methods = Vec::new();
@@ -626,14 +634,19 @@ impl Parser {
     }
 
     /// Consumes a PHP asymmetric visibility `(set)` marker after a visibility keyword.
+    ///
+    /// A parenthesis after a visibility keyword is not always that marker: `protected (A&B)|null $p`
+    /// opens a disjunctive normal form type. Only `(set)` is the marker, so the parenthesis is left
+    /// for the type parser whenever the word inside it is anything else.
     pub(super) fn consume_set_marker(&mut self) -> Result<bool, EvalParseError> {
-        if !self.consume(TokenKind::LParen) {
+        if !matches!(self.current(), TokenKind::LParen) {
             return Ok(false);
         }
-        match self.current() {
-            TokenKind::Ident(name) if ident_eq(name, "set") => self.advance(),
-            _ => return Err(EvalParseError::UnsupportedConstruct),
+        if !matches!(self.peek(), TokenKind::Ident(name) if ident_eq(name, "set")) {
+            return Ok(false);
         }
+        self.advance();
+        self.advance();
         self.expect(TokenKind::RParen)?;
         Ok(true)
     }

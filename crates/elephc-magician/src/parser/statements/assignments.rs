@@ -46,7 +46,7 @@ impl Parser {
         if matches!(self.current(), TokenKind::Semicolon) {
             return Ok(Vec::new());
         }
-        self.parse_for_clause_stmt()
+        self.parse_for_clause_stmt_list()
     }
 
     /// Parses the optional update clause of a `for` loop.
@@ -54,8 +54,23 @@ impl Parser {
         if self.consume(TokenKind::RParen) {
             return Ok(Vec::new());
         }
-        let statements = self.parse_for_clause_stmt()?;
+        let statements = self.parse_for_clause_stmt_list()?;
         self.expect(TokenKind::RParen)?;
+        Ok(statements)
+    }
+
+    /// Parses one comma-separated `for` clause list.
+    ///
+    /// PHP's grammar makes each of the three `for` clauses a `for_exprs` list, so
+    /// `for ($i = 0, $n = 3; $i < $n; ++$i, --$n)` runs both elements of the first clause once and
+    /// both elements of the third clause on every iteration, in source order. Each element lowers
+    /// to its own statement, which is exactly the vector the `For` statement's init and update
+    /// fields already hold.
+    fn parse_for_clause_stmt_list(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let mut statements = self.parse_for_clause_stmt()?;
+        while self.consume(TokenKind::Comma) {
+            statements.extend(self.parse_for_clause_stmt()?);
+        }
         Ok(statements)
     }
 

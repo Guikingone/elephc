@@ -34,6 +34,13 @@ pub(super) struct Parser {
     pub(super) namespace: String,
     pub(super) imports: NamespaceImports,
     pub(super) allow_use_imports: bool,
+    /// How many class-like bodies enclose the rule currently running.
+    ///
+    /// PHP resolves `self` and `parent` against the enclosing class, and a closure or arrow
+    /// function written inside a class body inherits that scope. Its parameters are parsed in the
+    /// plain-function type position, so the position alone cannot tell a legal `self` from the
+    /// top-level one PHP rejects; this depth can.
+    pub(super) class_scope_depth: usize,
     /// Where the failing token sits, when the cursor has already moved past it.
     ///
     /// A recursive-descent rule can consume several tokens before it discovers that the shape
@@ -63,6 +70,49 @@ pub(super) enum UseImportKind {
     Class,
     Function,
     Const,
+}
+
+/// Removes every doc-comment token the grammar never reads, keeping the token lines aligned.
+///
+/// PHP's scanner hands `T_DOC_COMMENT` to `zendlex()`, which skips it exactly like whitespace and
+/// parks the text in `CG(doc_comment)` for the next declaration; no grammar rule ever sees the
+/// token. This lexer instead keeps the token in the stream so `ReflectionClass::getDocComment()`
+/// can report it, and every rule that does not expect one — a parameter list above all, but also
+/// an argument list, an array literal or a `match` arm — refused a file `php -n` parses. Dropping
+/// the doc comments that no rule reads reproduces PHP's transparency while leaving the one place
+/// the grammar does read them, a doc comment in front of a class declaration, untouched.
+fn drop_unread_doc_comments(
+    tokens: Vec<TokenKind>,
+    lines: Vec<i64>,
+) -> (Vec<TokenKind>, Vec<i64>) {
+    if !tokens
+        .iter()
+        .any(|token| matches!(token, TokenKind::DocComment(_)))
+    {
+        return (tokens, lines);
+    }
+    let read: Vec<bool> = tokens
+        .iter()
+        .enumerate()
+        .map(|(index, token)| {
+            !matches!(token, TokenKind::DocComment(_))
+                || tokens[index + 1..]
+                    .iter()
+                    .find(|next| !matches!(next, TokenKind::DocComment(_)))
+                    .is_some_and(super::cursor::starts_doc_commented_declaration)
+        })
+        .collect();
+    let kept_tokens = tokens
+        .into_iter()
+        .zip(read.iter())
+        .filter_map(|(token, keep)| keep.then_some(token))
+        .collect();
+    let kept_lines = lines
+        .into_iter()
+        .zip(read.iter().chain(std::iter::repeat(&true)))
+        .filter_map(|(line, keep)| keep.then_some(line))
+        .collect();
+    (kept_tokens, kept_lines)
 }
 
 /// Returns a parser-global synthetic class name for one eval anonymous class expression.
@@ -121,6 +171,7 @@ impl Parser {
     pub(super) fn new(tokens: Vec<Token>, source_len: usize) -> Self {
         let token_lines = tokens.iter().map(Token::line).collect();
         let tokens = tokens.into_iter().map(Token::into_kind).collect();
+        let (tokens, token_lines) = drop_unread_doc_comments(tokens, token_lines);
         Self {
             tokens,
             token_lines,
@@ -129,8 +180,20 @@ impl Parser {
             namespace: String::new(),
             imports: NamespaceImports::default(),
             allow_use_imports: true,
+            class_scope_depth: 0,
             error_pos: None,
         }
+    }
+
+    /// Runs one class-like body parser with `self` and `parent` legal in every nested type.
+    pub(super) fn in_class_scope<T>(
+        &mut self,
+        body: impl FnOnce(&mut Self) -> Result<T, EvalParseError>,
+    ) -> Result<T, EvalParseError> {
+        self.class_scope_depth += 1;
+        let parsed = body(self);
+        self.class_scope_depth -= 1;
+        parsed
     }
 
     /// Records the current token as the one a failure should name, then returns that failure.

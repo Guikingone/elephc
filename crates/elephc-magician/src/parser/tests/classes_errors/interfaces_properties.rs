@@ -324,3 +324,45 @@ fn parse_fragment_rejects_unsupported_constructor_promotion_forms() {
     parse_fragment(b"enum DynEvalPromotedEnum { public function __construct(public int $id) {} }")
         .expect_err("enum methods cannot promote properties");
 }
+
+/// Verifies a disjunctive normal form property type parses as a nullable intersection.
+///
+/// `protected (NodeDefinition&ParentNodeDefinitionInterface)|null $parent = null;` sits at
+/// `symfony/config/Definition/Builder/NodeBuilder.php:26`. A parenthesis after a visibility keyword
+/// is not always the asymmetric-visibility `(set)` marker, and reading it as one is what refused
+/// the file.
+#[test]
+fn parse_fragment_accepts_a_disjunctive_normal_form_property_type() {
+    let program = parse_fragment(
+        b"class DynEvalDnfProperty { protected (Countable&ArrayAccess)|null $p = null; }",
+    )
+    .expect("fragment should parse");
+    let [EvalStmt::ClassDecl(class)] = program.statements() else {
+        panic!(
+            "expected one class declaration, got {:?}",
+            program.statements()
+        );
+    };
+    let property_type = class.properties()[0]
+        .property_type()
+        .expect("the property keeps its declared type");
+    assert!(property_type.is_intersection());
+    assert!(property_type.allows_null());
+    assert_eq!(property_type.variants().len(), 2);
+}
+
+/// Verifies `self` is a legal parameter type for a closure written inside a class body.
+///
+/// `'bar' => static function (self $bar, OutputInterface $output) { … }` sits in
+/// `symfony/console/Helper/ProgressBar.php`. A closure's parameters are parsed in the plain
+/// function type position, so only the enclosing class-like body can say the atom resolves; at the
+/// top level PHP raises `Cannot use "self" when no class scope is active`.
+#[test]
+fn parse_fragment_accepts_self_as_a_closure_parameter_type_inside_a_class() {
+    parse_fragment(
+        b"class DynEvalSelfClosure { public function f() { return static fn (self $c) => $c; } }",
+    )
+    .expect("a closure inside a class body carries that class scope");
+    parse_fragment(b"$f = static fn (self $c) => $c;")
+        .expect_err("no class scope is active at the top level");
+}

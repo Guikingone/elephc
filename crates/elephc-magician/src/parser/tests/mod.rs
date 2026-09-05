@@ -21,6 +21,8 @@ mod exceptions_control;
 mod magic_comments;
 mod namespaces;
 mod operators;
+mod source_files;
+mod source_tree_sweep;
 mod static_members;
 mod support;
 mod trait_adaptations;

@@ -38,6 +38,32 @@ pub(crate) fn parse_fragment_cached(code: &[u8]) -> CachedParseResult {
     result
 }
 
+/// Parses a whole PHP source file, reusing a cached immutable EvalIR program when available.
+///
+/// A source file and an eval fragment are different grammars — a file carries inline HTML and its
+/// own `<?php` tags — so the two share the cache only through distinct keys: a file is keyed by its
+/// bytes with a marker no fragment can produce, since the same bytes could legally be both.
+pub(crate) fn parse_source_file_cached(code: &[u8]) -> CachedParseResult {
+    if !is_cacheable_fragment(code) {
+        return parser::parse_source_file(code).map(Arc::new);
+    }
+    let key = source_file_cache_key(code);
+    if let Some(result) = lock_eval_parse_cache().lookup(&key) {
+        return result;
+    }
+    let result = parser::parse_source_file(code).map(Arc::new);
+    lock_eval_parse_cache().insert(key, result.clone());
+    result
+}
+
+/// Builds the cache key that separates a whole source file from an eval fragment.
+fn source_file_cache_key(code: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(code.len() + 1);
+    key.push(0);
+    key.extend_from_slice(code);
+    key
+}
+
 /// Returns true when a fragment is small enough to retain in the parse cache.
 fn is_cacheable_fragment(code: &[u8]) -> bool {
     code.len() <= MAX_CACHEABLE_FRAGMENT_BYTES

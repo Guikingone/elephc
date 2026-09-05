@@ -11,7 +11,7 @@
 //! - Missing include emits a warning and returns false; missing require is fatal.
 
 use super::*;
-use crate::parse_cache::parse_fragment_cached;
+use crate::parse_cache::{parse_fragment_cached, parse_source_file_cached};
 
 const EVAL_TRACE_ENV: &str = "ELEPHC_EVAL_TRACE";
 
@@ -119,7 +119,12 @@ fn eval_include_key(path: &std::path::Path) -> String {
         .into_owned()
 }
 
-/// Executes a local include file, alternating raw output and PHP code blocks.
+/// Executes a local include file as one program covering its inline HTML and every PHP block.
+///
+/// PHP compiles an included file in one pass: the text outside the tags is `T_INLINE_HTML` and
+/// becomes an echo, and a closing tag is an implicit semicolon. Parsing each `<?php … ?>` block on
+/// its own could never accept a `{` that one block opens and a later block closes, which is how
+/// every template in `error-handler/Resources/views` is written.
 fn eval_execute_include_bytes(
     bytes: &[u8],
     path: &std::path::Path,
@@ -127,72 +132,32 @@ fn eval_execute_include_bytes(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut cursor = 0;
-    while let Some((tag_start, code_start)) = eval_find_php_open_tag(bytes, cursor) {
-        eval_echo_include_bytes(&bytes[cursor..tag_start], values)?;
-        let close = crate::lexer::find_php_close_tag(bytes, code_start);
-        let code_end = close.unwrap_or(bytes.len());
-        let line_offset = eval_include_line_offset(bytes, code_start);
-        match eval_execute_include_code(
-            &bytes[code_start..code_end],
-            path,
-            line_offset,
-            context,
-            scope,
-            values,
-        )? {
-            EvalControl::None => {}
-            EvalControl::ReturnVoid => return values.null(),
-            EvalControl::Return(value) => return Ok(value),
-            EvalControl::Throw(value) => {
-                context.set_pending_throw(value);
-                return Err(EvalStatus::UncaughtThrowable);
-            }
-            EvalControl::Break(_) | EvalControl::Continue(_) | EvalControl::Goto(_) => {
-                return Err(EvalStatus::UnsupportedConstruct);
-            }
+    match eval_execute_include_code(bytes, path, context, scope, values)? {
+        EvalControl::None => values.int(1),
+        EvalControl::ReturnVoid => values.null(),
+        EvalControl::Return(value) => Ok(value),
+        EvalControl::Throw(value) => {
+            context.set_pending_throw(value);
+            Err(EvalStatus::UncaughtThrowable)
         }
-        let Some(close) = close else {
-            return values.int(1);
-        };
-        cursor = close + 2;
+        EvalControl::Break(_) | EvalControl::Continue(_) | EvalControl::Goto(_) => {
+            Err(EvalStatus::UnsupportedConstruct)
+        }
     }
-    eval_echo_include_bytes(&bytes[cursor..], values)?;
-    values.int(1)
 }
 
-/// Returns how many lines of an included file precede one PHP code block.
-///
-/// Parsing sees only the bytes after `<?php`, so a fragment line equals the file line only for
-/// the block that opens the file. Every later block, and any block that follows inline HTML,
-/// needs the newlines before it added back before a diagnostic can name PHP's file line.
-fn eval_include_line_offset(bytes: &[u8], code_start: usize) -> i64 {
-    i64::try_from(
-        bytes[..code_start.min(bytes.len())]
-            .iter()
-            .filter(|byte| **byte == b'\n')
-            .count(),
-    )
-    .unwrap_or(0)
-}
-
-/// Parses and executes one PHP code block from an included file.
+/// Parses and executes one whole included PHP source file.
 fn eval_execute_include_code(
     code: &[u8],
     path: &std::path::Path,
-    line_offset: i64,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     trace_include_fragment("input", code, path, context, None);
-    let program = parse_fragment_cached(code).map_err(|diagnostic| {
+    let program = parse_source_file_cached(code).map_err(|diagnostic| {
         trace_include_fragment("parse_error", code, path, context, Some(&diagnostic));
-        report_fatal_diagnostic(
-            &diagnostic
-                .with_line_offset(line_offset)
-                .include_message(&path.to_string_lossy()),
-        );
+        report_fatal_diagnostic(&diagnostic.include_message(&path.to_string_lossy()));
         diagnostic.status()
     })?;
     let previous = context.call_site();
@@ -254,36 +219,3 @@ fn trace_include_fragment(
     }));
 }
 
-/// Echoes raw non-PHP include bytes through the eval value hooks.
-fn eval_echo_include_bytes(
-    bytes: &[u8],
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    if bytes.is_empty() {
-        return Ok(());
-    }
-    let output = values.string_bytes_value(bytes)?;
-    values.echo(output)
-}
-
-/// Finds the next `<?php` opening tag and returns tag and code byte offsets.
-fn eval_find_php_open_tag(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
-    bytes
-        .get(start..)?
-        .windows(5)
-        .position(eval_is_php_open_tag)
-        .map(|offset| {
-            let tag_start = start + offset;
-            (tag_start, tag_start + 5)
-        })
-}
-
-/// Returns true when a five-byte window is a case-insensitive `<?php` tag.
-fn eval_is_php_open_tag(window: &[u8]) -> bool {
-    window.len() == 5
-        && window[0] == b'<'
-        && window[1] == b'?'
-        && window[2].eq_ignore_ascii_case(&b'p')
-        && window[3].eq_ignore_ascii_case(&b'h')
-        && window[4].eq_ignore_ascii_case(&b'p')
-}

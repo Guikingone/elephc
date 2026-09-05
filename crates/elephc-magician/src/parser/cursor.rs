@@ -90,6 +90,20 @@ impl Parser {
     }
 }
 
+/// Returns true when a token can open the one declaration form that reads a preceding doc comment.
+///
+/// `Parser::parse_stmt()` attaches a doc comment to a class declaration and to nothing else, so a
+/// doc comment in front of any other token is trivia the grammar never reads. The token filter in
+/// `Parser::new()` and `parse_stmt()` share this predicate so the two can never disagree about
+/// which doc comments survive tokenization.
+pub(super) fn starts_doc_commented_declaration(token: &TokenKind) -> bool {
+    matches!(token, TokenKind::Ident(name)
+        if ident_eq(name, "abstract")
+            || ident_eq(name, "final")
+            || ident_eq(name, "readonly")
+            || ident_eq(name, "class"))
+}
+
 /// Returns true when the current token closes or starts a switch case arm.
 ///
 /// `endswitch` counts as a boundary so an alternative-syntax case body stops there instead of

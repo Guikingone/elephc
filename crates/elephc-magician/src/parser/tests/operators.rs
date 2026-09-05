@@ -411,3 +411,20 @@ fn parse_fragment_accepts_unary_numeric_source() {
         }))]
     );
 }
+/// Verifies a `match` arm condition list may end with a trailing comma.
+///
+/// PHP's `match_arm_cond_list` admits one, and `symfony/cache/Traits/RedisTrait.php` writes
+/// `'use-cache', 'client-tracking', …, => $context[$name] = …`; the parser named the `=>` as the
+/// unexpected token instead of closing the list. A comma with nothing but the closing brace after
+/// it stays a syntax error, as it is in PHP.
+#[test]
+fn parse_fragment_accepts_a_trailing_comma_in_a_match_arm_condition_list() {
+    let program = parse_fragment(br#"return match ($x) { 1, 2, => "small", default => "other" };"#)
+        .expect("fragment should parse");
+    let [EvalStmt::Return(Some(EvalExpr::Match { arms, .. }))] = program.statements() else {
+        panic!("expected one match return, got {:?}", program.statements());
+    };
+    assert_eq!(arms.len(), 1);
+    assert_eq!(arms[0].patterns.len(), 2);
+    assert!(parse_fragment(br#"return match ($x) { 1, };"#).is_err());
+}

@@ -326,3 +326,42 @@ fn parse_fragment_rejects_unterminated_alternative_body() {
     assert!(parse_fragment(br#"while ($a): $x = 1;"#).is_err());
     assert!(parse_fragment(br#"switch ($a): case 1: $x = 1;"#).is_err());
 }
+
+/// Verifies each `for` clause is the comma-separated expression list PHP's grammar defines.
+///
+/// `for ($i = 0, $count = \count($trace); $i < $count; ++$i)` appears ten times across the Symfony
+/// tree; only the first element of the init and update lists was parsed before, so the loop refused
+/// the file at the comma.
+#[test]
+fn parse_fragment_accepts_comma_separated_for_clauses() {
+    let program = parse_fragment(br#"for ($i = 0, $n = 3; $i < $n; ++$i, --$n) { $x = $i; }"#)
+        .expect("fragment should parse");
+    let [EvalStmt::For { init, update, .. }] = program.statements() else {
+        panic!("expected one for statement, got {:?}", program.statements());
+    };
+    assert_eq!(init.len(), 2);
+    assert_eq!(update.len(), 2);
+}
+
+/// Verifies a `declare` directive parses in its statement, block, and alternative forms.
+///
+/// A directive is compile-time state in PHP and produces no runtime statement, but the file that
+/// carries it has to keep running: four PSR packages open with `declare(strict_types=1);` and every
+/// one of them was refused at the `=`.
+#[test]
+fn parse_fragment_accepts_declare_directives() {
+    let program =
+        parse_fragment(br#"declare(strict_types=1); $x = 1;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::StoreVar {
+            name: "x".to_string(),
+            value: EvalExpr::Const(EvalConst::Int(1)),
+        }]
+    );
+    parse_fragment(br#"declare(ticks=1, strict_types=1) { $x = 1; }"#)
+        .expect("block form should parse");
+    parse_fragment(br#"declare(ticks=1): $x = 1; enddeclare;"#)
+        .expect("alternative form should parse");
+    assert!(parse_fragment(br#"declare(1); $x = 1;"#).is_err());
+}

@@ -79,20 +79,30 @@ impl Parser {
         if let TokenKind::DocComment(doc_comment) = self.current() {
             let doc_comment = doc_comment.clone();
             self.advance();
-            return match self.current() {
-                TokenKind::Ident(name)
-                    if ident_eq(name, "abstract")
-                        || ident_eq(name, "final")
-                        || ident_eq(name, "readonly")
-                        || ident_eq(name, "class") =>
-                {
-                    self.parse_class_decl_stmt_with_doc_comment(Some(doc_comment))
-                }
-                _ => self.parse_stmt(),
+            return if starts_doc_commented_declaration(self.current()) {
+                self.parse_class_decl_stmt_with_doc_comment(Some(doc_comment))
+            } else {
+                self.parse_stmt()
             };
         }
         if matches!(self.current(), TokenKind::AttributeStart) {
             return self.parse_attributed_stmt();
+        }
+        if let TokenKind::InlineHtml(html) = self.current() {
+            let html = html.clone();
+            self.advance();
+            return Ok(vec![EvalStmt::Echo(EvalExpr::Const(
+                match String::from_utf8(html) {
+                    Ok(text) => EvalConst::String(text),
+                    Err(error) => EvalConst::Bytes(error.into_bytes()),
+                },
+            ))]);
+        }
+        // PHP's `;` is a statement of its own, and a closing tag emits one for the statement it
+        // terminates, so a `<?php } ?>` block ends with a semicolon that closes nothing.
+        if matches!(self.current(), TokenKind::Semicolon) {
+            self.advance();
+            return Ok(Vec::new());
         }
         match self.current() {
             TokenKind::Ident(name) if ident_eq(name, "break") => {
@@ -112,6 +122,11 @@ impl Parser {
                 self.advance();
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Goto(label)])
+            }
+            TokenKind::Ident(name)
+                if ident_eq(name, "declare") && matches!(self.peek(), TokenKind::LParen) =>
+            {
+                self.parse_declare_stmt()
             }
             TokenKind::Ident(name) if ident_eq(name, "do") => self.parse_do_while_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "echo") => {
@@ -361,6 +376,12 @@ impl Parser {
                         break;
                     }
                     self.expect(TokenKind::Comma)?;
+                    // PHP's attribute argument list is an ordinary argument list, so a trailing
+                    // comma before the closing parenthesis is legal and common in a multi-line
+                    // `#[AsCommand(name: …, description: …,)]`.
+                    if self.consume(TokenKind::RParen) {
+                        break;
+                    }
                 }
             }
             supported.then_some(args)

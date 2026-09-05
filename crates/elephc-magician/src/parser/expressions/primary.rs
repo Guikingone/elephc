@@ -189,8 +189,11 @@ impl Parser {
             if !self.consume(TokenKind::Comma) {
                 break;
             }
+            // PHP's `match_arm_cond_list` admits a trailing comma, so `'a', 'b', => …` is one arm
+            // with two conditions, not a missing third one. A comma with nothing after it but the
+            // closing brace stays a syntax error, which is the check below.
             if matches!(self.current(), TokenKind::FatArrow) {
-                return Err(EvalParseError::UnexpectedToken);
+                break;
             }
             if matches!(self.current(), TokenKind::Eof | TokenKind::RBrace) {
                 return Err(EvalParseError::UnexpectedToken);

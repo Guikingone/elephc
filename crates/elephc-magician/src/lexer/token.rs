@@ -52,6 +52,12 @@ pub(crate) enum TokenKind {
     Float(f64),
     String(String),
     DocComment(String),
+    /// One run of source text outside every `<?php … ?>` block, kept as raw bytes.
+    ///
+    /// PHP's scanner emits `T_INLINE_HTML` for it and the grammar turns it into an echo, which is
+    /// why a `{` opened in one block and closed in a later one parses: the whole file is one token
+    /// stream. The bytes stay unvalidated because a template may carry any encoding.
+    InlineHtml(Vec<u8>),
     Plus,
     PlusPlus,
     PlusEqual,
@@ -153,6 +159,7 @@ impl TokenKind {
             Self::Float(value) => format!("floating-point number \"{value}\""),
             Self::String(value) => format!("string \"{value}\""),
             Self::DocComment(_) => "comment".to_string(),
+            Self::InlineHtml(_) => "end of file".to_string(),
             Self::Magic(_) => "magic constant".to_string(),
             Self::Eof => "end of file".to_string(),
             other => format!("token \"{}\"", other.php_spelling()),
@@ -230,6 +237,7 @@ impl TokenKind {
             | Self::Float(_)
             | Self::String(_)
             | Self::DocComment(_)
+            | Self::InlineHtml(_)
             | Self::Eof => "",
         }
     }

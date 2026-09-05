@@ -30850,3 +30850,90 @@ fn test_an_eval_runtime_failure_names_its_cause_and_call_site() {
     );
     assert_no_rust_panic_leaked(&stderr);
 }
+
+/// Verifies a runtime include runs the PHP syntax a whole vendor tree was refused for.
+///
+/// Every construct here was measured against the interpreter's parser over the 1543 PHP files of
+/// `examples/symfony-app`: a doc comment inside a parameter list (4 files, and the one that killed
+/// the Symfony request), `declare(strict_types=1)` (4), a comma-separated `for` clause (10), `self`
+/// as a closure parameter type inside a class (2), a disjunctive normal form property type (1), a
+/// trailing comma in an attribute argument list (1) and in a `match` arm condition list (1), and a
+/// brace opened in one `<?php … ?>` block and closed in a later one (6, every error-page template).
+///
+/// Reference value captured from `php -n` (PHP 8.5.6) running the included file directly:
+/// `3;01:S1Bag:null;hit;tail[in][alt]done`.
+#[test]
+fn test_eval_include_runs_the_php_syntax_the_interpreter_parser_refused() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-source-syntax-piece.php";
+file_put_contents($piece, '<?php
+declare(strict_types=1);
+
+function s1_doc(/** @var int */ int $a, /** @var int */ int $b): int { return $a + $b; }
+
+class S1Bag
+{
+    protected (Countable&ArrayAccess)|null $slot = null;
+
+    public function frame(): string
+    {
+        $out = "";
+        for ($i = 0, $n = 3; $i < $n; ++$i, --$n) {
+            $out .= $i;
+        }
+        $pick = static fn (self $bag) => get_class($bag);
+        return $out . ":" . $pick($this) . ":" . (null === $this->slot ? "null" : "set");
+    }
+}
+
+echo s1_doc(/** here */ 1, 2), ";";
+echo (new S1Bag())->frame(), ";";
+$x = "a";
+echo match ($x) { "a", "b", => "hit", default => "miss" }, ";";
+?>
+tail<?php if (true) { ?>[in]<?php } ?>
+<?php if (false): ?>no<?php else: ?>[alt]<?php endif ?>
+done');
+include $piece;
+"#,
+    );
+    assert_eq!(out, "3;01:S1Bag:null;hit;tail[in][alt]done");
+}
+
+/// Verifies a runtime include applies an attribute whose argument list ends with a comma.
+///
+/// `#[AsCommand(name: 'error:dump', description: '…',)]` sits at
+/// `symfony/error-handler/Command/ErrorDumpCommand.php:35`; the trailing comma made the whole file
+/// unparseable, so the class never existed.
+///
+/// The attribute's own metadata is not asserted here on purpose: `new ReflectionClass()` on a class
+/// declared by a runtime-included file is a separate, pre-existing gap — it fails with
+/// `Fatal error: eval() runtime failed` on the block loop this commit replaced just as it does on
+/// the whole-file entry, so it is not this change's to fix. What is asserted is the consequence
+/// that matters: before, the trailing comma refused the file and the class did not exist at all.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): `marked;yes`.
+#[test]
+fn test_eval_include_declares_a_class_behind_an_attribute_with_a_trailing_comma() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-trailing-comma-attribute-piece.php";
+file_put_contents($piece, '<?php
+#[Attribute]
+class S1Named { public function __construct(public string $name = "") {} }
+
+#[S1Named(
+    name: "error:dump",
+)]
+final class S1Marked {
+    public function label(): string { return "marked"; }
+}
+
+echo (new S1Marked())->label(), ";", class_exists("S1Marked") ? "yes" : "no";
+');
+include $piece;
+"#,
+    );
+    assert_eq!(out, "marked;yes");
+}

@@ -268,6 +268,33 @@ impl Parser {
         Ok(vec![EvalStmt::While { condition, body }])
     }
 
+    /// Parses `declare(directive=value)` in its statement, block, and alternative-syntax forms.
+    ///
+    /// A declare directive is compile-time state in PHP — `strict_types` and `encoding` are read by
+    /// the compiler and `ticks` arms the tick handler — so none of them produces a runtime
+    /// statement. The directive list is parsed for its shape and discarded; a `declare(...) { ... }`
+    /// or `declare(...): ... enddeclare;` body is an ordinary statement list and keeps running.
+    pub(in crate::parser) fn parse_declare_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        loop {
+            if !matches!(self.current(), TokenKind::Ident(_)) {
+                return Err(self.fail(EvalParseError::UnexpectedToken));
+            }
+            self.advance();
+            self.expect(TokenKind::Equal)?;
+            let _ = self.parse_expr()?;
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+        if self.consume_semicolon() {
+            return Ok(Vec::new());
+        }
+        self.parse_statement_body_or_alternative("enddeclare")
+    }
+
     /// Parses either a brace-delimited block or one braceless statement body.
     pub(in crate::parser) fn parse_statement_body(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         if matches!(self.current(), TokenKind::LBrace) {

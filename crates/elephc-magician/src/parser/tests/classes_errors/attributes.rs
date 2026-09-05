@@ -280,3 +280,32 @@ enum DynEvalMemberEnum {
         ]
     );
 }
+
+/// Verifies an attribute argument list may end with a trailing comma.
+///
+/// It is an ordinary argument list in PHP, and a multi-line `#[AsCommand(name: …, description: …,)]`
+/// is how `symfony/error-handler/Command/ErrorDumpCommand.php` is written; the parser named the
+/// closing parenthesis as the unexpected token.
+#[test]
+fn parse_fragment_accepts_a_trailing_comma_in_an_attribute_argument_list() {
+    let program = parse_fragment(
+        b"#[AsCommand(\n    name: \"error:dump\",\n)]\nfinal class DynEvalTrailingCommaAttr {}",
+    )
+    .expect("fragment should parse");
+    let [EvalStmt::ClassDecl(class)] = program.statements() else {
+        panic!(
+            "expected one class declaration, got {:?}",
+            program.statements()
+        );
+    };
+    assert_eq!(
+        class.attributes(),
+        &[EvalAttribute::new(
+            "AsCommand",
+            Some(vec![EvalAttributeArg::Named {
+                name: "name".to_string(),
+                value: Box::new(EvalAttributeArg::String("error:dump".to_string())),
+            }])
+        )]
+    );
+}
