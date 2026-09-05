@@ -258,13 +258,13 @@ pub(in crate::interpreter) fn dynamic_object_is_a(
             !exclude_self && eval_class_like_name_matches("Closure", target_class),
         ));
     }
-    let Some(class) = context.dynamic_object_class(identity) else {
+    let Some((declaring, class)) = context.dynamic_object_declaring_class(identity) else {
         return Ok(None);
     };
-    if eval_class_string_is_a(class.name(), target_class, exclude_self, context, values)? {
+    if eval_class_string_is_a(class.name(), target_class, exclude_self, declaring, values)? {
         return Ok(Some(true));
     }
-    if context.class_native_parent_name(class.name()).is_some() {
+    if declaring.class_native_parent_name(class.name()).is_some() {
         return values
             .object_is_a(object, target_class, exclude_self)
             .map(Some);

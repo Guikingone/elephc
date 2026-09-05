@@ -618,7 +618,7 @@ pub fn execute_context_object_is_a_dynamic(
         }
         EVAL_TAG_OBJECT => {
             let identity = values.object_identity(target)?;
-            if let Some(class) = context.dynamic_object_class(identity) {
+            if let Some((_, class)) = context.dynamic_object_declaring_class(identity) {
                 class.name().to_string()
             } else {
                 let class_name = values.object_class_name(target)?;

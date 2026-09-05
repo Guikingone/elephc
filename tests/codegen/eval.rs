@@ -29901,6 +29901,111 @@ echo $c->services["b"] . $c->services["a"];
     assert_eq!(out, "b,a;21");
 }
 
+/// Verifies `instanceof` answers for an object whose class another eval context declared.
+///
+/// The relation has to be decided by the class table of the context that DECLARED the object.
+/// Resolving that context's class *name* against the asking context's own table loses the class
+/// whenever the asker never declared one of that name, and the probe then answers a definite
+/// false for every relation — its own class included. Every letter here is the value `php -n`
+/// prints: an upper-case letter is a true relation, its lower-case twin a false one.
+#[test]
+fn test_eval_bridge_instanceof_answers_from_the_declaring_context() {
+    let out = compile_and_run(
+        r#"<?php
+$decl = __DIR__ . "/eval-instanceof-owner-decl.php";
+file_put_contents($decl, '<?php
+interface EvalOwnerIface { public function values(): array; }
+class EvalOwnerRef {
+    public function __construct(private string $id) {}
+    public function __toString(): string { return $this->id; }
+}
+class EvalOwnerArg implements EvalOwnerIface {
+    private array $held;
+    public function __construct(mixed $value) { $this->held = [$value]; }
+    public function values(): array { return $this->held; }
+}
+class EvalOwnerBase {}
+class EvalOwnerChild extends EvalOwnerBase { public function __construct() {} }
+return [new EvalOwnerArg(new EvalOwnerRef("a")), new EvalOwnerRef("b"), new EvalOwnerChild()];');
+
+function probe(mixed $v, mixed $argTarget, mixed $refTarget): string {
+    eval('$seed = 1;');
+    if ($v === null) { $v = new EvalOwnerArg(1); }
+    return get_class($v)
+        . ":" . ($v instanceof EvalOwnerArg ? "A" : "a")
+        . ($v instanceof EvalOwnerIface ? "I" : "i")
+        . ($v instanceof EvalOwnerChild ? "C" : "c")
+        . ($v instanceof EvalOwnerBase ? "B" : "b")
+        . ($v instanceof EvalOwnerRef ? "R" : "r")
+        . (!$v instanceof EvalOwnerRef ? "N" : "n")
+        . ($v instanceof $argTarget ? "O" : "o")
+        . ($v instanceof $refTarget ? "P" : "p")
+        . (is_a($v, "EvalOwnerIface") ? "J" : "j")
+        . (is_subclass_of($v, "EvalOwnerBase") ? "K" : "k");
+}
+
+$values = include $decl;
+foreach ($values as $v) { echo probe($v, $values[0], $values[1]), ";"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "EvalOwnerArg:AIcbrNOpJk;EvalOwnerRef:aicbRnoPjk;EvalOwnerChild:aiCBrNopjK;"
+    );
+}
+
+/// Verifies the service-locator wrapping loop keeps its `instanceof` guards across eval contexts.
+///
+/// This is Symfony's `ServiceLocatorTagPass::register()` reduced to its decisions: an already
+/// wrapped argument must be kept as-is, and only a reference may become the new string key. When
+/// the relation probe loses the class, the first element is wrapped a second time and the second
+/// element's key is stringified — both observable in the wrapped keys, which is what this asserts.
+#[test]
+fn test_eval_bridge_instanceof_guards_the_service_locator_wrapping_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$decl = __DIR__ . "/eval-instanceof-locator-decl.php";
+file_put_contents($decl, '<?php
+interface LocatorArgumentIface { public function getValues(): array; }
+class LocatorRef {
+    public function __construct(private string $id) {}
+    public function __toString(): string { return $this->id; }
+}
+class LocatorClosureArg implements LocatorArgumentIface {
+    private array $values;
+    public function __construct(mixed $value = []) { $this->values = [$value]; }
+    public function getValues(): array { return $this->values; }
+}
+return [new LocatorClosureArg(new LocatorRef("a")), new LocatorRef("b"), "k" => new LocatorRef("c")];');
+
+function wrapAll(mixed $values): string {
+    eval('$seed = 1;');
+    if ($values === null) { $values = [new LocatorClosureArg(1)]; }
+    $out = "";
+    $services = [];
+    $i = 0;
+    foreach ($values as $k => $v) {
+        $out .= ($v instanceof LocatorClosureArg ? "S" : "s");
+        $out .= ($v instanceof LocatorRef ? "R" : "r");
+        $out .= ($v instanceof LocatorArgumentIface ? "A" : "a");
+        if ($v instanceof LocatorClosureArg) { $services[$k] = $v; $out .= "=kept;"; continue; }
+        if ($i === $k) {
+            if ($v instanceof LocatorRef) { $k = (string) $v; }
+            ++$i;
+        } elseif (is_int($k)) { $i = null; }
+        $services[$k] = new LocatorClosureArg($v);
+        $out .= "=wrapped:" . $k . ";";
+    }
+    return $out . "count=" . count($services);
+}
+
+$values = include $decl;
+echo wrapAll($values);
+"#,
+    );
+    assert_eq!(out, "SrA=kept;sRa=wrapped:1;sRa=wrapped:k;count=3");
+}
+
 /// Verifies missing eval require aborts through the runtime eval fatal path.
 #[test]
 fn test_eval_fragment_missing_require_fails() {

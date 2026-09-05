@@ -353,6 +353,38 @@ impl ElephcEvalContext {
         }
     }
 
+    /// Returns the eval class one dynamic object was built from, with the context that declares it.
+    ///
+    /// An object created inside one eval context carries the class *that* context declared, so a
+    /// second context asking about the same object has to read the owner's class table. Resolving
+    /// the owner's class *name* against the asker's own table — what `dynamic_object_class` does —
+    /// loses the class outright whenever the asker has not itself declared a class of that name,
+    /// and every relation asked about the object then answers false, its own class included.
+    /// Answers are ordered owner-last so a context that knows the object keeps deciding for it.
+    pub fn dynamic_object_declaring_class(&self, identity: u64) -> Option<(&Self, &EvalClass)> {
+        if let Some(class) = self
+            .dynamic_objects
+            .get(&identity)
+            .and_then(|class_key| self.classes.get(class_key))
+        {
+            return Some((self, class));
+        }
+        #[cfg(not(test))]
+        {
+            let owner = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)?;
+            let owner = unsafe { owner.as_ref()? };
+            if owner.abi_version() != ABI_VERSION {
+                return None;
+            }
+            let class_key = owner.dynamic_objects.get(&identity)?;
+            owner.classes.get(class_key).map(|class| (owner, class))
+        }
+        #[cfg(test)]
+        {
+            None
+        }
+    }
+
     /// Returns the PHP-visible eval class name associated with one dynamic object identity.
     pub fn dynamic_object_class_name(&self, identity: u64) -> Option<String> {
         if self.closure_objects.contains_key(&identity) {

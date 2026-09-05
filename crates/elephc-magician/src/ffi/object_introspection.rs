@@ -279,6 +279,7 @@ unsafe fn eval_object_is_a_inner(
         return 0;
     }
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let traced_subject = trace.then(|| eval_object_is_a_trace_subject(object, context, &mut values));
     let result = interpreter::execute_context_object_is_a(
         context,
         object,
@@ -286,15 +287,50 @@ unsafe fn eval_object_is_a_inner(
         exclude_self != 0,
         &mut values,
     );
-    if trace {
+    if let Some((identity, class, decided_by)) = traced_subject {
         eprintln!(
-            "[elephc-eval-trace] phase=object_is_a target={target:?} context={context:p} result={result:?}"
+            "[elephc-eval-trace] phase=object_is_a identity={identity} class={class:?} \
+             decided_by={decided_by} target={target:?} context={context:p} result={result:?}"
         );
     }
     match result {
         Ok(result) => i32::from(result),
         Err(_) => 0,
     }
+}
+
+/// Names the object one `object_is_a` probe was asked about, for `ELEPHC_EVAL_TRACE`.
+///
+/// The relation answer alone cannot be checked against PHP: the same target is asked about many
+/// different receivers in one request, so a trace without the receiver's identity and class says
+/// nothing about which answer is wrong. `decided_by` reports which table produced the answer —
+/// the eval class table of the context that DECLARED the object, or the generated AOT metadata
+/// the bridge falls back to when no eval class owns the identity.
+#[cfg(not(test))]
+fn eval_object_is_a_trace_subject(
+    object: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut ElephcRuntimeOps,
+) -> (u64, String, &'static str) {
+    let Ok(identity) = values.object_identity(object) else {
+        return (0, String::from("<invalid>"), "invalid-object");
+    };
+    let decided_by = if context.dynamic_object_declaring_class(identity).is_some() {
+        "eval-class"
+    } else {
+        "aot-metadata"
+    };
+    let runtime_class = values
+        .object_class_name(object)
+        .ok()
+        .and_then(|class_name| {
+            let bytes = values.string_bytes(class_name).ok();
+            let _ = values.release(class_name);
+            bytes.and_then(|bytes| String::from_utf8(bytes).ok())
+        })
+        .unwrap_or_default();
+    let eval_class = context.dynamic_object_class_name(identity).unwrap_or_default();
+    (identity, format!("{eval_class}|runtime={runtime_class}"), decided_by)
 }
 
 /// Runs the eval dynamic object relation ABI body after installing a panic boundary.

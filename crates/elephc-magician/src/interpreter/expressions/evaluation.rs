@@ -406,7 +406,7 @@ fn eval_instanceof_object_target_name(
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     let identity = values.object_identity(target)?;
-    if let Some(class) = context.dynamic_object_class(identity) {
+    if let Some((_, class)) = context.dynamic_object_declaring_class(identity) {
         return Ok(class.name().to_string());
     }
     let class_name = values.object_class_name(target)?;
