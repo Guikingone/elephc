@@ -35,6 +35,7 @@ pub(super) fn eval_const_fetch(
         return Ok(value);
     }
     let Some(value) = context.constant(name) else {
+        note_eval_runtime_failure(format!("undefined constant \"{name}\""), context);
         return Err(EvalStatus::RuntimeFatal);
     };
     values.retain(value)

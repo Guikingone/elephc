@@ -34,13 +34,16 @@ use super::super::{
 };
 
 const EVAL_STATUS_PARSE_ERROR: i64 = 1;
+const EVAL_STATUS_RUNTIME_FATAL: i64 = 2;
 const EVAL_STATUS_UNCAUGHT_THROWABLE: i64 = 3;
 const EVAL_STATUS_UNSUPPORTED: i64 = 4;
 /// PHP's process exit status for a parse error, measured with `php -n` 8.5.6.
 const EVAL_PARSE_ERROR_EXIT_STATUS: u32 = 255;
-const EVAL_UNSUPPORTED_MESSAGE: &str =
-    "Fatal error: eval() fragment uses an unsupported construct\n";
-const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";
+/// The status the bridge has always exited with for its two anonymous fatals.
+///
+/// Not PHP's 255: these are not PHP fatals but the interpreter reporting what it could not do,
+/// and the wording that goes with them is written by `__elephc_eval_report_runtime_fatal`.
+const EVAL_RUNTIME_FATAL_EXIT_STATUS: u32 = 1;
 const EVAL_STACK_BYTES: usize = 96;
 const EVAL_RESULT_VALUE_CELL_OFFSET: usize = 8;
 const EVAL_RESULT_ERROR_OFFSET: usize = 16;

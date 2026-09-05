@@ -30615,3 +30615,238 @@ render_extract_defaults(["name" => "ignored", "value" => 42]);
     );
     assert_eq!(out, "kept:42|overwritten");
 }
+
+/// Verifies runtime-included code constructs a builtin Throwable the compiled program never names.
+///
+/// Oracle: `php -n` 8.5.6 prints the asserted line and exits 0. Before the fix the binary printed
+/// `Fatal error: eval() runtime failed` and exited 1 at the second class. The eval constructor
+/// bridge emits a helper for every name in `BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES` whenever the
+/// bridge is linked, but the class metadata that `__rt_new_by_name` scans carried only the eight
+/// throwables seeded unconditionally — so `Exception` worked and the SPL hierarchy allocated null.
+#[test]
+fn test_runtime_included_code_throws_builtin_exceptions_the_program_never_names() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loaded.php",
+                r#"<?php
+foreach (['RuntimeException', 'LogicException', 'InvalidArgumentException', 'ReflectionException', 'DomainException'] as $class) {
+    try {
+        throw new $class('boom');
+    } catch (\Throwable $error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+    }
+}
+"#,
+            ),
+            (
+                "main.php",
+                "<?php\n$path = __DIR__ . '/loaded.php';\ninclude $path;\necho 'done';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "RuntimeException:boom|LogicException:boom|InvalidArgumentException:boom|",
+            "ReflectionException:boom|DomainException:boom|done"
+        )
+    );
+}
+
+/// Verifies `class_exists()` runs an autoloader registered by runtime-included code.
+///
+/// Oracle: `php -n` 8.5.6 prints `loader:MissingWithAutoload|no|no|done`. PHP's second parameter
+/// defaults to true and means "ask the registered autoloaders"; the loader therefore runs once,
+/// for the first probe only. Before the fix the interpreter's `class_exists` consulted the eval
+/// declarations and the AOT name table and stopped there, so the loader never ran at all.
+#[test]
+fn test_class_exists_runs_a_loader_registered_by_runtime_included_code() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loaded.php",
+                r#"<?php
+spl_autoload_register(function ($name) { echo 'loader:', $name, '|'; });
+echo class_exists('MissingWithAutoload') ? 'yes' : 'no', '|';
+echo class_exists('MissingWithoutAutoload', false) ? 'yes' : 'no', '|';
+"#,
+            ),
+            (
+                "main.php",
+                "<?php\n$path = __DIR__ . '/loaded.php';\ninclude $path;\necho 'done';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "loader:MissingWithAutoload|no|no|done");
+}
+
+/// Verifies a Throwable raised inside an autoloader reaches the interpreted code that asked.
+///
+/// Oracle: `php -n` 8.5.6 prints the asserted line and exits 0. This is Symfony's
+/// `ClassExistenceResource` shape: a temporary loader whose only job is to raise
+/// `ReflectionException` for a class it cannot provide, caught at the `class_exists()` and
+/// `new \ReflectionClass()` call sites. `class_exists()` must THROW, not answer false.
+#[test]
+fn test_a_throwing_autoloader_reaches_the_interpreted_caller_that_asked() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loaded.php",
+                r#"<?php
+spl_autoload_register(function ($name) {
+    throw new \ReflectionException(sprintf('Class "%s" not found.', $name));
+});
+try {
+    echo class_exists('MissingThrows') ? 'yes' : 'no', '|';
+} catch (\Throwable $error) {
+    echo 'caught:', get_class($error), ':', $error->getMessage(), '|';
+}
+try {
+    $reflection = new \ReflectionClass('MissingReflected');
+    echo 'reflected:', $reflection->getName(), '|';
+} catch (\Throwable $error) {
+    echo 'caught:', get_class($error), ':', $error->getMessage(), '|';
+}
+"#,
+            ),
+            (
+                "main.php",
+                "<?php\n$path = __DIR__ . '/loaded.php';\ninclude $path;\necho 'done';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "caught:ReflectionException:Class \"MissingThrows\" not found.|",
+            "caught:ReflectionException:Class \"MissingReflected\" not found.|done"
+        )
+    );
+}
+
+/// Verifies an autoloader's Throwable escapes the include and is caught by compiled code.
+///
+/// Oracle: `php -n` 8.5.6 prints the asserted line and exits 0. The catch that takes it is in the
+/// AOT file, so the throwable has to cross the bridge as status 3 carrying its object rather than
+/// collapsing into the anonymous status-2 fatal that ends the process.
+#[test]
+fn test_a_throwing_autoloader_escapes_the_include_into_a_compiled_catch() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loaded.php",
+                r#"<?php
+spl_autoload_register(function ($name) {
+    throw new \ReflectionException(sprintf('Class "%s" not found.', $name));
+});
+class_exists('MissingEscapes');
+echo 'unreached|';
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+$path = __DIR__ . '/loaded.php';
+try {
+    include $path;
+    echo 'returned|';
+} catch (\Throwable $error) {
+    echo 'aot-caught:', get_class($error), ':', $error->getMessage(), '|';
+}
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "aot-caught:ReflectionException:Class \"MissingEscapes\" not found.|done"
+    );
+}
+
+/// Verifies an autoloader's Throwable that nobody catches is reported the way PHP reports it.
+///
+/// Oracle: `php -n` 8.5.6 writes `Fatal error: Uncaught ReflectionException: Class
+/// "MissingUncaught" not found.` on STANDARD OUTPUT and exits 255. PHP then appends
+/// ` in <file>:<line>`, a stack trace and a `thrown in` line, which elephc's uncaught report has
+/// never emitted for a bridge-thrown object; the prefix, the stream and the exit status are what
+/// this pins. What matters is that the throwable reaches the uncaught report AT ALL rather than
+/// collapsing into `Fatal error: eval() runtime failed` on standard error with status 1.
+#[test]
+fn test_an_uncaught_autoloader_throwable_is_reported_as_php_reports_it() {
+    let dir = make_cli_test_dir("elephc_eval_uncaught_autoload_throwable");
+    fs::write(
+        dir.join("loaded.php"),
+        r#"<?php
+spl_autoload_register(function ($name) {
+    throw new \ReflectionException(sprintf('Class "%s" not found.', $name));
+});
+class_exists('MissingUncaught');
+echo 'unreached';
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\n$path = __DIR__ . '/loaded.php';\ninclude $path;\necho 'done';\n",
+    )
+    .unwrap();
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "./main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "compile failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the uncaught autoload fixture");
+    let stdout = String::from_utf8_lossy(&run.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    assert!(
+        stdout.contains(
+            "Fatal error: Uncaught ReflectionException: Class \"MissingUncaught\" not found."
+        ),
+        "stdout did not carry PHP's uncaught report:\n{stdout}\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("unreached"),
+        "the loader's throw must abort the include:\n{stdout}"
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(255),
+        "PHP exits 255 for an uncaught Throwable"
+    );
+    assert_no_rust_panic_leaked(&stderr);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a bridge runtime failure that is not a Throwable names its cause, file and line.
+///
+/// The status-2 fatal used to be a fixed string in the generated assembly, which could name none
+/// of the three. It is now written by `__elephc_eval_report_runtime_fatal` in the bridge, which
+/// keeps that string as its prefix — so every caller reading the old diagnostic still reads it —
+/// and appends what the interpreter recorded. The line is the `eval()` call site, which is the
+/// line PHP names too (`… in Command line code(1) : eval()'d code:1`).
+#[test]
+fn test_an_eval_runtime_failure_names_its_cause_and_call_site() {
+    let stderr = assert_eval_failure_contains(
+        "<?php\n$code = $argc > 1 ? $argv[1] : 'return MissingEvalContractConst;';\neval($code);\n",
+        "Fatal error: eval() runtime failed: undefined constant \"MissingEvalContractConst\" in ",
+    );
+    assert!(
+        stderr.contains("test.php on line 3"),
+        "the fatal did not name the eval() call site: {stderr}"
+    );
+    assert_no_rust_panic_leaked(&stderr);
+}

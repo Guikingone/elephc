@@ -38,6 +38,11 @@ pub(in crate::interpreter) fn execute_statements(
             }
         }
     }
+    // Nothing is failing any more, so no description of a failure may survive here. An FFI entry
+    // point can map an interpreter error onto a benign answer for its AOT caller — that is how
+    // Symfony absorbs a missing autoload target — and the note that error left would otherwise
+    // wait to be printed beside an unrelated fatal much later on.
+    crate::errors::clear_eval_runtime_failure();
     Ok(EvalControl::None)
 }
 

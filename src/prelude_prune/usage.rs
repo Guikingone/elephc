@@ -88,6 +88,15 @@ pub(crate) struct Usage {
     /// something different for the rest of its life. Nothing approximates that, so it disables
     /// pruning outright.
     pub(crate) introspects: bool,
+    /// An `include`/`require` whose path this walk cannot read as a string literal.
+    ///
+    /// Such an include RUNS PHP TEXT THAT DOES NOT EXIST YET, through the same interpreter
+    /// `eval()` uses, and that text can name any class — exactly the hazard `introspects`
+    /// records for `eval`. It is kept separate because the two answers differ: `eval` also
+    /// hands over the symbol table and so must disable prelude pruning outright, whereas a
+    /// runtime include reaches classes through the eval bridge's own construction surface. Only
+    /// `types::checker::builtin_class_gate` reads this, and only to widen the throwable set.
+    pub(crate) includes_runtime_php: bool,
 }
 
 impl Usage {
@@ -364,8 +373,11 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         | StmtKind::Return(Some(expr))
         | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
-        | StmtKind::StaticPropertyArrayPush { value: expr, .. }
-        | StmtKind::Include { path: expr, .. } => scan_expr(expr, usage),
+        | StmtKind::StaticPropertyArrayPush { value: expr, .. } => scan_expr(expr, usage),
+        StmtKind::Include { path, .. } => {
+            record_include_path(path, usage);
+            scan_expr(path, usage);
+        }
         StmtKind::RefAssign { source, .. } => scan_expr(source, usage),
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
@@ -599,10 +611,24 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
     }
 }
 
+/// Records an `include`/`require` whose path this walk cannot read as a literal.
+///
+/// A literal path names a file the compiler resolves and inlines, so its declarations are part
+/// of the program this walk already sees. Anything else is decided at run time and executed by
+/// the interpreter, which can name a class no static walk can read.
+fn record_include_path(path: &Expr, usage: &mut Usage) {
+    if !matches!(path.kind, ExprKind::StringLiteral(_)) {
+        usage.includes_runtime_php = true;
+    }
+}
+
 /// Scans every child and callable position of one expression.
 fn scan_expr(expr: &Expr, usage: &mut Usage) {
     match &expr.kind {
-        ExprKind::IncludeValue { path, .. } => scan_expr(path, usage),
+        ExprKind::IncludeValue { path, .. } => {
+            record_include_path(path, usage);
+            scan_expr(path, usage);
+        }
         ExprKind::FunctionCall { name, args } => {
             let name = php_symbol_key(name.as_str().trim_start_matches('\\'));
             record_name(usage, &name);

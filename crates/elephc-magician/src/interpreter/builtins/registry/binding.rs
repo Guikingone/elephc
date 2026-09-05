@@ -21,6 +21,7 @@ pub(in crate::interpreter) fn eval_builtin_call(
     let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
     let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, values)?;
     let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
+        note_eval_runtime_failure(format!("call to unsupported function {name}()"), context);
         return Err(EvalStatus::UnsupportedConstruct);
     };
     Ok(result)

@@ -116,7 +116,7 @@ fn spl_pulls_in_every_exception(spl_surface_registered: bool) -> bool {
 /// because the always-set is exactly the set of classes such a helper can name, and a test pins
 /// it against the codegen list.
 ///
-/// THREE THINGS REGISTER EVERYTHING, and each names its class somewhere no static walk can read.
+/// FOUR THINGS REGISTER EVERYTHING, and each names its class somewhere no static walk can read.
 /// `eval` resolves names at runtime, and `codegen::eval_constructor_helpers::
 /// BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES` emits a constructor bridge for all twenty-five for
 /// exactly that reason. `unserialize` reads its class name out of its DATA. And `new $c` with a
@@ -124,6 +124,15 @@ fn spl_pulls_in_every_exception(spl_surface_registered: bool) -> bool {
 /// `codegen_support::dynamic_new::supported_dynamic_new_builtin_class_names`, which contains all
 /// of these. It widens even when a literal assigned the variable earlier, because at the `new`
 /// site the name is a variable and nothing connects it back to that assignment.
+///
+/// The fourth is an `include`/`require` WHOSE PATH IS NOT A LITERAL. It is the same case as
+/// `eval` and was missing: the file is chosen at run time, its text is executed by the same
+/// interpreter, and `throw new RuntimeException(...)` inside it names a class this walk never
+/// sees. Missing it is the one failure this gate promises cannot happen — a runtime helper
+/// materializing a class whose metadata was never emitted — because the eval bridge IS such a
+/// helper and its `__rt_new_by_name` lookup answers null, which the interpreter can only report
+/// as a fatal. Measured: `throw new RuntimeException("boom")` in a runtime-included file printed
+/// `Fatal error: eval() runtime failed` where `php -n` 8.5.6 caught it.
 ///
 /// The date/time gate next door has no equivalent case: no `Date*` class is in that dynamic-new
 /// list, so `new $c` cannot conjure one.
@@ -138,7 +147,11 @@ pub(crate) fn throwables_to_register(
         .map(|name| (*name).to_string())
         .collect();
 
-    if usage.introspects || usage.constructs_dynamic_class || usage.references("unserialize") {
+    if usage.introspects
+        || usage.constructs_dynamic_class
+        || usage.includes_runtime_php
+        || usage.references("unserialize")
+    {
         wanted.extend(every_builtin_throwable().map(str::to_string));
         return wanted;
     }
@@ -269,6 +282,23 @@ mod tests {
         ] {
             assert!(!wanted.contains(name), "{name} should have been gated out");
         }
+    }
+
+    /// An include whose path is decided at run time reaches every builtin throwable, because the
+    /// interpreter runs the chosen file's text and `throw new RuntimeException(...)` inside it is
+    /// a name no walk over THIS program can see. A literal path is a file the compiler resolves
+    /// and inlines, so it stays narrow.
+    #[test]
+    fn a_runtime_include_registers_every_builtin_throwable() {
+        let wanted = registered("<?php $path = $argv[1]; include $path;");
+        for name in every_builtin_throwable() {
+            assert!(wanted.contains(name), "{name} is reachable through the include");
+        }
+        assert!(registered("<?php $x = require $argv[1];").contains("ReflectionException"));
+
+        let literal = registered("<?php include 'lib.php';");
+        assert_eq!(literal.len(), ALWAYS_REGISTERED_THROWABLES.len());
+        assert!(!literal.contains("RuntimeException"), "a literal path is resolved and inlined");
     }
 
     /// Naming `RuntimeException` alone must register it without dragging in the SPL surface.

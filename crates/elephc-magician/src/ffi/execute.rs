@@ -88,6 +88,38 @@ unsafe fn execute_eval_inner(
     execute_parsed_eval(ctx, scope, program.as_ref(), out)
 }
 
+/// Prints the eval bridge fatal for a non-zero status the generated handler cannot describe.
+///
+/// WHY THE BRIDGE PRINTS THIS AND THE ASSEMBLY NO LONGER DOES, which is the same argument the
+/// parse-error path already won. The generated handler carries a fixed string in the data
+/// section; it cannot name the file, the line, or what the interpreter was doing, because none
+/// of those exist until the fragment runs. So the side that owns the interpreter prints, and
+/// `codegen::lower_inst::builtins::eval::status` is left with the exit.
+///
+/// The prefixes are unchanged so this is a strict addition: with nothing recorded, the bytes
+/// written are exactly the constants the assembly used to emit. `status` is the ABI code, and
+/// any code other than the two anonymous fatals prints nothing — a parse error has already
+/// printed its own diagnostic, and an uncaught Throwable is reported by the runtime unwinder.
+///
+/// # Safety
+/// Called from generated assembly with no arguments beyond the ABI status code.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_report_runtime_fatal(status: i64) {
+    let _ = std::panic::catch_unwind(|| {
+        let prefix = if status == i64::from(EvalStatus::RuntimeFatal.code()) {
+            "Fatal error: eval() runtime failed"
+        } else if status == i64::from(EvalStatus::UnsupportedConstruct.code()) {
+            "Fatal error: eval() fragment uses an unsupported construct"
+        } else {
+            return;
+        };
+        let clause = crate::errors::take_eval_runtime_failure()
+            .map(|failure| failure.clause())
+            .unwrap_or_default();
+        crate::errors::report_bridge_fatal_diagnostic(&format!("{prefix}{clause}\n"));
+    });
+}
+
 /// Returns whether opt-in eval bridge tracing is enabled for this process.
 fn eval_trace_enabled() -> bool {
     std::env::var_os(EVAL_TRACE_ENV).is_some()

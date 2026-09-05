@@ -36,7 +36,17 @@ use super::eval_ref_arg_helpers::{
 };
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 
-const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
+/// Every builtin Throwable the eval bridge can construct from a runtime string.
+///
+/// ONE LIST, TWO HALVES, AND THEY MUST NOT DRIFT. This side emits a constructor helper for each
+/// of these whenever `eval_bridge` is required; `codegen::runtime_metadata::classes::
+/// seed_runtime_throwable_class_names` reads the same list under the same gate to keep the
+/// ALLOCATION half — the `_classes_by_name` entry `__rt_new_by_name` scans — in step. A name
+/// present here but absent there ships a constructor for a class that cannot be allocated:
+/// `__rt_new_by_name` answers null, `RuntimeValueOps::new_object` turns that into
+/// `EvalStatus::RuntimeFatal`, and the interpreter reports a fatal where PHP throws a catchable
+/// Throwable. Add a class here and both halves follow.
+pub(in crate::codegen) const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
     "ArgumentCountError",

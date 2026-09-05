@@ -176,6 +176,97 @@ pub fn report_fatal_diagnostic(message: &str) {
     let _ = out.flush();
 }
 
+/// Writes one eval bridge fatal where the generated status handler used to write a constant.
+///
+/// Standard error and no trailing exit are deliberate: this replaces the string the assembly
+/// emitted, byte for byte when nothing better is known, so every caller that already reads this
+/// diagnostic keeps reading the same thing. PHP writes its own fatals on standard output with
+/// status 255, and the parse-error path already does that; a bridge status that is NOT a PHP
+/// fatal — the interpreter reporting what it could not do — keeps the stream it has always had.
+pub fn report_bridge_fatal_diagnostic(message: &str) {
+    use std::io::Write;
+    let mut err = std::io::stderr().lock();
+    let _ = err.write_all(message.as_bytes());
+    let _ = err.flush();
+}
+
+/// What the interpreter could not do, and where the PHP source asked for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvalRuntimeFailure {
+    what: String,
+    file: String,
+    line: Option<i64>,
+}
+
+impl EvalRuntimeFailure {
+    /// Renders the clause that follows one of the bridge's fixed fatal prefixes.
+    ///
+    /// EACH HALF OF THE LOCATION IS OMITTED RATHER THAN FAKED. A fragment executed with no
+    /// context handle has no file at all. A file included at run time has one, but no line: the
+    /// call site an eval context carries is the `eval()` or `include` that started the fragment,
+    /// which for an include is the top of the included file rather than the statement that
+    /// failed inside it, and EvalIR statements carry no line of their own to correct it with.
+    /// Printing `on line 1` for a failure forty lines down would be worse than printing nothing,
+    /// so the line appears only for an `eval()`, where the call site is the line PHP itself
+    /// names. Giving EvalIR statements a line is what would close the rest.
+    pub fn clause(&self) -> String {
+        match (self.file.as_str(), self.line) {
+            ("", _) => format!(": {}", self.what),
+            (file, None) => format!(": {} in {file}", self.what),
+            (file, Some(line)) => format!(": {} in {file} on line {line}", self.what),
+        }
+    }
+}
+
+thread_local! {
+    /// The description the next bridge fatal should carry, if the interpreter left one.
+    static PENDING_RUNTIME_FAILURE: std::cell::RefCell<Option<EvalRuntimeFailure>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Records what the interpreter could not do, for the fatal the bridge may be about to report.
+///
+/// THE FIRST WRITER WINS. A `RuntimeFatal` travels outwards through every enclosing statement,
+/// call and include, and each of those frames could describe itself; the one worth printing is
+/// the innermost, which is the first to run this.
+///
+/// THE NOTE IS CLEARED THE MOMENT NO FAILURE IS OUTSTANDING — `interpreter::execute_statements`
+/// clears it whenever a statement list runs to completion. That is what keeps a description
+/// honest across the one case where a bridge failure does not end the process: an FFI entry
+/// point can map an interpreter error onto a benign answer for its AOT caller, and the note it
+/// left would otherwise wait around to be printed beside an unrelated fatal later on.
+pub fn note_eval_runtime_failure(
+    what: impl Into<String>,
+    file: impl Into<String>,
+    line: Option<i64>,
+) {
+    PENDING_RUNTIME_FAILURE.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        if pending.is_none() {
+            *pending = Some(EvalRuntimeFailure {
+                what: what.into(),
+                file: file.into(),
+                line,
+            });
+        }
+    });
+}
+
+/// Drops any pending description, because nothing is failing any more.
+pub fn clear_eval_runtime_failure() {
+    PENDING_RUNTIME_FAILURE.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        if pending.is_some() {
+            *pending = None;
+        }
+    });
+}
+
+/// Returns and clears the description the bridge fatal should carry.
+pub fn take_eval_runtime_failure() -> Option<EvalRuntimeFailure> {
+    PENDING_RUNTIME_FAILURE.with(|pending| pending.borrow_mut().take())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

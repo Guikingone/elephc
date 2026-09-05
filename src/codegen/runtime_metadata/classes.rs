@@ -186,13 +186,31 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
     //   a catchable `UnhandledMatchError` there, so this is a real gap; closing it will add
     //   an EIR reference, which is exactly what makes the class survive this gate.
     // A program that names one of them still gets it — `throw new AssertionError(...)` is an
-    // EIR reference. Only eval can conjure one from a string with nothing to scan, and the
-    // eval constructor bridge emits helpers for the whole family (see
-    // `codegen::eval_constructor_helpers::BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES`).
+    // EIR reference. Only eval can conjure one from a string with nothing to scan — and eval
+    // can conjure ANY of them, which is why the clause below is the whole family and not the
+    // three names that used to sit here.
+    //
+    // THE ALLOCATION HALF OF THE EVAL CONSTRUCTOR BRIDGE. `eval_constructor_helpers` emits a
+    // constructor helper for every name in BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES under exactly
+    // this gate. Constructing needs two things: a constructor, and something to construct. The
+    // second is this table — `runtime_referenced_class_names` becomes `allowed_class_names`,
+    // which is what `runtime::data::user` retains before emitting `_classes_by_name`, the table
+    // `__rt_new_by_name` scans. Ship one half and the interpreter's
+    // `throw new RuntimeException(...)` allocates null, `RuntimeValueOps::new_object` maps that
+    // to `EvalStatus::RuntimeFatal`, and the bridge reports fatal status 2 where PHP throws a
+    // catchable Throwable that the very next `catch (\Throwable $e)` would have taken.
+    //
+    // Measured before the fix, `php -n` 8.5.6 as the oracle: a runtime-included file doing
+    // `throw new RuntimeException("boom")` inside `try { } catch (\Throwable $e) { }` printed
+    // `Fatal error: eval() runtime failed` and exited 1, where PHP printed the caught message
+    // and exited 0. `new Exception` worked in the same file, because the eight unconditional
+    // seeds above already carried it — which is what made the divergence look class-specific.
+    // Reading the list from the constructor side is the point: adding a 26th class there now
+    // brings its metadata along instead of shipping a constructor with nothing to construct.
     if module.required_runtime_features.eval_bridge {
-        for class_name in ["ArgumentCountError", "AssertionError", "UnhandledMatchError"] {
-            if module.class_infos.contains_key(class_name) {
-                names.insert(class_name.to_string());
+        for class_name in crate::codegen::eval_constructor_helpers::BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES {
+            if module.class_infos.contains_key(*class_name) {
+                names.insert((*class_name).to_string());
             }
         }
     }

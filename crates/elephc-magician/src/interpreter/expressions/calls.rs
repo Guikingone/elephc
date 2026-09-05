@@ -170,6 +170,7 @@ pub(in crate::interpreter) fn eval_call(
     if let Some(function) = context.native_function(name) {
         return eval_native_function(function, args, context, scope, values);
     }
+    note_eval_runtime_failure(format!("call to undefined function {name}()"), context);
     Err(EvalStatus::UnsupportedConstruct)
 }
 
@@ -244,5 +245,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         return Ok(result);
     }
 
+    note_eval_runtime_failure(
+        format!("call to unsupported builtin {name}()"),
+        context,
+    );
     Err(EvalStatus::UnsupportedConstruct)
 }

@@ -234,9 +234,13 @@ pub(in crate::interpreter) fn eval_new_object_result(
         return eval_dynamic_class_new_object(&class, args, context, scope, values)
             .map_err(|status| trace_new_object_error("eval_class", class_name, status, context));
     }
-    let object = values
-        .new_object(class_name)
-        .map_err(|status| trace_new_object_error("allocation", class_name, status, context))?;
+    let object = values.new_object(class_name).map_err(|status| {
+        note_eval_runtime_failure(
+            format!("could not construct class \"{class_name}\""),
+            context,
+        );
+        trace_new_object_error("allocation", class_name, status, context)
+    })?;
     if let Err(err) =
         eval_native_constructor_with_evaluated_args(class_name, object, args, context, values)
     {
