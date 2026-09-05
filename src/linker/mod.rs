@@ -11,6 +11,7 @@
 //! - Dependency resolution stays outside this module; the linker consumes typed paths only.
 
 mod archive_dedup;
+mod asm_cache;
 mod asm_split;
 mod bridges;
 mod command;
@@ -193,19 +194,55 @@ pub(crate) fn assemble_parallel(
         0 => obj_path.to_path_buf(),
         _ => obj_path.with_extension(format!("slice{index}.o")),
     };
-    for (index, slice) in outcome.slices.iter().enumerate() {
-        if std::fs::write(slice_asm(index), slice).is_err() {
-            for cleanup in 0..=index {
+
+    // Consult the slice cache BEFORE writing any `.s`. A hit materializes the
+    // object directly, so a slice that did not change costs neither a file write
+    // nor an assembler process -- which is the whole point on a machine where the
+    // assembler is memory-bound rather than merely slow.
+    let caching = asm_cache::is_enabled();
+    let keys: Vec<u64> = if caching {
+        let identity = asm_cache::assembler_identity(&assembler_command(target));
+        outcome
+            .slices
+            .iter()
+            .map(|slice| asm_cache::slice_key(slice, &identity))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut misses: Vec<usize> = Vec::new();
+    for index in 0..outcome.slices.len() {
+        if caching && asm_cache::reuse(keys[index], &slice_obj(index)) {
+            continue;
+        }
+        misses.push(index);
+    }
+    let cached = outcome.slices.len() - misses.len();
+
+    // A restored object is a HARDLINK to the cache entry, so anything that writes
+    // to it in place would write through into the cache. Unlinking the name first
+    // leaves the entry's inode untouched, which is what makes the fallback safe.
+    let drop_restored = || {
+        for index in 0..outcome.slices.len() {
+            let _ = std::fs::remove_file(slice_obj(index));
+        }
+    };
+
+    for &index in &misses {
+        if std::fs::write(slice_asm(index), &outcome.slices[index]).is_err() {
+            for &cleanup in &misses {
                 let _ = std::fs::remove_file(slice_asm(cleanup));
             }
+            drop_restored();
             assemble(target, asm_path, obj_path);
             return single();
         }
     }
 
     let failed = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..outcome.slices.len())
-            .map(|index| {
+        let handles: Vec<_> = misses
+            .iter()
+            .map(|&index| {
                 let asm = slice_asm(index);
                 let obj = slice_obj(index);
                 scope.spawn(move || assemble(target, &asm, &obj))
@@ -226,18 +263,28 @@ pub(crate) fn assemble_parallel(
         process::exit(1);
     }
 
+    // Publish only what this build actually assembled. A hit was already published
+    // by whoever produced it, and re-publishing it would only move its mtime.
+    if caching {
+        for &index in &misses {
+            asm_cache::publish(keys[index], &slice_obj(index));
+        }
+        asm_cache::prune(&keys);
+    }
+
     // The slice sources are derived files: the `.s` the developer asked for is
     // still on disk untouched. A failing `as` exits before this point, so a
     // slice that could not be assembled is always left behind for inspection.
     let objects: Vec<PathBuf> = (0..outcome.slices.len()).map(|index| slice_obj(index)).collect();
-    for index in 0..outcome.slices.len() {
+    for &index in &misses {
         let _ = std::fs::remove_file(slice_asm(index));
     }
     let note = format!(
-        "Assembler: {} parallel slices ({} temporaries promoted, {} locals published)",
+        "Assembler: {} parallel slices ({} temporaries promoted, {} locals published, {} reused from cache)",
         objects.len(),
         outcome.promoted.len(),
-        outcome.published
+        outcome.published,
+        cached
     );
     AssembledObjects {
         objects,
