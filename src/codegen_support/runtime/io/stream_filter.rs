@@ -315,92 +315,126 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("mov x2, x6");                                          // return decoded length
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
-    // -- dechunk: parse HTTP/1.1 chunked transfer-encoding inline.
-    //    Format: <hex_size>\r\n<bytes>\r\n<hex_size>\r\n<bytes>\r\n...0\r\n\r\n
-    //    Output is the concatenation of all <bytes> chunks, with the
-    //    size-lines and CRLFs removed. In-place compaction (output ≤
-    //    input) using read/write cursors. --
+    // -- dechunk: php-src's `php_dechunk` (ext/standard/filters.c:1724), transcribed.
+    //
+    //    The four rules elephc's own parser did not have, each MEASURED through php-src's
+    //    `filters/chunked_001.phpt`, whose seven streams it answered two of:
+    //      * The CR is OPTIONAL and the LF is what ends a line — an LF-terminated stream never
+    //        ended a size line here at all, so `2\nte\n2\nst\n0\n` decoded to nothing.
+    //      * A size line ends at the FIRST byte that is not a hex digit, and that byte opens the
+    //        extension, skipped to a CR *or* an LF. Skipping non-hex bytes and accumulating past
+    //        them read the `e` of `te` as another digit.
+    //      * A size line whose first byte is not hex is php's CHUNK_ERROR.
+    //      * So is a chunk body not followed by its LF. CHUNK_ERROR stops parsing and copies the
+    //        remainder VERBATIM, which is how php answers a stream it cannot frame.
+    //
+    //    ⚠️ php carries this state ACROSS buckets; this helper does not — it restarts at
+    //    CHUNK_SIZE_START on every call, so a chunk split over two reads still decodes wrong.
+    //    That limit is older than this parser and is not addressed here.
+    //
+    //    x5 = read cursor, x6 = write cursor, x7 = chunk size, x10 = where the size line began. --
     emitter.label("__rt_asf_dechunk");
     emitter.instruction("mov x5, #0");                                          // read index
     emitter.instruction("mov x6, #0");                                          // write index
-    emitter.label("__rt_asf_dechunk_size_loop");
-    // Parse a hex chunk-size line: accumulate hex digits in x7 until \r\n.
+    emitter.label("__rt_asf_dechunk_size_start");
+    emitter.instruction("cmp x5, x2");                                          // php's outer `while (p < end)`
+    emitter.instruction("b.ge __rt_asf_dechunk_done");                          // nothing left to parse
     emitter.instruction("mov x7, #0");                                          // chunk size accumulator
-    emitter.label("__rt_asf_dechunk_size_read");
+    emitter.instruction("mov x10, x5");                                         // remember where the size line began
+    emitter.label("__rt_asf_dechunk_size_scan");
     emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
-    emitter.instruction("b.ge __rt_asf_dechunk_done");                          // finish the dechunk operation when the bound is reached
+    emitter.instruction("b.ge __rt_asf_dechunk_done");                          // a size line cut short yields what was decoded
     emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
-    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
-    emitter.instruction("cmp w8, #13");                                         // test for carriage return in the encoded stream
-    emitter.instruction("b.eq __rt_asf_dechunk_size_eol");                      // end of size line
-    emitter.instruction("cmp w8, #59");                                         // ';' (chunk extensions)
-    emitter.instruction("b.eq __rt_asf_dechunk_skip_to_eol");                   // ignore extensions
-    // Hex digit?
     emitter.instruction("cmp w8, #48");                                         // test for the lower bound of ASCII digits
-    emitter.instruction("b.lt __rt_asf_dechunk_size_read");                     // skip non-digit
+    emitter.instruction("b.lt __rt_asf_dechunk_size_nonhex");                   // not a hex digit: the size line is over
     emitter.instruction("cmp w8, #57");                                         // test for the upper bound of ASCII digits
-    emitter.instruction("b.le __rt_asf_dechunk_size_digit");                    // accept values inside the current range
-    // letter? case-fold via |0x20.
-    emitter.instruction("orr w8, w8, #0x20");                                   // merge the extracted bits into the accumulator
-    emitter.instruction("cmp w8, #97");                                         // test for the lower bound of lowercase hex/base64 letters
-    emitter.instruction("b.lt __rt_asf_dechunk_size_read");                     // reject values below the accepted range
-    emitter.instruction("cmp w8, #102");                                        // test for line feed in the encoded stream
-    emitter.instruction("b.gt __rt_asf_dechunk_size_read");                     // reject values above the accepted range
-    emitter.instruction("sub w8, w8, #87");                                     // a..f → 10..15 (97-87)
-    emitter.instruction("b __rt_asf_dechunk_size_acc");                         // continue at __rt_asf_dechunk_size_acc
+    emitter.instruction("b.le __rt_asf_dechunk_size_digit");                    // 0..9
+    emitter.instruction("orr w9, w8, #0x20");                                   // case-fold A..F onto a..f
+    emitter.instruction("cmp w9, #97");                                         // test for the lower bound of lowercase hex letters
+    emitter.instruction("b.lt __rt_asf_dechunk_size_nonhex");                   // not a hex digit: the size line is over
+    emitter.instruction("cmp w9, #102");                                        // test for the upper bound of lowercase hex letters
+    emitter.instruction("b.gt __rt_asf_dechunk_size_nonhex");                   // not a hex digit: the size line is over
+    emitter.instruction("sub w9, w9, #87");                                     // a..f → 10..15 (97-87)
+    emitter.instruction("b __rt_asf_dechunk_size_acc");                         // accumulate the digit
     emitter.label("__rt_asf_dechunk_size_digit");
-    emitter.instruction("sub w8, w8, #48");                                     // 0..9 → 0..9
+    emitter.instruction("sub w9, w8, #48");                                     // 0..9 → 0..9
     emitter.label("__rt_asf_dechunk_size_acc");
     emitter.instruction("lsl x7, x7, #4");                                      // shift the accumulator to make room for the next value
-    emitter.instruction("orr x7, x7, x8");                                      // merge the extracted bits into the accumulator
-    emitter.instruction("b __rt_asf_dechunk_size_read");                        // continue at __rt_asf_dechunk_size_read
-    emitter.label("__rt_asf_dechunk_skip_to_eol");
-    // Skip everything until \r.
+    emitter.instruction("orr x7, x7, x9");                                      // merge the extracted bits into the accumulator
+    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
+    emitter.instruction("b __rt_asf_dechunk_size_scan");                        // continue at __rt_asf_dechunk_size_scan
+    emitter.label("__rt_asf_dechunk_size_nonhex");
+    emitter.instruction("cmp x5, x10");                                         // did the line hold ANY hex digit?
+    emitter.instruction("b.eq __rt_asf_dechunk_error");                         // php's CHUNK_ERROR: a size line that starts non-hex
+    emitter.label("__rt_asf_dechunk_ext");
+    // CHUNK_SIZE_EXT: everything after the size is skipped, up to a CR or an LF.
     emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
     emitter.instruction("b.ge __rt_asf_dechunk_done");                          // finish the dechunk operation when the bound is reached
     emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
-    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
     emitter.instruction("cmp w8, #13");                                         // test for carriage return in the encoded stream
-    emitter.instruction("b.ne __rt_asf_dechunk_skip_to_eol");                   // continue at __rt_asf_dechunk_skip_to_eol when the comparison does not match
-    emitter.label("__rt_asf_dechunk_size_eol");
-    // Expect '\n' (LF) after the \r. Skip it if present.
+    emitter.instruction("b.eq __rt_asf_dechunk_size_cr");                       // the size line ends here
+    emitter.instruction("cmp w8, #10");                                         // test for line feed in the encoded stream
+    emitter.instruction("b.eq __rt_asf_dechunk_size_cr");                       // the size line ends here
+    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
+    emitter.instruction("b __rt_asf_dechunk_ext");                              // continue skipping the extension
+    emitter.label("__rt_asf_dechunk_size_cr");
+    // CHUNK_SIZE_CR: php consumes a CR only if one is there.
+    emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
+    emitter.instruction("cmp w8, #13");                                         // test for carriage return in the encoded stream
+    emitter.instruction("b.ne __rt_asf_dechunk_size_lf");                       // no CR: the LF is judged on this same byte
+    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
     emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
     emitter.instruction("b.ge __rt_asf_dechunk_done");                          // finish the dechunk operation when the bound is reached
+    emitter.label("__rt_asf_dechunk_size_lf");
+    // CHUNK_SIZE_LF: the LF is REQUIRED — anything else is CHUNK_ERROR.
     emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
     emitter.instruction("cmp w8, #10");                                         // test for line feed in the encoded stream
-    emitter.instruction("b.ne __rt_asf_dechunk_skip_lf");                       // continue at __rt_asf_dechunk_skip_lf when the comparison does not match
+    emitter.instruction("b.ne __rt_asf_dechunk_error");                         // php's CHUNK_ERROR
     emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
-    emitter.label("__rt_asf_dechunk_skip_lf");
-    // chunk size 0 → end.
-    emitter.instruction("cbz x7, __rt_asf_dechunk_done");                       // finish the dechunk operation when the count is zero
-    // Copy x7 bytes from [x1+x5] to [x1+x6].
-    emitter.instruction("mov x9, #0");                                          // set up the next value for this filter step
+    emitter.instruction("cbz x7, __rt_asf_dechunk_done");                       // size 0 is the last chunk: php ignores the trailer
+    emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
+    emitter.instruction("b.ge __rt_asf_dechunk_done");                          // finish the dechunk operation when the bound is reached
+    // CHUNK_BODY: copy min(chunk size, what is left).
+    emitter.instruction("sub x12, x2, x5");                                     // bytes still in the buffer
+    emitter.instruction("cmp x12, x7");                                         // is the whole chunk here?
+    emitter.instruction("b.lt __rt_asf_dechunk_body_copy");                     // a partial chunk copies what arrived
+    emitter.instruction("mov x12, x7");                                         // the whole chunk
+    emitter.label("__rt_asf_dechunk_body_copy");
+    emitter.instruction("mov x11, #0");                                         // chunk-copy cursor
     emitter.label("__rt_asf_dechunk_copy_loop");
-    emitter.instruction("cmp x9, x7");                                          // check whether the current cursor reached its bound
-    emitter.instruction("b.ge __rt_asf_dechunk_copy_done");                     // finish the dechunk operation when the bound is reached
+    emitter.instruction("cmp x11, x12");                                        // check whether the current cursor reached its bound
+    emitter.instruction("b.ge __rt_asf_dechunk_copy_done");                     // the chunk body is copied
+    emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
+    emitter.instruction("strb w8, [x1, x6]");                                   // write output back into the stream buffer
+    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
+    emitter.instruction("add x6, x6, #1");                                      // advance the write cursor
+    emitter.instruction("add x11, x11, #1");                                    // advance the chunk-copy cursor
+    emitter.instruction("b __rt_asf_dechunk_copy_loop");                        // continue the dechunk loop
+    emitter.label("__rt_asf_dechunk_copy_done");
+    emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
+    emitter.instruction("b.ge __rt_asf_dechunk_done");                          // finish the dechunk operation when the bound is reached
+    // CHUNK_BODY_CR / CHUNK_BODY_LF: the same optional CR, required LF pair.
+    emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
+    emitter.instruction("cmp w8, #13");                                         // test for carriage return in the encoded stream
+    emitter.instruction("b.ne __rt_asf_dechunk_body_lf");                       // no CR: the LF is judged on this same byte
+    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
+    emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
+    emitter.instruction("b.ge __rt_asf_dechunk_done");                          // finish the dechunk operation when the bound is reached
+    emitter.label("__rt_asf_dechunk_body_lf");
+    emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
+    emitter.instruction("cmp w8, #10");                                         // test for line feed in the encoded stream
+    emitter.instruction("b.ne __rt_asf_dechunk_error");                         // php's CHUNK_ERROR
+    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
+    emitter.instruction("b __rt_asf_dechunk_size_start");                       // the next chunk-size line
+    emitter.label("__rt_asf_dechunk_error");
+    // CHUNK_ERROR: php stops parsing and passes the remainder through untouched.
     emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
     emitter.instruction("b.ge __rt_asf_dechunk_done");                          // finish the dechunk operation when the bound is reached
     emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
     emitter.instruction("strb w8, [x1, x6]");                                   // write output back into the stream buffer
     emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
     emitter.instruction("add x6, x6, #1");                                      // advance the write cursor
-    emitter.instruction("add x9, x9, #1");                                      // advance the chunk-copy cursor
-    emitter.instruction("b __rt_asf_dechunk_copy_loop");                        // continue the dechunk loop
-    emitter.label("__rt_asf_dechunk_copy_done");
-    // Skip trailing \r\n after chunk data.
-    emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
-    emitter.instruction("b.ge __rt_asf_dechunk_size_loop");                     // leave the loop when the cursor reaches its bound
-    emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
-    emitter.instruction("cmp w8, #13");                                         // test for carriage return in the encoded stream
-    emitter.instruction("b.ne __rt_asf_dechunk_size_loop");                     // continue the dechunk loop when the delimiter was not found
-    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
-    emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
-    emitter.instruction("b.ge __rt_asf_dechunk_size_loop");                     // leave the loop when the cursor reaches its bound
-    emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
-    emitter.instruction("cmp w8, #10");                                         // test for line feed in the encoded stream
-    emitter.instruction("b.ne __rt_asf_dechunk_size_loop");                     // continue the dechunk loop when the delimiter was not found
-    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
-    emitter.instruction("b __rt_asf_dechunk_size_loop");                        // continue the dechunk loop
+    emitter.instruction("b __rt_asf_dechunk_error");                            // continue copying the remainder
     emitter.label("__rt_asf_dechunk_done");
     emitter.instruction("mov x2, x6");                                          // return the transformed output length
     emitter.instruction("ret");                                                 // return to the stream-filter caller
@@ -1128,63 +1162,79 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r10");                                        // return the transformed output length
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
-    // -- dechunk (x86_64) — HTTP/1.1 chunked transfer-encoding parser --
+    // -- dechunk (x86_64) — php-src's `php_dechunk`; the AArch64 arm carries the rules.
+    //    r9 = read cursor, r10 = write cursor, r11 = chunk size, r13 = the size-line start and,
+    //    once the size line is behind us, the byte count of the body copy. --
     emitter.label("__rt_asf_dechunk_x86");
     emitter.instruction("xor r9, r9");                                          // read index
     emitter.instruction("xor r10, r10");                                        // write index
-    emitter.label("__rt_asf_dc_size_loop_x86");
+    emitter.label("__rt_asf_dc_size_start_x86");
+    emitter.instruction("cmp r9, rdx");                                         // php's outer `while (p < end)`
+    emitter.instruction("jge __rt_asf_dc_done_x86");                            // nothing left to parse
     emitter.instruction("xor r11, r11");                                        // chunk size accumulator
-    emitter.label("__rt_asf_dc_size_read_x86");
+    emitter.instruction("mov r13, r9");                                         // remember where the size line began
+    emitter.label("__rt_asf_dc_size_scan_x86");
     emitter.instruction("cmp r9, rdx");                                         // check whether the current cursor reached its bound
-    emitter.instruction("jge __rt_asf_dc_done_x86");                            // finish the dechunk operation when the bound is reached
+    emitter.instruction("jge __rt_asf_dc_done_x86");                            // a size line cut short yields what was decoded
     emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the next byte from the stream buffer
-    emitter.instruction("inc r9");                                              // advance the read cursor
-    emitter.instruction("cmp r8b, 13");                                         // test for carriage return in the encoded stream
-    emitter.instruction("je __rt_asf_dc_size_eol_x86");                         // finish parsing the current line
-    emitter.instruction("cmp r8b, 59");                                         // ';' ext
-    emitter.instruction("je __rt_asf_dc_skip_eol_x86");                         // finish parsing the current line
     emitter.instruction("cmp r8b, 48");                                         // test for the lower bound of ASCII digits
-    emitter.instruction("jl __rt_asf_dc_size_read_x86");                        // reject values below the accepted range
+    emitter.instruction("jl __rt_asf_dc_size_nonhex_x86");                      // not a hex digit: the size line is over
     emitter.instruction("cmp r8b, 57");                                         // test for the upper bound of ASCII digits
-    emitter.instruction("jle __rt_asf_dc_size_digit_x86");                      // accept values inside the current range
-    emitter.instruction("or r8b, 0x20");                                        // case-fold to lower
-    emitter.instruction("cmp r8b, 97");                                         // test for the lower bound of lowercase hex/base64 letters
-    emitter.instruction("jl __rt_asf_dc_size_read_x86");                        // reject values below the accepted range
-    emitter.instruction("cmp r8b, 102");                                        // test for line feed in the encoded stream
-    emitter.instruction("jg __rt_asf_dc_size_read_x86");                        // reject values above the accepted range
+    emitter.instruction("jle __rt_asf_dc_size_digit_x86");                      // 0..9
+    emitter.instruction("or r8b, 0x20");                                        // case-fold A..F onto a..f
+    emitter.instruction("cmp r8b, 97");                                         // test for the lower bound of lowercase hex letters
+    emitter.instruction("jl __rt_asf_dc_size_nonhex_x86");                      // not a hex digit: the size line is over
+    emitter.instruction("cmp r8b, 102");                                        // test for the upper bound of lowercase hex letters
+    emitter.instruction("jg __rt_asf_dc_size_nonhex_x86");                      // not a hex digit: the size line is over
     emitter.instruction("sub r8b, 87");                                         // a..f → 10..15
-    emitter.instruction("jmp __rt_asf_dc_size_acc_x86");                        // continue at __rt_asf_dc_size_acc_x86
+    emitter.instruction("jmp __rt_asf_dc_size_acc_x86");                        // accumulate the digit
     emitter.label("__rt_asf_dc_size_digit_x86");
     emitter.instruction("sub r8b, 48");                                         // convert an ASCII digit into its numeric value
     emitter.label("__rt_asf_dc_size_acc_x86");
     emitter.instruction("shl r11, 4");                                          // shift the accumulator to make room for the next value
     emitter.instruction("movzx r8, r8b");                                       // zero-extend the parsed chunk-size digit
     emitter.instruction("or r11, r8");                                          // merge the extracted bits into the accumulator
-    emitter.instruction("jmp __rt_asf_dc_size_read_x86");                       // continue at __rt_asf_dc_size_read_x86
-    emitter.label("__rt_asf_dc_skip_eol_x86");
+    emitter.instruction("inc r9");                                              // advance the read cursor
+    emitter.instruction("jmp __rt_asf_dc_size_scan_x86");                       // continue at __rt_asf_dc_size_scan_x86
+    emitter.label("__rt_asf_dc_size_nonhex_x86");
+    emitter.instruction("cmp r9, r13");                                         // did the line hold ANY hex digit?
+    emitter.instruction("je __rt_asf_dc_error_x86");                            // php's CHUNK_ERROR: a size line that starts non-hex
+    emitter.label("__rt_asf_dc_ext_x86");
     emitter.instruction("cmp r9, rdx");                                         // check whether the current cursor reached its bound
     emitter.instruction("jge __rt_asf_dc_done_x86");                            // finish the dechunk operation when the bound is reached
     emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the next byte from the stream buffer
-    emitter.instruction("inc r9");                                              // advance the read cursor
     emitter.instruction("cmp r8b, 13");                                         // test for carriage return in the encoded stream
-    emitter.instruction("jne __rt_asf_dc_skip_eol_x86");                        // continue at __rt_asf_dc_skip_eol_x86 when the comparison does not match
-    emitter.label("__rt_asf_dc_size_eol_x86");
+    emitter.instruction("je __rt_asf_dc_size_cr_x86");                          // the size line ends here
+    emitter.instruction("cmp r8b, 10");                                         // test for line feed in the encoded stream
+    emitter.instruction("je __rt_asf_dc_size_cr_x86");                          // the size line ends here
+    emitter.instruction("inc r9");                                              // advance the read cursor
+    emitter.instruction("jmp __rt_asf_dc_ext_x86");                             // continue skipping the extension
+    emitter.label("__rt_asf_dc_size_cr_x86");
+    emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the next byte from the stream buffer
+    emitter.instruction("cmp r8b, 13");                                         // test for carriage return in the encoded stream
+    emitter.instruction("jne __rt_asf_dc_size_lf_x86");                         // no CR: the LF is judged on this same byte
+    emitter.instruction("inc r9");                                              // advance the read cursor
     emitter.instruction("cmp r9, rdx");                                         // check whether the current cursor reached its bound
     emitter.instruction("jge __rt_asf_dc_done_x86");                            // finish the dechunk operation when the bound is reached
+    emitter.label("__rt_asf_dc_size_lf_x86");
     emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the next byte from the stream buffer
     emitter.instruction("cmp r8b, 10");                                         // test for line feed in the encoded stream
-    emitter.instruction("jne __rt_asf_dc_skip_lf_x86");                         // continue at __rt_asf_dc_skip_lf_x86 when the comparison does not match
+    emitter.instruction("jne __rt_asf_dc_error_x86");                           // php's CHUNK_ERROR
     emitter.instruction("inc r9");                                              // advance the read cursor
-    emitter.label("__rt_asf_dc_skip_lf_x86");
-    emitter.instruction("test r11, r11");                                       // check whether the current counter or flag is zero
-    emitter.instruction("jz __rt_asf_dc_done_x86");                             // finish the dechunk operation when the count is zero
-    // Copy r11 bytes.
-    emitter.instruction("xor r12, r12");                                        // initialize the base64 group count
-    emitter.label("__rt_asf_dc_copy_loop_x86");
-    emitter.instruction("cmp r12, r11");                                        // check whether the current cursor reached its bound
-    emitter.instruction("jge __rt_asf_dc_copy_done_x86");                       // finish the dechunk operation when the bound is reached
+    emitter.instruction("test r11, r11");                                       // size 0 is the last chunk
+    emitter.instruction("jz __rt_asf_dc_done_x86");                             // php ignores the trailer
     emitter.instruction("cmp r9, rdx");                                         // check whether the current cursor reached its bound
     emitter.instruction("jge __rt_asf_dc_done_x86");                            // finish the dechunk operation when the bound is reached
+    emitter.instruction("mov r13, rdx");                                        // bytes still in the buffer
+    emitter.instruction("sub r13, r9");                                         // end - p
+    emitter.instruction("cmp r13, r11");                                        // is the whole chunk here?
+    emitter.instruction("jl __rt_asf_dc_body_copy_x86");                        // a partial chunk copies what arrived
+    emitter.instruction("mov r13, r11");                                        // the whole chunk
+    emitter.label("__rt_asf_dc_body_copy_x86");
+    emitter.instruction("xor r12, r12");                                        // chunk-copy cursor
+    emitter.label("__rt_asf_dc_copy_loop_x86");
+    emitter.instruction("cmp r12, r13");                                        // check whether the current cursor reached its bound
+    emitter.instruction("jge __rt_asf_dc_copy_done_x86");                       // the chunk body is copied
     emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the next byte from the stream buffer
     emitter.instruction("mov BYTE PTR [rax + r10], r8b");                       // write output back into the stream buffer
     emitter.instruction("inc r9");                                              // advance the read cursor
@@ -1192,20 +1242,28 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r12");                                             // advance the chunk-copy cursor
     emitter.instruction("jmp __rt_asf_dc_copy_loop_x86");                       // continue the dechunk loop
     emitter.label("__rt_asf_dc_copy_done_x86");
-    // Skip trailing \r\n.
     emitter.instruction("cmp r9, rdx");                                         // check whether the current cursor reached its bound
-    emitter.instruction("jge __rt_asf_dc_size_loop_x86");                       // leave the loop when the cursor reaches its bound
+    emitter.instruction("jge __rt_asf_dc_done_x86");                            // finish the dechunk operation when the bound is reached
     emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the next byte from the stream buffer
     emitter.instruction("cmp r8b, 13");                                         // test for carriage return in the encoded stream
-    emitter.instruction("jne __rt_asf_dc_size_loop_x86");                       // continue the dechunk loop when the delimiter was not found
+    emitter.instruction("jne __rt_asf_dc_body_lf_x86");                         // no CR: the LF is judged on this same byte
     emitter.instruction("inc r9");                                              // advance the read cursor
     emitter.instruction("cmp r9, rdx");                                         // check whether the current cursor reached its bound
-    emitter.instruction("jge __rt_asf_dc_size_loop_x86");                       // leave the loop when the cursor reaches its bound
+    emitter.instruction("jge __rt_asf_dc_done_x86");                            // finish the dechunk operation when the bound is reached
+    emitter.label("__rt_asf_dc_body_lf_x86");
     emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the next byte from the stream buffer
     emitter.instruction("cmp r8b, 10");                                         // test for line feed in the encoded stream
-    emitter.instruction("jne __rt_asf_dc_size_loop_x86");                       // continue the dechunk loop when the delimiter was not found
+    emitter.instruction("jne __rt_asf_dc_error_x86");                           // php's CHUNK_ERROR
     emitter.instruction("inc r9");                                              // advance the read cursor
-    emitter.instruction("jmp __rt_asf_dc_size_loop_x86");                       // continue the dechunk loop
+    emitter.instruction("jmp __rt_asf_dc_size_start_x86");                      // the next chunk-size line
+    emitter.label("__rt_asf_dc_error_x86");
+    emitter.instruction("cmp r9, rdx");                                         // check whether the current cursor reached its bound
+    emitter.instruction("jge __rt_asf_dc_done_x86");                            // finish the dechunk operation when the bound is reached
+    emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the next byte from the stream buffer
+    emitter.instruction("mov BYTE PTR [rax + r10], r8b");                       // write output back into the stream buffer
+    emitter.instruction("inc r9");                                              // advance the read cursor
+    emitter.instruction("inc r10");                                             // advance the write cursor
+    emitter.instruction("jmp __rt_asf_dc_error_x86");                           // continue copying the remainder
     emitter.label("__rt_asf_dc_done_x86");
     emitter.instruction("mov rdx, r10");                                        // return the transformed output length
     emitter.instruction("ret");                                                 // return to the stream-filter caller

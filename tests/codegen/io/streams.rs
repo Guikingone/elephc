@@ -21691,3 +21691,70 @@ var_dump(stream_context_create([]));
         ),
     );
 }
+
+/// `dechunk` frames a chunked stream the way php's own state machine does.
+///
+/// php-src's `filters/chunked_001.phpt` is seven streams and elephc answered TWO of them. Every
+/// failure was one of the rules in `php_dechunk` (ext/standard/filters.c:1724) that the local
+/// parser did not have: the CR before a line's LF is OPTIONAL, a size line ends at the FIRST
+/// non-hex byte (which opens the extension), and a stream it cannot frame is CHUNK_ERROR — php
+/// stops parsing and passes the REMAINDER through untouched rather than dropping it.
+///
+/// MEASURED against `php -n` 8.5.6 on all ten streams below, php-src's seven plus three the
+/// corpus does not cover: a body that is not chunked at all, a chunk whose body has no line
+/// ending after it, and a size line promising more bytes than arrived.
+///
+/// ⚠️ php carries the parser state ACROSS buckets and this filter does not — it restarts at
+/// CHUNK_SIZE_START on every call, so a chunk split over two reads still decodes wrong. That is
+/// older than this parser; the streams here all arrive whole.
+#[test]
+fn test_dechunk_frames_a_chunked_stream_the_way_php_does() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$streams = array(
+    "data://text/plain,0\r\n",
+    "data://text/plain,2\r\nte\r\n2\r\nst\r\n0\r\n",
+    "data://text/plain,2\nte\n2\nst\n0\n",
+    "data://text/plain,2;a=1\nte\n2;a=2;b=3\r\nst\n0\n",
+    "data://text/plain,2\nte\n2\nst\n0\na=b\r\nc=d\n\r\n",
+    "data://text/plain,1f\n0123456789abcdef0123456789abcde\n1\nf\n0\n",
+    "data://text/plain,1E\n0123456789abcdef0123456789abcd\n2\nef\n0\n",
+    "data://text/plain,not chunked at all\n",
+    "data://text/plain,2\nte!2\nst\n0\n",
+    "data://text/plain,5\nabc",
+);
+foreach ($streams as $name) {
+    $fp = fopen($name, "r");
+    stream_filter_append($fp, "dechunk", STREAM_FILTER_READ);
+    var_dump(stream_get_contents($fp));
+    fclose($fp);
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            // The last chunk alone decodes to nothing.
+            "string(0) \"\"\n",
+            // CRLF framing, which already worked.
+            "string(4) \"test\"\n",
+            // LF-only framing: the CR is optional.
+            "string(4) \"test\"\n",
+            // Chunk extensions, mixed with both framings.
+            "string(4) \"test\"\n",
+            // A trailer after the last chunk is ignored, not decoded.
+            "string(4) \"test\"\n",
+            // Two-digit hex sizes, lowercase…
+            "string(32) \"0123456789abcdef0123456789abcdef\"\n",
+            // …and uppercase.
+            "string(32) \"0123456789abcdef0123456789abcdef\"\n",
+            // Not chunked at all: php's CHUNK_ERROR passes the bytes through.
+            "string(19) \"not chunked at all\n\"\n",
+            // A body with no line ending after it is the same error, from the byte it failed on.
+            "string(10) \"te!2\nst\n0\n\"\n",
+            // A size line promising more than arrived yields what arrived.
+            "string(3) \"abc\"\n",
+        ),
+    );
+}
