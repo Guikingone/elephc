@@ -488,7 +488,16 @@ pub(in crate::interpreter) fn eval_property_set_result(
     // invisible to `print_r`, `var_dump`, `json_encode`, `foreach` and the `(array)` cast.
     // Keeping the two in step at the single write point is what lets those keep reading one
     // store, instead of teaching each of them about two.
-    values.property_set(object, &storage_property_name, value)?;
+    //
+    // THE MIRROR IS BEST-EFFORT, AND HAS TO BE. An eval class that extends an AOT class is
+    // backed by an instance of THAT class, whose slots were fixed at compile time, so a property
+    // the eval class declares and its native parent does not has no slot to receive it. Symfony's
+    // dumped container is exactly that shape — `App_KernelDevDebugContainer extends Container`
+    // writing `$this->targetDir` and its promoted `$buildParameters` — and treating the missing
+    // slot as a failure turned every warm-container request into `eval() runtime failed`. The
+    // overlay below still takes the value and `$object->property` still reads it; the enumerators
+    // lose sight only of a property the backing object could never have held.
+    let _ = values.property_set(object, &storage_property_name, value);
     let stored = values.retain(value)?;
     let replaced = context.set_dynamic_property_value(identity, &storage_property_name, stored);
     if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {

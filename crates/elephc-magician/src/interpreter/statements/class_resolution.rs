@@ -607,7 +607,17 @@ pub(super) fn eval_dynamic_class_allocate_object(
                 // `(array)` cast all walk the slots. Writing the default to both at
                 // construction is what keeps those agreeing with `$object->property`, instead
                 // of each enumerator needing to learn about a second store.
-                values.property_set(object, &storage_name, value)?;
+                //
+                // THE SLOT WRITE IS BEST-EFFORT, AND HAS TO BE. An eval class that extends an
+                // AOT class is backed by an instance of THAT class, whose slots were fixed at
+                // compile time, so a property the eval class declares and its native parent does
+                // not has no slot to receive it. Symfony's dumped container is exactly that
+                // shape — `App_KernelDevDebugContainer extends Container` declaring `$targetDir`,
+                // `$parameters` and `$getService` — and treating the missing slot as a failure
+                // aborted the allocation and killed every warm-container request. The overlay
+                // below still takes the value, and `$object->property` still reads it; only the
+                // enumerators lose sight of a property their backing object cannot hold anyway.
+                let _ = values.property_set(object, &storage_name, value);
                 if let Some(replaced) =
                     context.set_dynamic_property_value(identity, &storage_name, value)
                 {
