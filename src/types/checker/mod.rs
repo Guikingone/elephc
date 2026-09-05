@@ -280,6 +280,8 @@ pub(crate) struct Checker {
     /// one: lowering looks entries up by the span of the node it is lowering, so a key shared
     /// by many nodes makes all of them throw. See that method for why the preludes make this
     /// reachable rather than theoretical.
+    /// See `CheckResult::fallthrough_return_types`.
+    pub fallthrough_return_types: HashMap<String, String>,
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
@@ -872,6 +874,7 @@ pub fn check_types_with_options(
         extern_globals: checker.extern_globals,
         required_libraries: checker.required_libraries,
         warnings,
+        fallthrough_return_types: checker.fallthrough_return_types,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
         loop_storage_types: checker.loop_storage_types,

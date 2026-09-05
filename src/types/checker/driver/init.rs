@@ -224,6 +224,7 @@ impl Checker {
             current_loop_storage_scope: "main".to_string(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
+            fallthrough_return_types: HashMap::new(),
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
             loop_storage_types: HashMap::new(),

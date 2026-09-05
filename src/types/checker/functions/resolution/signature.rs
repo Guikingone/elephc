@@ -274,12 +274,32 @@ impl Checker {
                     &format!("Function '{}' declared never must not return", name),
                 ));
             }
-            self.require_declared_return_coverage(
-                &declared_ret,
-                &decl.body,
-                decl.span,
-                &format!("Function '{}'", name),
-            )?;
+            // php ACCEPTS a body that can fall off its end under a declared return type and
+            // raises a catchable TypeError only when the fall-through is REACHED — measured, and
+            // php-src's own filter fixtures rely on it. Record what to raise; the lowering turns
+            // it into the throw. A type this cannot spell php's way keeps the compile error.
+            match Self::fallthrough_return_type_message(name, &declared_ret) {
+                Some(message)
+                    if self
+                        .require_declared_return_coverage(
+                            &declared_ret,
+                            &decl.body,
+                            decl.span,
+                            &format!("Function '{}'", name),
+                        )
+                        .is_err() =>
+                {
+                    self.fallthrough_return_types.insert(name.to_string(), message);
+                }
+                _ => {
+                    self.require_declared_return_coverage(
+                        &declared_ret,
+                        &decl.body,
+                        decl.span,
+                        &format!("Function '{}'", name),
+                    )?;
+                }
+            }
             if !all_return_infos.is_empty() {
                 for return_info in &all_return_infos {
                     self.require_compatible_return_type(

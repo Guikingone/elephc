@@ -82,6 +82,12 @@ pub struct CheckResult {
     pub warnings: Vec<CompileWarning>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
+    /// Functions and methods whose body can fall off its end under a DECLARED return type,
+    /// mapped to the message php raises when that happens: `f(): Return value must be of type
+    /// int, none returned`. php accepts the declaration and only throws at the call, so this
+    /// replaces what used to be a compile error — see `require_declared_return_coverage`.
+    /// Keyed by the qualified name (`f`, `C::m`), which is what the lowering knows itself.
+    pub fallthrough_return_types: HashMap<String, String>,
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,

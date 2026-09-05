@@ -511,11 +511,22 @@ impl Checker {
                         method.span,
                         &format!("Method '{}::{}'", class.name, method.name),
                     ) {
-                        pass_errors.extend(error.flatten());
-                        self.current_class = None;
-                        self.current_method = None;
-                        self.current_method_is_static = false;
-                        return;
+                        // See the free-function site: php accepts the declaration and throws at
+                        // the call. Record the message when the type can be spelled php's way;
+                        // otherwise keep the refusal rather than invent a wording.
+                        let qualified = format!("{}::{}", class.name, method.name);
+                        match Self::fallthrough_return_type_message(&qualified, &declared) {
+                            Some(message) => {
+                                self.fallthrough_return_types.insert(qualified, message);
+                            }
+                            None => {
+                                pass_errors.extend(error.flatten());
+                                self.current_class = None;
+                                self.current_method = None;
+                                self.current_method_is_static = false;
+                                return;
+                            }
+                        }
                     }
                     // :never methods are allowed to have no return statements (they always throw/exit/loop).
                     let skip_compat_check = matches!(declared, PhpType::Never);

@@ -272,6 +272,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// from the body. Only a declared boundary carries PHP's coercive-mode verification
     /// (TypeError on a non-coercible runtime value); an inferred return must never throw.
     pub return_type_is_declared: bool,
+    /// php's message for a body that falls off its end under a DECLARED return type, when the
+    /// checker found one: `f(): Return value must be of type int, none returned`. php accepts
+    /// such a declaration and throws only if the fall-through is REACHED, so the terminator
+    /// raises this instead of returning a default. `None` for every body that always returns.
+    pub fallthrough_return_message: Option<String>,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
     /// so a `return $obj->prop` yields the property's ref-cell pointer instead of a value copy.
     pub by_ref_return: bool,
@@ -403,6 +408,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return_type,
             return_php_type,
             return_type_is_declared: false,
+            fallthrough_return_message: None,
             by_ref_return: false,
             in_main,
             all_global_var_names,

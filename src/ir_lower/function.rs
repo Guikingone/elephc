@@ -92,6 +92,7 @@ pub(crate) fn lower_main(
         None,
         PhpType::Void,
         false,
+        &check_result.fallthrough_return_types,
         &[],
         None,
         true,
@@ -215,6 +216,7 @@ pub(crate) fn lower_user_function(
         None,
         body_return_type.clone(),
         signature.declared_return,
+        &check_result.fallthrough_return_types,
         &eir_signature.params,
         None,
         false,
@@ -322,6 +324,7 @@ pub(crate) fn lower_class_method(
         Some(class_name.to_string()),
         method_body_return_type.clone(),
         signature.declared_return,
+        &check_result.fallthrough_return_types,
         &body_params,
         None,
         false,
@@ -419,6 +422,7 @@ pub(crate) fn lower_eval_aot_function(
         None,
         return_type,
         signature.declared_return,
+        &check_result.fallthrough_return_types,
         &[],
         None,
         false,
@@ -531,6 +535,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         None,
         return_type,
         signature.declared_return,
+        &check_result.fallthrough_return_types,
         &signature.params,
         None,
         false,
@@ -636,6 +641,7 @@ pub(crate) fn lower_property_init_thunk(
         Some(class_name.to_string()),
         PhpType::Void,
         false,
+        &check_result.fallthrough_return_types,
         &params,
         None,
         false,
@@ -992,6 +998,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         Some(class_name.to_string()),
         PhpType::Void,
         false,
+        &check_result.fallthrough_return_types,
         &params,
         None,
         false,
@@ -1199,6 +1206,9 @@ fn lower_closure_function_with_signature(
         parent.current_class.clone(),
         closure_body_return_type.clone(),
         signature.declared_return,
+        // A closure keeps the compile refusal: php spells its name `{closure:FILE:LINE}` in
+        // this message, which cannot be reproduced from here.
+        &std::collections::HashMap::new(),
         &lowered_params,
         recursive_binding,
         false,
@@ -1244,6 +1254,7 @@ fn lower_body_into_function(
     current_class: Option<String>,
     return_php_type: PhpType,
     return_type_is_declared: bool,
+    fallthrough_return_types: &std::collections::HashMap<String, String>,
     params: &[(String, PhpType)],
     recursive_closure_binding: Option<RecursiveClosureBinding>,
     in_main: bool,
@@ -1303,6 +1314,11 @@ fn lower_body_into_function(
     );
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
+    // The checker keys this by the qualified name, which is exactly what the loop-storage scope
+    // already holds: the bare name for a function, `Class::method` for a method.
+    ctx.fallthrough_return_message = fallthrough_return_types
+        .get(&ctx.loop_storage_scope)
+        .cloned();
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);
     }
@@ -1441,6 +1457,34 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>) {
     if ctx.return_type == IrType::Void {
         ctx.emit_eval_scope_finalizer(None);
         ctx.builder.terminate(Terminator::Return { value: None });
+        return;
+    }
+    // php ACCEPTS `function f(): int {}` and raises a CATCHABLE TypeError only when the
+    // fall-through is actually reached — measured on `php -n` 8.5.6 across seven declared types
+    // and three callable shapes. elephc used to refuse this at compile time, which failed four
+    // corpus tests at BUILD: php-src writes exactly that shape in its own filter fixtures.
+    //
+    // The exception is built like every other synthetic one here — a `new TypeError(...)` lowered
+    // through the ordinary expression path, then `Terminator::Throw` — so it travels the same
+    // road a user `throw` does, which is the road measured to reach a caller's `catch`.
+    if let Some(message) = ctx.fallthrough_return_message.clone() {
+        ctx.emit_eval_scope_finalizer(None);
+        // The synthetic throw belongs to the function itself, not to any statement in it.
+        let span = crate::span::Span::new(0, 0);
+        let exception = crate::parser::ast::Expr::new(
+            crate::parser::ast::ExprKind::NewObject {
+                class_name: crate::names::Name::unqualified("TypeError"),
+                args: vec![crate::parser::ast::Expr::new(
+                    crate::parser::ast::ExprKind::StringLiteral(message),
+                    span,
+                )],
+            },
+            span,
+        );
+        let exception = crate::ir_lower::expr::lower_expr(ctx, &exception);
+        ctx.builder.terminate(Terminator::Throw {
+            value: exception.value,
+        });
         return;
     }
     ctx.emit_eval_scope_finalizer(None);

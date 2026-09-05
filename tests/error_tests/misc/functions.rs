@@ -407,36 +407,6 @@ fn test_error_function_declared_return_type_rejects_mismatch_via_first_class_cal
     );
 }
 
-/// Verifies that a function with a declared return type that does not return a
-/// value on all paths (bare function body) produces an error.
-#[test]
-fn test_error_function_declared_return_type_requires_return_value() {
-    expect_error(
-        "<?php function foo(): int { }",
-        "Function 'foo' must return a value on every path",
-    );
-}
-
-/// Verifies that a function with a declared return type that returns a value on
-/// some paths but not all (e.g., inside an `if` without an `else`) produces an error.
-#[test]
-fn test_error_function_declared_return_type_rejects_partial_fallthrough() {
-    expect_error(
-        "<?php function foo(bool $ok): int { if ($ok) { return 1; } }",
-        "Function 'foo' must return a value on every path",
-    );
-}
-
-/// Verifies that a function with a declared return type that can exit via a switch
-/// `break` without returning a value produces an error.
-#[test]
-fn test_error_function_declared_return_type_rejects_switch_break_path() {
-    expect_error(
-        "<?php function foo(int $x): int { switch ($x) { case 1: if ($x > 0) { break; } return 1; default: return 2; } }",
-        "Function 'foo' must return a value on every path",
-    );
-}
-
 /// Verifies that a bare `return;` inside a function with a non-void return type
 /// produces an error.
 #[test]
@@ -444,16 +414,6 @@ fn test_error_function_declared_return_type_rejects_bare_return() {
     expect_error(
         "<?php function foo(): ?int { return; }",
         "Function 'foo' return type must return a value of type",
-    );
-}
-
-/// Verifies that a method with a declared return type that does not return a
-/// value on all paths produces an error.
-#[test]
-fn test_error_method_declared_return_type_requires_return_value() {
-    expect_error(
-        "<?php class Box { public function value(): int { } }",
-        "Method 'Box::value' must return a value on every path",
     );
 }
 

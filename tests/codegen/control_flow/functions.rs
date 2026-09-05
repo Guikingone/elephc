@@ -339,3 +339,70 @@ fn test_while_condition_reads_by_reference_out_parameter() {
     );
     assert_eq!(out, "3:0");
 }
+
+/// A declared return type with a body that can fall off its end is php's CATCHABLE TypeError,
+/// raised at the CALL — not a compile error.
+///
+/// MEASURED on `php -n` 8.5.6 (`scratchpad/qp/a/retpath2.php`), which is what elephc used to
+/// refuse outright. php-src writes exactly this shape in its own filter fixtures
+/// (`function filter($in, $out, &$c, $closing): int {}`), so refusing it failed four corpus tests
+/// at BUILD.
+///
+/// ⚠️ The switch row uncovered THREE separate defects once it stopped being refused, every one of
+/// them already reachable on `main` through a program that returns on every path:
+///
+/// * the single-case `switch`→`if` rewrite dropped the nested `break`'s target, so it compiled to
+///   `Terminator::Unreachable` and the program died with an illegal instruction;
+/// * `switch_terminal_effect` lacked the guard its sibling `switch_guarantees_function_exit` has,
+///   so everything after the switch was deleted as dead code;
+/// * underneath both, a block keeps only its FIRST non-`FallsThrough` effect, and an `if` with no
+///   `else` reports `FallsThrough` — which discards "one branch BREAKS" entirely.
+///
+/// ⚠️ A CLOSURE still refuses at compile time, deliberately: php names it `{closure:FILE:LINE}` in
+/// this message and that cannot be reproduced from the checker, so a wrong name would be worse
+/// than a stated narrowing. `tests/error_tests/callables.rs` keeps that assertion.
+#[test]
+fn test_a_declared_return_type_throws_when_the_fall_through_is_reached() {
+    let out = compile_and_run(
+        r#"<?php
+function a(): int { }
+function b(bool $ok): int { if ($ok) { return 1; } }
+function c(int $x): int { switch ($x) { case 1: if ($x > 0) { break; } return 1; default: return 2; } }
+class Box { public function value(): int { } }
+echo "all four declared\n";
+foreach ([
+    'a'    => fn() => a(),
+    'b1'   => fn() => b(true),
+    'b0'   => fn() => b(false),
+    'c9'   => fn() => c(9),
+    'c1'   => fn() => c(1),
+    'Box'  => fn() => (new Box)->value(),
+] as $label => $call) {
+    try {
+        // Computed first: with commas php evaluates left to right, so a throw mid-echo would
+        // print the label twice.
+        $answer = var_export($call(), true);
+    } catch (TypeError $e) {
+        $answer = $e->getMessage();
+    }
+    echo $label, " => ", $answer, "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // the declarations alone say nothing, which is the half php differs on
+            "all four declared\n",
+            "a => a(): Return value must be of type int, none returned\n",
+            // a fall-through only some calls reach throws only for those calls
+            "b1 => 1\n",
+            "b0 => b(): Return value must be of type int, none returned\n",
+            // the switch path that RETURNS still returns, and the one that BREAKS throws
+            "c9 => 2\n",
+            "c1 => c(): Return value must be of type int, none returned\n",
+            // a method names itself Class::method()
+            "Box => Box::value(): Return value must be of type int, none returned\n",
+        )
+    );
+}

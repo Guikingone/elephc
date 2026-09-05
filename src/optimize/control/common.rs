@@ -338,6 +338,81 @@ fn stmt_has_level_sensitive_loop_exit(stmt: &Stmt) -> bool {
     }
 }
 
+/// Returns `true` when a case or default body still contains a `break` that targets the SWITCH.
+///
+/// The single-case `if` rewrite drops the switch, so such a break would lose its target: measured,
+/// `case 1: if ($x > 0) { break; } return 1;` compiled to `unreachable` and the program died with
+/// an illegal instruction where php answers a value.
+///
+/// A break ENDING a case body is not counted — `strip_final_switch_break` has already removed it
+/// by the time this runs, and a rewrite is exactly what it enables.
+pub(crate) fn switch_has_body_targeting_break(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: &Option<Vec<Stmt>>,
+) -> bool {
+    cases
+        .iter()
+        .any(|(_, body)| block_has_body_targeting_break(body))
+        || default
+            .as_ref()
+            .is_some_and(|body| block_has_body_targeting_break(body))
+}
+
+/// Returns `true` if the statement list contains a switch-targeting `break`.
+fn block_has_body_targeting_break(body: &[Stmt]) -> bool {
+    body.iter().any(stmt_has_body_targeting_break)
+}
+
+/// Returns `true` if the statement contains a `break` that would target the enclosing switch.
+///
+/// ⚠️ The walk deliberately does NOT descend into a loop or a nested switch: a level-1 `break`
+/// inside one of those targets IT, not the switch being rewritten, and counting it would refuse a
+/// rewrite that is perfectly safe. `Break(n > 1)` is left to
+/// [`stmt_has_level_sensitive_loop_exit`], which already refuses it.
+fn stmt_has_body_targeting_break(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Break(levels) => *levels <= 1,
+        StmtKind::Synthetic(stmts) => block_has_body_targeting_break(stmts),
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            block_has_body_targeting_break(then_body)
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| block_has_body_targeting_break(body))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_body_targeting_break(body))
+        }
+        StmtKind::IfDef {
+            then_body, else_body, ..
+        } => {
+            block_has_body_targeting_break(then_body)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_body_targeting_break(body))
+        }
+        // A try does not capture a break; its body's break still leaves the switch.
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            block_has_body_targeting_break(try_body)
+                || catches
+                    .iter()
+                    .any(|catch| block_has_body_targeting_break(&catch.body))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_body_targeting_break(body))
+        }
+        _ => false,
+    }
+}
+
 /// Splits a try body into a hoistable prefix and a non-hoistable tail.
 /// The hoistable prefix contains only statements that may not throw and
 /// always fall through. The tail contains the first statement that may throw
