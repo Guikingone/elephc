@@ -182,6 +182,16 @@ pub enum EvalExpr {
         target: Box<EvalExpr>,
         value: Box<EvalExpr>,
     },
+    /// `$name = &<lvalue>` where the result is used, as in `if (null !== $e = &self::$c[$k])`.
+    ///
+    /// The statement form of the same binding is `EvalStmt::VarReferenceBind`; this one exists
+    /// because PHP's `=` accepts a `&` source wherever an assignment is an expression, and
+    /// `symfony/config/Resource/ClassExistenceResource.php` puts one inside an `if` condition.
+    /// It evaluates to the value the name now aliases, which is what PHP's assignment yields.
+    ReferenceBindAssign {
+        target: String,
+        source: Box<EvalExpr>,
+    },
     NullsafePropertyGet {
         object: Box<EvalExpr>,
         property: String,
@@ -278,6 +288,11 @@ pub enum EvalArrayElement {
     Reference(EvalExpr),
     KeyValue { key: EvalExpr, value: EvalExpr },
     KeyReference { key: EvalExpr, value: EvalExpr },
+    /// `...$rest` inside an array literal: every element of the operand, in order.
+    ///
+    /// PHP 8.1 renumbers the integer keys and keeps the string ones, which is `array_merge`'s
+    /// rule. `[...$path, $name]` appears eleven times across the Symfony tree.
+    Spread(EvalExpr),
 }
 
 /// One ordered arm in a PHP `match` expression parsed from an eval fragment.

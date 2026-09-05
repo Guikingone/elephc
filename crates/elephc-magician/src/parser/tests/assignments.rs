@@ -740,6 +740,113 @@ fn parse_fragment_accepts_echo_source() {
         })]
     );
 }
+/// Verifies a write through a chain deeper than one property or one index parses.
+///
+/// `$this->listeners[$name][$priority][] = $listener;` and its relatives cost twenty-one Symfony
+/// files. The four builders in `property_builders` enumerated property shapes and refused anything
+/// else, and because the refusal surfaced only after the whole statement had been read it was
+/// reported at the NEXT statement's first token — which is why the sweep saw `unexpected "}"`,
+/// `unexpected "return"` and `unexpected "continue"` for what is one construct.
+#[test]
+fn parse_fragment_accepts_writes_through_a_deeper_chain() {
+    for source in [
+        br#"$this->listeners[$name][$priority][] = $listener;"# as &[u8],
+        br#"$this->rows["k"]["n"] += 2;"#,
+        br#"++$sanitizedLogs[$errorId]["errorCount"];"#,
+        br#"$this->errorCount[$key] ??= 0;"#,
+        br#"$this->data[$key] = &$rows;"#,
+    ] {
+        parse_fragment(source).unwrap_or_else(|error| {
+            panic!(
+                "should parse {}: {error:?}",
+                String::from_utf8_lossy(source)
+            )
+        });
+    }
+}
+/// Verifies a by-reference binding parses where the assignment's value is used.
+///
+/// `if (null !== $exists = &self::$existsCache[$this->resource])` sits at
+/// `symfony/config/Resource/ClassExistenceResource.php:62`, in the file that holds
+/// `throwOnRequiredClass` — the loader every Symfony `class_exists()` reaches, which is why this
+/// one line stopped the whole request.
+#[test]
+fn parse_fragment_accepts_a_reference_binding_used_as_a_value() {
+    let program =
+        parse_fragment(br#"$e = &$rows["k"];"#).expect("the plain form should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::VarReferenceBind {
+            target: "e".to_string(),
+            source: EvalExpr::ArrayGet {
+                array: Box::new(EvalExpr::LoadVar("rows".to_string())),
+                index: Box::new(EvalExpr::Const(EvalConst::String("k".to_string()))),
+            },
+        }]
+    );
+    let program = parse_fragment(br#"return null !== $exists = &self::$cache[$key];"#)
+        .expect("the value form should parse");
+    let [EvalStmt::Return(Some(EvalExpr::Binary { right, .. }))] = program.statements() else {
+        panic!("expected one comparison return, got {:?}", program.statements());
+    };
+    assert!(matches!(
+        right.as_ref(),
+        EvalExpr::ReferenceBindAssign { target, .. } if target == "exists"
+    ));
+}
+/// Verifies a `&` before a declaration name is the by-reference return marker, not a syntax error.
+#[test]
+fn parse_fragment_accepts_by_reference_return_declarations() {
+    for source in [
+        br#"function &usageIndex() { return 1; }"# as &[u8],
+        br#"class DynEvalByRef { public function &getUsageIndex(): int { return 1; } }"#,
+        br#"$f = function &() { return 1; };"#,
+        br#"$f = fn &() => 1;"#,
+    ] {
+        parse_fragment(source).unwrap_or_else(|error| {
+            panic!(
+                "should parse {}: {error:?}",
+                String::from_utf8_lossy(source)
+            )
+        });
+    }
+}
+/// Verifies an assignment is accepted as the right operand of `??`, as PHP's grammar has it.
+///
+/// PHP's `=` binds looser than `??`, so `$a ?? $a = 5` could only mean `($a ?? $a) = 5`, which is
+/// not derivable because the left of `=` must be a variable; bison reduces `$a ?? ($a = 5)` and
+/// php prints `55`. Four Symfony files write that, and `dependency-injection/Container.php` writes
+/// the `??=` form inside the same shape.
+#[test]
+fn parse_fragment_accepts_an_assignment_after_null_coalesce() {
+    let program = parse_fragment(br#"return $a ?? $a = 5;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::NullCoalesce {
+            value: Box::new(EvalExpr::LoadVar("a".to_string())),
+            default: Box::new(EvalExpr::Assign {
+                target: Box::new(EvalExpr::LoadVar("a".to_string())),
+                value: Box::new(EvalExpr::Const(EvalConst::Int(5))),
+            }),
+        }))]
+    );
+    parse_fragment(br#"return $this->factories[$id] ?? self::$make ??= self::make(...);"#)
+        .expect("the coalesce-assign form should parse");
+}
+/// Verifies `...` unpacks inside an array literal, keyed and unkeyed.
+#[test]
+fn parse_fragment_accepts_a_spread_inside_an_array_literal() {
+    let program = parse_fragment(br#"return [1, ...$tail, 4];"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Array(vec![
+            EvalArrayElement::Value(EvalExpr::Const(EvalConst::Int(1))),
+            EvalArrayElement::Spread(EvalExpr::LoadVar("tail".to_string())),
+            EvalArrayElement::Value(EvalExpr::Const(EvalConst::Int(4))),
+        ])))]
+    );
+    parse_fragment(br#"return ["a" => 1, ...$rest];"#).expect("the keyed form should parse");
+}
 /// Verifies PHP echo comma lists lower to one EvalIR echo statement per expression.
 #[test]
 fn parse_fragment_accepts_echo_comma_list_source() {

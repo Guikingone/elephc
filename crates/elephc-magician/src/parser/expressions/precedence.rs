@@ -104,6 +104,27 @@ impl Parser {
         {
             return Ok(target);
         }
+        // `$name = &<lvalue>` where the result is used. PHP's `=` takes a `&` source wherever an
+        // assignment is an expression, and `symfony/config/Resource/ClassExistenceResource.php`
+        // writes `if (null !== $exists = &self::$existsCache[$this->resource])` — the file that
+        // holds `throwOnRequiredClass`, the loader every Symfony `class_exists()` reaches.
+        if assignment == Some(None) && matches!(self.peek(), TokenKind::Ampersand) {
+            if let Some(name) = reference_bind_assign_name(&target, nested_assignment_target) {
+                self.advance();
+                self.advance();
+                let source = self.parse_reference_source_expr()?;
+                let bind = EvalExpr::ReferenceBindAssign {
+                    target: name,
+                    source: Box::new(source),
+                };
+                return if nested_assignment_target {
+                    nested_assignment_replacement(&target, bind)
+                        .ok_or(EvalParseError::UnexpectedToken)
+                } else {
+                    Ok(bind)
+                };
+            }
+        }
         self.advance();
         let value = self.parse_assignment()?;
         if let Some(targets) = array_destructure_targets {
@@ -494,7 +515,7 @@ fn short_array_destructure_targets(target: &EvalExpr) -> Option<Vec<Option<Strin
 }
 
 /// Returns whether one expression is a regular PHP assignment lvalue in the EvalIR subset.
-pub(super) fn is_assignment_target(target: &EvalExpr) -> bool {
+pub(in crate::parser) fn is_assignment_target(target: &EvalExpr) -> bool {
     matches!(
         target,
         EvalExpr::LoadVar(_)
@@ -515,6 +536,12 @@ fn is_property_reference_target(target: &EvalExpr) -> bool {
             | EvalExpr::DynamicPropertyGet { .. }
             | EvalExpr::DynamicStaticPropertyGet { .. }
             | EvalExpr::DynamicStaticPropertyNameGet { .. }
+            // An array element of any writable chain, `$this->data[$key] = &$rows;` above all.
+            // Leaving the `= &` to the statement tail is what routes it to
+            // `property_reference_bind_stmt`, which builds the `ArrayReferenceBind` that writes
+            // through a whole element path; reading the `&` here instead would try to parse it as
+            // the start of a value.
+            | EvalExpr::ArrayGet { .. }
     )
 }
 
@@ -530,22 +557,104 @@ fn negated_assignment_target(target: &EvalExpr) -> Option<EvalExpr> {
     is_assignment_target(expr).then(|| expr.as_ref().clone())
 }
 
+/// Returns the scope name a `= &` binding writes to when the assignment is used as a value.
+///
+/// Only a plain variable can be REBOUND as a reference: PHP aliases two scope names, which is
+/// what `EvalStmt::VarReferenceBind` models and what `EvalExpr::ReferenceBindAssign` reuses. When
+/// the assignment sits inside a larger expression — `null !== $exists = &…`, the shape PHP's
+/// grammar produces because the left side of `=` must be a variable — the variable is the
+/// rightmost assignable child, the same one `nested_assignment_target()` found.
+fn reference_bind_assign_name(target: &EvalExpr, nested: bool) -> Option<String> {
+    match rightmost_assignment_target(target, nested)? {
+        EvalExpr::LoadVar(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// Returns the assignable expression a nested assignment actually writes to.
+fn rightmost_assignment_target(target: &EvalExpr, nested: bool) -> Option<&EvalExpr> {
+    if !nested {
+        return is_assignment_target(target).then_some(target);
+    }
+    if let EvalExpr::Unary {
+        op: EvalUnaryOp::LogicalNot,
+        expr,
+    } = target
+    {
+        if is_assignment_target(expr) {
+            return Some(expr.as_ref());
+        }
+    }
+    let right = match target {
+        EvalExpr::Binary { right, .. } | EvalExpr::NullCoalesce { default: right, .. } => right,
+        _ => return None,
+    };
+    if is_assignment_target(right) {
+        return Some(right.as_ref());
+    }
+    rightmost_assignment_target(right, true)
+}
+
+/// Rebuilds a nested-assignment target with its rightmost writable child replaced outright.
+///
+/// `nested_assignment_expr()` builds the replacement itself from an operator and a value; a
+/// reference binding is neither, so it is handed in already built.
+fn nested_assignment_replacement(target: &EvalExpr, replacement: EvalExpr) -> Option<EvalExpr> {
+    if negated_assignment_target(target).is_some() {
+        return Some(EvalExpr::Unary {
+            op: EvalUnaryOp::LogicalNot,
+            expr: Box::new(replacement),
+        });
+    }
+    if let EvalExpr::NullCoalesce { value, default } = target {
+        if is_assignment_target(default) {
+            return Some(EvalExpr::NullCoalesce {
+                value: Box::new(value.as_ref().clone()),
+                default: Box::new(replacement),
+            });
+        }
+        return nested_assignment_replacement(default, replacement).map(|default| {
+            EvalExpr::NullCoalesce {
+                value: Box::new(value.as_ref().clone()),
+                default: Box::new(default),
+            }
+        });
+    }
+    let EvalExpr::Binary { op, left, right } = target else {
+        return None;
+    };
+    if is_assignment_target(right) {
+        return Some(EvalExpr::Binary {
+            op: *op,
+            left: Box::new(left.as_ref().clone()),
+            right: Box::new(replacement),
+        });
+    }
+    nested_assignment_replacement(right, replacement).map(|right| EvalExpr::Binary {
+        op: *op,
+        left: Box::new(left.as_ref().clone()),
+        right: Box::new(right),
+    })
+}
+
 /// Returns whether an assignment belongs to a nested lvalue on a binary expression's right edge.
 ///
 /// PHP parses `$prefix.$suffix ??= value` as `$prefix.($suffix ??= value)`, even though the
 /// completed concatenation itself is not writable. Apply the same right-edge recovery to every
 /// binary operator so compound assignments retain PHP's lvalue association consistently.
+///
+/// `??` IS THAT SAME RIGHT EDGE, and it is not a `Binary`. PHP's assignment binds looser than
+/// `??`, so `$a ?? $a = 5` could only mean `($a ?? $a) = 5`, which is not derivable because the
+/// left of `=` must be a variable — bison therefore reduces `$a ?? ($a = 5)`, and php prints
+/// `55`. Five Symfony files depend on it, four as `$x ?? $x = …` and Container.php as
+/// `$this->factories[$id] ?? self::$make ??= self::make(...)`.
 fn nested_assignment_target(target: &EvalExpr) -> bool {
     if negated_assignment_target(target).is_some() {
         return true;
     }
-    let EvalExpr::Binary {
-        op: _,
-        left: _,
-        right,
-    } = target
-    else {
-        return false;
+    let right = match target {
+        EvalExpr::Binary { right, .. } | EvalExpr::NullCoalesce { default: right, .. } => right,
+        _ => return false,
     };
     is_assignment_target(right) || nested_assignment_target(right)
 }
@@ -566,6 +675,29 @@ fn nested_assignment_expr(
                 assignment,
                 value,
             )),
+        });
+    }
+    if let EvalExpr::NullCoalesce {
+        value: probed,
+        default,
+    } = target
+    {
+        if is_assignment_target(default) {
+            return Some(EvalExpr::NullCoalesce {
+                value: Box::new(probed.as_ref().clone()),
+                default: Box::new(nested_assignment_value(
+                    default.as_ref().clone(),
+                    null_coalescing,
+                    assignment,
+                    value,
+                )),
+            });
+        }
+        return nested_assignment_expr(default, null_coalescing, assignment, value).map(|default| {
+            EvalExpr::NullCoalesce {
+                value: Box::new(probed.as_ref().clone()),
+                default: Box::new(default),
+            }
         });
     }
     let EvalExpr::Binary { op, left, right } = target else {

@@ -21,6 +21,6 @@ use crate::lexer::TokenKind;
 
 mod callables_arrays;
 mod postfix;
-mod precedence;
+pub(in crate::parser) mod precedence;
 mod primary;
 mod static_names;

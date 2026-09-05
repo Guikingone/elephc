@@ -367,6 +367,10 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::Assign { target, value } => {
             eval_assign(target, value, context, scope, values)
         }
+        EvalExpr::ReferenceBindAssign { target, source } => {
+            eval_var_reference_bind(target, source, context, scope, values)?;
+            eval_expr(&EvalExpr::LoadVar(target.clone()), context, scope, values)
+        }
         EvalExpr::NullsafePropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             if values.is_null(object)? {

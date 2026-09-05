@@ -131,6 +131,7 @@ impl Parser {
             self.advance();
         }
         self.advance();
+        self.consume_by_reference_return_marker();
         self.expect(TokenKind::LParen)?;
         let ParsedMethodParams {
             params,
@@ -205,6 +206,7 @@ impl Parser {
             return Err(EvalParseError::UnexpectedToken);
         }
         self.advance();
+        self.consume_by_reference_return_marker();
         self.expect(TokenKind::LParen)?;
         let ParsedMethodParams {
             params,
@@ -323,6 +325,20 @@ impl Parser {
                 }
                 continue;
             }
+            // `[...$rest]`. PHP 8.1 unpacks an array or Traversable here, renumbering integer keys
+            // and keeping string ones; the operand is an ordinary expression and carries no key of
+            // its own, so it never reaches the `=>` branch below.
+            if self.consume(TokenKind::Ellipsis) {
+                let value = self.parse_expr()?;
+                elements.push(EvalArrayElement::Spread(value));
+                if !self.consume(TokenKind::Comma) {
+                    break;
+                }
+                if self.consume(close.clone()) {
+                    return Ok(EvalExpr::Array(elements));
+                }
+                continue;
+            }
             let first = self.parse_expr()?;
             if self.consume(TokenKind::FatArrow) {
                 if self.consume(TokenKind::Ampersand) {
@@ -386,11 +402,18 @@ fn collect_arrow_expr_variables(expr: &EvalExpr, names: &mut Vec<String>) {
                         collect_arrow_expr_variables(key, names);
                         collect_arrow_expr_variables(value, names);
                     }
+                    EvalArrayElement::Spread(value) => {
+                        collect_arrow_expr_variables(value, names);
+                    }
                 }
             }
         }
         EvalExpr::ArrayDestructureAssign { value, .. } => {
             collect_arrow_expr_variables(value, names);
+        }
+        // The bound name is written, not read, so only the source is a capture.
+        EvalExpr::ReferenceBindAssign { source, .. } => {
+            collect_arrow_expr_variables(source, names);
         }
         EvalExpr::ArrayGet { array, index } => {
             collect_arrow_expr_variables(array, names);

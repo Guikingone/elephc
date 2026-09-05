@@ -580,6 +580,21 @@ impl Parser {
             }
             let index = self.parse_expr()?;
             self.expect(TokenKind::RBracket)?;
+            // `$this->errorCount[$key] ??= 0;` — `??=` is not in `assignment_op()`, which lists the
+            // operators that lower to a binary op, and it lowers to its own expression instead.
+            if self.consume(TokenKind::QuestionQuestionEqual) {
+                let default = self.parse_expr()?;
+                if require_semicolon {
+                    self.expect_semicolon()?;
+                }
+                return Ok(vec![EvalStmt::Expr(EvalExpr::NullCoalesceAssign {
+                    target: Box::new(EvalExpr::ArrayGet {
+                        array: Box::new(target),
+                        index: Box::new(index),
+                    }),
+                    default: Box::new(default),
+                })]);
+            }
             let Some(op) = assignment_op(self.current()) else {
                 return Err(EvalParseError::UnexpectedToken);
             };

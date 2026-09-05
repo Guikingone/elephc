@@ -20,6 +20,7 @@ impl Parser {
     ) -> Result<(EvalClassMethod, Vec<EvalClassProperty>), EvalParseError> {
         let source_start_line = self.current_line();
         self.advance();
+        self.consume_by_reference_return_marker();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };

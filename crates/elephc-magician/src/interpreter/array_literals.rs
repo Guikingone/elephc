@@ -18,8 +18,13 @@ pub(super) fn eval_indexed_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.array_new(elements.len())?;
-    for (index, element) in elements.iter().enumerate() {
-        let index = values.int(index as i64)?;
+    for element in elements {
+        // The key is the array's CURRENT length, not the element's position in the literal: a
+        // spread contributes as many entries as its operand holds, so after `[1, ...$tail, 4]`
+        // the last element belongs at 3, and keying it by its position 2 silently overwrote the
+        // spread's last entry.
+        let position = values.array_len(array)? as i64;
+        let index = values.int(position)?;
         let (value, owned, target) = match element {
             EvalArrayElement::Value(element) => (
                 eval_expr(element, context, scope, values)?,
@@ -30,6 +35,11 @@ pub(super) fn eval_indexed_array(
                 let (value, target) =
                     eval_reference_array_element_value(element, context, scope, values)?;
                 (value, false, Some(target))
+            }
+            EvalArrayElement::Spread(source) => {
+                let source = eval_expr(source, context, scope, values)?;
+                array = eval_spread_into_indexed_array(array, source, context, scope, values)?;
+                continue;
             }
             EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
                 return Err(EvalStatus::UnsupportedConstruct);
@@ -97,6 +107,14 @@ pub(super) fn eval_assoc_array(
                     eval_reference_array_element_value(value, context, scope, values)?;
                 (key, value, false, Some(target))
             }
+            EvalArrayElement::Spread(source) => {
+                let source = eval_expr(source, context, scope, values)?;
+                let (updated, key_after) =
+                    eval_spread_into_assoc_array(array, source, next_key, context, values)?;
+                array = updated;
+                next_key = key_after;
+                continue;
+            }
         };
         array = values.array_set(array, key, value).map_err(|status| {
             trace_array_literal_error("store", element_index, status, context)
@@ -107,6 +125,79 @@ pub(super) fn eval_assoc_array(
         }
     }
     Ok(array)
+}
+
+/// Appends every element of a spread operand to an indexed array literal under construction.
+///
+/// This is the list case, `[1, ...$tail]`, and PHP renumbers the integer keys exactly as the
+/// running index already does. A STRING key is refused rather than renumbered: PHP keeps it, an
+/// indexed array cannot express it, and answering with a renumbered element would be a wrong
+/// value with no diagnostic. The associative builder below handles the keyed case properly, and a
+/// literal that mixes a spread with an explicit key goes there.
+fn eval_spread_into_indexed_array(
+    array: RuntimeCellHandle,
+    source: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let _ = scope;
+    if !values.is_array_like(source)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let mut array = array;
+    let len = values.array_len(source)?;
+    for position in 0..len {
+        let key = values.array_iter_key(source, position)?;
+        if values.type_tag(key)? != EVAL_TAG_INT {
+            eval_release_value(context, values, key)?;
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
+        let value = values.array_get(source, key)?;
+        eval_release_value(context, values, key)?;
+        let position = values.array_len(array)? as i64;
+        let index = values.int(position)?;
+        array = values.array_set(array, index, value)?;
+        eval_release_value(context, values, index)?;
+    }
+    Ok(array)
+}
+
+/// Appends every element of a spread operand to an associative array literal under construction.
+///
+/// PHP 8.1's rule is `array_merge`'s: an integer key is renumbered to the literal's running next
+/// key, a string key is kept and overwrites an earlier entry of the same name.
+fn eval_spread_into_assoc_array(
+    array: RuntimeCellHandle,
+    source: RuntimeCellHandle,
+    next_key: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<RuntimeCellHandle>), EvalStatus> {
+    if !values.is_array_like(source)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let mut array = array;
+    let mut next_key = next_key;
+    let len = values.array_len(source)?;
+    for position in 0..len {
+        let key = values.array_iter_key(source, position)?;
+        let value = values.array_get(source, key)?;
+        let key = if values.type_tag(key)? == EVAL_TAG_INT {
+            eval_release_value(context, values, key)?;
+            let renumbered = match next_key {
+                Some(next_key) => next_key,
+                None => values.int(0)?,
+            };
+            let one = values.int(1)?;
+            next_key = Some(values.add(renumbered, one)?);
+            renumbered
+        } else {
+            key
+        };
+        array = values.array_set(array, key, value)?;
+    }
+    Ok((array, next_key))
 }
 
 /// Drops the builder's own reference on an element the literal has just stored.

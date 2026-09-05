@@ -30913,6 +30913,86 @@ include $piece;
 /// the whole-file entry, so it is not this change's to fix. What is asserted is the consequence
 /// that matters: before, the trailing comma refused the file and the class did not exist at all.
 ///
+/// Verifies a runtime include runs, and gets right, the write and reference shapes it refused.
+///
+/// Every construct here was measured over the 1543 PHP files of `examples/symfony-app`: a write
+/// through a chain deeper than one property or one index (21 files), a by-reference binding whose
+/// value is used (`ClassExistenceResource::throwOnRequiredClass`, the loader every Symfony
+/// `class_exists()` reaches), a reference bound into an element of a property (1), an assignment as
+/// the right operand of `??` (5, four as `$x ?? $x = …` and Container.php as `?? … ??= …`), and a
+/// spread inside an array literal (11).
+///
+/// The spread is the one that needed a VALUE test rather than a parse test: keying each element by
+/// its position in the literal instead of by the array's running length made `[1, ...$tail, 4]`
+/// print `1,2,4` — the last element silently overwrote the spread's last entry.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6) running the included file directly:
+/// `74d;2;hit:11;miss;1,2,3,4/2,3,2,3;55;2`.
+#[test]
+fn test_eval_include_runs_the_write_and_reference_shapes_the_parser_refused() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-write-shapes-piece.php";
+file_put_contents($piece, '<?php
+class S2Bag
+{
+    public array $rows = [];
+    public array $seen = [];
+    public array $data = [];
+
+    public function fill(): string
+    {
+        $this->rows["k"][] = 7;
+        $this->rows["k"]["n"] = 1;
+        $this->rows["k"]["n"] += 2;
+        ++$this->rows["k"]["n"];
+        $this->seen["x"] ??= "d";
+        return $this->rows["k"][0] . $this->rows["k"]["n"] . $this->seen["x"];
+    }
+
+    public function attach(array &$rows): void
+    {
+        $this->data["bag"] = &$rows;
+    }
+}
+
+class S2Cache
+{
+    public static array $existsCache = ["a" => 1];
+
+    public function probe(string $key): string
+    {
+        if (null !== $exists = &self::$existsCache[$key]) {
+            $exists = $exists + 10;
+            return "hit:" . self::$existsCache[$key];
+        }
+        return "miss";
+    }
+}
+
+$bag = new S2Bag();
+echo $bag->fill(), ";";
+$rows = [1];
+$bag->attach($rows);
+$rows[] = 2;
+echo count($bag->data["bag"]), ";";
+$cache = new S2Cache();
+echo $cache->probe("a"), ";", $cache->probe("b"), ";";
+$tail = [2, 3];
+echo implode(",", [1, ...$tail, 4]), "/", implode(",", [...$tail, ...$tail]), ";";
+$maybe = null;
+echo $maybe ?? $maybe = 5;
+echo $maybe, ";";
+$local = ["k" => ["c" => 1]];
+++$local["k"]["c"];
+echo $local["k"]["c"];
+');
+include $piece;
+"#,
+    );
+    assert_eq!(out, "74d;2;hit:11;miss;1,2,3,4/2,3,2,3;55;2");
+}
+
 /// Reference value captured from `php -n` (PHP 8.5.6): `marked;yes`.
 #[test]
 fn test_eval_include_declares_a_class_behind_an_attribute_with_a_trailing_comma() {
