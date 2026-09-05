@@ -84,6 +84,15 @@ pub(super) fn eval_static_method_call_result_resolved(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // Every step below can refuse, and until this trace existed a refusal anywhere in the chain
+    // surfaced as one anonymous fatal with no way to tell which step it was.
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=static_method_dispatch class={class_name:?} method={method_name:?} context_owns={} args={}",
+            context.has_class(&class_name),
+            evaluated_args.len(),
+        );
+    }
     if let Some(result) = eval_closure_static_method_result(
         &class_name,
         method_name,
@@ -219,7 +228,7 @@ pub(super) fn eval_static_method_call_result_resolved(
             values,
         );
     }
-    if let Some(result) = eval_native_static_syntax_method_result(
+    let native = eval_native_static_syntax_method_result(
         &class_name,
         None,
         method_name,
@@ -227,7 +236,18 @@ pub(super) fn eval_static_method_call_result_resolved(
         lexical_scope,
         context,
         values,
-    )? {
+    );
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=static_method_native class={class_name:?} method={method_name:?} outcome={}",
+            match &native {
+                Ok(Some(_)) => "found".to_string(),
+                Ok(None) => "absent".to_string(),
+                Err(status) => format!("{status:?}"),
+            },
+        );
+    }
+    if let Some(result) = native? {
         return Ok(result);
     }
     // PHP gives registered SPL autoloaders one chance to materialize an otherwise unknown class
@@ -244,11 +264,23 @@ pub(super) fn eval_static_method_call_result_resolved(
             values,
         );
     }
-    eval_native_static_method_with_evaluated_args(
-        &class_name,
-        method_name,
-        evaluated_args,
-        context,
-        values,
-    )
+    // The last resort, and the one whose failure said nothing. Everything above either found the
+    // method or threw a PHP error naming it; reaching here means the class is known to neither the
+    // context nor the autoloaders, so the AOT bridge is being asked for it blind. When that
+    // answers with a status the interpreter can only report an anonymous fatal, which is what a
+    // Symfony `class_exists()` reaching `ClassExistenceResource::throwOnRequiredClass` looked like.
+    let result =
+        eval_native_static_method_with_evaluated_args(&class_name, method_name, evaluated_args, context, values);
+    if let Err(status) = &result {
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            let call_site = context.call_site();
+            eprintln!(
+                "[elephc-eval-trace] phase=static_method_unresolved class={class_name:?} method={method_name:?} status={status:?} context_owns={} file={:?} line={}",
+                context.has_class(&class_name),
+                call_site.0,
+                call_site.2,
+            );
+        }
+    }
+    result
 }
