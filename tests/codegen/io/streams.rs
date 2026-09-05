@@ -3478,10 +3478,45 @@ var_dump($s);
     // the program did not run at all: it died on the registration with php's missing-name
     // TypeError.
     assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
-    // ⚠️ php also prints `Warning: fopen(e0ploit://): Failed to open stream: operation failed`
-    // here and elephc prints nothing. That warning belongs to the user-wrapper OPEN path, which
-    // has no diagnostic of its own for a class it cannot construct — a separate gap, asserted
-    // as the silence it currently is rather than left unstated.
+    // …and the open says so out loud. php words a class it cannot CONSTRUCT with its generic
+    // reason; the url it names is the whole one the program wrote.
+    assert!(
+        out.diagnostics.contains(
+            "Warning: fopen(e0ploit://): Failed to open stream: operation failed"
+        ),
+        "the failed open said nothing: {}",
+        out.diagnostics
+    );
+}
+
+/// The three ways a wrapper open fails, and the ONE of them php still words differently here.
+///
+/// MEASURED on `php -n` 8.5.6:
+///
+///     a class that cannot be constructed   Warning: fopen(wt://x): … : operation failed
+///     stream_open() returning false        Warning: fopen(wr://x): … : "R::stream_open" call failed
+///     a scheme nobody registered           two lines, the wrapper-not-found one first
+///
+/// The first and the third match. The second is still SILENT here — its message composes the
+/// class name at run time, and `operation failed` would be a wrong word where there is today an
+/// honest silence — so this test asserts the silence rather than leaving it unstated.
+#[test]
+fn test_a_wrapper_that_refuses_the_open_is_still_silent() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Refuses {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened) { return false; }
+}
+var_dump(stream_wrapper_register('wr', 'Refuses'));
+var_dump(fopen('wr://x', 'r'));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
+    // ⚠️ php prints `Warning: fopen(wr://x): Failed to open stream: "Refuses::stream_open" call
+    // failed`. The VALUE is right and the word is missing; the day it is composed, this
+    // assertion is the one that has to change.
     assert_eq!(out.diagnostics, "");
 }
 

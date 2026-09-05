@@ -568,7 +568,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
     emitter.instruction("bl __rt_new_by_name");                                 // returns obj pointer in x0, or 0 when the class is unknown
     emitter.instruction("bl __rt_user_wrapper_construct");                      // php constructs before it asks
-    emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // unknown class → silent fail with -1
+    emitter.instruction("cbz x0, __rt_fopen_uw_unconstructible");               // php words this one: "operation failed"
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper object pointer for later
 
     // -- inject PHP's selected stream context into a declared `$context` property --
@@ -680,6 +680,30 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("orr x0, x0, x12");                                     // synthetic fd = USER_WRAPPER_FD_BASE | slot index
     emitter.instruction("add sp, sp, #80");                                     // release the wrapper-dispatch scratch
     emitter.instruction("b __rt_fopen_return");                                 // share the common return path
+
+    // php names the WHOLE url and the caller, then its own generic reason. The path is still in
+    // the dispatch scratch, and the caller's `Warning: <fn>(` prefix was published by the
+    // lowering — the same pair `php://filter`'s failed open already composes.
+    emitter.label("__rt_fopen_uw_unconstructible");
+    abi::emit_symbol_address(emitter, "x1", "_diag_open_failed_fopen_prefix");
+    emitter.instruction(&format!("mov x2, #{}", "Warning: fopen(".len()));
+    abi::emit_symbol_address(emitter, "x9", "_pwo_callee_prefix_ptr");
+    emitter.instruction("ldr x10, [x9]");
+    emitter.instruction("cbz x10, __rt_fopen_uw_prefix_ready");                 // nobody published: it is fopen
+    emitter.instruction("mov x1, x10");
+    abi::emit_symbol_address(emitter, "x9", "_pwo_callee_prefix_len");
+    emitter.instruction("ldr x2, [x9]");
+    emitter.label("__rt_fopen_uw_prefix_ready");
+    emitter.instruction("bl __rt_diag_warning");
+    emitter.instruction("ldr x1, [sp, #0]");                                    // the url the program wrote, whole
+    emitter.instruction("ldr x2, [sp, #8]");
+    emitter.instruction("bl __rt_diag_warning");
+    abi::emit_symbol_address(emitter, "x1", "_fgc_filter_fail_tail");           // "): Failed to open stream: operation failed\n"
+    emitter.instruction(&format!(
+        "mov x2, #{}",
+        crate::codegen_support::runtime::data::FGC_FILTER_FAIL_TAIL.len()
+    ));
+    emitter.instruction("bl __rt_diag_warning");
 
     emitter.label("__rt_fopen_uw_fail");
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the wrapper object pointer (or 0 if instantiation never happened)
@@ -948,7 +972,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_new_by_name");                               // returns obj pointer in rax, or 0 when the class is unknown
     emitter.instruction("call __rt_user_wrapper_construct");                    // php constructs before it asks
     emitter.instruction("test rax, rax");                                       // unknown class?
-    emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // unknown class → silent fail with -1
+    emitter.instruction("jz __rt_fopen_uw_unconstructible_x86");                // php words this one: "operation failed"
     emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // save the wrapper object pointer for later
 
     // -- inject PHP's selected stream context into a declared `$context` property --
@@ -1066,6 +1090,29 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("or rax, r12");                                         // synthetic fd = USER_WRAPPER_FD_BASE | slot index
     emitter.instruction("add rsp, 80");                                         // release the wrapper-dispatch scratch
     emitter.instruction("jmp __rt_fopen_return_x86");                           // share the common return path
+
+    // See the AArch64 counterpart for the three wordings php uses here.
+    emitter.label("__rt_fopen_uw_unconstructible_x86");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fopen_prefix");
+    emitter.instruction(&format!("mov esi, {}", "Warning: fopen(".len()));
+    abi::emit_symbol_address(emitter, "r9", "_pwo_callee_prefix_ptr");
+    emitter.instruction("mov r10, QWORD PTR [r9]");
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_fopen_uw_prefix_ready_x86");                   // nobody published: it is fopen
+    emitter.instruction("mov rdi, r10");
+    abi::emit_symbol_address(emitter, "r9", "_pwo_callee_prefix_len");
+    emitter.instruction("mov rsi, QWORD PTR [r9]");
+    emitter.label("__rt_fopen_uw_prefix_ready_x86");
+    emitter.instruction("call __rt_diag_warning");
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                        // the url the program wrote, whole
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");
+    emitter.instruction("call __rt_diag_warning");
+    abi::emit_symbol_address(emitter, "rdi", "_fgc_filter_fail_tail");
+    emitter.instruction(&format!(
+        "mov esi, {}",
+        crate::codegen_support::runtime::data::FGC_FILTER_FAIL_TAIL.len()
+    ));
+    emitter.instruction("call __rt_diag_warning");
 
     emitter.label("__rt_fopen_uw_fail_x86");
     emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer (or 0 if instantiation never happened)
