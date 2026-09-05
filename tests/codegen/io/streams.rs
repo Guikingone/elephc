@@ -22270,3 +22270,77 @@ echo "kept:", count($chunks), ":", strlen($chunks[0]), "\n";
         ),
     );
 }
+
+/// The filter call carrying the LAST bytes is php's closing one — on the backends that say so.
+///
+/// php has ONE rule: `_php_stream_fill_read_buffer` takes
+/// `flags = stream->eof ? PSFS_FLAG_FLUSH_CLOSE : PSFS_FLAG_NORMAL` after each read, so a read
+/// that left the stream at EOF makes its own dispatch the closing one and there is no separate
+/// empty call. The SHAPES differ by backend because each raises `eof` at a different moment.
+/// MEASURED on `php -n` 8.5.6 with a filter printing its own arguments, 8320 bytes at chunk 8192:
+///
+///     php://temp     8192 closing=0 eof=0 | 128 closing=1 eof=1                 TWO calls
+///     php://memory   8192 closing=0 eof=0 | 128 closing=0 eof=0 | 0 closing=1   three
+///     plain file     the same three
+///     php://temp, 10 bytes                  10 closing=1 eof=1                  ONE call
+///
+/// elephc always made a separate empty closing call, so `php://temp` got one dispatch too many.
+///
+/// ⚠️ The fold asks WHICH BACKEND, and that is not caution. elephc's raw read judges a short read
+/// on any seekable stream — right for `fread()`, where php loops until a read returns nothing —
+/// but a read filter is dispatched BETWEEN those reads, so php's memory stream and plain file
+/// still answer `eof` false at that point. Folding for them turned php's three calls into two;
+/// `__rt_stream_drains_eof_early` is the same classification `__rt_stream_temp_eof_probe` already
+/// made for line reads.
+#[test]
+fn test_the_last_filter_call_is_the_closing_one_when_the_backend_says_so() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class F extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        $n = 0;
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $n += $bucket->datalen;
+            $consumed += $bucket->datalen;
+            stream_bucket_append($out, $bucket);
+        }
+        echo "  ", $n, "/", ($closing ? "close" : "open"), "/", (feof($this->stream) ? "eof" : "live"), "\n";
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register('f', 'F');
+function run(string $label, $h, string $payload) {
+    echo $label, "\n";
+    fwrite($h, $payload);
+    fseek($h, 0, SEEK_SET);
+    stream_filter_append($h, 'f', STREAM_FILTER_READ);
+    // Read FIRST: the filter prints as it runs, and an `echo` of several parts would interleave
+    // its lines with this one — which php does too, and which says nothing about the rule.
+    $total = strlen(stream_get_contents($h));
+    echo "  total=", $total, "\n";
+    fclose($h);
+}
+$str = str_repeat('a', 8320);
+run("temp", fopen('php://temp', 'r+b'), $str);
+run("memory", fopen('php://memory', 'r+b'), $str);
+$path = __DIR__ . "/closing_probe.tmp";
+run("file", fopen($path, 'w+b'), $str);
+@unlink($path);
+run("temp-short", fopen('php://temp', 'r+b'), str_repeat('b', 10));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            // php://temp raises eof on the read that drains it, so TWO calls.
+            "temp\n  8192/open/live\n  128/close/eof\n  total=8320\n",
+            // php://memory raises it a read later, so three.
+            "memory\n  8192/open/live\n  128/open/live\n  0/close/live\n  total=8320\n",
+            // A plain file behaves like the memory stream here.
+            "file\n  8192/open/live\n  128/open/live\n  0/close/live\n  total=8320\n",
+            // One read drains a short temp stream, so ONE call, and it is the closing one.
+            "temp-short\n  10/close/eof\n  total=10\n",
+        ),
+    );
+}

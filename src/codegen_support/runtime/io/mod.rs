@@ -301,6 +301,7 @@ pub(crate) use stream_pending::{
     emit_stream_pending_clear, emit_stream_pending_consume, emit_stream_pending_fill,
     emit_stream_pending_append, emit_stream_pending_held, emit_stream_pending_put,
     emit_stream_pending_take,
+    emit_stream_drains_eof_early,
     emit_stream_temp_eof_probe,
 };
 pub(crate) use filter_inert::emit_filter_mark_inert;

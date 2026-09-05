@@ -507,6 +507,98 @@ pub fn emit_stream_pending_consume(emitter: &mut Emitter) {
     }
 }
 
+/// Emits `__rt_stream_drains_eof_early(handle) -> 1/0`: does this backend raise `eof` on the read
+/// that DRAINS it, rather than on the next one?
+///
+/// `php://temp` and the two `compress.*` wrappers do, because each wraps an inner stream and
+/// copies its `eof` after every read. A plain file, a socket and `php://memory` do not. The
+/// distinction is php's, not a rule about temporary files — see `__rt_stream_temp_eof_probe`,
+/// which performs the extra read this predicate only classifies for.
+///
+/// Input: x0/rdi = the opaque stream handle. Output: x0/rax = 1 or 0.
+pub fn emit_stream_drains_eof_early(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: does this backend raise EOF on the read that drains it ---");
+            emitter.label_global("__rt_stream_drains_eof_early");
+            emitter.instruction("sub sp, sp, #16");                             // frame for the saved linkage
+            emitter.instruction("stp x29, x30, [sp, #0]");                      // save frame pointer and return address
+            emitter.instruction("bl __rt_stream_state");                        // resolve the stable stream state
+            emitter.instruction("cbz x0, __rt_sdee_no");                        // no state: nothing to classify
+            emitter.instruction(&format!("ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]"));
+            emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_PHP}"));
+            emitter.instruction("b.ne __rt_sdee_compress");                     // not php://: a compress wrapper reads the same way
+            emitter.instruction(&format!("ldr x10, [x0, #{STREAM_URI_PTR_OFFSET}]"));
+            emitter.instruction(&format!("ldr x11, [x0, #{STREAM_URI_LEN_OFFSET}]"));
+            emitter.instruction("cbz x10, __rt_sdee_no");                       // no URI: the sub-wrapper is unknown
+            emitter.instruction("cmp x11, #7");                                 // "php://" plus the naming byte
+            emitter.instruction("b.lt __rt_sdee_no");
+            emitter.instruction("ldrb w12, [x10, #6]");                         // the php:// sub-wrapper's initial
+            emitter.instruction("cmp w12, #0x74");                              // 't' as in temp, and nothing else
+            emitter.instruction("b.ne __rt_sdee_no");
+            emitter.instruction("b __rt_sdee_yes");
+            emitter.label("__rt_sdee_compress");
+            emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_COMPRESS_ZLIB}"));
+            emitter.instruction("b.eq __rt_sdee_yes");
+            emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_COMPRESS_BZIP2}"));
+            emitter.instruction("b.ne __rt_sdee_no");
+            emitter.label("__rt_sdee_yes");
+            emitter.instruction("mov x0, #1");
+            emitter.instruction("ldp x29, x30, [sp, #0]");
+            emitter.instruction("add sp, sp, #16");
+            emitter.instruction("ret");
+            emitter.label("__rt_sdee_no");
+            emitter.instruction("mov x0, #0");
+            emitter.instruction("ldp x29, x30, [sp, #0]");
+            emitter.instruction("add sp, sp, #16");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: does this backend raise EOF on the read that drains it ---");
+            emitter.label_global("__rt_stream_drains_eof_early");
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish the helper frame pointer
+            emitter.instruction("call __rt_stream_state");                      // rax = the stable stream state
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_sdee_no_x");                           // no state: nothing to classify
+            emitter.instruction(&format!(
+                "mov r9, QWORD PTR [rax + {STREAM_WRAPPER_ID_OFFSET}]"
+            ));
+            emitter.instruction(&format!("cmp r9, {WRAPPER_ID_PHP}"));
+            emitter.instruction("jne __rt_sdee_compress_x");                    // not php://: a compress wrapper reads the same way
+            emitter.instruction(&format!(
+                "mov r10, QWORD PTR [rax + {STREAM_URI_PTR_OFFSET}]"
+            ));
+            emitter.instruction(&format!(
+                "mov r11, QWORD PTR [rax + {STREAM_URI_LEN_OFFSET}]"
+            ));
+            emitter.instruction("test r10, r10");
+            emitter.instruction("jz __rt_sdee_no_x");                           // no URI: the sub-wrapper is unknown
+            emitter.instruction("cmp r11, 7");                                  // "php://" plus the naming byte
+            emitter.instruction("jl __rt_sdee_no_x");
+            emitter.instruction("movzx r11d, BYTE PTR [r10 + 6]");              // the php:// sub-wrapper's initial
+            emitter.instruction("cmp r11b, 0x74");                              // 't' as in temp, and nothing else
+            emitter.instruction("jne __rt_sdee_no_x");
+            emitter.instruction("jmp __rt_sdee_yes_x");
+            emitter.label("__rt_sdee_compress_x");
+            emitter.instruction(&format!("cmp r9, {WRAPPER_ID_COMPRESS_ZLIB}"));
+            emitter.instruction("je __rt_sdee_yes_x");
+            emitter.instruction(&format!("cmp r9, {WRAPPER_ID_COMPRESS_BZIP2}"));
+            emitter.instruction("jne __rt_sdee_no_x");
+            emitter.label("__rt_sdee_yes_x");
+            emitter.instruction("mov rax, 1");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+            emitter.label("__rt_sdee_no_x");
+            emitter.instruction("xor eax, eax");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
 /// Emits `__rt_stream_temp_eof_probe(handle)`, php's over-read at the end of a LINE read.
 ///
 /// `php://temp` reports EOF one read EARLIER than every other stream, and only for a line read:

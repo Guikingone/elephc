@@ -17,6 +17,18 @@
 //!   data loss, because callers stop on the first empty chunk.
 //! - End of input raises `_user_filter_closing` and runs the chain once with an empty input. That
 //!   is PHP's closing dispatch, and the bytes it emits reach the reader like any others.
+//! - The dispatch that carries the LAST bytes is php's closing one when the read that produced
+//!   them left the stream at EOF: `_php_stream_fill_read_buffer` computes
+//!   `flags = stream->eof ? PSFS_FLAG_FLUSH_CLOSE : PSFS_FLAG_NORMAL` AFTER the read, so there is
+//!   no separate empty call in that case. MEASURED on `php -n` 8.5.6 with a filter printing its
+//!   own arguments, over 8320 bytes at a chunk of 8192:
+//!
+//!       php://temp     8192 closing=0 eof=0 | 128 closing=1 eof=1                (TWO calls)
+//!       php://memory   8192 closing=0 eof=0 | 128 closing=0 eof=0 | 0 closing=1  (three)
+//!       plain file     the same three
+//!
+//!   php differs by BACKEND because its temp stream raises `eof` on the read that drains it and
+//!   its memory stream raises it a read later; the rule above is the same for all three.
 //! - The served bytes are copied into concat-reserved storage, so `__rt_fread`'s contract with its
 //!   callers is unchanged: they never hold a pointer into the stream's own buffer.
 //! - Streams with no read-filter chain tail-call the raw helper, leaving that hot path untouched.
@@ -202,9 +214,34 @@ fn emit_fread_wrapper_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x1, #{FILTERED_READ_CHUNK}"));            // one backend chunk
     emitter.instruction("bl __rt_fread_raw");                                   // x1/x2 = the raw bytes
     emitter.instruction("cbz x2, __rt_freadb_flush");                           // a zero-byte read ends the input
+    // php decides `$closing` from the stream's state AFTER this read, not from a later empty
+    // dispatch: the call carrying the last bytes IS the closing one. See the header.
+    emitter.instruction("mov x5, x1");                                          // the bytes outlive the state load below
+    emitter.instruction("mov x6, x2");                                          // (plain loads only: nothing here calls)
+    emitter.instruction("ldr x1, [sp, #16]");                                   // state pointer
+    emitter.instruction(&format!("ldr x9, [x1, #{STREAM_EOF_OFFSET}]"));        // did that read exhaust the backend?
+    emitter.instruction("cbz x9, __rt_freadb_dispatch");                        // no: an ordinary dispatch
+    // …and does this backend say so on the read that DRAINED it, the way php's does? elephc's raw
+    // read judges a short read on any seekable stream, which is right for `fread()` — php loops
+    // there until a read returns nothing — but a read FILTER is dispatched BETWEEN those reads, so
+    // php's memory stream and plain file still say `eof` false at this point and only their next,
+    // empty read raises it. Folding for them made a two-call program out of php's three.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the stream handle
+    emitter.instruction("bl __rt_stream_drains_eof_early");
+    emitter.instruction("cbz x0, __rt_freadb_dispatch");                        // it does not: keep php's separate closing call
+    emitter.instruction("ldr x1, [sp, #16]");                                   // the call clobbered the state pointer
+    emitter.instruction("mov x9, #1");
+    emitter.instruction(&format!("str x9, [x1, #{STREAM_FILTERED_FLUSHED_OFFSET}]")); // this dispatch is the closing one
+    abi::emit_symbol_address(emitter, "x10", "_user_filter_closing");
+    emitter.instruction("str x9, [x10]");                                       // the brigade reads this as `$closing`
+    emitter.label("__rt_freadb_dispatch");
+    emitter.instruction("mov x1, x5");                                          // the raw bytes, once more
+    emitter.instruction("mov x2, x6");
     emitter.instruction("ldr x0, [sp, #0]");                                    // the stream handle
     emitter.instruction(&format!("mov x3, #{STREAM_READ_FILTER_HEAD_OFFSET}")); // select the read-direction chain
     emitter.instruction("bl __rt_stream_apply_filter_chain");                   // x1/x2 = what the filters produced
+    abi::emit_symbol_address(emitter, "x10", "_user_filter_closing");
+    emitter.instruction("str xzr, [x10]");                                      // lower the flag again immediately
     emitter.instruction("ldr x0, [sp, #0]");                                    // the stream handle
     emitter.instruction("bl __rt_stream_filtered_append");                      // park it on the stream
     emitter.instruction("b __rt_freadb_fill");                                  // a filter that withheld output gets fed again
@@ -459,9 +496,36 @@ fn emit_fread_wrapper_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_fread_raw");                                 // rax/rdx = the raw bytes
     emitter.instruction("test rdx, rdx");
     emitter.instruction("jz __rt_freadb_flush_x");                              // a zero-byte read ends the input
+    // See the AArch64 arm: php decides `$closing` from the state AFTER this read.
+    emitter.instruction("mov r8, rax");                                         // the bytes outlive the state load below
+    emitter.instruction("mov r11, rdx");                                        // (plain loads only: nothing here calls)
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // state pointer
+    emitter.instruction(&format!("mov r10, QWORD PTR [r9 + {STREAM_EOF_OFFSET}]")); // did that read exhaust the backend?
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_freadb_dispatch_x");                           // no: an ordinary dispatch
+    // See the AArch64 arm: only a backend that raises `eof` on the read that DRAINED it folds.
+    emitter.instruction("mov QWORD PTR [rbp - 32], r8");                        // the bytes outlive this call
+    emitter.instruction("mov QWORD PTR [rbp - 40], r11");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the stream handle
+    emitter.instruction("call __rt_stream_drains_eof_early");
+    emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // the bytes, once more
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_freadb_dispatch_x");                           // it does not: keep php's separate closing call
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // the call clobbered the state pointer
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r9 + {STREAM_FILTERED_FLUSHED_OFFSET}], 1"
+    ));                                                                         // this dispatch is the closing one
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_closing");
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // the brigade reads this as `$closing`
+    emitter.label("__rt_freadb_dispatch_x");
+    emitter.instruction("mov rax, r8");                                         // the chain takes the bytes in rax/rdx
+    emitter.instruction("mov rdx, r11");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the stream handle
     emitter.instruction(&format!("mov rsi, {STREAM_READ_FILTER_HEAD_OFFSET}")); // select the read-direction chain
     emitter.instruction("call __rt_stream_apply_filter_chain");                 // rax/rdx = what the filters produced
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_closing");
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // lower the flag again immediately
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the stream handle
     emitter.instruction("call __rt_stream_filtered_append");                    // park it on the stream
     emitter.instruction("jmp __rt_freadb_fill_x");                              // a filter that withheld output gets fed again
