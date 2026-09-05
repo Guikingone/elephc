@@ -9,8 +9,9 @@
 //! Key details:
 //! - Comments and whitespace advance line metadata for `__LINE__`.
 //! - Unterminated strings or block comments return parse errors before grammar parsing.
-//! - Double-quoted literals are expanded by `super::strings` into concatenation token
-//!   streams, so one source character can yield more than one token.
+//! - Double-quoted literals and heredoc bodies are expanded by `super::strings` into
+//!   concatenation token streams, so one source character can yield more than one token.
+//! - Identifier characters follow PHP's byte rule, which admits every byte from `0x80` up.
 
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
@@ -31,7 +32,10 @@ pub(super) struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     /// Creates a lexer over a UTF-8 eval fragment.
-    fn new(source: &'a str) -> Self {
+    ///
+    /// `super::strings` builds a second lexer over an extracted heredoc body so the body
+    /// runs through the same interpolation scanner a `"…"` literal uses.
+    pub(super) fn new(source: &'a str) -> Self {
         Self {
             source,
             pos: 0,
@@ -79,7 +83,7 @@ impl<'a> Lexer<'a> {
             && self.peek_next_char() == Some('<')
             && self.peek_nth_char(2) == Some('<')
         {
-            return self.lex_nowdoc(line);
+            return self.lex_heredoc(line);
         }
         let kind = match ch {
             '$' => self.lex_variable(),
@@ -605,8 +609,17 @@ fn radix_digits_to_float(digits: &str, radix: u32) -> f64 {
 }
 
 /// Returns true for the first character of a PHP variable/function identifier.
+///
+/// PHP's identifier rule is a byte rule, not a Unicode one: every byte from `0x80` up is
+/// accepted, so `class ©` and `class Café` are both legal declarations. `php -n` 8.5.6 runs
+/// `class \xA9 { public const V = 5; } echo \xA9::V;` and prints `5`.
+///
+/// Source bytes that are not valid UTF-8 never reach this scanner as themselves: the parser
+/// entry point rewrites each of them to a private-use marker in `U+F0000..=U+F00FF` first.
+/// Those markers sit above `0x80` too, so the one range test admits an identifier written in
+/// UTF-8 and one written in a single-byte encoding without knowing which it is looking at.
 pub(super) fn is_ident_start(ch: char) -> bool {
-    ch == '_' || ch.is_ascii_alphabetic()
+    ch == '_' || ch.is_ascii_alphabetic() || ch >= '\u{80}'
 }
 
 /// Returns true for subsequent characters in a PHP variable/function identifier.

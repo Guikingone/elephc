@@ -25,6 +25,7 @@ mod eval_callable_ref_errors;
 mod eval_callables;
 mod eval_closures;
 mod eval_constructors;
+mod eval_heredoc;
 mod eval_reflection_invocation;
 mod operators;
 mod control_flow;

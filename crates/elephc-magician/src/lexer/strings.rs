@@ -1,35 +1,56 @@
 //! Purpose:
-//! Expands double-quoted eval-fragment string literals into interpolation-aware token
-//! streams. A literal without interpolation stays exactly one `TokenKind::String`; a
-//! literal with interpolation becomes a parenthesized `.` concatenation the existing
-//! grammar already lowers to `EvalBinOp::Concat`.
+//! Expands double-quoted eval-fragment string literals and heredoc bodies into
+//! interpolation-aware token streams. A body without interpolation stays exactly one
+//! `TokenKind::String`; a body with interpolation becomes a parenthesized `.` concatenation
+//! the existing grammar already lowers to `EvalBinOp::Concat`.
 //!
 //! Called from:
-//! - `super::scan::Lexer::next_tokens()` for every `"` encountered in a fragment.
+//! - `super::scan::Lexer::next_tokens()` for every `"` and every `<<<` in a fragment.
 //!
 //! Key details:
-//! - Escape handling is byte-identical to the pre-interpolation double-quote table, so
-//!   `\$` still yields a literal `$` and never interpolates.
-//! - Every synthetic token carries the line of the opening quote, keeping `__LINE__`
-//!   stable across multi-line literals.
+//! - A heredoc body IS a double-quoted body in PHP, so both run through one scanner,
+//!   `Lexer::lex_interpolated_body()`, and cannot drift apart.
+//! - The two bodies differ in exactly two measured ways: a `"` ends a double-quoted literal
+//!   but is ordinary text in a heredoc, and `\"` yields `"` in a double-quoted literal but
+//!   keeps its backslash in a heredoc. `php -n` 8.5.6 prints `quote:\"` for a heredoc line
+//!   reading `quote:\"`.
+//! - A nowdoc body is a single-quoted body: no interpolation and no escape expansion.
+//! - `\x`, octal and `\u{}` escapes can name a byte that is not valid UTF-8, so they are
+//!   emitted as the `super::binary` markers the parser decodes into `EvalConst::Bytes`.
+//! - Every synthetic token carries the line of the opening quote or `<<<`, keeping
+//!   `__LINE__` stable across multi-line literals.
 //! - PHP simple syntax allows exactly one `[offset]` or `->prop` after `$name`; anything
 //!   deeper requires the complex `{$expr}` form.
 //! - Malformed offsets (`"$a[]"`, `"$a[ 0]"`, `"$a['k']"`) are refused, matching PHP's
 //!   parse errors rather than silently inventing a key.
 
+use super::binary::BINARY_MARKER_BASE;
 use super::scan::{is_ident_start, tokenize, Lexer};
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
 
+/// Selects which of PHP's two interpolating string bodies is being scanned.
+///
+/// Both share one scanner because PHP defines a heredoc body as a double-quoted body; the
+/// enum names the two places the reference lexer treats them differently.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum InterpolatedBody {
+    /// A `"…"` literal, ending at its closing quote, where `\"` produces `"`.
+    DoubleQuoted,
+    /// A heredoc body already cut out at its closing marker, where `\"` stays `\"`.
+    Heredoc,
+}
+
 impl Lexer<'_> {
-    /// Reads a non-interpolating PHP heredoc or nowdoc into one literal string token.
+    /// Reads a PHP heredoc or nowdoc starting at its `<<<`.
     ///
-    /// A nowdoc has the same closing-marker and flexible-indentation rules as a
-    /// heredoc, but its body is never interpolated or escape-expanded. An
-    /// unquoted/quoted heredoc with no interpolation is the same literal form;
-    /// a heredoc containing PHP interpolation remains explicitly unsupported
-    /// until it can reuse the full double-quoted interpolation token builder.
-    pub(super) fn lex_nowdoc(&mut self, line: i64) -> Result<Vec<Token>, EvalParseError> {
+    /// The opener, the closing-marker search and PHP 7.3+ flexible indentation stripping are
+    /// shared: they are the same in both forms. Only the body treatment differs. A nowdoc
+    /// (`<<<'EOT'`) is a single-quoted body and becomes one literal token verbatim. A heredoc
+    /// (`<<<EOT` or `<<<"EOT"`) is a double-quoted body, so the extracted text is handed to
+    /// the same interpolation scanner a `"…"` literal uses and yields either one literal
+    /// token or a parenthesized `.` concatenation.
+    pub(super) fn lex_heredoc(&mut self, line: i64) -> Result<Vec<Token>, EvalParseError> {
         self.bump_char();
         self.bump_char();
         self.bump_char();
@@ -78,7 +99,13 @@ impl Lexer<'_> {
                         .next()
                         .is_none_or(|ch| !is_ident_start(ch) && !ch.is_ascii_digit());
                     if closes {
-                        for _ in 0..indent + label.len() {
+                        // The indentation is space/tab only, so its char count equals its
+                        // byte count; the label may hold multi-byte characters, which is why
+                        // it is stepped over per character rather than per byte.
+                        for _ in 0..indent {
+                            self.bump_char();
+                        }
+                        for _ in label.chars() {
                             self.bump_char();
                         }
                         if content.ends_with('\n') {
@@ -87,11 +114,12 @@ impl Lexer<'_> {
                                 content.pop();
                             }
                         }
-                        let content = strip_nowdoc_indentation(&content, indent)?;
-                        if quote != Some('\'') && content.contains('$') {
-                            return Err(EvalParseError::UnsupportedConstruct);
+                        let content = strip_heredoc_indentation(&content, indent)?;
+                        if quote == Some('\'') {
+                            return Ok(vec![Token::new(TokenKind::String(content), line)]);
                         }
-                        return Ok(vec![Token::new(TokenKind::String(content), line)]);
+                        return Lexer::new(&content)
+                            .lex_interpolated_body(line, InterpolatedBody::Heredoc);
                     }
                 }
             }
@@ -108,13 +136,32 @@ impl Lexer<'_> {
     /// interpolation, otherwise `( <part> . <part> ... )` as a token stream.
     pub(super) fn lex_double_quoted(&mut self, line: i64) -> Result<Vec<Token>, EvalParseError> {
         self.bump_char();
+        self.lex_interpolated_body(line, InterpolatedBody::DoubleQuoted)
+    }
+
+    /// Scans one interpolating PHP string body from the cursor to its end.
+    ///
+    /// For `InterpolatedBody::DoubleQuoted` the opening quote is already consumed and the
+    /// body ends at the closing quote, whose absence is an unterminated literal. For
+    /// `InterpolatedBody::Heredoc` the lexer runs over a body already cut out at the closing
+    /// marker, so the end of the input IS the end of the body and cannot be an error.
+    ///
+    /// Returns exactly one `TokenKind::String` when the body contains no interpolation,
+    /// otherwise `( <part> . <part> ... )` as a token stream.
+    fn lex_interpolated_body(
+        &mut self,
+        line: i64,
+        body: InterpolatedBody,
+    ) -> Result<Vec<Token>, EvalParseError> {
         let mut tokens: Vec<Token> = Vec::new();
         let mut current = String::new();
         let mut has_interpolation = false;
-        let mut terminated = false;
+        // A heredoc body has no closing delimiter left to find: it was removed with the
+        // marker line, so reaching the end of this input is the normal, terminated case.
+        let mut terminated = body == InterpolatedBody::Heredoc;
 
         while let Some(ch) = self.peek_char() {
-            if ch == '"' {
+            if ch == '"' && body == InterpolatedBody::DoubleQuoted {
                 self.bump_char();
                 terminated = true;
                 break;
@@ -122,11 +169,16 @@ impl Lexer<'_> {
             match ch {
                 '\\' => {
                     self.bump_char();
-                    let Some(escaped) = self.peek_char() else {
+                    if self.peek_char().is_none() {
+                        // `php -n` 8.5.6 keeps a heredoc body's final lone backslash as
+                        // text; only a double-quoted literal can run out of input here.
+                        if body == InterpolatedBody::Heredoc {
+                            current.push('\\');
+                            break;
+                        }
                         return Err(EvalParseError::UnterminatedString);
-                    };
-                    self.bump_char();
-                    push_double_quoted_escape(escaped, &mut current);
+                    }
+                    self.push_escape(body, &mut current)?;
                 }
                 // Complex interpolation: `{` is only special when a `$` follows it.
                 '{' if self.peek_next_char() == Some('$') => {
@@ -192,6 +244,132 @@ impl Lexer<'_> {
         result.extend(tokens);
         result.push(Token::new(TokenKind::RParen, line));
         Ok(result)
+    }
+
+    /// Expands one escape sequence into the pending literal text, cursor on the character
+    /// after the backslash, leaving it past the whole sequence.
+    ///
+    /// Every value here is `php -n` 8.5.6 through `bin2hex()`:
+    /// `\x41`→`41`, `\x4`→`04`, `\x4z`→`047a`, `\x414`→`4134`, `\X41`→`41` (PHP accepts both
+    /// letter cases), `\xZZ`→`5c785a5a` and `\x` at the end→`5c78` (no digit, so the
+    /// backslash survives); `\101`→`41`, `\1`→`01`, `\1011`→`4131` (three digits at most),
+    /// `\777`→`ff` and `\400`→`00` (PHP warns `Octal escape sequence overflow` and keeps the
+    /// low byte), `\8`→`5c38`; `\u{41}`→`41`, `\u{1F600}`→`f09f9880`, `\u{0000041}`→`41`,
+    /// `\u{10FFFF}`→`f48fbfbf`, `\u{D800}`→`eda080`, while `\u41`→`5c753431` and
+    /// `\U{41}`→`5c557b34317d` stay text because only a lowercase `u` with a brace starts
+    /// the sequence.
+    ///
+    /// The four malformed brace forms — `\u{}`, `\u{ZZ}`, `\u{41` and `\u{110000}` — are
+    /// PHP parse errors (`Invalid UTF-8 codepoint escape sequence`), so they are refused
+    /// rather than kept as text.
+    fn push_escape(
+        &mut self,
+        body: InterpolatedBody,
+        out: &mut String,
+    ) -> Result<(), EvalParseError> {
+        let escaped = self
+            .peek_char()
+            .expect("the caller rejects a backslash with nothing after it");
+        match escaped {
+            'x' | 'X' => {
+                self.push_hex_escape(escaped, out);
+                return Ok(());
+            }
+            '0'..='7' => {
+                self.push_octal_escape(out);
+                return Ok(());
+            }
+            'u' if self.peek_next_char() == Some('{') => return self.push_code_point_escape(out),
+            _ => {}
+        }
+        self.bump_char();
+        match escaped {
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'v' => out.push('\x0b'),
+            'e' => out.push('\x1b'),
+            'f' => out.push('\x0c'),
+            '\\' => out.push('\\'),
+            // `\"` is the one entry that depends on the body. PHP prints `"` for the
+            // double-quoted literal `"\""` and `\"` for a heredoc line reading `\"`,
+            // because a heredoc has no quote to escape.
+            '"' if body == InterpolatedBody::DoubleQuoted => out.push('"'),
+            '$' => out.push('$'),
+            other => {
+                out.push('\\');
+                out.push(other);
+            }
+        }
+        Ok(())
+    }
+
+    /// Expands `\x41`-style escapes, cursor on the `x`, consuming at most two hex digits.
+    ///
+    /// With no hex digit at all the sequence is not an escape: PHP keeps `\xZZ` verbatim,
+    /// so the backslash and the letter are pushed as text.
+    fn push_hex_escape(&mut self, letter: char, out: &mut String) {
+        let Some(first) = self.peek_next_char().and_then(|ch| ch.to_digit(16)) else {
+            self.bump_char();
+            out.push('\\');
+            out.push(letter);
+            return;
+        };
+        self.bump_char();
+        self.bump_char();
+        let mut value = first;
+        if let Some(second) = self.peek_char().and_then(|ch| ch.to_digit(16)) {
+            self.bump_char();
+            value = value * 16 + second;
+        }
+        push_source_byte(value, out);
+    }
+
+    /// Expands `\101`-style escapes, cursor on the first octal digit, consuming at most three.
+    ///
+    /// PHP keeps only the low byte of an overflowing sequence (`\400` is `\0`) and warns at
+    /// compile time; this scanner has no channel to a warning, so it produces the value only.
+    fn push_octal_escape(&mut self, out: &mut String) {
+        let mut value: u32 = 0;
+        for _ in 0..3 {
+            let Some(digit) = self.peek_char().and_then(|ch| ch.to_digit(8)) else {
+                break;
+            };
+            value = value * 8 + digit;
+            self.bump_char();
+        }
+        push_source_byte(value & 0xFF, out);
+    }
+
+    /// Expands `\u{1F600}`-style escapes, cursor on the `u`, consuming through the `}`.
+    fn push_code_point_escape(&mut self, out: &mut String) -> Result<(), EvalParseError> {
+        self.bump_char();
+        self.bump_char();
+        let mut value: u32 = 0;
+        let mut digits = 0usize;
+        loop {
+            let Some(ch) = self.peek_char() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            if ch == '}' {
+                self.bump_char();
+                break;
+            }
+            let Some(digit) = ch.to_digit(16) else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            value = value * 16 + digit;
+            if value > MAX_CODE_POINT {
+                return Err(EvalParseError::UnexpectedToken);
+            }
+            self.bump_char();
+            digits += 1;
+        }
+        if digits == 0 {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        push_code_point(value, out);
+        Ok(())
     }
 
     /// Appends the single `[offset]` or `->prop` access PHP's simple interpolation
@@ -338,8 +516,8 @@ impl Lexer<'_> {
     }
 }
 
-/// Removes flexible-nowdoc indentation using PHP's closing-marker width rule.
-fn strip_nowdoc_indentation(content: &str, indent: usize) -> Result<String, EvalParseError> {
+/// Removes flexible heredoc/nowdoc indentation using PHP's closing-marker width rule.
+fn strip_heredoc_indentation(content: &str, indent: usize) -> Result<String, EvalParseError> {
     if indent == 0 {
         return Ok(content.to_owned());
     }
@@ -413,25 +591,38 @@ fn tokenize_interpolated_fragment(
     Ok(part)
 }
 
-/// Appends the expansion of a double-quoted escape sequence to the pending literal text.
+/// The largest code point `\u{…}` accepts, matching PHP's `Codepoint too large` boundary.
+const MAX_CODE_POINT: u32 = 0x10_FFFF;
+
+/// Appends one raw source byte produced by a `\x` or octal escape to the pending text.
 ///
-/// The table is intentionally identical to the pre-interpolation lexer: `\x`, octal and
-/// `\u{}` escapes remain unsupported here and keep their backslash, so this change alters
-/// no literal that lacks interpolation.
-fn push_double_quoted_escape(escaped: char, out: &mut String) {
-    match escaped {
-        'n' => out.push('\n'),
-        'r' => out.push('\r'),
-        't' => out.push('\t'),
-        'v' => out.push('\x0b'),
-        'e' => out.push('\x1b'),
-        'f' => out.push('\x0c'),
-        '\\' => out.push('\\'),
-        '"' => out.push('"'),
-        '$' => out.push('$'),
-        other => {
-            out.push('\\');
-            out.push(other);
-        }
+/// A PHP string is a byte sequence and `"\xFF"` is the single byte `0xFF`, which is not
+/// valid UTF-8 and so cannot live in a Rust `String` as itself. Bytes at or above `0x80`
+/// are therefore written as the private-use markers `super::binary` defines, exactly as a
+/// non-UTF-8 source byte is; `crate::parser` decodes the same range back into
+/// `EvalConst::Bytes`, so the literal reaches the interpreter as the byte PHP produced.
+fn push_source_byte(byte: u32, out: &mut String) {
+    if byte < 0x80 {
+        out.push(char::from_u32(byte).expect("an ASCII byte is a code point"));
+        return;
     }
+    out.push(
+        char::from_u32(BINARY_MARKER_BASE + byte).expect("the marker plane holds every byte"),
+    );
+}
+
+/// Appends the UTF-8 encoding of one `\u{…}` code point to the pending text.
+///
+/// PHP encodes a lone surrogate rather than refusing it: `bin2hex("\u{D800}")` is `eda080`.
+/// Rust's `char` cannot hold a surrogate, so those three bytes are emitted through the same
+/// byte markers a `\x` escape uses and the literal becomes `EvalConst::Bytes`, which is what
+/// PHP hands the program too.
+fn push_code_point(value: u32, out: &mut String) {
+    if let Some(ch) = char::from_u32(value) {
+        out.push(ch);
+        return;
+    }
+    push_source_byte(0xE0 | (value >> 12), out);
+    push_source_byte(0x80 | ((value >> 6) & 0x3F), out);
+    push_source_byte(0x80 | (value & 0x3F), out);
 }

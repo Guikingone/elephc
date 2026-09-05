@@ -18,6 +18,7 @@ mod classes_errors;
 mod control_statements;
 mod enums;
 mod exceptions_control;
+mod heredoc_and_identifiers;
 mod magic_comments;
 mod namespaces;
 mod operators;
