@@ -119,6 +119,11 @@ struct Analysis<'a> {
     spans: Vec<LabelSpan>,
     /// Line indices a slice may start at, ascending.
     candidates: Vec<usize>,
+    /// Name of the label each candidate opens, parallel to `candidates`.
+    ///
+    /// The stable cut policy hashes THIS rather than a byte offset, so a boundary's
+    /// identity does not depend on the size of anything else in the file.
+    candidate_names: Vec<&'a str>,
     /// `(line, directive)` for every section change, ascending by line.
     sections: Vec<(usize, &'a str)>,
     /// File-global directives replayed at the top of every later slice.
@@ -148,7 +153,10 @@ pub(super) fn split_assembly(source: &str, jobs: usize, local_prefix: &str) -> S
         // directive; refuse instead.
         return SplitOutcome::unsplit(source);
     }
-    let cuts = choose_cuts(&analysis, jobs);
+    let cuts = match cut_policy() {
+        CutPolicy::Balanced => choose_cuts(&analysis, jobs),
+        CutPolicy::Stable => choose_cuts_stable(&analysis, jobs),
+    };
     if cuts.is_empty() {
         return SplitOutcome::unsplit(source);
     }
@@ -272,7 +280,7 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
         }
     }
 
-    let candidates = boundary_candidates(&lines, local_prefix, &merged);
+    let (candidates, candidate_names) = boundary_candidates(&lines, local_prefix, &merged);
     Analysis {
         lines,
         offsets,
@@ -280,6 +288,7 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
         ids,
         spans,
         candidates,
+        candidate_names,
         sections,
         file_prologue,
         footer,
@@ -450,8 +459,17 @@ fn numeric_references(line: &str) -> Vec<(&str, u8)> {
 ///
 /// The `.align`/`.globl`/comment lines that introduce the label are pulled into
 /// the following slice with it, so the label keeps its alignment and declaration.
-fn boundary_candidates(lines: &[&str], local_prefix: &str, hard: &[(usize, usize)]) -> Vec<usize> {
+///
+/// Returns the line indices and, parallel to them, the name of the label each one
+/// opens. The name is what the stable cut policy hashes, so it has to be carried
+/// out of here rather than recovered from the line later.
+fn boundary_candidates<'a>(
+    lines: &[&'a str],
+    local_prefix: &str,
+    hard: &[(usize, usize)],
+) -> (Vec<usize>, Vec<&'a str>) {
     let mut candidates: Vec<usize> = Vec::new();
+    let mut candidate_names: Vec<&'a str> = Vec::new();
     for (index, raw) in lines.iter().copied().enumerate() {
         if raw.starts_with(' ') || raw.starts_with('\t') {
             continue;
@@ -477,9 +495,10 @@ fn boundary_candidates(lines: &[&str], local_prefix: &str, hard: &[(usize, usize
         }
         if candidates.last() != Some(&start) {
             candidates.push(start);
+            candidate_names.push(name);
         }
     }
-    candidates
+    (candidates, candidate_names)
 }
 
 /// Returns whether control cannot reach the label defined at `index` by falling through.
@@ -526,6 +545,112 @@ fn inside_hard_interval(hard: &[(usize, usize)], line: usize) -> bool {
             lo < line && line <= hi
         }
     }
+}
+
+/// Which policy decides where the body is cut.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum CutPolicy {
+    /// Cut as near an equal byte split as the legal boundaries allow.
+    ///
+    /// Every cut is a function of the body's TOTAL size, so any edit moves every
+    /// boundary. Best balance, worst cacheability.
+    Balanced,
+    /// Cut where a boundary's own symbol name hashes into a residue class.
+    ///
+    /// No boundary decision reads the file's size or any other symbol, so adding,
+    /// removing or resizing one function moves no boundary but its own: the edit
+    /// dirties the slice it lands in and leaves every other slice's bytes alone.
+    /// This is content-defined chunking, the same reason rsync and borg cut where
+    /// they do, and it is what makes the slice cache useful across an edit rather
+    /// than only across an unchanged rebuild.
+    Stable,
+}
+
+/// Returns the cut policy this build uses.
+///
+/// `ELEPHC_ASM_CUTS=stable` opts in. The default stays `Balanced`, which is the
+/// policy the split's measurements were taken with; the stable policy changes where
+/// the cuts fall, and therefore how many symbols cross one, so it does not become
+/// the default until that is measured on a machine quiet enough to measure it.
+pub(super) fn cut_policy() -> CutPolicy {
+    cut_policy_from_env(std::env::var("ELEPHC_ASM_CUTS").ok().as_deref())
+}
+
+/// Maps an `ELEPHC_ASM_CUTS` value to a policy.
+///
+/// Only `stable` selects the content-defined policy. Anything else, including a
+/// typo, keeps today's balanced cuts, so an unrecognised value can never silently
+/// change what the assembler is handed.
+fn cut_policy_from_env(value: Option<&str>) -> CutPolicy {
+    match value {
+        Some("stable") => CutPolicy::Stable,
+        _ => CutPolicy::Balanced,
+    }
+}
+
+/// FNV-1a over a symbol name, so a boundary decision depends on that name alone.
+fn name_hash(name: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for &byte in name.as_bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Picks cuts whose positions do not depend on the size of the rest of the file.
+///
+/// A candidate becomes a cut when the hash of ITS OWN name falls in the residue
+/// class, so an edit moves no boundary but its own. Two things keep that from
+/// degenerating:
+///
+/// * the stride is a POWER OF TWO near `candidates / jobs`, not the exact ratio.
+///   An exact ratio would be a function of the candidate count, so adding one
+///   symbol would change the stride and therefore every boundary — reintroducing
+///   precisely the instability this policy exists to remove. Rounding to a power of
+///   two means the candidate count has to change by nearly a factor of two before
+///   any boundary moves.
+/// * a SIZE CAP closes the one hole a hash-based rule leaves: a run of candidates
+///   that all hash the wrong way would produce one enormous slice and destroy the
+///   parallelism. A cap-forced cut is not stable — it depends on where the previous
+///   cut fell — but it fires only on that pathological run, so it bounds the damage
+///   instead of spreading it.
+fn choose_cuts_stable(analysis: &Analysis<'_>, jobs: usize) -> Vec<usize> {
+    let total = *analysis.offsets.last().unwrap_or(&0);
+    if total == 0 || analysis.candidates.is_empty() || jobs <= 1 {
+        return Vec::new();
+    }
+    let stride = stable_stride(analysis.candidates.len(), jobs);
+    // No slice may exceed twice the ideal share, so the largest slice bounds the
+    // speedup at half of what an even split would give rather than at nothing.
+    let cap = (total / jobs).saturating_mul(2).max(1);
+    let mut cuts: Vec<usize> = Vec::new();
+    let mut slice_start = 0usize;
+    for (position, &candidate) in analysis.candidates.iter().enumerate() {
+        if cuts.last().is_some_and(|&last| candidate <= last) {
+            continue;
+        }
+        let chosen = name_hash(analysis.candidate_names[position]) % stride == 0;
+        let oversized = analysis.offsets[candidate].saturating_sub(slice_start) >= cap;
+        if !chosen && !oversized {
+            continue;
+        }
+        cuts.push(candidate);
+        slice_start = analysis.offsets[candidate];
+    }
+    cuts
+}
+
+/// Returns the residue-class stride for `candidates` boundaries and `jobs` slices.
+///
+/// A power of two so that a small change in the candidate count leaves it alone;
+/// at least 1, and never so large that a typical file yields no cut at all.
+fn stable_stride(candidates: usize, jobs: usize) -> u64 {
+    let ideal = (candidates / jobs).max(1);
+    // The power of two nearest `ideal` from below, which keeps the expected slice
+    // count at or above `jobs` rather than under it.
+    let stride = 1u64 << (usize::BITS - 1 - ideal.leading_zeros()).min(31);
+    stride.max(1)
 }
 
 /// Picks up to `jobs - 1` cut lines, each as close as the legal boundaries allow
@@ -1079,5 +1204,175 @@ mod tests {
             Target::new(Platform::MacOS, Arch::X86_64),
             Emit::Executable
         ));
+    }
+
+    /// Builds an assembly of `count` top-level functions, one of which can be resized.
+    ///
+    /// Every function ends in `ret`, so every following label is a legal boundary --
+    /// which is what makes this fixture able to say anything about cut POLICY rather
+    /// than about which boundaries are legal.
+    fn many_functions(count: usize, fat: Option<usize>) -> String {
+        let mut asm = String::new();
+        asm.push_str(".globl _main\n_main:\n    ret\n");
+        for index in 0..count {
+            asm.push_str(&format!(".align 2\n.globl _fn{index}\n_fn{index}:\n"));
+            let body = if fat == Some(index) { 40 } else { 4 };
+            for step in 0..body {
+                asm.push_str(&format!("    mov x0, #{step}\n"));
+            }
+            asm.push_str("    ret\n");
+        }
+        asm
+    }
+
+    /// Returns the NAME of the symbol each cut opens, under one policy.
+    ///
+    /// Names rather than line indices: an edit shifts every later line, so comparing
+    /// indices would report movement that is only renumbering.
+    fn cut_names(source: &str, jobs: usize, policy: CutPolicy) -> Vec<String> {
+        let analysis = analyze(source, MACOS_LOCAL);
+        let cuts = match policy {
+            CutPolicy::Balanced => choose_cuts(&analysis, jobs),
+            CutPolicy::Stable => choose_cuts_stable(&analysis, jobs),
+        };
+        cuts.iter()
+            .map(|cut| {
+                let position = analysis
+                    .candidates
+                    .iter()
+                    .position(|candidate| candidate == cut)
+                    .expect("every cut is a candidate");
+                analysis.candidate_names[position].to_string()
+            })
+            .collect()
+    }
+
+    /// THE PROPERTY THE WHOLE POLICY EXISTS FOR: resizing one function must leave
+    /// every other boundary exactly where it was.
+    ///
+    /// That is what lets the slice cache survive an edit — every slice but the one
+    /// holding the edit renders the same bytes and so keeps its key.
+    #[test]
+    fn a_stable_cut_set_does_not_move_when_one_function_changes_size() {
+        let before = cut_names(&many_functions(64, None), 8, CutPolicy::Stable);
+        let after = cut_names(&many_functions(64, Some(30)), 8, CutPolicy::Stable);
+        assert!(!before.is_empty(), "the fixture must produce cuts to compare");
+        assert_eq!(
+            before, after,
+            "resizing _fn30 must move no boundary but the ones around it"
+        );
+    }
+
+    /// Adding a function must not move the boundaries of the functions around it.
+    #[test]
+    fn a_stable_cut_set_survives_an_added_function() {
+        let before = cut_names(&many_functions(64, None), 8, CutPolicy::Stable);
+        let after = cut_names(&many_functions(65, None), 8, CutPolicy::Stable);
+        let kept = before.iter().filter(|name| after.contains(name)).count();
+        assert!(
+            kept * 10 >= before.len() * 9,
+            "adding one function should keep almost every boundary, kept {kept} of {}",
+            before.len()
+        );
+    }
+
+    /// The same edit under the BALANCED policy moves boundaries it never touched.
+    ///
+    /// This is the contrast that says why the stable policy exists: it is not that
+    /// the balanced policy is wrong, it is that every one of its cuts is a function
+    /// of the file's total size, so one edit invalidates every cached slice.
+    #[test]
+    fn the_balanced_policy_moves_boundaries_the_edit_never_touched() {
+        let before = cut_names(&many_functions(64, None), 8, CutPolicy::Balanced);
+        let after = cut_names(&many_functions(64, Some(30)), 8, CutPolicy::Balanced);
+        assert_ne!(
+            before, after,
+            "if this ever becomes equal the balanced policy has changed and the \
+             stable policy may no longer be needed"
+        );
+    }
+
+    /// No slice may exceed the cap, whatever the names happen to hash to.
+    #[test]
+    fn no_stable_slice_exceeds_the_size_cap() {
+        let source = many_functions(64, Some(10));
+        let analysis = analyze(&source, MACOS_LOCAL);
+        let jobs = 8;
+        let cuts = choose_cuts_stable(&analysis, jobs);
+        let total = *analysis.offsets.last().expect("offsets end with the total");
+        let cap = (total / jobs).saturating_mul(2).max(1);
+        let mut start = 0usize;
+        for &cut in &cuts {
+            let size = analysis.offsets[cut] - start;
+            assert!(size <= cap, "slice of {size} bytes exceeds the cap of {cap}");
+            start = analysis.offsets[cut];
+        }
+    }
+
+    /// The stride must be a power of two, so a small edit cannot change it.
+    ///
+    /// An exact `candidates / jobs` ratio would be a function of the candidate
+    /// count, so adding one symbol would change the stride and therefore EVERY
+    /// boundary -- exactly the instability this policy removes.
+    #[test]
+    fn the_stride_is_a_power_of_two_and_ignores_a_small_change_in_the_count() {
+        for candidates in [64usize, 65, 70, 100, 4096] {
+            let stride = stable_stride(candidates, 8);
+            assert!(stride.is_power_of_two(), "stride {stride} is not a power of two");
+        }
+        // A handful of added symbols must not move the stride.
+        assert_eq!(stable_stride(64, 8), stable_stride(70, 8));
+        assert_eq!(stable_stride(1000, 8), stable_stride(1010, 8));
+        // THE KNOWN LIMIT, pinned rather than hidden: the stride is constant only
+        // BETWEEN powers of two. A program that grows across one -- here from 1000
+        // to 1100 candidates, straddling 128 * 8 -- does change stride, and that one
+        // build misses on every slice. Rounding to a power of two makes that rare
+        // instead of impossible; only a stride fixed independently of the program
+        // could make it impossible, and that would stop the slice count tracking
+        // the program's size at all.
+        assert_ne!(stable_stride(1000, 8), stable_stride(1100, 8));
+        // A pathological count still yields a usable stride rather than zero.
+        assert!(stable_stride(0, 8) >= 1);
+        assert!(stable_stride(1, 8) >= 1);
+    }
+
+    /// The slice count must stay in a usable band, not collapse to one or explode.
+    #[test]
+    fn the_stride_bounds_the_slice_count() {
+        let source = many_functions(256, None);
+        let analysis = analyze(&source, MACOS_LOCAL);
+        let jobs = 8;
+        let cuts = choose_cuts_stable(&analysis, jobs);
+        let slices = cuts.len() + 1;
+        assert!(
+            slices >= 2 && slices <= jobs * 4,
+            "{slices} slices for {jobs} jobs is outside the usable band"
+        );
+    }
+
+    /// Only `stable` opts in; a typo keeps today's cuts.
+    #[test]
+    fn only_stable_selects_the_content_defined_policy() {
+        assert_eq!(cut_policy_from_env(None), CutPolicy::Balanced);
+        assert_eq!(cut_policy_from_env(Some("stable")), CutPolicy::Stable);
+        assert_eq!(cut_policy_from_env(Some("balanced")), CutPolicy::Balanced);
+        assert_eq!(cut_policy_from_env(Some("Stable")), CutPolicy::Balanced);
+        assert_eq!(cut_policy_from_env(Some("1")), CutPolicy::Balanced);
+        assert_eq!(cut_policy_from_env(Some("")), CutPolicy::Balanced);
+    }
+
+    /// A boundary's name must be the label it opens, or the hash means nothing.
+    #[test]
+    fn every_candidate_carries_the_name_it_opens() {
+        let source = many_functions(8, None);
+        let analysis = analyze(&source, MACOS_LOCAL);
+        assert_eq!(analysis.candidates.len(), analysis.candidate_names.len());
+        for (position, &candidate) in analysis.candidates.iter().enumerate() {
+            let name = analysis.candidate_names[position];
+            let opens = analysis.lines[candidate..]
+                .iter()
+                .any(|line| line.trim() == format!("{name}:"));
+            assert!(opens, "candidate at line {candidate} does not open {name}");
+        }
     }
 }
