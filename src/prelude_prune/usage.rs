@@ -94,8 +94,12 @@ pub(crate) struct Usage {
     /// `eval()` uses, and that text can name any class — exactly the hazard `introspects`
     /// records for `eval`. It is kept separate because the two answers differ: `eval` also
     /// hands over the symbol table and so must disable prelude pruning outright, whereas a
-    /// runtime include reaches classes through the eval bridge's own construction surface. Only
-    /// `types::checker::builtin_class_gate` reads this, and only to widen the throwable set.
+    /// runtime include reaches classes through the eval bridge's own construction surface.
+    ///
+    /// Every checker gate that widens a builtin class family for `eval` has the same reason to
+    /// widen it for a runtime include, and must read this flag beside `introspects`:
+    /// `types::checker::builtin_class_gate` (the throwable set) and
+    /// `types::checker::builtin_types::reflection::gate` (the fourteen Reflection classes) do.
     pub(crate) includes_runtime_php: bool,
 }
 

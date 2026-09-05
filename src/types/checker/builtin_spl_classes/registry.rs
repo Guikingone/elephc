@@ -92,6 +92,14 @@ const PHAR_CLASS_NAMES: &[&str] = &["Phar", "PharData", "PharFileInfo"];
 /// `PharFileInfo extends SplFileInfo`, so gating Phar separately would imply the SPL gate anyway.
 pub(crate) fn program_may_reference_spl(program: &[crate::parser::ast::Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
+    // NOT widened for `usage.includes_runtime_php`, though a runtime include can certainly write
+    // `new ArrayObject(…)`. Measured: opening this gate alone changes nothing a program can
+    // observe, because the eval bridge has no constructor helper and no allocation metadata for
+    // the SPL classes — `codegen::eval_constructor_helpers` builds those for the 25 builtin
+    // throwables and nothing else — so the include still dies, one layer deeper, at
+    // `native_constructor_error stage=construct`. Opening it would buy every runtime-include
+    // program the SPL checker surface for no change in behaviour. Both halves move together or
+    // neither does.
     if usage.introspects {
         return true;
     }

@@ -72,6 +72,12 @@ pub(crate) const DATETIME_CLASS_NAMES: &[&str] = &[
 /// open the gate for every program that calls anything through a variable.
 pub(crate) fn program_may_reference_datetime(program: &[Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
+    // NOT widened for `usage.includes_runtime_php`, though a runtime include can certainly write
+    // `new DateTimeImmutable(…)`. Measured with the gate opened: the include still dies at
+    // `native_constructor_error stage=construct class="DateTimeImmutable"`, because the eval
+    // bridge builds constructor helpers and allocation metadata for the 25 builtin throwables and
+    // nothing else. Opening this alone costs the date/time checker surface on every
+    // runtime-include program and changes nothing observable; both halves move together.
     if usage.introspects {
         return true;
     }
