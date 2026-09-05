@@ -14,6 +14,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::runtime::resources::layout::{
     STREAM_BACKEND_DIRECTORY, STREAM_BACKEND_GLOB_DIRECTORY, STREAM_BACKEND_KIND_OFFSET,
+    STREAM_BACKEND_POPEN,
     STREAM_BACKEND_USER_DIRECTORY, STREAM_FD_OFFSET, STREAM_MODE_LEN_OFFSET,
     STREAM_MODE_PTR_OFFSET, STREAM_TRANSPORT_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,
     STREAM_WRAPPER_ID_OFFSET,
@@ -583,6 +584,11 @@ fn emit_stream_meta_has_api_flags_aarch64(emitter: &mut Emitter) {
 /// some default. elephc left the id at its unset value 0, which the table below maps to
 /// "plainfile", so every socket claimed to have been opened by the plain-files wrapper. Measured
 /// on `php -n` 8.5.6.
+///
+/// A process pipe has no wrapper either, for the same reason a socket does not:
+/// `php_stream_fopen_from_pipe` builds the stream directly and never assigns `stream->wrapper`.
+/// MEASURED on `php -n` 8.5.6, `stream_get_meta_data(popen("echo hi", "rb"))` answers SEVEN keys
+/// with no `wrapper_type`; elephc answered eight, claiming `plainfile`.
 fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
     let wrappers: &[(&str, i64)] = &[
         ("_meta_wrapper_plainfile", 9),
@@ -609,6 +615,8 @@ fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "ldr x7, [x6, #{}]", STREAM_BACKEND_KIND_OFFSET
     ));                                                                         // what backs the stream
+    emitter.instruction(&format!("cmp x7, #{}", STREAM_BACKEND_POPEN));
+    emitter.instruction("b.eq __rt_sgmd_wtype_done");                           // a process pipe has no wrapper either
     emitter.instruction(&format!("cmp x7, #{}", STREAM_BACKEND_GLOB_DIRECTORY));
     emitter.instruction("b.eq __rt_sgmd_wtype_glob");                           // php names this wrapper `glob`
     emitter.instruction(&format!(
@@ -1082,6 +1090,8 @@ fn emit_set_wrapper_type_x86(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r10 + {}]", STREAM_BACKEND_KIND_OFFSET
     ));                                                                         // what backs the stream
+    emitter.instruction(&format!("cmp rax, {}", STREAM_BACKEND_POPEN));
+    emitter.instruction("je __rt_sgmd_wtype_done_x");                           // a process pipe has no wrapper either
     emitter.instruction(&format!("cmp rax, {}", STREAM_BACKEND_GLOB_DIRECTORY));
     emitter.instruction("je __rt_sgmd_wtype_glob_x");                           // php names this wrapper `glob`
     emitter.instruction(&format!(

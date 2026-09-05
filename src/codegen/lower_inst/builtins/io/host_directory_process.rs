@@ -480,6 +480,11 @@ pub(crate) fn lower_popen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     abi::emit_call_label(ctx.emitter, "__rt_popen");
     emit_popen_mode_value_error(ctx);
     box_stream_fd_or_false_result_kind(ctx, "popen", 3, true, false);
+    // php reports the mode the caller WROTE, not the one libc was given: `php_stream_fopen_from_pipe`
+    // takes the original `mode`, while the `b` was stripped only from the copy handed to `popen(3)`.
+    // Without this the metadata helper derived a mode from the descriptor's access bits and answered
+    // `"r"` for a pipe opened `"rb"`.
+    super::boxing_helpers::emit_record_stream_mode_after_boxed(ctx, mode)?;
     store_if_result(ctx, inst)
 }
 

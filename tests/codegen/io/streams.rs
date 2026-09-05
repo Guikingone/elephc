@@ -21991,10 +21991,19 @@ probe('wtrue', 'true');
 /// accepts, which is where the missing refusal came from. `"rb"` is the mode php-src's own
 /// `streams/stream_get_meta_data_process_basic.phpt` uses, so the common spelling did not work.
 ///
-/// ⚠️ That test still diverges on the META DATA of a pipe — php reports seven keys with no
-/// `wrapper_type`, `eof` false and the ORIGINAL `"rb"` as the mode, while elephc reports eight
-/// keys, `wrapper_type` `"plainfile"`, `eof` true and the stripped `"r"`. Three separate gaps,
-/// none of them this one.
+/// The META DATA of the pipe followed: php reports SEVEN keys with no `wrapper_type` and the
+/// ORIGINAL `"rb"` as the mode, where elephc reported eight keys, `wrapper_type` `"plainfile"`
+/// and the stripped `"r"`. `php_stream_fopen_from_pipe` takes the original mode and never assigns
+/// `stream->wrapper`, exactly as a socket transport does not — the socket case was already
+/// handled here and the pipe joins it.
+///
+/// ⚠️ One divergence is left and it is NOT in this file: php answers `eof` **false** after
+/// `fread($pipe, 100)` returns 20 bytes, and elephc answers true.
+/// `php_stream_fill_read_buffer` breaks after the FIRST read for any stream whose wrapper is not
+/// the plain-files wrapper — "to avoid greedy read" in its own words — so php never reaches the
+/// zero-length read that would set the flag. elephc loops until the request is filled. That is a
+/// core read-path rule with its own consequences (php-src's `streams/bug51056.phpt` asserts the
+/// short reads it produces), not a metadata detail.
 #[test]
 fn test_popen_takes_the_four_modes_php_takes() {
     let out = compile_and_run_capture(
@@ -22014,6 +22023,14 @@ try {
 } catch (ValueError $e) {
     echo "caught: ", $e->getMessage(), "\n";
 }
+// The pipe reports the mode the caller WROTE, and claims no wrapper at all.
+$h = popen("echo here is some output", "rb");
+$meta = stream_get_meta_data($h);
+echo "mode=", $meta["mode"], "\n";
+echo "wrapper_type=", array_key_exists("wrapper_type", $meta) ? "present" : "absent", "\n";
+echo "stream_type=", $meta["stream_type"], "\n";
+echo "seekable=", $meta["seekable"] ? "yes" : "no", "\n";
+pclose($h);
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
@@ -22026,6 +22043,10 @@ try {
             "wb=handle\n",
             "caught: popen(): Argument #2 ($mode) must be one of \"r\", \"rb\", \"w\", or \"wb\"\n",
             "caught: popen(): Argument #2 ($mode) must be one of \"r\", \"rb\", \"w\", or \"wb\"\n",
+            "mode=rb\n",
+            "wrapper_type=absent\n",
+            "stream_type=STDIO\n",
+            "seekable=no\n",
         ),
     );
 }
