@@ -57,6 +57,7 @@ mod dynamic_calls;
 mod enums;
 mod expressions;
 mod functions_namespaces;
+mod include_reflection;
 mod method_arguments;
 mod native_scope;
 mod static_members;
