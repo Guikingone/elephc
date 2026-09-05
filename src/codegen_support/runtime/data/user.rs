@@ -700,11 +700,12 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n");
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _user_wrapper_vtable_missing\n_user_wrapper_vtable_missing:\n");
-    // The method pointers plus BOTH trailing quads — the boxed-result mask and the `$context`
-    // offset — so a class with no wrapper method shares a table the helpers can read to the same
-    // extent. A short table here would let a helper read past its end.
-    // +3: the boxed-result mask, the `$context` offset, and the constructor pointer.
-    for _ in 0..USER_WRAPPER_VTABLE_SLOTS + 3 {
+    // The method pointers plus EVERY trailing quad, so a class with no wrapper method shares a
+    // table the helpers can read to the same extent. A short table here would let a helper read
+    // past its end.
+    // +5: the boxed-result mask, the `$context` offset, the constructor pointer, and the
+    // bool-result and void-result masks.
+    for _ in 0..USER_WRAPPER_VTABLE_SLOTS + 5 {
         out.push_str("    .quad 0\n");
     }
     out.push_str("    .p2align 3\n");
@@ -2382,6 +2383,25 @@ pub(crate) const USER_WRAPPER_VTABLE_CONTEXT_OFFSET: usize = USER_WRAPPER_VTABLE
 /// would make every class with a constructor look like one.
 pub(crate) const USER_WRAPPER_VTABLE_CTOR_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8 + 16;
 
+/// Byte offset of the mask marking slots whose method returns php `bool`.
+///
+/// The boxed mask above answers "is the result a Mixed cell"; this answers "is a zero in the
+/// result register the VALUE `false`". They are different questions and php's rules turn on the
+/// second: `php_userstreamop_write` maps `IS_FALSE` to -1 and converts everything else with
+/// `convert_to_long`, so `false` and `0` out of the same method are opposite answers —
+/// MEASURED on `php -n` 8.5.6, `fwrite()` gives `false` for the first and `int(0)` for the
+/// second. A `bool` return has codegen representation `Bool`, not `Mixed`, so the boxed mask
+/// cannot see it and elephc answered `int(0)` for both.
+pub(crate) const USER_WRAPPER_VTABLE_BOOL_MASK_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8 + 24;
+
+/// Byte offset of the mask marking slots whose method returns NOTHING.
+///
+/// A body with no `return` (or `return null;`) leaves the result register holding whatever it
+/// last held, and the helper read it as a count: MEASURED, a `stream_write` returning `null` made
+/// `fwrite()` answer `4374275152` — an ADDRESS — where php answers `int(0)`, because php converts
+/// null with `convert_to_long`.
+pub(crate) const USER_WRAPPER_VTABLE_VOID_MASK_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8 + 32;
+
 /// The number of fixed-slot stream-filter methods recorded per class in
 /// `_user_filter_vtable_<class_id>` (Phase 10 tier 3). Slot order:
 /// 0 filter, 1 onCreate, 2 onClose. Slot 3 is a non-method "arity" flag:
@@ -2497,6 +2517,42 @@ fn user_wrapper_boxed_result_mask(class_info: &ClassInfo) -> u64 {
             .get(method_name)
             .is_some_and(|sig| matches!(sig.return_type.codegen_repr(), PhpType::Mixed));
         if returns_boxed {
+            mask |= 1 << slot;
+        }
+    }
+    mask
+}
+
+/// Returns the mask whose bit `i` marks a slot whose method returns php `bool`.
+///
+/// Same slot set and same shape as [`user_wrapper_boxed_result_mask`]; only the question differs.
+fn user_wrapper_bool_result_mask(class_info: &ClassInfo) -> u64 {
+    user_wrapper_result_mask_where(class_info, |ty| matches!(ty, PhpType::Bool))
+}
+
+/// Returns the mask whose bit `i` marks a slot whose method returns NOTHING.
+fn user_wrapper_void_result_mask(class_info: &ClassInfo) -> u64 {
+    user_wrapper_result_mask_where(class_info, |ty| matches!(ty, PhpType::Void))
+}
+
+/// Shared walk behind the two masks above: the same slot set the boxed mask uses, tested with
+/// `predicate` against each method's codegen representation.
+fn user_wrapper_result_mask_where(
+    class_info: &ClassInfo,
+    predicate: impl Fn(&PhpType) -> bool,
+) -> u64 {
+    let mut mask = 0u64;
+    let slots = USER_WRAPPER_STRING_RESULT_SLOTS
+        .iter()
+        .chain(USER_WRAPPER_SCALAR_RESULT_SLOTS.iter())
+        .copied();
+    for slot in slots {
+        let method_name = USER_WRAPPER_METHOD_NAMES[slot];
+        let matches_shape = class_info
+            .methods
+            .get(method_name)
+            .is_some_and(|sig| predicate(&sig.return_type.codegen_repr()));
+        if matches_shape {
             mask |= 1 << slot;
         }
     }
@@ -2669,6 +2725,17 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
         )),
         None => out.push_str("    .quad 0\n"),
     }
+    // And two more, answering what the boxed mask cannot: which slots return php `bool` (so a
+    // zero result is the VALUE false) and which return nothing at all (so the register holds
+    // no result to read).
+    out.push_str(&format!(
+        "    .quad {}\n",
+        user_wrapper_bool_result_mask(class_info)
+    ));
+    out.push_str(&format!(
+        "    .quad {}\n",
+        user_wrapper_void_result_mask(class_info)
+    ));
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.

@@ -21919,3 +21919,56 @@ unlink($again);
         ),
     );
 }
+
+/// `stream_write()` answering `false` is php's ERROR, not a zero-byte write.
+///
+/// php-src's `php_userstreamop_write` (main/streams/userspace.c:556) maps `IS_FALSE` to -1 and
+/// runs `convert_to_long` on everything else, so `false` and `0` out of the same method are
+/// opposite answers. MEASURED on `php -n` 8.5.6, one wrapper per shape:
+///
+///     stream_write returns false   fwrite() answers false
+///     stream_write returns 0       int(0)
+///     stream_write returns null    int(0)
+///     stream_write returns true    int(3) for a three-byte payload — 1 byte per call, re-offered
+///
+/// elephc answered `int(0)` for the first two alike, and an ADDRESS (`4374275152`) for the third.
+/// The boxed-result mask could not tell them apart: it marks slots whose method returns a Mixed
+/// cell, and a `bool` return has codegen representation `Bool` while a method returning nothing
+/// has no result in the register at all. Two more masks answer those two questions.
+#[test]
+fn test_a_wrapper_write_answers_false_not_zero() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function probe(string $scheme, string $label) {
+    $h = fopen($scheme . '://x', 'w');
+    echo $label, "=", var_export(fwrite($h, "bar"), true), "\n";
+    fclose($h);
+}
+class WFalse { public $context;
+    function stream_open($p,$m,$o,&$x){return true;} function stream_write($d){return false;}
+    function stream_stat(){return [];} function stream_eof(){return true;} }
+class WZero { public $context;
+    function stream_open($p,$m,$o,&$x){return true;} function stream_write($d){return 0;}
+    function stream_stat(){return [];} function stream_eof(){return true;} }
+class WNull { public $context;
+    function stream_open($p,$m,$o,&$x){return true;} function stream_write($d){return null;}
+    function stream_stat(){return [];} function stream_eof(){return true;} }
+class WTrue { public $context;
+    function stream_open($p,$m,$o,&$x){return true;} function stream_write($d){return true;}
+    function stream_stat(){return [];} function stream_eof(){return true;} }
+stream_wrapper_register('wfalse', 'WFalse');
+stream_wrapper_register('wzero', 'WZero');
+stream_wrapper_register('wnull', 'WNull');
+stream_wrapper_register('wtrue', 'WTrue');
+probe('wfalse', 'false');
+probe('wzero', 'zero');
+probe('wnull', 'null');
+probe('wtrue', 'true');
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "false=false\nzero=0\nnull=0\ntrue=3\n",
+    );
+}

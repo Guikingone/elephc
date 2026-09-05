@@ -29,7 +29,9 @@
 //!   pair, int/bool in the int-result register — so wrapper classes should
 //!   declare `: string`/`: int`/`: bool` on the methods they implement.
 
+use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOOL_MASK_OFFSET;
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
+use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_VOID_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::data::{
     WRAPPER_MISSING_HOOK_HEAD_FEOF, WRAPPER_MISSING_HOOK_HEAD_FLOCK,
@@ -328,6 +330,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("csel x15, xzr, x15, ne");                              // present: zero, the "nothing owed" marker
     emitter.instruction("str x15, [sp, #56]");                                  // outlives the call into user code
 
+
     // -- call stream_read($this, $count); the result shape follows the method's return type --
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
     emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ)); // a `string|false` return arrives boxed instead
@@ -429,6 +432,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");
     emitter.label("__rt_uwfread_eof_probed_x86");
 
+
     // -- call stream_read($this, $count); the result shape follows the method's return type --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
     emitter.instruction(&format!("bt r8, {}", VTABLE_SLOT_READ));               // does this class return a boxed `string|false`?
@@ -524,21 +528,50 @@ pub fn emit_user_wrapper_fwrite(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_wrapper_fwrite ---");
     emitter.label_global("__rt_user_wrapper_fwrite");
 
-    // Frame: 32 bytes. [sp, #0..16] saved x29/x30. [sp, #16..24] data ptr.
-    //   [sp, #24..32] data len.
-    emitter.instruction("sub sp, sp, #32");                                     // helper frame for the wrapper dispatch
+    // Frame: 48 bytes. [sp, #0..16] saved x29/x30. [sp, #16..24] data ptr.
+    //   [sp, #24..32] data len. [sp, #32..40] the return SHAPE of this class's stream_write,
+    //   read before any user code runs and consulted after it.
+    emitter.instruction("sub sp, sp, #48");                                     // helper frame for the wrapper dispatch
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
     emitter.instruction("stp x1, x2, [sp, #16]");                               // save the data string pointer/length across the helper call
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfwrite_zero");                  // resolve obj into x0, fall through to zero on missing handles
+    emit_aarch64_write_shape_aarch64(emitter);                                  // park the shape while the object is still in x0
     emit_aarch64_method_lookup(emitter, "__rt_uwfwrite_missing", VTABLE_SLOT_WRITE); // resolve stream_write method pointer into x11
 
     // -- call stream_write($this, $data) → returns int in x0 --
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload data string ptr/len for the second argument pair
     emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_WRITE, "fwrite");        // invoke stream_write, unboxing an undeclared return
+
+    // -- php's own conversion of what the method answered --
+    //
+    // `php_userstreamop_write` (php-src main/streams/userspace.c:556) maps `IS_FALSE` to -1 and
+    // runs `convert_to_long` on everything else. MEASURED on `php -n` 8.5.6, one wrapper per
+    // shape: `false` → `fwrite()` answers `false`; `0` → `int(0)`; `null` → `int(0)`; `true` →
+    // `int(3)` for a three-byte payload, because 1 byte is taken per call and php re-offers.
+    //
+    // elephc answered `int(0)` for the first two alike — a `bool` return has codegen
+    // representation `Bool`, which the boxed mask cannot see, so 0 arrived indistinguishable from
+    // a zero-byte write — and an ADDRESS for `null`, whose register holds no result at all.
+    emitter.instruction("ldr x9, [sp, #32]");                                   // the shape parked before the call
+    emitter.instruction("cmp x9, #1");
+    emitter.instruction("b.eq __rt_uwfwrite_shape_bool");
+    emitter.instruction("cmp x9, #2");
+    emitter.instruction("b.eq __rt_uwfwrite_shape_void");
+    emitter.instruction("b __rt_uwfwrite_return");                              // a count is already a count
+    emitter.label("__rt_uwfwrite_shape_bool");
+    emitter.instruction("cbz x0, __rt_uwfwrite_shape_false");                   // php's IS_FALSE
+    emitter.instruction("mov x0, #1");                                          // and its convert_to_long(true)
+    emitter.instruction("b __rt_uwfwrite_return");
+    emitter.label("__rt_uwfwrite_shape_false");
+    emitter.instruction("mov x0, #-1");                                         // a negative count is how the caller sees false
+    emitter.instruction("b __rt_uwfwrite_return");
+    emitter.label("__rt_uwfwrite_shape_void");
+    emitter.instruction("mov x0, #0");                                          // php's convert_to_long(null)
+    emitter.label("__rt_uwfwrite_return");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
 
     // -- the class does not implement stream_write: warn, then report failure --
@@ -553,14 +586,35 @@ pub fn emit_user_wrapper_fwrite(emitter: &mut Emitter) {
     );
     emitter.instruction("mov x0, #-1");                                         // a negative count is how the caller sees false
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the failure sentinel
 
     emitter.label("__rt_uwfwrite_zero");
     emitter.instruction("mov x0, #0");                                          // zero-byte fallback for the missing stream_write
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return 0 bytes written
+}
+
+/// AArch64: parks the return SHAPE of this class's `stream_write` at `[sp, #32]`.
+///
+/// 0 = a count, 1 = php `bool`, 2 = nothing. Read while the wrapper object is still in `x0` and
+/// before any user code runs, because the answer has to outlive the call that consumes it.
+/// Touches `x12`, `x14`-`x17` only; the method lookup that follows reloads what it needs.
+fn emit_aarch64_write_shape_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x12, [x0]");                                       // class_id at the head of every wrapper object
+    abi::emit_symbol_address(emitter, "x14", "_user_wrapper_vtable_ptrs");
+    emitter.instruction("ldr x14, [x14, x12, lsl #3]");                         // this class's wrapper vtable
+    emitter.instruction("mov x17, #0");                                         // a count until a mask says otherwise
+    emitter.instruction(&format!("ldr x15, [x14, #{}]", USER_WRAPPER_VTABLE_BOOL_MASK_OFFSET));
+    emitter.instruction(&format!("tbz x15, #{}, __rt_uwfwrite_shape_not_bool", VTABLE_SLOT_WRITE));
+    emitter.instruction("mov x17, #1");                                         // php `bool`
+    emitter.label("__rt_uwfwrite_shape_not_bool");
+    emitter.instruction(&format!("ldr x16, [x14, #{}]", USER_WRAPPER_VTABLE_VOID_MASK_OFFSET));
+    emitter.instruction(&format!("tbz x16, #{}, __rt_uwfwrite_shape_ready", VTABLE_SLOT_WRITE));
+    emitter.instruction("mov x17, #2");                                         // nothing at all
+    emitter.label("__rt_uwfwrite_shape_ready");
+    emitter.instruction("str x17, [sp, #32]");                                  // outlives the call into user code
 }
 
 /// Emits the Linux x86_64 stream runtime helper for user wrapper fwrite.
@@ -571,20 +625,40 @@ fn emit_user_wrapper_fwrite_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // helper frame for the wrapper dispatch
+    emitter.instruction("sub rsp, 32");                                         // helper frame for the wrapper dispatch
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the data string pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the data string length
 
     // rdi already holds the synthetic fd from the builtin call site; the
     // handle lookup expects the fd in rdi so no extra reload is needed.
     emit_x86_handle_lookup(emitter, "__rt_uwfwrite_zero_x86");                  // resolve obj into rdi, fall through on missing handles
+    emit_x86_write_shape_x86_64(emitter);                                       // park the shape while the object is still in rdi
     emit_x86_method_lookup(emitter, "__rt_uwfwrite_missing_x86", VTABLE_SLOT_WRITE); // resolve stream_write method pointer into r11
 
     // -- call stream_write($this, $data) → returns int in rax --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload data string pointer as the second arg
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload data string length as the third arg
     emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_WRITE, "fwrite");            // invoke stream_write, unboxing an undeclared return
-    emitter.instruction("add rsp, 16");                                         // release the helper frame
+
+    // See the AArch64 arm for php's rule and the measurements behind it.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // the shape parked before the call
+    emitter.instruction("cmp r9, 1");
+    emitter.instruction("je __rt_uwfwrite_shape_bool_x86");
+    emitter.instruction("cmp r9, 2");
+    emitter.instruction("je __rt_uwfwrite_shape_void_x86");
+    emitter.instruction("jmp __rt_uwfwrite_return_x86");                        // a count is already a count
+    emitter.label("__rt_uwfwrite_shape_bool_x86");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_uwfwrite_shape_false_x86");                    // php's IS_FALSE
+    emitter.instruction("mov rax, 1");                                          // and its convert_to_long(true)
+    emitter.instruction("jmp __rt_uwfwrite_return_x86");
+    emitter.label("__rt_uwfwrite_shape_false_x86");
+    emitter.instruction("mov rax, -1");                                         // a negative count is how the caller sees false
+    emitter.instruction("jmp __rt_uwfwrite_return_x86");
+    emitter.label("__rt_uwfwrite_shape_void_x86");
+    emitter.instruction("xor eax, eax");                                        // php's convert_to_long(null)
+    emitter.label("__rt_uwfwrite_return_x86");
+    emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
 
@@ -598,15 +672,40 @@ fn emit_user_wrapper_fwrite_linux_x86_64(emitter: &mut Emitter) {
         WRAPPER_MISSING_HOOK_TAIL_WRITE.len(),
     );
     emitter.instruction("mov rax, -1");                                         // a negative count is how the caller sees false
-    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure sentinel
 
     emitter.label("__rt_uwfwrite_zero_x86");
     emitter.instruction("xor eax, eax");                                        // zero-byte fallback for the missing stream_write
-    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return 0 bytes written
+}
+
+/// x86_64 twin of `emit_aarch64_write_shape_aarch64`; the object is in `rdi`, the shape lands at
+/// `[rbp - 24]`. Touches `r9`, `r10` and `rax` only.
+fn emit_x86_write_shape_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
+    abi::emit_symbol_address(emitter, "r9", "_user_wrapper_vtable_ptrs");
+    emitter.instruction("mov r10, QWORD PTR [r9 + r10 * 8]");                   // this class's wrapper vtable
+    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // a count until a mask says otherwise
+    emitter.instruction(&format!(
+        "mov r9, QWORD PTR [r10 + {}]",
+        USER_WRAPPER_VTABLE_BOOL_MASK_OFFSET
+    ));
+    emitter.instruction(&format!("bt r9, {}", VTABLE_SLOT_WRITE));
+    emitter.instruction("jnc __rt_uwfwrite_shape_not_bool_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 24], 1");                         // php `bool`
+    emitter.label("__rt_uwfwrite_shape_not_bool_x86");
+    emitter.instruction(&format!(
+        "mov r9, QWORD PTR [r10 + {}]",
+        USER_WRAPPER_VTABLE_VOID_MASK_OFFSET
+    ));
+    emitter.instruction(&format!("bt r9, {}", VTABLE_SLOT_WRITE));
+    emitter.instruction("jnc __rt_uwfwrite_shape_ready_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 24], 2");                         // nothing at all
+    emitter.label("__rt_uwfwrite_shape_ready_x86");
 }
 
 /// Emits `__rt_uw_post_read_eof(handle, fd)`: php's question after every wrapper read.
