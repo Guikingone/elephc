@@ -90,7 +90,12 @@ pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
 /// prepends folds like any other.
 pub fn fold_constants(program: Program) -> Program {
     let program = crate::superglobals::seed_cli_populated_superglobals(program);
-    program.into_iter().map(fold_stmt).collect()
+    // The `$GLOBALS` rewrite rides here too, and it needs to know WHICH body it is in: the
+    // top-level scope is declared around this walk so a later `fold_expr` from another pass,
+    // which knows no scope at all, cannot rewrite behind its back.
+    crate::globals_superglobal::fold_program(program, |program| {
+        program.into_iter().map(fold_stmt).collect()
+    })
 }
 
 /// Propagates scalar constants across statements and control flow.

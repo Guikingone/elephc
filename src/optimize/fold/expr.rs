@@ -59,6 +59,7 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
 
 /// Folds default expressions and block body in a class method declaration.
 pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
+    let param_names: Vec<String> = method.params.iter().map(|(name, ..)| name.clone()).collect();
     ClassMethod {
         name: method.name,
         visibility: method.visibility,
@@ -73,7 +74,12 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
         variadic_type: method.variadic_type,
         return_type: method.return_type,
         by_ref_return: method.by_ref_return,
-        body: fold_block(method.body),
+        // `$GLOBALS["name"]` in a method body needs its `global` beside it, like a function's.
+        body: crate::globals_superglobal::fold_function_body(
+            &param_names,
+            method.body,
+            fold_block,
+        ),
         span: method.span,
         attributes: method.attributes,
     }
@@ -216,10 +222,15 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::ArrayAccess { array, index } => {
             let array = fold_expr(*array);
             let index = fold_expr(*index);
-            try_fold_array_access(&array, &index).unwrap_or_else(|| ExprKind::ArrayAccess {
-                array: Box::new(array),
-                index: Box::new(index),
-            })
+            // `$GLOBALS["name"]` IS the global variable it names; see `globals_superglobal`.
+            if let Some(name) = crate::globals_superglobal::read_target(&array, &index) {
+                ExprKind::Variable(name)
+            } else {
+                try_fold_array_access(&array, &index).unwrap_or_else(|| ExprKind::ArrayAccess {
+                    array: Box::new(array),
+                    index: Box::new(index),
+                })
+            }
         }
         ExprKind::Ternary {
             condition,
@@ -270,7 +281,8 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             variadic_by_ref,
             variadic_type,
             return_type,
-            body: fold_block(body),
+            // A closure keeps `$GLOBALS` as it is: `global` loses its write inside one here.
+            body: crate::globals_superglobal::fold_closure_body(body, fold_block),
             is_arrow,
             is_static,
             captures,

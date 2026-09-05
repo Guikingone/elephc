@@ -31,6 +31,7 @@ pub mod exports;
 pub mod func_args;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
+pub(crate) mod globals_superglobal;
 mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod dir_prelude;

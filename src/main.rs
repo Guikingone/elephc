@@ -23,6 +23,7 @@ mod func_args;
 mod dir_prelude;
 mod gz_prelude;
 mod global_decls;
+mod globals_superglobal;
 mod hash_prelude;
 mod image_prelude;
 mod intrinsics;

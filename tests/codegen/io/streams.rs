@@ -22344,3 +22344,69 @@ run("temp-short", fopen('php://temp', 'r+b'), str_repeat('b', 10));
         ),
     );
 }
+
+/// `$GLOBALS["name"]` is the global variable it names — read and written.
+///
+/// The superglobal did not exist here at all. MEASURED on `php -n` 8.5.6 against elephc:
+///
+///     $text = "Hello";
+///     function r() { return $GLOBALS["text"]; }
+///     php     Hello
+///     elephc  Warning: Undefined variable $GLOBALS
+///             Warning: Trying to access array offset on null
+///
+/// php-src's own `filters/basic.phpt` reads its fixture that way, and six tests under
+/// `ext/standard/tests/file` do the same.
+///
+/// ⚠️ The rewrite is REFUSED whenever the body already spells the name — parameters included —
+/// because a `global $name;` beside it would merge the local with the global, silently. Those
+/// bodies keep the warnings they have today, which this test asserts rather than leaves unstated:
+/// `shadowed()` and `local_first()` below answer php's value in php and an empty string here.
+/// A closure body is refused for its own reason (`global` loses its write inside one), and a
+/// non-literal key names no variable this pass can see.
+#[test]
+fn test_globals_subscript_is_the_global_it_names() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$text = "outer";
+$count = 1;
+function plain_read() { return $GLOBALS["text"]; }
+function plain_write() { $GLOBALS["text"] = "written"; }
+function two_keys() { return $GLOBALS["text"] . "/" . $GLOBALS["count"]; }
+function shadowed($text) { return $text . "/" . @$GLOBALS["text"]; }
+class Holder {
+    public function read() { return $GLOBALS["text"]; }
+    public function bump() { $GLOBALS["count"] = $GLOBALS["count"] + 10; }
+}
+echo "read:", plain_read(), "\n";
+echo "two:", two_keys(), "\n";
+echo "method:", (new Holder)->read(), "\n";
+echo "top:", $GLOBALS["text"], "\n";
+$GLOBALS["text"] = "from top";
+echo "afterTop:", $text, "\n";
+$text = "outer";
+plain_write();
+echo "afterFn:", $text, "\n";
+(new Holder)->bump();
+echo "count:", $count, "\n";
+// The refused shape: php answers "arg/outer", elephc keeps its own behaviour.
+echo "shadowed:", shadowed("arg"), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "read:outer\n",
+            "two:outer/1\n",
+            "method:outer\n",
+            "top:outer\n",
+            "afterTop:from top\n",
+            "afterFn:written\n",
+            "count:11\n",
+            // ⚠️ php answers `arg/outer`. A body that spells `$text` itself keeps today's
+            // behaviour rather than having its local merged with the global.
+            "shadowed:arg/\n",
+        ),
+    );
+}
