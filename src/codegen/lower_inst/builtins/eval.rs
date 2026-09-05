@@ -42,8 +42,20 @@ const EVAL_PARSE_ERROR_EXIT_STATUS: u32 = 255;
 /// The status the bridge has always exited with for its two anonymous fatals.
 ///
 /// Not PHP's 255: these are not PHP fatals but the interpreter reporting what it could not do,
-/// and the wording that goes with them is written by `__elephc_eval_report_runtime_fatal`.
+/// and the wording that goes with them is written by `__elephc_eval_report_runtime_fatal` when
+/// that reporter is linked at all.
 const EVAL_RUNTIME_FATAL_EXIT_STATUS: u32 = 1;
+/// The two anonymous fatals' wording, for programs that do not link the interpreter bridge.
+///
+/// A scope-only program runs its eval fragments natively and deliberately does NOT link
+/// `libelephc-magician` (`runtime_features::link_requirements_for_runtime_features` asks for the
+/// archive only when `eval_bridge` is set), so `__elephc_eval_report_runtime_fatal` does not
+/// exist in its link. These are the exact strings that reporter falls back to when the
+/// interpreter recorded no clause, which is always the case when there is no interpreter.
+const EVAL_UNSUPPORTED_MESSAGE: &str =
+    "Fatal error: eval() fragment uses an unsupported construct\n";
+/// The runtime-fatal wording, for programs that do not link the interpreter bridge.
+const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";
 const EVAL_STACK_BYTES: usize = 96;
 const EVAL_RESULT_VALUE_CELL_OFFSET: usize = 8;
 const EVAL_RESULT_ERROR_OFFSET: usize = 16;

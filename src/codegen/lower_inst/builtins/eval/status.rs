@@ -74,26 +74,85 @@ pub(super) fn emit_eval_parse_error_exit(ctx: &mut FunctionContext<'_>) {
     abi::emit_exit(ctx.emitter, EVAL_PARSE_ERROR_EXIT_STATUS);
 }
 
-/// Asks the bridge to print the fatal for one anonymous status, then exits the process.
+/// Reports the fatal for one anonymous status, then exits the process.
 ///
-/// The message names what the interpreter could not do, the file it was asked in and the line,
-/// none of which a constant in the generated assembly can carry — the same reason the parse
-/// diagnostic moved to `libelephc-magician`. `__elephc_eval_report_runtime_fatal` falls back to
-/// the exact constant this used to emit when the interpreter recorded nothing, so a caller that
-/// reads the diagnostic sees no less than before. Only the exit is left here, and it keeps the
-/// status the bridge has always exited with.
+/// When the interpreter bridge is linked, it writes the message: it names what the interpreter
+/// could not do, the file it was asked in and the line, none of which a constant in the
+/// generated assembly can carry — the same reason the parse diagnostic moved to
+/// `libelephc-magician`.
+///
+/// WHEN IT IS NOT LINKED, THIS MUST NOT CALL IT. A scope-only program — one whose eval
+/// fragments were all compiled ahead of time, so `eval_scope` is set and `eval_bridge` is not —
+/// runs them natively against the runtime's own `__elephc_eval_scope_*` helpers and
+/// deliberately does not link `libelephc-magician`
+/// (`runtime_features::link_requirements_for_runtime_features` asks for that archive only when
+/// `eval_bridge` is set). Emitting the call regardless left every such program with an
+/// undefined `__elephc_eval_report_runtime_fatal` at link time, from builtin-class emissions
+/// that carry these arms whether or not the fragment needed the interpreter. The alternative
+/// fix — making the feature scan set `eval_bridge` for these references — would link the whole
+/// interpreter into programs that compiled every fragment ahead of time, which is the cost
+/// scope-only AOT exists to avoid.
+///
+/// So without the bridge the constant is written here, exactly as it was before the diagnostic
+/// moved: it is the same text the reporter itself falls back to when the interpreter recorded
+/// no clause, and with no interpreter there is never a clause. Either way the exit status is
+/// the one the bridge has always used.
 pub(super) fn emit_eval_bridge_fatal_exit(ctx: &mut FunctionContext<'_>, status: i64) {
+    if ctx.module.required_runtime_features.eval_bridge {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter
+                    .instruction(&format!("mov x0, #{status}")); // pass the ABI status the bridge should describe
+            }
+            Arch::X86_64 => {
+                ctx.emitter
+                    .instruction(&format!("mov edi, {status}")); // pass the ABI status the bridge should describe
+            }
+        }
+        let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_report_runtime_fatal");
+        abi::emit_call_label(ctx.emitter, &symbol);
+    } else {
+        emit_eval_fatal_constant(ctx, status);
+    }
+    abi::emit_exit(ctx.emitter, EVAL_RUNTIME_FATAL_EXIT_STATUS);
+}
+
+/// Writes the constant wording for one anonymous status straight to stderr.
+///
+/// Mirrors `__elephc_eval_report_runtime_fatal`'s own fallback, including its silence: only the
+/// two anonymous fatals have wording, and any other status writes nothing, because a parse
+/// error has already printed its own diagnostic and an uncaught Throwable is reported by the
+/// runtime unwinder. The caller emits the exit, so this returns exactly as the reporter does.
+fn emit_eval_fatal_constant(ctx: &mut FunctionContext<'_>, status: i64) {
+    let message = if status == EVAL_STATUS_RUNTIME_FATAL {
+        EVAL_RUNTIME_FATAL_MESSAGE
+    } else if status == EVAL_STATUS_UNSUPPORTED {
+        EVAL_UNSUPPORTED_MESSAGE
+    } else {
+        return;
+    };
+    emit_eval_fatal_message(ctx, message);
+}
+
+/// Emits a write of one constant eval diagnostic to stderr, without exiting.
+fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // write the eval runtime diagnostic to stderr
+            ctx.emitter.adrp("x1", &message_label);
+            ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
-                .instruction(&format!("mov x0, #{status}")); // pass the ABI status the bridge should describe
+                .instruction(&format!("mov x2, #{}", message_len)); // pass the eval runtime diagnostic byte length
+            ctx.emitter.syscall(4);
         }
         Arch::X86_64 => {
+            ctx.emitter.instruction("mov edi, 2");                              // write the eval runtime diagnostic to Linux stderr
+            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
-                .instruction(&format!("mov edi, {status}")); // pass the ABI status the bridge should describe
+                .instruction(&format!("mov edx, {}", message_len)); // pass the eval runtime diagnostic byte length
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the eval runtime diagnostic before exiting
         }
     }
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_report_runtime_fatal");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    abi::emit_exit(ctx.emitter, EVAL_RUNTIME_FATAL_EXIT_STATUS);
 }
