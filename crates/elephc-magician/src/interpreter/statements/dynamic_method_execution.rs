@@ -156,6 +156,33 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    // A method whose body contains `yield` returns a Generator without executing a line, and its
+    // activation travels with it: the class scope a later `next()` runs under is this method's,
+    // not the resumer's.
+    if eval_body_is_generator(method.body()) {
+        let generator = eval_generator_new(
+            method.body(),
+            std::mem::replace(&mut method_scope, ElephcEvalScope::new()),
+            eval_method_activation(
+                qualified_method_name.clone(),
+                class_name,
+                called_class_name,
+                method,
+            ),
+            context,
+            values,
+        );
+        let arg_cleanup = release_owned_bound_args(&evaluated_args, None, context, values);
+        context.pop_magic_scope();
+        context.pop_called_class_scope();
+        context.pop_class_scope();
+        context.pop_call_frame();
+        context.pop_function();
+        return match (generator, arg_cleanup) {
+            (Err(status), _) | (_, Err(status)) => Err(status),
+            (Ok(generator), Ok(())) => Ok(generator),
+        };
+    }
     let previous_source = enter_dynamic_class_method_source(class_name, method, context);
     let result = execute_statements(method.body(), context, &mut method_scope, values);
     let persist_result = persist_static_locals(
@@ -301,6 +328,33 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    // A method whose body contains `yield` returns a Generator without executing a line, and its
+    // activation travels with it: the class scope a later `next()` runs under is this method's,
+    // not the resumer's.
+    if eval_body_is_generator(method.body()) {
+        let generator = eval_generator_new(
+            method.body(),
+            std::mem::replace(&mut method_scope, ElephcEvalScope::new()),
+            eval_method_activation(
+                qualified_method_name.clone(),
+                class_name,
+                called_class_name,
+                method,
+            ),
+            context,
+            values,
+        );
+        let arg_cleanup = release_owned_bound_args(&evaluated_args, None, context, values);
+        context.pop_magic_scope();
+        context.pop_called_class_scope();
+        context.pop_class_scope();
+        context.pop_call_frame();
+        context.pop_function();
+        return match (generator, arg_cleanup) {
+            (Err(status), _) | (_, Err(status)) => Err(status),
+            (Ok(generator), Ok(())) => Ok(generator),
+        };
+    }
     let previous_source = enter_dynamic_class_method_source(class_name, method, context);
     let result = execute_statements(method.body(), context, &mut method_scope, values);
     let persist_result = persist_static_locals(

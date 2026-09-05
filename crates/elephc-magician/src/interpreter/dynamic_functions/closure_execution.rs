@@ -105,6 +105,25 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    // A body containing `yield` does not run here at all. PHP evaluates the arguments, binds
+    // them, and hands back a Generator whose body starts only when it is first asked for a
+    // value, so the bound scope becomes the generator's own and outlives this call.
+    if eval_body_is_generator(function.body()) {
+        let generator = eval_generator_new(
+            function.body(),
+            std::mem::replace(&mut function_scope, ElephcEvalScope::new()),
+            eval_plain_function_activation(function.name()),
+            context,
+            values,
+        );
+        let arg_cleanup = release_owned_bound_args(&evaluated_args, None, context, values);
+        context.pop_call_frame();
+        context.pop_function();
+        return match (generator, arg_cleanup) {
+            (Err(status), _) | (_, Err(status)) => Err(status),
+            (Ok(generator), Ok(())) => Ok(generator),
+        };
+    }
     let result = execute_statements(function.body(), context, &mut function_scope, values);
     let persist_result = persist_static_locals(
         context,
@@ -376,6 +395,10 @@ fn eval_closure_with_optional_binding(
     let function = closure.function();
     let static_names = static_var_names(function.body());
     let bound_class_pushed = binding.is_some();
+    // Captured before `binding` is consumed below, because a generator closure keeps the scopes
+    // it was created under rather than inheriting whoever resumes it.
+    let bound_class_scope = binding.as_ref().map(|binding| binding.class_scope.clone());
+    let bound_called_class = binding.as_ref().map(|binding| binding.called_class.clone());
     context.push_function(function.name());
     if let Some(binding) = &binding {
         context.push_class_scope(binding.class_scope.clone());
@@ -421,6 +444,29 @@ fn eval_closure_with_optional_binding(
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    // A closure whose body contains `yield` is a generator function too: calling it produces the
+    // Generator object and runs nothing, and the scope built above — captures, `$this` and the
+    // bound arguments — becomes the generator's own.
+    if eval_body_is_generator(function.body()) {
+        let generator = eval_generator_new(
+            function.body(),
+            std::mem::replace(&mut function_scope, ElephcEvalScope::new()),
+            eval_closure_activation(function.name(), bound_class_scope, bound_called_class),
+            context,
+            values,
+        );
+        let arg_cleanup = release_owned_bound_args(&evaluated_args, None, context, values);
+        context.pop_call_frame();
+        if bound_class_pushed {
+            context.pop_called_class_scope();
+            context.pop_class_scope();
+        }
+        context.pop_function();
+        return match (generator, arg_cleanup) {
+            (Err(status), _) | (_, Err(status)) => Err(status),
+            (Ok(generator), Ok(())) => Ok(generator),
+        };
+    }
     let result = execute_statements(function.body(), context, &mut function_scope, values);
     let persist_result = persist_static_locals(
         context,

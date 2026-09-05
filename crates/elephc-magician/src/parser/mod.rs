@@ -25,6 +25,7 @@ use crate::eval_ir::EvalProgram;
 use crate::lexer::{
     contains_php_open_tag, find_php_close_tag, normalize_binary_source, tokenize, Token, TokenKind,
 };
+pub(crate) use state::{EVAL_YIELD_FROM_INTRINSIC, EVAL_YIELD_INTRINSIC};
 use state::Parser;
 
 /// Parses a whole PHP source file, inline HTML and every `<?php … ?>` block, into one program.

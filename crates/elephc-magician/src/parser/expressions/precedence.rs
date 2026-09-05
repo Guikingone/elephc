@@ -10,6 +10,7 @@
 //!   kept explicit.
 
 use super::*;
+use crate::parser::state::{EVAL_YIELD_FROM_INTRINSIC, EVAL_YIELD_INTRINSIC};
 
 impl Parser {
     /// Parses an expression using PHP-like logical, comparison, concatenation, and arithmetic precedence.
@@ -60,6 +61,64 @@ impl Parser {
             };
         }
         Ok(expr)
+    }
+
+    /// Parses one `yield`, `yield EXPR`, `yield KEY => VALUE` or `yield from EXPR` expression.
+    ///
+    /// PHP puts `yield` BELOW assignment in precedence, so `$a = yield 1;` is `$a = (yield 1)`
+    /// and the operand runs to the end of the expression: `yield 1 + 2` yields three, not one.
+    /// Parsing the operand with `parse_expr()` gives exactly that, and it still stops at a comma
+    /// or a closing paren, so `f(yield $a, $b)` passes two arguments the way PHP does.
+    ///
+    /// A bare `yield` has no operand at all — `$x = yield;` is legal and yields null — so the
+    /// operand is only parsed when a token that can begin an expression actually follows.
+    fn parse_yield_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+        self.advance();
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "from")) {
+            self.advance();
+            let source = self.parse_expr()?;
+            return Ok(EvalExpr::Call {
+                name: EVAL_YIELD_FROM_INTRINSIC.to_string(),
+                args: vec![EvalCallArg::positional(source)],
+            });
+        }
+        if !self.at_yield_operand() {
+            return Ok(EvalExpr::Call {
+                name: EVAL_YIELD_INTRINSIC.to_string(),
+                args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::Null))],
+            });
+        }
+        let first = self.parse_expr()?;
+        let args = if self.consume(TokenKind::FatArrow) {
+            vec![
+                EvalCallArg::positional(first),
+                EvalCallArg::positional(self.parse_expr()?),
+            ]
+        } else {
+            vec![EvalCallArg::positional(first)]
+        };
+        Ok(EvalExpr::Call {
+            name: EVAL_YIELD_INTRINSIC.to_string(),
+            args,
+        })
+    }
+
+    /// Returns whether the current token can begin a `yield` operand.
+    ///
+    /// Everything that ENDS an expression means the yield had none. Listing the terminators
+    /// rather than the starters is what keeps a bare `yield;`, `yield)` and `yield,` working
+    /// without enumerating every token an expression may open with.
+    fn at_yield_operand(&self) -> bool {
+        !matches!(
+            self.current(),
+            TokenKind::Semicolon
+                | TokenKind::RParen
+                | TokenKind::RBracket
+                | TokenKind::RBrace
+                | TokenKind::Comma
+                | TokenKind::Colon
+                | TokenKind::Eof
+        )
     }
 
     /// Parses supported right-associative assignment expressions.
@@ -396,6 +455,9 @@ impl Parser {
 
     /// Parses right-associative unary prefix expressions.
     pub(in crate::parser) fn parse_unary(&mut self) -> Result<EvalExpr, EvalParseError> {
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "yield")) {
+            return self.parse_yield_expr();
+        }
         if let Some(target) = self.peek_scalar_cast_type() {
             self.advance();
             self.advance();

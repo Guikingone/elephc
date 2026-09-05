@@ -297,6 +297,17 @@ pub(super) fn execute_foreach_object_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    if context.has_eval_generator(identity) {
+        if value_by_ref {
+            // A by-reference `foreach` over a generator needs the yielded value to be an alias
+            // into the generator's own frame, which suspension makes unsound to hold.
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
+        return execute_foreach_generator_stmt(
+            identity, key_name, value_name, body, context, scope, values,
+        );
+    }
     if eval_foreach_object_is_a(object, "Iterator", context, values)? {
         return execute_foreach_iterator_stmt(
             object, key_name, value_name, body, context, scope, values,

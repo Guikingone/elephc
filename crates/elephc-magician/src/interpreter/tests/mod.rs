@@ -60,6 +60,7 @@ mod enums;
 mod expressions;
 mod foreach_object;
 mod functions_namespaces;
+mod generators;
 mod include_reflection;
 mod method_arguments;
 mod native_scope;

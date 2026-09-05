@@ -276,32 +276,16 @@ impl Parser {
         Ok(level)
     }
 
-    /// Parses one yield statement into the closure-local generator marker representation.
+    /// Parses one statement whose expression begins with `yield`.
+    ///
+    /// The yield forms themselves are parsed by the expression grammar, so `yield 1;` and
+    /// `$a = yield 1;` produce the same marker through the same code and cannot drift apart.
+    /// This exists only because a statement beginning with the keyword needs its own dispatch
+    /// arm; it consumes the terminating semicolon the expression parser leaves behind.
     fn parse_yield_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
-        self.advance();
-        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "from")) {
-            return Err(EvalParseError::UnsupportedConstruct);
-        }
-        if self.consume_semicolon() {
-            return Ok(vec![EvalStmt::Expr(EvalExpr::Call {
-                name: EVAL_YIELD_INTRINSIC.to_string(),
-                args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::Null))],
-            })]);
-        }
-        let first = self.parse_expr()?;
-        let args = if self.consume(TokenKind::FatArrow) {
-            vec![
-                EvalCallArg::positional(first),
-                EvalCallArg::positional(self.parse_expr()?),
-            ]
-        } else {
-            vec![EvalCallArg::positional(first)]
-        };
+        let expr = self.parse_expr()?;
         self.expect_semicolon()?;
-        Ok(vec![EvalStmt::Expr(EvalExpr::Call {
-            name: EVAL_YIELD_INTRINSIC.to_string(),
-            args,
-        })])
+        Ok(vec![EvalStmt::Expr(expr)])
     }
 
     /// Parses one declaration preceded by PHP attribute groups.

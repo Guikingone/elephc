@@ -75,6 +75,11 @@ pub struct ElephcEvalContext {
     pub(super) dynamic_initialized_properties: HashSet<(u64, String)>,
     /// Live interpreter call frames, innermost last, for `debug_backtrace()`.
     pub(super) call_frames: Vec<EvalCallFrame>,
+    /// Execution state of every live generator, keyed by its object identity.
+    ///
+    /// A generator outlives the call that created it, so its frame — including its own
+    /// scope — cannot live on that call's stack.
+    pub(super) eval_generators: HashMap<u64, EvalGeneratorFrame>,
     pub(super) eval_reflection_attributes: HashMap<u64, EvalReflectionAttributeMetadata>,
     pub(super) eval_reflection_classes: HashMap<u64, String>,
     pub(super) eval_reflection_functions: HashMap<u64, String>,
@@ -164,6 +169,7 @@ impl ElephcEvalContext {
             array_cursors: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
             call_frames: Vec::new(),
+            eval_generators: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
             eval_reflection_functions: HashMap::new(),
@@ -254,6 +260,7 @@ impl ElephcEvalContext {
             array_cursors: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
             call_frames: Vec::new(),
+            eval_generators: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
             eval_reflection_functions: HashMap::new(),

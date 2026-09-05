@@ -20,7 +20,15 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const EVAL_TRACE_ENV: &str = "ELEPHC_EVAL_TRACE";
-pub(super) const EVAL_YIELD_INTRINSIC: &str = "__elephc_eval_yield";
+pub(crate) const EVAL_YIELD_INTRINSIC: &str = "__elephc_eval_yield";
+
+/// Marker call the parser emits for `yield from EXPR`.
+///
+/// Delegation needs its own marker rather than a flag on the plain one, because the two differ
+/// in what they do to the generator's key counter: `php -n` 8.5.6 preserves the inner keys of a
+/// delegated array or generator and leaves the OUTER auto-increment counter untouched, so
+/// `yield 0; yield from [10, 20]; yield 99;` produces the keys 0, 0, 1, 1.
+pub(crate) const EVAL_YIELD_FROM_INTRINSIC: &str = "__elephc_eval_yield_from";
 
 static ANONYMOUS_CLASS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static CLOSURE_FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(0);

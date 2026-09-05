@@ -11,6 +11,7 @@
 
 pub(super) use super::super::cursor::inc_dec_store;
 pub(super) use super::super::parse_fragment;
+pub(super) use super::super::state::EVAL_YIELD_INTRINSIC;
 pub(super) use crate::errors::EvalParseError;
 pub(super) use crate::eval_ir::*;
 

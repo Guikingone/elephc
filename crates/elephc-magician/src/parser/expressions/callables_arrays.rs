@@ -10,7 +10,6 @@
 
 use super::*;
 use crate::eval_ir::{EvalAttribute, EvalStmt};
-use crate::parser::state::EVAL_YIELD_INTRINSIC;
 use std::collections::HashSet;
 
 impl Parser {
@@ -149,7 +148,6 @@ impl Parser {
         let captures = self.parse_optional_closure_use_captures(&params)?;
         let return_type = self.parse_optional_return_type(EvalTypePosition::FunctionReturn)?;
         let (body, source_end_line) = self.parse_block_with_end_line()?;
-        let body = lower_straight_line_yield_body(body)?;
         let function = EvalFunction::new(next_closure_function_name(), params, body)
             .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
             .with_attributes(attributes)
@@ -593,43 +591,3 @@ fn is_arrow_superglobal(name: &str) -> bool {
     )
 }
 
-/// Converts a closure body made only of yields into an eager `ArrayIterator` return.
-///
-/// Each closure invocation still reevaluates every yielded expression and preserves explicit
-/// keys. The resulting iterator satisfies the ordinary `Traversable` boundary used by callers;
-/// control-flow-dependent and `yield from` generators remain explicitly unsupported.
-fn lower_straight_line_yield_body(body: Vec<EvalStmt>) -> Result<Vec<EvalStmt>, EvalParseError> {
-    let contains_yield = body.iter().any(is_eval_yield_marker);
-    if !contains_yield {
-        return Ok(body);
-    }
-    let mut elements = Vec::with_capacity(body.len());
-    for statement in body {
-        let EvalStmt::Expr(EvalExpr::Call { name, args }) = statement else {
-            return Err(EvalParseError::UnsupportedConstruct);
-        };
-        if name != EVAL_YIELD_INTRINSIC {
-            return Err(EvalParseError::UnsupportedConstruct);
-        }
-        match args.as_slice() {
-            [value] => elements.push(EvalArrayElement::Value(value.value().clone())),
-            [key, value] => elements.push(EvalArrayElement::KeyValue {
-                key: key.value().clone(),
-                value: value.value().clone(),
-            }),
-            _ => return Err(EvalParseError::UnexpectedToken),
-        }
-    }
-    Ok(vec![EvalStmt::Return(Some(EvalExpr::NewObject {
-        class_name: "ArrayIterator".to_string(),
-        args: vec![EvalCallArg::positional(EvalExpr::Array(elements))],
-    }))])
-}
-
-/// Returns whether a statement is the parser-owned marker for one yield.
-fn is_eval_yield_marker(statement: &EvalStmt) -> bool {
-    matches!(
-        statement,
-        EvalStmt::Expr(EvalExpr::Call { name, .. }) if name == EVAL_YIELD_INTRINSIC
-    )
-}

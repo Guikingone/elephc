@@ -30,9 +30,15 @@ fn parse_fragment_accepts_attributed_arrow_closure() {
     assert_eq!(captures, &[EvalClosureCapture::new("container", false)]);
 }
 
-/// Verifies straight-line keyed yields lower to an iterator-returning eval closure.
+/// Verifies the parser leaves a generator body alone instead of rewriting it.
+///
+/// This used to assert the body became `return new ArrayIterator([...])`. That eager lowering
+/// was wrong in kind, not degree: it evaluated every yielded expression at call time, so an
+/// infinite generator hung, `send()` had nowhere to land, and the body ran before PHP runs it.
+/// The parser now emits the yields as marker calls and the interpreter owns the suspension, so
+/// the contract this pins is that BOTH yields survive as statements of the closure body.
 #[test]
-fn parse_fragment_lowers_straight_line_yields_to_array_iterator() {
+fn parse_fragment_leaves_straight_line_yields_in_the_generator_body() {
     let program = parse_fragment(
         br#"return function () { yield 2 => "two"; yield 5 => "five"; };"#,
     )
@@ -40,11 +46,13 @@ fn parse_fragment_lowers_straight_line_yields_to_array_iterator() {
     let [EvalStmt::Return(Some(EvalExpr::Closure { function, .. }))] = program.statements() else {
         panic!("expected generator closure return");
     };
-    assert!(matches!(
-        function.body(),
-        [EvalStmt::Return(Some(EvalExpr::NewObject { class_name, args }))]
-            if class_name == "ArrayIterator" && args.len() == 1
-    ));
+    let body = function.body();
+    assert_eq!(body.len(), 2);
+    assert!(body.iter().all(|statement| matches!(
+        statement,
+        EvalStmt::Expr(EvalExpr::Call { name, args })
+            if name == EVAL_YIELD_INTRINSIC && args.len() == 2
+    )));
 }
 
 /// Verifies PHP's error-suppression prefix preserves the wrapped call expression.
