@@ -420,9 +420,28 @@ impl GraphState {
     }
 
     /// Keeps shared virtual slots on every live class in a lineage once any occupant survives.
+    ///
+    /// The inner test used to be `class_is_or_descends_from(candidate, lineage_root)` run for
+    /// EVERY (kept method, live class) pair — O(kept_methods x live_classes x depth) — and each
+    /// call allocated a fresh `String` per parent hop plus a `HashSet` for its cycle guard. That
+    /// product is the prune phase's dominant cost on a large program, and nothing in the
+    /// predicate depends on the method: it is a pure function of the declaration index's parent
+    /// chains. So the chains are walked ONCE per fixed-point round here and inverted into
+    /// `lineage root -> live classes that descend from it`.
+    ///
+    /// The retained set cannot change:
+    /// * the inversion and the predicate share ONE walk (`walk_class_ancestors`), so they cut the
+    ///   chain at the same first repeated name and compare a name before looking its node up —
+    ///   "root is among the names visited from candidate" is exactly what the predicate answered;
+    /// * `live_classes` is deduplicated (it comes from a `HashSet`) and a name is visited at most
+    ///   once per chain, so each root lists each candidate at most once;
+    /// * the lists are built in ascending `live_classes` position, so the inner loop still visits
+    ///   candidates in the same order it did, inserting the same pairs;
+    /// * every other test in the loop (`has_vtable_slot`, the behavioral lookup) is untouched.
     fn seed_vtable_slot_families(&mut self) {
         let live_classes: Vec<_> = self.reach.classes.iter().cloned().collect();
         let kept_methods: Vec<_> = self.reach.methods.iter().cloned().collect();
+        let descendants_by_root = live_descendants_by_root(&self.index, &live_classes);
         for (class, method, is_static) in kept_methods {
             if !self.has_vtable_slot(&class, &method, is_static) {
                 continue;
@@ -433,10 +452,11 @@ impl GraphState {
                 method.clone(),
                 is_static,
             ));
-            for candidate in &live_classes {
-                if !self.class_is_or_descends_from(candidate, &lineage_root) {
-                    continue;
-                }
+            let Some(descendants) = descendants_by_root.get(&lineage_root) else {
+                continue;
+            };
+            for position in descendants {
+                let candidate = &live_classes[*position];
                 let visible_method = (candidate.clone(), method.clone(), is_static);
                 if !self.has_vtable_slot(candidate, &method, is_static) {
                     continue;
@@ -804,23 +824,19 @@ impl GraphState {
     }
 
     /// Returns whether one indexed class is the named root or inherits from it.
+    ///
+    /// Delegates to `walk_class_ancestors` so this predicate and the `root -> descendants`
+    /// inversion `seed_vtable_slot_families` builds can never disagree about what a chain is.
     fn class_is_or_descends_from(&self, class: &str, root: &str) -> bool {
-        let mut current = Some(class.to_string());
-        let mut seen = HashSet::new();
-        while let Some(candidate) = current {
-            if !seen.insert(candidate.clone()) {
+        let mut found = false;
+        walk_class_ancestors(&self.index, class, |candidate| {
+            if candidate == root {
+                found = true;
                 return false;
             }
-            if candidate == root {
-                return true;
-            }
-            current = self
-                .index
-                .classes
-                .get(&candidate)
-                .and_then(|node| node.parent.clone());
-        }
-        false
+            true
+        });
+        found
     }
 
     /// Turns method calls on interprocedurally aliased variable names into wildcard edges.
@@ -893,4 +909,220 @@ fn is_magic_method(method: &str) -> bool {
             | "__call"
             | "__callstatic"
     )
+}
+
+/// Walks one class's ancestor chain and hands every name it reaches to `visit`, stopping when
+/// `visit` returns `false` or when a name repeats.
+///
+/// This IS the walk `class_is_or_descends_from` performed, factored out so the single-root
+/// predicate and the root-to-descendants inversion cannot drift apart: the cycle guard cuts the
+/// chain at the first repeated name (a class in an `extends` cycle therefore descends only from
+/// the names before the repeat), and a name is handed to `visit` BEFORE its node is looked up, so
+/// a parent with no indexed node is still part of the chain and is its own lineage root.
+fn walk_class_ancestors(
+    index: &DeclarationIndex,
+    class: &str,
+    mut visit: impl FnMut(&str) -> bool,
+) {
+    let mut current = Some(class.to_string());
+    let mut seen = HashSet::new();
+    while let Some(candidate) = current {
+        if !seen.insert(candidate.clone()) {
+            return;
+        }
+        if !visit(&candidate) {
+            return;
+        }
+        current = index
+            .classes
+            .get(&candidate)
+            .and_then(|node| node.parent.clone());
+    }
+}
+
+/// Inverts the live classes' ancestor chains into `root -> positions in live_classes`.
+///
+/// `descendants[root]` holds the position of every live class for which
+/// `class_is_or_descends_from(class, root)` answers `true`, and no other: both come from
+/// `walk_class_ancestors`. Positions are pushed in ascending order, so iterating one root's list
+/// visits candidates in the same order a scan of `live_classes` did.
+fn live_descendants_by_root(
+    index: &DeclarationIndex,
+    live_classes: &[String],
+) -> HashMap<String, Vec<usize>> {
+    let mut descendants: HashMap<String, Vec<usize>> = HashMap::new();
+    for (position, class) in live_classes.iter().enumerate() {
+        walk_class_ancestors(index, class, |candidate| {
+            descendants
+                .entry(candidate.to_string())
+                .or_default()
+                .push(position);
+            true
+        });
+    }
+    descendants
+}
+
+#[cfg(test)]
+mod vtable_lineage_index_tests {
+    use super::*;
+
+    /// The pre-patch predicate, copied verbatim, so the index below is compared against the code
+    /// it replaced rather than against a refactoring of itself.
+    fn reference_class_is_or_descends_from(
+        index: &DeclarationIndex,
+        class: &str,
+        root: &str,
+    ) -> bool {
+        let mut current = Some(class.to_string());
+        let mut seen = HashSet::new();
+        while let Some(candidate) = current {
+            if !seen.insert(candidate.clone()) {
+                return false;
+            }
+            if candidate == root {
+                return true;
+            }
+            current = index
+                .classes
+                .get(&candidate)
+                .and_then(|node| node.parent.clone());
+        }
+        false
+    }
+
+    /// Builds one indexed class node.
+    fn node(
+        kind: ClassKind,
+        parent: Option<&str>,
+        interfaces: &[&str],
+        traits: &[&str],
+    ) -> ClassNode {
+        ClassNode {
+            kind,
+            usage: Usage::default(),
+            methods: HashMap::new(),
+            parent: parent.map(str::to_string),
+            interfaces: interfaces.iter().map(|name| (*name).to_string()).collect(),
+            traits: traits.iter().map(|name| (*name).to_string()).collect(),
+        }
+    }
+
+    /// A hierarchy with an interface, a trait, an abstract-shaped parent, a class whose parent is
+    /// not indexed at all, and an `extends` cycle.
+    fn hierarchy() -> DeclarationIndex {
+        let mut index = DeclarationIndex::default();
+        for (name, class_node) in [
+            ("contract", node(ClassKind::Interface, None, &[], &[])),
+            ("helper", node(ClassKind::Trait, None, &[], &[])),
+            (
+                "base",
+                node(ClassKind::Class, None, &["contract"], &["helper"]),
+            ),
+            (
+                "middle",
+                node(ClassKind::Class, Some("base"), &[], &["helper"]),
+            ),
+            ("leaf", node(ClassKind::Class, Some("middle"), &[], &[])),
+            ("sibling", node(ClassKind::Class, Some("base"), &[], &[])),
+            (
+                "orphan",
+                node(ClassKind::Class, Some("runtime_owned"), &[], &[]),
+            ),
+            ("cycle_a", node(ClassKind::Class, Some("cycle_b"), &[], &[])),
+            ("cycle_b", node(ClassKind::Class, Some("cycle_a"), &[], &[])),
+        ] {
+            index.classes.insert(name.to_string(), class_node);
+        }
+        index
+    }
+
+    /// The live-class list the seeding loop would scan, plus names that only ever appear as
+    /// parents, so roots outside the list are exercised too.
+    fn live_classes() -> Vec<String> {
+        [
+            "contract",
+            "helper",
+            "base",
+            "middle",
+            "leaf",
+            "sibling",
+            "orphan",
+            "runtime_owned",
+            "cycle_a",
+            "cycle_b",
+        ]
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+    }
+
+    /// The inverted index answers, for every root, exactly the set the chain predicate answers.
+    #[test]
+    fn descendant_index_agrees_with_the_chain_predicate() {
+        let index = hierarchy();
+        let live = live_classes();
+        let descendants = live_descendants_by_root(&index, &live);
+        let mut roots = live.clone();
+        roots.push("never_declared".to_string());
+        for root in roots {
+            let from_index: HashSet<usize> = descendants
+                .get(&root)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let from_predicate: HashSet<usize> = live
+                .iter()
+                .enumerate()
+                .filter(|(_, class)| reference_class_is_or_descends_from(&index, class, &root))
+                .map(|(position, _)| position)
+                .collect();
+            assert_eq!(from_index, from_predicate, "root {root}");
+        }
+    }
+
+    /// Each root's list is in ascending `live_classes` position and free of duplicates, which is
+    /// what keeps the seeding loop's visit order identical to the scan it replaced.
+    #[test]
+    fn descendant_lists_preserve_scan_order() {
+        let index = hierarchy();
+        for (root, positions) in live_descendants_by_root(&index, &live_classes()) {
+            let mut sorted = positions.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                positions, sorted,
+                "root {root} must list positions in scan order"
+            );
+        }
+    }
+
+    /// Interfaces and traits are their own roots: `base` implements `contract` and uses `helper`,
+    /// but neither is on its `extends` chain, so neither lists `base` as a descendant. This pins
+    /// the relation the inversion inherits from the predicate instead of inventing a new one.
+    #[test]
+    fn interfaces_and_traits_are_not_extends_roots() {
+        let index = hierarchy();
+        let live = live_classes();
+        let descendants = live_descendants_by_root(&index, &live);
+        let at = |name: &str| live.iter().position(|entry| entry == name).unwrap();
+        assert_eq!(descendants["contract"], vec![at("contract")]);
+        assert_eq!(descendants["helper"], vec![at("helper")]);
+        assert_eq!(
+            descendants["base"],
+            vec![at("base"), at("middle"), at("leaf"), at("sibling")],
+        );
+        assert_eq!(descendants["middle"], vec![at("middle"), at("leaf")]);
+        // A parent with no indexed node is still a root, and is its own descendant when live.
+        assert_eq!(
+            descendants["runtime_owned"],
+            vec![at("orphan"), at("runtime_owned")],
+        );
+        // An `extends` cycle stops at the first repeat instead of looping.
+        assert_eq!(descendants["cycle_a"], vec![at("cycle_a"), at("cycle_b")]);
+        assert_eq!(descendants["cycle_b"], vec![at("cycle_a"), at("cycle_b")]);
+        // A name no live class reaches has no entry at all.
+        assert!(!descendants.contains_key("never_declared"));
+    }
 }

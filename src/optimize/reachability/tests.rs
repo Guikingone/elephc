@@ -1209,3 +1209,33 @@ fn prune_keeps_dynamic_call_magic_on_live_class() {
     assert!(has_method(&program, "T", "__call"));
     assert!(has_method(&program, "T", "__callStatic"));
 }
+
+/// Verifies vtable-slot family seeding keeps the same methods on a lineage that mixes an
+/// interface contract, a trait, an abstract parent and two concrete leaves.
+///
+/// This is the retained-set characterization pin for the `lineage root -> descendants` index that
+/// replaced the per-pair `class_is_or_descends_from` scan in `graph::seed_vtable_slot_families`:
+/// every live class sharing the slot keeps its override, and a method outside the lineage that
+/// nothing calls is still pruned.
+#[test]
+fn prune_keeps_vtable_slot_family_across_interface_trait_and_abstract_parent() {
+    let (program, _) = prune(
+        "<?php interface Speaks { public function speak(): string; } trait Loud { public function shout(): string { return 'HI'; } } abstract class Animal implements Speaks { use Loud; public function speak(): string { return 'generic'; } } class Dog extends Animal { public function speak(): string { return 'woof'; } } class Cat extends Animal { public function speak(): string { return 'meow'; } } class Unrelated { public function speak(): string { return 'nope'; } public function unused(): string { return 'gone'; } } function greet(Animal $a): string { return $a->speak(); } echo greet(new Dog()); echo greet(new Cat()); $other = new Unrelated(); echo $other->speak();",
+    );
+    assert!(
+        has_method(&program, "Dog", "speak"),
+        "the called override survives",
+    );
+    assert!(
+        has_method(&program, "Cat", "speak"),
+        "the sibling sharing the same vtable slot survives",
+    );
+    assert!(
+        has_method(&program, "Unrelated", "speak"),
+        "an unrelated live receiver keeps the method it is called for",
+    );
+    assert!(
+        !has_method(&program, "Unrelated", "unused"),
+        "a method outside the lineage that nothing calls is still pruned",
+    );
+}
