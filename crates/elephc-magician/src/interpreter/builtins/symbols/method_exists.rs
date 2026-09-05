@@ -145,7 +145,7 @@ fn eval_property_exists_target(
             )? {
                 return Ok(true);
             }
-            eval_object_public_property_exists(target, property_name, values)
+            eval_object_public_property_exists(target, property_name, context, values)
         }
         EVAL_TAG_STRING => {
             let class_name = eval_resolved_class_metadata_name(target, context, values)?;

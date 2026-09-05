@@ -359,7 +359,7 @@ pub(super) fn eval_reflection_property_new_for_object(
         )
         .map(Some);
     }
-    if !eval_reflection_object_dynamic_property_exists(object, property_name, values)? {
+    if !eval_reflection_object_dynamic_property_exists(object, property_name, context, values)? {
         let message = eval_reflection_missing_member_message(
             EVAL_REFLECTION_OWNER_PROPERTY,
             &class_name,
@@ -399,10 +399,23 @@ pub(super) fn eval_reflection_object_class_name(
 pub(super) fn eval_reflection_object_dynamic_property_exists(
     object: RuntimeCellHandle,
     property_name: &str,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     if property_name.contains('\0') {
         return Ok(false);
+    }
+    // The overlay is checked FIRST because it is the only store a dynamic property on an
+    // eval-declared object ever reaches: the runtime-slot write is guarded on the property
+    // being declared. The slot scan below still matters for an AOT-backed object, whose
+    // properties really do live in slots.
+    let identity = values.object_identity(object)?;
+    if context
+        .dynamic_property_storage_names(identity)
+        .iter()
+        .any(|name| name == property_name)
+    {
+        return Ok(true);
     }
     let property_count = values.object_property_len(object)?;
     for position in 0..property_count {
@@ -501,6 +514,24 @@ pub(super) fn eval_reflection_object_dynamic_property_names(
             names.push(property_name);
         }
     }
+    // A dynamic property on an eval-declared object is in the context overlay and nowhere
+    // else, so the slot scan above cannot see it. The overlay also holds every DECLARED
+    // property, which the visibility filter removes, leaving exactly the undeclared ones.
+    //
+    // These are sorted because the overlay is a hash map: PHP reports dynamic properties in
+    // the order they were created, and reproducing that needs an insertion-ordered store in
+    // the context. Sorting at least makes the answer deterministic instead of arbitrary.
+    let identity = values.object_identity(object)?;
+    let mut overlay_names: Vec<String> = context
+        .dynamic_property_storage_names(identity)
+        .into_iter()
+        .filter(|property_name| {
+            eval_reflection_dynamic_property_name_is_visible(reflected_name, property_name, context)
+        })
+        .filter(|property_name| !names.contains(property_name))
+        .collect();
+    overlay_names.sort();
+    names.extend(overlay_names);
     Ok(names)
 }
 

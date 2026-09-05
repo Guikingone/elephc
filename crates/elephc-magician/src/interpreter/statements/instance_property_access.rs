@@ -100,6 +100,14 @@ pub(in crate::interpreter) fn eval_property_get_result(
             );
         }
     }
+    // An undeclared property written as `$object->name = ...` lands in the context overlay, not
+    // in the object's slots, so the slot probe below cannot see it. Asking the overlay first
+    // keeps this early return from answering null for a property that plainly has a value.
+    if !declared_property_found {
+        if let Some(stored) = context.dynamic_property_value(identity, property_name) {
+            return values.retain(stored);
+        }
+    }
     if !declared_property_found
         && eval_object_public_property_exists(object, property_name, values)?
     {
@@ -475,6 +483,12 @@ pub(in crate::interpreter) fn eval_property_set_result(
         }
         return Ok(());
     }
+    // Mirror the value into the object's own slot as well. The overlay is what reads consult,
+    // but every enumerator walks the slots, so a property written only to the overlay is
+    // invisible to `print_r`, `var_dump`, `json_encode`, `foreach` and the `(array)` cast.
+    // Keeping the two in step at the single write point is what lets those keep reading one
+    // store, instead of teaching each of them about two.
+    values.property_set(object, &storage_property_name, value)?;
     let stored = values.retain(value)?;
     let replaced = context.set_dynamic_property_value(identity, &storage_property_name, stored);
     if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
@@ -744,6 +758,12 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         )
         .map(|result| result.unwrap_or(false));
     }
+    // Same store decision as the read: an undeclared property lives in the overlay, so
+    // `isset($object->name)` answered false for a property the very next read returns.
+    // The cell is inspected in place, without taking a reference the caller would have to drop.
+    if let Some(stored) = context.dynamic_property_value(identity, property_name) {
+        return Ok(!values.is_null(stored)?);
+    }
     if eval_object_public_property_exists(object, property_name, values)? {
         let value = values.property_get(object, property_name)?;
         return Ok(!values.is_null(value)?);
@@ -835,9 +855,22 @@ pub(in crate::interpreter) fn eval_property_unset_result(
         }
         return Ok(());
     }
+    // An UNDECLARED property reaches here, and on an eval-declared object it lives in the
+    // context overlay rather than in the object's slots. Clearing only the slot left it
+    // findable by everything that consults the overlay — `property_exists()` answered true
+    // after an `unset()`, where `php -n` 8.5.6 answers false. Both stores are cleared.
+    let removed_overlay = context.remove_dynamic_property_value(identity, property_name);
+    if let Some(removed) = removed_overlay {
+        context.remove_dynamic_property_alias(identity, property_name);
+        context.mark_dynamic_property_uninitialized(identity, property_name);
+        values.release(removed)?;
+    }
     if eval_object_public_property_exists(object, property_name, values)? {
         let null = values.null()?;
         return values.property_set(object, property_name, null);
+    }
+    if removed_overlay.is_some() {
+        return Ok(());
     }
     let _ = eval_magic_property_unset(object, &object_class_name, property_name, context, values)?;
     Ok(())

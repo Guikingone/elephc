@@ -359,7 +359,7 @@ pub(super) fn eval_reflection_dynamic_property_is_initialized(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     eval_reflection_dynamic_property_validate_object(declaring_class, object, context, values)?;
-    eval_reflection_object_dynamic_property_exists(object, property_name, values)
+    eval_reflection_object_dynamic_property_exists(object, property_name, context, values)
 }
 
 /// Validates the object argument used by dynamic ReflectionProperty operations.

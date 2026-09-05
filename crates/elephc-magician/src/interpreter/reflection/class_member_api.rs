@@ -250,6 +250,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
                 let exists = eval_reflection_object_dynamic_property_exists(
                     dynamic_object,
                     &requested_name,
+                    context,
                     values,
                 );
                 values.release(dynamic_object)?;

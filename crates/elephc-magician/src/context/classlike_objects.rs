@@ -325,6 +325,23 @@ impl ElephcEvalContext {
             .collect()
     }
 
+    /// Returns the storage names of every overlay slot currently held for one object.
+    ///
+    /// A property created by `$object->name = ...` on an eval-declared object exists ONLY here:
+    /// the runtime-slot write in `interpreter::statements::instance_property_access` is guarded
+    /// on the property being declared, so an undeclared one never reaches the object's slots.
+    /// Anything that enumerates or probes an object's properties has to consult this too, or it
+    /// reports a dynamic property as absent.
+    ///
+    /// The order is the map's, which is not PHP's insertion order; callers that present these
+    /// to a program sort them so the answer is at least deterministic.
+    pub fn dynamic_property_storage_names(&self, identity: u64) -> Vec<String> {
+        self.dynamic_property_values
+            .keys()
+            .filter_map(|(object, property)| (*object == identity).then(|| property.clone()))
+            .collect()
+    }
+
     /// Removes this context from the process-local dynamic object destructor registry.
     pub fn unregister_dynamic_object_context(&self) {
         crate::ffi::dynamic_destructors::unregister_dynamic_objects_for_context(

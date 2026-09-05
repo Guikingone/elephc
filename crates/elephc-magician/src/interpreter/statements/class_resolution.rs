@@ -602,6 +602,12 @@ pub(super) fn eval_dynamic_class_allocate_object(
             };
             let storage_name = eval_instance_property_storage_name(class.name(), property);
             if let Some(value) = value {
+                // The overlay is where reads look, and the object's own slot is where every
+                // enumerator looks: `print_r`, `var_dump`, `json_encode`, `foreach` and the
+                // `(array)` cast all walk the slots. Writing the default to both at
+                // construction is what keeps those agreeing with `$object->property`, instead
+                // of each enumerator needing to learn about a second store.
+                values.property_set(object, &storage_name, value)?;
                 if let Some(replaced) =
                     context.set_dynamic_property_value(identity, &storage_name, value)
                 {

@@ -54,6 +54,7 @@ mod closures;
 mod control_flow;
 mod core;
 mod dynamic_calls;
+mod dynamic_property_store;
 mod enums;
 mod expressions;
 mod functions_namespaces;
