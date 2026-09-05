@@ -16,18 +16,21 @@
 //!   `stream_set_chunk_size($h, 100)` makes both say 100.
 //! - A read that simply hits EOF is silent, and so is one that would block on a non-blocking
 //!   descriptor — both are answered before this is reached.
-//! - ⚠️ The WRITE half is NOT here, deliberately. php has FOUR wordings for a failed write, all
-//!   MEASURED on `php -n` 8.5.6 (`scratchpad/qp/a/wrfail*.php`), and only one of them is this
-//!   Notice with the verb changed:
+//! - php has FOUR wordings for a failed WRITE, all MEASURED on `php -n` 8.5.6:
 //!
 //!       plain fd opened "r"            fwrite(): Write of 4 bytes failed with errno=9 …
 //!       socket whose peer is gone      fwrite(): Send of 4 bytes failed with errno=32 Broken pipe
 //!       data:// in any mode            fwrite(): Stream is not writable
 //!       php://temp, php://memory "r"   SILENT, just bool(false)
 //!
-//!   The count there is the PAYLOAD length, not the chunk — the opposite of the read half. And
-//!   elephc's own read-only mode gate refuses before the syscall, so the plain-fd wording cannot
-//!   simply be hung off the syscall failure: the gate has to tell the four cases apart first.
+//!   The THIRD is `__rt_not_writable_notice` below: php refuses on the wrapper's OPS, which the
+//!   data wrapper has none of, so the recorded mode never enters into it — `data://` opened `"w"`
+//!   is as unwritable as one opened `"r"`, and elephc answered that one `int(1)`.
+//!
+//!   The first is still missing. Its count is the PAYLOAD length, not the chunk — the opposite of
+//!   the read half — and elephc's read-only mode gate refuses before the syscall, so the errno it
+//!   would have to name (9, `Bad file descriptor`) is never produced. Adding it means the gate
+//!   composing the errno itself, which is a different shape from every other diagnostic here.
 //! - The function name travels in `_io_fail_fn_ptr` / `_io_fail_fn_len` rather than as an
 //!   argument, because the failure is detected deep inside `__rt_fread` while the name belongs to
 //!   whoever called it. The globals start out spelling `fread`, and
@@ -47,6 +50,15 @@ pub(crate) const READ_FN_NAME_FREAD: &str = "fread";
 
 /// The name `__rt_stream_get_contents` announces around its own `__rt_fread` calls.
 pub(crate) const READ_FN_NAME_STREAM_GET_CONTENTS: &str = "stream_get_contents";
+
+/// Everything after the function name for a stream php will not write to AT ALL.
+///
+/// No count and no errno: php never reached a syscall, so there is nothing to number. Verbatim
+/// from `_php_stream_write`, which refuses when the stream's ops have no write function.
+pub(crate) const NOT_WRITABLE_NOTICE_TAIL: &str = "(): Stream is not writable\n";
+
+/// The name a zeroed `_io_fail_fn_ptr` stands for on the write side.
+pub(crate) const WRITE_FN_NAME_FWRITE: &str = "fwrite";
 
 /// One half of the Notice: which verb it uses, what a zeroed name global means for it, and the
 /// symbol it is entered by.
@@ -231,6 +243,69 @@ pub(crate) fn emit_clear_read_fn_name(emitter: &mut Emitter) {
         Arch::X86_64 => {
             abi::emit_symbol_address(emitter, "r10", "_io_fail_fn_ptr");
             emitter.instruction("mov QWORD PTR [r10], 0");
+        }
+    }
+}
+
+/// Emits `__rt_not_writable_notice()`: php's word for a stream whose wrapper cannot write at all.
+///
+/// Takes no arguments — the whole message is the function name and a fixed tail. The name comes
+/// from the same `_io_fail_fn_ptr` pair the read half uses, so a builtin that announces itself
+/// around its write is named correctly; a zeroed pair means the caller is `fwrite()` itself.
+///
+/// Clobbers only what `__rt_diag_warning` does. No result.
+pub fn emit_not_writable_notice(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: not_writable_notice ---");
+            emitter.label_global("__rt_not_writable_notice");
+            emitter.instruction("sub sp, sp, #16");                             // frame for the saved linkage
+            emitter.instruction("stp x29, x30, [sp, #0]");                      // save frame pointer and return address
+            abi::emit_symbol_address(emitter, "x1", "_read_failed_notice_head");
+            emitter.instruction(&format!("mov x2, #{}", READ_FAILED_NOTICE_HEAD.len()));
+            emitter.instruction("bl __rt_diag_warning");                        // honours @ and the output-buffer scope
+            abi::emit_symbol_address(emitter, "x9", "_io_fail_fn_ptr");
+            emitter.instruction("ldr x1, [x9]");                                // the php function whose write was refused
+            abi::emit_symbol_address(emitter, "x9", "_io_fail_fn_len");
+            emitter.instruction("ldr x2, [x9]");
+            emitter.instruction("cbnz x1, __rt_not_writable_notice_named");     // a caller announced itself
+            abi::emit_symbol_address(emitter, "x1", "_write_fn_name_fwrite");   // nobody did: it is the plain builtin
+            emitter.instruction(&format!("mov x2, #{}", WRITE_FN_NAME_FWRITE.len()));
+            emitter.label("__rt_not_writable_notice_named");
+            emitter.instruction("bl __rt_diag_warning");
+            abi::emit_symbol_address(emitter, "x1", "_not_writable_notice_tail");
+            emitter.instruction(&format!("mov x2, #{}", NOT_WRITABLE_NOTICE_TAIL.len()));
+            emitter.instruction("bl __rt_diag_warning");                        // the newline is what flushes the line
+            emitter.instruction("ldp x29, x30, [sp, #0]");                      // restore frame pointer and return address
+            emitter.instruction("add sp, sp, #16");                             // release the frame
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: not_writable_notice ---");
+            emitter.label_global("__rt_not_writable_notice");
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish the helper frame pointer
+            abi::emit_symbol_address(emitter, "rdi", "_read_failed_notice_head");
+            emitter.instruction(&format!("mov esi, {}", READ_FAILED_NOTICE_HEAD.len()));
+            emitter.instruction("call __rt_diag_warning");                      // honours @ and the output-buffer scope
+            abi::emit_symbol_address(emitter, "r9", "_io_fail_fn_ptr");
+            emitter.instruction("mov rdi, QWORD PTR [r9]");                     // the php function whose write was refused
+            abi::emit_symbol_address(emitter, "r9", "_io_fail_fn_len");
+            emitter.instruction("mov rsi, QWORD PTR [r9]");
+            emitter.instruction("test rdi, rdi");
+            emitter.instruction("jnz __rt_not_writable_notice_named_x86");      // a caller announced itself
+            abi::emit_symbol_address(emitter, "rdi", "_write_fn_name_fwrite");  // nobody did: it is the plain builtin
+            emitter.instruction(&format!("mov esi, {}", WRITE_FN_NAME_FWRITE.len()));
+            emitter.label("__rt_not_writable_notice_named_x86");
+            emitter.instruction("call __rt_diag_warning");
+            abi::emit_symbol_address(emitter, "rdi", "_not_writable_notice_tail");
+            emitter.instruction(&format!("mov esi, {}", NOT_WRITABLE_NOTICE_TAIL.len()));
+            emitter.instruction("call __rt_diag_warning");                      // the newline is what flushes the line
+            emitter.instruction("mov rsp, rbp");                                // release the frame from rbp
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.instruction("ret");
         }
     }
 }

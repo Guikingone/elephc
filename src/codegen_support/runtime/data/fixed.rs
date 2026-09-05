@@ -281,6 +281,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_read_failed_notice_mid", read_failed_notice::READ_FAILED_NOTICE_MID),
         ("_read_fn_name_fread", read_failed_notice::READ_FN_NAME_FREAD),
         ("_read_fn_name_sgc", read_failed_notice::READ_FN_NAME_STREAM_GET_CONTENTS),
+        ("_not_writable_notice_tail", read_failed_notice::NOT_WRITABLE_NOTICE_TAIL),
+        ("_write_fn_name_fwrite", read_failed_notice::WRITE_FN_NAME_FWRITE),
         ("_diag_space", " "),
         ("_pf_w_head", PF_WARN_HEAD),
         ("_pf_w_locate_mid", PF_WARN_LOCATE_MID),

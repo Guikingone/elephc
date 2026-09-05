@@ -370,7 +370,8 @@ pub(crate) use opendir::emit_opendir;
 pub(crate) use glob_dir_next::{emit_glob_dir_next, emit_path_is_glob_url};
 pub(crate) use brigade_remove::emit_brigade_remove;
 pub(crate) use read_failed_notice::{
-    emit_announce_read_fn_name, emit_clear_read_fn_name, emit_read_failed_notice,
+    emit_announce_read_fn_name, emit_clear_read_fn_name, emit_not_writable_notice,
+    emit_read_failed_notice,
 };
 pub(crate) use readdir::emit_readdir;
 pub(crate) use closedir::emit_closedir;

@@ -31,6 +31,7 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_put_contents ---");
     emitter.label_global("__rt_file_put_contents");
+    emit_refuse_data_scheme_aarch64(emitter);
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
     super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
         emitter,
@@ -134,6 +135,7 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_put_contents ---");
     emitter.label_global("__rt_file_put_contents");
+    emit_refuse_data_scheme_x86_64(emitter);
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
     super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
         emitter,
@@ -201,4 +203,84 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the aligned stack locals used by file_put_contents
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller with the write byte count in rax
+}
+
+/// Refuses a `data:` path the way php does, before the plain-file open is ever attempted.
+///
+/// php locates the wrapper first and the data wrapper OPENS in any mode — it simply has no write
+/// function, so the write is what fails. MEASURED on `php -n` 8.5.6, both spellings:
+///
+///     file_put_contents('data://text/plain,cccc', 'x')  Notice: … Stream is not writable / false
+///     file_put_contents('data:text/plain,cccc', 'x')    the same
+///
+/// elephc never consulted a wrapper here and opened the whole URL as a FILENAME, so it answered
+/// `Warning: file_put_contents(data://text/plain,cccc): Failed to open stream: No such file or
+/// directory` — a wrong reason for a stream that opens perfectly well.
+///
+/// The scheme is matched case-SENSITIVELY, because php is: `DATA://` and `Data://` are not the
+/// data wrapper for either implementation (measured on both).
+///
+/// ⚠️ Only `data:` is routed. Every other wrapper still reaches the plain-file open, and each has
+/// its own php answer; this is the one the corpus names.
+fn emit_refuse_data_scheme_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("cmp x2, #5");                                          // "data:" is five bytes
+    emitter.instruction("b.lt __rt_fpc_not_data");                              // too short to be the data wrapper
+    abi::emit_symbol_address(emitter, "x9", "_data_n_prefix");                  // "data://" — the first five bytes are the scheme
+    emitter.instruction("mov x10, #0");                                         // compare cursor
+    emitter.label("__rt_fpc_data_scan");
+    emitter.instruction("cmp x10, #5");                                         // compared the whole scheme?
+    emitter.instruction("b.ge __rt_fpc_is_data");                               // it is the data wrapper
+    emitter.instruction("ldrb w11, [x1, x10]");                                 // the path byte
+    emitter.instruction("ldrb w12, [x9, x10]");                                 // the scheme byte
+    emitter.instruction("cmp w11, w12");
+    emitter.instruction("b.ne __rt_fpc_not_data");                              // some other wrapper, or a plain path
+    emitter.instruction("add x10, x10, #1");
+    emitter.instruction("b __rt_fpc_data_scan");
+    emitter.label("__rt_fpc_is_data");
+    emitter.instruction("sub sp, sp, #16");                                     // frame for the diagnostic call
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
+    crate::codegen_support::runtime::io::emit_announce_read_fn_name(
+        emitter,
+        "_uww_name_file_put_contents",
+        17,
+    );                                                                          // php names the builtin the user wrote
+    emitter.instruction("bl __rt_not_writable_notice");
+    crate::codegen_support::runtime::io::emit_clear_read_fn_name(emitter);      // a later fwrite() is its own name again
+    emitter.instruction("mov x0, #-1");                                         // negative: the caller boxes PHP false
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the frame
+    emitter.instruction("ret");
+    emitter.label("__rt_fpc_not_data");
+}
+
+/// The x86_64 counterpart of [`emit_refuse_data_scheme_aarch64`]; the filename is in `rax`/`rdx`.
+fn emit_refuse_data_scheme_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("cmp rdx, 5");                                          // "data:" is five bytes
+    emitter.instruction("jl __rt_fpc_not_data_x86");                            // too short to be the data wrapper
+    abi::emit_symbol_address(emitter, "r9", "_data_n_prefix");                  // "data://" — the first five bytes are the scheme
+    emitter.instruction("xor r10, r10");                                        // compare cursor
+    emitter.label("__rt_fpc_data_scan_x86");
+    emitter.instruction("cmp r10, 5");                                          // compared the whole scheme?
+    emitter.instruction("jge __rt_fpc_is_data_x86");                            // it is the data wrapper
+    emitter.instruction("movzx r11d, BYTE PTR [rax + r10]");                    // the path byte
+    emitter.instruction("movzx r8d, BYTE PTR [r9 + r10]");                      // the scheme byte
+    emitter.instruction("cmp r11b, r8b");
+    emitter.instruction("jne __rt_fpc_not_data_x86");                           // some other wrapper, or a plain path
+    emitter.instruction("add r10, 1");
+    emitter.instruction("jmp __rt_fpc_data_scan_x86");
+    emitter.label("__rt_fpc_is_data_x86");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    crate::codegen_support::runtime::io::emit_announce_read_fn_name(
+        emitter,
+        "_uww_name_file_put_contents",
+        17,
+    );                                                                          // php names the builtin the user wrote
+    emitter.instruction("call __rt_not_writable_notice");
+    crate::codegen_support::runtime::io::emit_clear_read_fn_name(emitter);      // a later fwrite() is its own name again
+    emitter.instruction("mov rax, -1");                                         // negative: the caller boxes PHP false
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");
+    emitter.label("__rt_fpc_not_data_x86");
 }

@@ -21758,3 +21758,92 @@ foreach ($streams as $name) {
         ),
     );
 }
+
+/// A `data://` stream refuses every write, in every mode, the way php words it.
+///
+/// php-src's `_php_stream_write` refuses on the stream OPS, and the data wrapper has no write
+/// function at all — the recorded mode never enters into it. MEASURED on `php -n` 8.5.6:
+///
+///     fopen("data://text/plain,cccc", "r") + fwrite   false, Notice: … Stream is not writable
+///     fopen("data://text/plain,cccc", "w") + fwrite   false, Notice: … Stream is not writable
+///     fopen($file, "r") + fwrite                      false, Notice: … Write of 1 bytes failed …
+///     fopen("php://memory", "r") + fwrite             false, SILENT
+///     file_put_contents("data://text/plain,c", "x")   false, Notice: file_put_contents(): …
+///     file_put_contents("data:text/plain,c", "x")     the same — php treats both spellings alike
+///
+/// `file_put_contents` never reaches `fwrite`: it opens the path itself, and it opened the whole
+/// URL as a FILENAME, so it answered `Failed to open stream: No such file or directory` — a wrong
+/// reason for a stream that opens perfectly well.
+///
+/// elephc answered the `"w"` case `int(1)` — a wrong VALUE, not a missing word — because its gate
+/// asked the mode string, which for `data://` says nothing about what the wrapper can do.
+///
+/// ⚠️ The plain-file `"r"` wording is still missing and is asserted here as the silence it is:
+/// its errno (9) is never produced, because elephc's mode gate refuses before the syscall.
+#[test]
+fn test_a_data_stream_is_never_writable() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$path = __DIR__ . "/nw_probe.tmp";
+file_put_contents($path, "seed");
+$r = fopen('data://text/plain,cccc', 'r');
+var_dump(fwrite($r, "x"));
+fclose($r);
+$w = fopen('data://text/plain,cccc', 'w');
+var_dump(fwrite($w, "x"));
+fclose($w);
+$f = fopen($path, 'r');
+var_dump(fwrite($f, "x"));
+fclose($f);
+$m = fopen('php://memory', 'r');
+var_dump(fwrite($m, "x"));
+fclose($m);
+// file_put_contents never reaches fwrite() — it opens the path itself — so it carries its own
+// copy of the rule, and php names IT rather than fwrite in the notice. Both spellings of the
+// scheme, which php treats alike.
+var_dump(file_put_contents('data://text/plain,cccc', 'x'));
+var_dump(file_put_contents('data:text/plain,cccc', 'x'));
+unlink($path);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+    // Four notices: one per data:// handle and one per file_put_contents, nothing for the rest.
+    let notices: Vec<&str> = out
+        .diagnostics
+        .lines()
+        .filter(|line| line.contains("Stream is not writable"))
+        .collect();
+    assert_eq!(
+        notices.len(),
+        4,
+        "expected one notice per refused data write: {}",
+        out.diagnostics
+    );
+    assert!(
+        notices[2].starts_with("Notice: file_put_contents(): Stream is not writable"),
+        "file_put_contents named the wrong function: {}",
+        notices[2]
+    );
+    assert!(
+        notices[3].starts_with("Notice: file_put_contents(): Stream is not writable"),
+        "the bare `data:` spelling was worded differently: {}",
+        notices[3]
+    );
+    assert!(
+        notices[0].starts_with("Notice: fwrite(): Stream is not writable"),
+        "wrong wording: {}",
+        notices[0]
+    );
+    // ⚠️ php also says `Notice: fwrite(): Write of 1 bytes failed with errno=9 Bad file
+    // descriptor` for the plain file opened "r". elephc's gate refuses before the syscall, so it
+    // has no errno to name; asserted as the silence it is rather than left unstated.
+    assert!(
+        !out.diagnostics.contains("Write of"),
+        "the plain-fd wording arrived unannounced: {}",
+        out.diagnostics
+    );
+}

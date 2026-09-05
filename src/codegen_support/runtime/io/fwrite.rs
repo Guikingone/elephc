@@ -28,6 +28,15 @@ const FILTER_BUF_SIZE: i64 = 65536;
 /// Wrapper id 6 is `php://`, whose sub-wrappers each answer writes their own way.
 const WRAPPER_ID_PHP: u64 = 6;
 
+/// Wrapper id 7 is `data://`, which php gives NO write function at all.
+///
+/// php-src's `_php_stream_write` refuses on the ops, never on the mode string, so the recorded
+/// mode does not enter into it: MEASURED on `php -n` 8.5.6, `fopen("data://text/plain,c","w")`
+/// SUCCEEDS and the `fwrite()` that follows answers `false` with
+/// `Notice: fwrite(): Stream is not writable`. elephc's mode gate let that write through and
+/// answered the byte count — a wrong VALUE, not just a missing word.
+const WRAPPER_ID_DATA: u64 = 7;
+
 /// Classification stored in the frame: an ordinary stream, whose recorded mode gates the write.
 const PHP_WRITE_ORDINARY: i64 = 0;
 
@@ -108,6 +117,9 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x0, #{STREAM_BACKEND_KIND_OFFSET}]")); // which backend owns this stream
     emitter.instruction(&format!("cmp x9, #{STREAM_BACKEND_USER_WRAPPER}"));
     emitter.instruction("b.eq __rt_fwrite_mode_ok");                            // a user wrapper's stream_write() decides for itself
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]")); // which wrapper opened it
+    emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_DATA}"));
+    emitter.instruction("b.eq __rt_fwrite_not_writable");                       // data:// has no write op, in any mode
     emit_php_sub_wrapper_classify_aarch64(emitter);
     emitter.instruction(&format!("ldr x9, [x0, #{STREAM_MODE_PTR_OFFSET}]"));   // the recorded mode string
     emitter.instruction(&format!("ldr x10, [x0, #{STREAM_MODE_LEN_OFFSET}]"));  // and its length
@@ -127,6 +139,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_fwrite_mode_ok");
     emitter.instruction("add x12, x12, #1");
     emitter.instruction("b __rt_fwrite_mode_scan");
+    emitter.label("__rt_fwrite_not_writable");
+    emitter.instruction("bl __rt_not_writable_notice");                         // php names the function and says so out loud
     emitter.label("__rt_fwrite_mode_refuse");
     emitter.instruction("mov x0, #-1");                                         // negative: the caller boxes PHP false
     emitter.instruction("ldp x29, x30, [sp, #64]");
@@ -559,6 +573,9 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_BACKEND_KIND_OFFSET}]")); // which backend owns this stream
     emitter.instruction(&format!("cmp r9, {STREAM_BACKEND_USER_WRAPPER}"));
     emitter.instruction("je __rt_fwrite_mode_ok_x86");                          // a user wrapper's stream_write() decides for itself
+    emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_WRAPPER_ID_OFFSET}]")); // which wrapper opened it
+    emitter.instruction(&format!("cmp r9, {WRAPPER_ID_DATA}"));
+    emitter.instruction("je __rt_fwrite_not_writable_x86");                     // data:// has no write op, in any mode
     emit_php_sub_wrapper_classify_x86_64(emitter);
     emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_MODE_PTR_OFFSET}]")); // the recorded mode string
     emitter.instruction(&format!("mov r10, QWORD PTR [rax + {STREAM_MODE_LEN_OFFSET}]")); // and its length
@@ -580,6 +597,8 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_fwrite_mode_ok_x86");
     emitter.instruction("add r11, 1");
     emitter.instruction("jmp __rt_fwrite_mode_scan_x86");
+    emitter.label("__rt_fwrite_not_writable_x86");
+    emitter.instruction("call __rt_not_writable_notice");                       // php names the function and says so out loud
     emitter.label("__rt_fwrite_mode_refuse_x86");
     emitter.instruction("mov rax, -1");                                         // negative: the caller boxes PHP false
     emitter.instruction("mov rsp, rbp");
