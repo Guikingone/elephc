@@ -60,6 +60,7 @@ mod functions_namespaces;
 mod include_reflection;
 mod method_arguments;
 mod native_scope;
+mod reflection_property_store;
 mod static_members;
 mod support;
 mod trait_adaptations;

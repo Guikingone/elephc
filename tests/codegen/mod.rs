@@ -27,6 +27,7 @@ mod eval_closures;
 mod eval_constructors;
 mod eval_heredoc;
 mod eval_reflection_invocation;
+mod eval_reflection_property_values;
 mod operators;
 mod control_flow;
 mod arg_return_coercions;
