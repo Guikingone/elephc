@@ -338,27 +338,51 @@ fn stmt_has_level_sensitive_loop_exit(stmt: &Stmt) -> bool {
     }
 }
 
-/// Returns `true` when a case or default body still contains a `break` that targets the SWITCH.
+/// Returns `true` when a case or default body contains a STRAY `break` that targets the SWITCH.
 ///
-/// The single-case `if` rewrite drops the switch, so such a break would lose its target: measured,
+/// The rewrites below drop the switch, so such a break would lose its target: measured,
 /// `case 1: if ($x > 0) { break; } return 1;` compiled to `unreachable` and the program died with
 /// an illegal instruction where php answers a value.
 ///
-/// A break ENDING a case body is not counted — `strip_final_switch_break` has already removed it
-/// by the time this runs, and a rewrite is exactly what it enables.
+/// ⚠️ "Stray" is the whole rule, and the first version of this guard did not have it. A `break`
+/// ENDING a case body is that body's ordinary terminator, which every rewrite consumes — refusing
+/// on it refuses nearly every switch ever written, and it turned off constant switch folding
+/// wholesale (six optimizer tests, from `switch (3) { case 1: … case 3: echo 20; break; }` folding
+/// to `echo 20;` down to no fold at all). `strip_final_switch_break` removes only the break of the
+/// body that runs LAST; every other case keeps its own, and those are not the hazard.
+///
+/// What IS the hazard is a break the fold cannot consume: one with statements after it, or one
+/// nested inside an `if`, a `Synthetic` block or a `try`, where it is conditional.
 pub(crate) fn switch_has_body_targeting_break(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,
 ) -> bool {
     cases
         .iter()
-        .any(|(_, body)| block_has_body_targeting_break(body))
+        .any(|(_, body)| case_body_has_stray_switch_break(body))
         || default
             .as_ref()
-            .is_some_and(|body| block_has_body_targeting_break(body))
+            .is_some_and(|body| case_body_has_stray_switch_break(body))
 }
 
-/// Returns `true` if the statement list contains a switch-targeting `break`.
+/// Returns `true` if a case or default body holds a switch-targeting `break` a rewrite cannot
+/// consume — anything but a plain `break` as the body's LAST statement.
+fn case_body_has_stray_switch_break(body: &[Stmt]) -> bool {
+    let last = body.len().saturating_sub(1);
+    body.iter().enumerate().any(|(index, stmt)| {
+        if matches!(stmt.kind, StmtKind::Break(levels) if levels <= 1) {
+            // The terminator every rewrite already drops — unless something follows it, in which
+            // case it is not the terminator at all.
+            return index != last;
+        }
+        stmt_has_body_targeting_break(stmt)
+    })
+}
+
+/// Returns `true` if the statement list contains a switch-targeting `break`, anywhere.
+///
+/// Used for NESTED blocks, where nothing is exempt: a break at the end of an `if` arm is still
+/// conditional, and the rewrite has no way to consume it.
 fn block_has_body_targeting_break(body: &[Stmt]) -> bool {
     body.iter().any(stmt_has_body_targeting_break)
 }
