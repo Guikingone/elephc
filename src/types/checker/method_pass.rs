@@ -322,7 +322,10 @@ impl Checker {
         if !declares_stream_wrapper_marker(class_info) {
             return None;
         }
-        stream_wrapper_contract_return_type(&crate::names::php_symbol_key(&method.name))
+        stream_wrapper_contract_return_type(
+            &crate::names::php_symbol_key(&method.name),
+            raw_inferred.as_ref(),
+        )
     }
 
     /// Patches untyped constructor parameters with property types when the constructor
@@ -767,9 +770,50 @@ fn stream_wrapper_contract_param_types(method_key: &str) -> Option<Vec<Option<Ph
 /// inference that lands on the wrong one of those still reaches the dispatcher intact. The stat
 /// slots are deliberately absent for the opposite reason — `stream_stat()`/`url_stat()` hand back a
 /// boxed Mixed cell on purpose, which is why the vtable documents them as having to stay untyped.
-fn stream_wrapper_contract_return_type(method_key: &str) -> Option<PhpType> {
+fn stream_wrapper_contract_return_type(
+    method_key: &str,
+    raw_inferred: Option<&PhpType>,
+) -> Option<PhpType> {
     match method_key {
+        // php's own signature is `stream_read(int $count): string|false`, and the FALSE is not
+        // decoration: `php_userstreamop_read` (php-src main/streams/userspace.c:605) returns -1 on
+        // `IS_FALSE` BEFORE it asks `stream_eof()` at all. Pinning a body that answers `false` to
+        // `string` coerced it to the empty string before the dispatcher could see it, so the
+        // refusal became a successful empty read and elephc went on to ask the eof question php
+        // never asks — MEASURED on `php -n` 8.5.6, a wrapper whose `stream_read` answers `false`
+        // and which has no `stream_eof` prints NOTHING and answers `bool(false)`, where elephc
+        // printed `Warning: fread(): C::stream_eof is not implemented! Assuming EOF`.
+        //
+        // ⚠️ Only a body that CAN answer false gets the union, and that restriction is measured
+        // too. The union's representation is `Mixed`, which routes the read through the BOXED arm
+        // of the dispatcher, and that arm converts with `__rt_mixed_cast_string` — which neither
+        // calls `__toString` nor throws. Pinning EVERY `stream_read` to the union therefore broke
+        // two answers that the plain `string` pin gets right, both MEASURED:
+        //     stream_read returning `new stdClass`  php throws `Object of class stdClass could
+        //                                           not be converted to string`; the union arm
+        //                                           answered `string(0) ""`
+        //     stream_read returning a __toString'd  php answers `"hello"`; the union arm answered
+        //     object                                `string(0) ""`
+        // Both keep the `string` pin, whose coercion happens in the CHECKER and does both things
+        // correctly. Widening this further waits on the boxed arm learning php's string cast.
+        "stream_read" if inferred_can_answer_false(raw_inferred) => {
+            Some(PhpType::Union(vec![PhpType::Str, PhpType::False]))
+        }
         "stream_read" | "dir_readdir" => Some(PhpType::Str),
         _ => None,
+    }
+}
+
+/// Returns true when the inferred body type can produce php's `false`.
+///
+/// `False` alone is the literal `return false;`; `Bool` is a body that returns both; a union is
+/// read member by member because `string|false` — php's own spelling — is the common shape.
+fn inferred_can_answer_false(inferred: Option<&PhpType>) -> bool {
+    match inferred {
+        Some(PhpType::False | PhpType::Bool) => true,
+        Some(PhpType::Union(members)) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::False | PhpType::Bool)),
+        _ => false,
     }
 }

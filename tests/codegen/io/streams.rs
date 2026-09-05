@@ -22124,3 +22124,81 @@ unlink($path);
         ),
     );
 }
+
+/// A `stream_read()` answering `false` is php's failed read — silent, and it asks nothing further.
+///
+/// `php_userstreamop_read` (php-src main/streams/userspace.c:605) returns -1 on `IS_FALSE` BEFORE
+/// it asks `stream_eof()` at all. elephc pinned every wrapper's `stream_read` to `string`, so such
+/// a body was coerced to the empty string before the dispatcher could see it: the refusal became a
+/// successful empty read, and the eof question that followed printed a warning for something php
+/// never asks. MEASURED on `php -n` 8.5.6 against php-src's `streams/bug78662.phpt`:
+///
+///     php     bool(false)   bool(false)
+///     elephc  int(0)        Warning: fread(): FailedStream::stream_eof is not implemented!
+///                           bool(false)
+///
+/// Only a body that CAN answer false gets php's `string|false`, and that restriction is measured
+/// too: the union routes the read through the BOXED arm, which converts with
+/// `__rt_mixed_cast_string` — a helper that neither calls `__toString` nor throws. Pinning EVERY
+/// `stream_read` to the union broke two answers the plain `string` pin gets right, both asserted
+/// below, so the pin stays for bodies that cannot answer false.
+#[test]
+fn test_a_wrapper_read_answering_false_is_a_silent_failure() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class FailedStream {
+    public $context;
+    function stream_open($path, $mode, $options, &$opened_path) { return true; }
+    function stream_read($count) { return false; }
+    function stream_write($data) { return false; }
+    function stream_stat() { return []; }
+}
+class Plain {
+    public $context;
+    function stream_open() { return true; }
+    function stream_stat() { return false; }
+    function stream_read() { return new stdClass; }
+}
+class Sayable { public function __toString(): string { return "hello"; } }
+class WithToString {
+    public $context;
+    private $done = false;
+    function stream_open() { return true; }
+    function stream_stat() { return false; }
+    function stream_eof() { return $this->done; }
+    function stream_read() { if ($this->done) { return ""; } $this->done = true; return new Sayable; }
+}
+stream_wrapper_register('fails', 'FailedStream');
+stream_wrapper_register('plainobj', 'Plain');
+stream_wrapper_register('sayobj', 'WithToString');
+
+$f = fopen('fails://foo', 'a+');
+var_dump(fwrite($f, "bar"));
+var_dump(fread($f, 100));
+// An OBJECT keeps the `string` pin, whose coercion happens in the checker and throws there.
+try {
+    var_dump(file_get_contents('plainobj://'));
+} catch (Error $e) {
+    echo "caught: ", $e->getMessage(), "\n";
+}
+// …and calls `__toString` when there is one.
+var_dump(file_get_contents('sayobj://'));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "bool(false)\n",
+            "bool(false)\n",
+            "caught: Object of class stdClass could not be converted to string\n",
+            "string(5) \"hello\"\n",
+        ),
+    );
+    // The eof question php never asks is not asked here either.
+    assert!(
+        !out.diagnostics.contains("stream_eof is not implemented"),
+        "a refused read asked the eof question: {}",
+        out.diagnostics
+    );
+}

@@ -372,6 +372,24 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
 
     emitter.label("__rt_uwfread_boxed");
     emitter.instruction("blr x11");                                             // invoke stream_read; x0 = owned Mixed cell
+    // php reads the TAG before it reads bytes: `IS_FALSE` is a failed read and it returns -1 there
+    // and then, without asking `stream_eof()`. Casting first would turn that false into "" and the
+    // eof question would follow — a warning for something php never asks.
+    emitter.instruction("cbz x0, __rt_uwfread_boxed_keep");                     // a null box is not a false
+    emitter.instruction("ldr x9, [x0]");                                        // the cell's runtime tag
+    emitter.instruction("cmp x9, #3");                                          // tag 3 is a boolean
+    emitter.instruction("b.ne __rt_uwfread_boxed_keep");
+    emitter.instruction("ldr x9, [x0, #8]");                                    // its payload: 0 is false
+    emitter.instruction("cbnz x9, __rt_uwfread_boxed_keep");
+    emitter.instruction("str xzr, [x0]");                                       // a bool owns nothing; retag before the release
+    emitter.instruction("bl __rt_mixed_free_deep");
+    emitter.instruction("mov x1, #0");                                          // php keeps nothing and asks nothing
+    emitter.instruction("mov x2, #0");
+    emitter.instruction("mov x0, #0");                                          // the read failed
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the failure verdict, silently
+    emitter.label("__rt_uwfread_boxed_keep");
     emitter.instruction("str x0, [sp, #32]");                                   // keep the boxed result across the conversion
     emitter.instruction("bl __rt_mixed_cast_string");                           // x1/x2 = owned string; false unboxes to the empty-string result
     emitter.instruction("stp x1, x2, [sp, #40]");                               // save the converted pair across the box release
@@ -500,6 +518,22 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     // On AArch64 `x0` is both, so the distinction exists only here.
     emitter.label("__rt_uwfread_boxed_x86");
     emitter.instruction("call r11");                                            // invoke stream_read; rax = owned Mixed cell
+    // See the AArch64 twin: php reads the TAG first and a false read asks nothing further.
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_uwfread_boxed_keep_x86");                      // a null box is not a false
+    emitter.instruction("cmp QWORD PTR [rax], 3");                              // tag 3 is a boolean
+    emitter.instruction("jne __rt_uwfread_boxed_keep_x86");
+    emitter.instruction("cmp QWORD PTR [rax + 8], 0");                          // its payload: 0 is false
+    emitter.instruction("jne __rt_uwfread_boxed_keep_x86");
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // a bool owns nothing; retag before the release
+    emitter.instruction("call __rt_mixed_free_deep");                           // this one reads RAX, not RDI
+    emitter.instruction("xor eax, eax");                                        // php keeps nothing and asks nothing
+    emitter.instruction("xor edx, edx");
+    emitter.instruction("xor ecx, ecx");                                        // the read failed
+    emitter.instruction("add rsp, 48");                                         // release the WHOLE frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the failure verdict, silently
+    emitter.label("__rt_uwfread_boxed_keep_x86");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the boxed result across the conversion
     emitter.instruction("mov rdi, rax");                                        // the conversion helper takes its box in rdi
     emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = owned string; false unboxes to the empty-string result
