@@ -1666,7 +1666,7 @@ fn parent_of_existing(ctx: &FunctionContext<'_>, class_name: &str) -> Option<Str
 /// Returns a string literal value defined by a `ConstStr` operand.
 fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<String> {
     optional_const_string_operand(ctx, value)?.ok_or_else(|| {
-        CodegenIrError::unsupported("get_parent_class with non-literal class name")
+        CodegenIrError::unsupported("builtin requires a compile-time string operand")
     })
 }
 
