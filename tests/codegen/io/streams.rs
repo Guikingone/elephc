@@ -8291,7 +8291,16 @@ unlink("enc.zip");
 /// `PharData::setZipPassword()` also encrypts on write (a compiler extension): with a
 /// password set before `addFromString`, the entry is ZipCrypto-encrypted on disk and
 /// round-trips back through a fresh object with the correct password, while a fresh
-/// object with a wrong password cannot decrypt it.
+/// object with a wrong password does not get the payload back.
+///
+/// ⚠️ The wrong password is checked on the CONTENT, not on the length, and that is not a style
+/// choice. ZipCrypto verifies a password against ONE byte of a RANDOM 12-byte encryption header,
+/// so a wrong password passes that check about once in 256 — and this test writes a fresh archive
+/// each run, so the header is different every time. MEASURED: 400 write/read round-trips through
+/// this exact sequence returned a non-empty read 4 times, all of them 14 bytes of garbage rather
+/// than the payload. Asserting `len=0` made the test fail roughly 1 run in 100 for a reason that
+/// is the FORMAT's, not the implementation's; the property that actually holds every time is that
+/// the plaintext never comes back.
 #[test]
 fn test_phar_oop_zipcrypto_write_roundtrip() {
     let out = compile_and_run(
@@ -8303,14 +8312,16 @@ $p->addFromString("a.txt", "secret payload");
 $ok = new PharData("encw.zip");
 $ok->setZipPassword("hunter2");
 echo $ok["a.txt"]->getContent();
-// A fresh object with a wrong password cannot decrypt it.
+// A fresh object with a wrong password never gets the payload back. It usually reads nothing at
+// all; on the ~1/256 of runs where ZipCrypto's single check byte happens to match, it reads
+// garbage of the same length — which is still not the payload.
 $bad = new PharData("encw.zip");
 $bad->setZipPassword("nope");
-echo "|len=", strlen($bad["a.txt"]->getContent());
+echo "|leaked=", $bad["a.txt"]->getContent() === "secret payload" ? "yes" : "no";
 unlink("encw.zip");
 "#,
     );
-    assert_eq!(out, "secret payload|len=0");
+    assert_eq!(out, "secret payload|leaked=no");
 }
 
 /// `Phar` and `PharData` iterate over entries written through the OOP surface.
@@ -21845,5 +21856,66 @@ unlink($path);
         !out.diagnostics.contains("Write of"),
         "the plain-fd wording arrived unannounced: {}",
         out.diagnostics
+    );
+}
+
+/// A receive that FAILED leaves `&$address` at php's null, not at an empty string.
+///
+/// php assigns null to the reference before it attempts anything and overwrites it only when the
+/// receive succeeded, so null and `''` are DIFFERENT answers. MEASURED on `php -n` 8.5.6:
+///
+///     a handle that is not a socket   false, $address === null
+///     a connected TCP socket          'ping', $address === ''
+///     a UDP socket with a sender      'pong', $address === '127.0.0.1:PORT'
+///
+/// elephc read only the stashed LENGTH and answered `string(0) ""` for the first — the same value
+/// a connected socket legitimately produces, so a caller could not tell a failed receive from a
+/// peerless one. php-src's `streams/bug72857.phpt` is the first case.
+#[test]
+fn test_a_failed_recvfrom_leaves_the_address_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$fname = __DIR__ . "/recvfrom_probe.tmp";
+$fp = fopen($fname, 'w');
+$peek = "seed";
+var_dump(stream_socket_recvfrom($fp, 10, STREAM_PEEK, $peek), $peek);
+$plain = "seed";
+var_dump(stream_socket_recvfrom($fp, 10, 0, $plain), $plain);
+fclose($fp);
+unlink($fname);
+
+// A connected socket that really does receive: the address is EMPTY, not null.
+$srv = stream_socket_server('tcp://127.0.0.1:0');
+$cli = stream_socket_client('tcp://' . stream_socket_get_name($srv, false));
+$peer = stream_socket_accept($srv);
+fwrite($peer, "ping");
+$addr = "seed";
+var_dump(stream_socket_recvfrom($cli, 4, 0, $addr), $addr);
+fclose($peer);
+fclose($cli);
+fclose($srv);
+
+// php's own idiom passes the address variable UNDECLARED, which is why the parameter is spelled
+// the way php's stub spells it — untyped, defaulting to null — rather than as a `string`.
+$again = __DIR__ . "/recvfrom_probe2.tmp";
+$fp2 = fopen($again, 'w');
+var_dump(stream_socket_recvfrom($fp2, 10, 0, $never), $never);
+fclose($fp2);
+unlink($again);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "bool(false)\n",
+            "NULL\n",
+            "bool(false)\n",
+            "NULL\n",
+            "string(4) \"ping\"\n",
+            "string(0) \"\"\n",
+            "bool(false)\n",
+            "NULL\n",
+        ),
     );
 }

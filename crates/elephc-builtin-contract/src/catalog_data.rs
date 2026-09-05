@@ -19014,12 +19014,20 @@ writes: None,
             // php-src's stub is `&$address = null` — an OUTPUT parameter whose pre-call value is
             // never read. Declaring `""` claimed a starting value the function does not have,
             // and made the default disagree with the one reflection reports.
+            //
+            // What it WRITES is `?string`, not `string`: php assigns null to the reference before
+            // it even attempts the receive, and overwrites it only when the receive succeeded.
+            // MEASURED on `php -n` 8.5.6, all three outcomes:
+            //     a non-socket handle           false, $address === null
+            //     a connected TCP socket        'ping', $address === ''
+            //     a UDP socket with a sender    'pong', $address === '127.0.0.1:PORT'
+            // Declaring `string` here made the first indistinguishable from the second.
             ParamSpec {
                 name: "address",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Mixed,
                 default: Some(DefaultSpec::Null),
                 by_ref: true,
-                writes: Some(TypeSpec::Str),
+                writes: Some(TypeSpec::Nullable(&TypeSpec::Str)),
             },
         ],
         variadic: None,

@@ -168,29 +168,65 @@ pub(super) fn store_accept_peer_name(ctx: &mut FunctionContext<'_>, value: Value
 }
 
 /// Stores `stream_socket_recvfrom`'s sender address into a local output slot.
+///
+/// A receive that FAILED writes php's null, not an empty string. php assigns null to the
+/// reference before it attempts anything and overwrites it only on success, so the two are
+/// different answers — MEASURED on `php -n` 8.5.6:
+///
+///     a non-socket handle        false, $address === null
+///     a connected TCP socket     'ping', $address === ''
+///     a UDP socket with a sender 'pong', $address === '127.0.0.1:PORT'
+///
+/// The runtime already tells them apart: `__rt_stream_socket_recvfrom` zeroes the stashed
+/// pointer on failure, and its empty-address path allocates a one-byte buffer precisely so the
+/// pointer stays non-null. elephc read only the LENGTH and answered `string(0) ""` for both.
 pub(super) fn store_recvfrom_address(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let Some(slot) = source_load_local_slot(ctx, value)? else {
         return Err(CodegenIrError::unsupported(
             "stream_socket_recvfrom address output for non-local arguments",
         ));
     };
+    let offset = ctx.local_offset(slot)?;
+    let null_label = ctx.next_label("recvfrom_addr_null");
+    let done_label = ctx.next_label("recvfrom_addr_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", "_recvfrom_addr_ptr");
             ctx.emitter.instruction("ldr x10, [x9]");                           // load the stashed sender-address pointer
+            ctx.emitter
+                .instruction(&format!("cbz x10, {}", null_label));              // zero: the receive failed, and php's answer is null
             abi::emit_symbol_address(ctx.emitter, "x9", "_recvfrom_addr_len");
             ctx.emitter.instruction("ldr x11, [x9]");                           // load the stashed sender-address byte length
             store_string_output_to_local(ctx, slot, "x10", "x11")?;
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&null_label);
+            ctx.emitter.instruction("mov x0, #8");                              // runtime tag 8 is php's null
+            ctx.emitter.instruction("mov x1, #0");                              // null has no low payload word
+            ctx.emitter.instruction("mov x2, #0");                              // null has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+            ctx.emitter.label(&done_label);
             abi::emit_pop_reg(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");
             abi::emit_symbol_address(ctx.emitter, "r9", "_recvfrom_addr_ptr");
             ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                 // load the stashed sender-address pointer
+            ctx.emitter.instruction("test r10, r10");
+            ctx.emitter
+                .instruction(&format!("jz {}", null_label));                    // zero: the receive failed, and php's answer is null
             abi::emit_symbol_address(ctx.emitter, "r9", "_recvfrom_addr_len");
             ctx.emitter.instruction("mov r11, QWORD PTR [r9]");                 // load the stashed sender-address byte length
             store_string_output_to_local(ctx, slot, "r10", "r11")?;
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&null_label);
+            ctx.emitter.instruction("xor edi, edi");                            // null has no low payload word
+            ctx.emitter.instruction("xor esi, esi");                            // null has no high payload word
+            ctx.emitter.instruction("mov eax, 8");                              // runtime tag 8 is php's null
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+            ctx.emitter.label(&done_label);
             abi::emit_pop_reg(ctx.emitter, "rax");
         }
     }
