@@ -626,6 +626,14 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             // hands back small pieces. Every other backend has only this judgement, and needs it:
             // MEASURED on `php://memory`, a 3-byte stream read with `fread($h, 3)` leaves `feof()`
             // FALSE and a 1-byte stream read with `fread($h, 2)` leaves it TRUE.
+            //
+            // …and it only holds for a SEEKABLE backend. A pipe or a socket may legally hand back
+            // less than was asked without being anywhere near its end, which is why `__rt_fread`
+            // above probes `lseek` before drawing the same conclusion. This judgement did not, and
+            // it runs AFTER that one, so it overrode a correct answer with a wrong one: MEASURED
+            // on `php -n` 8.5.6, `fread(popen("echo here is some output", "rb"), 100)` returns 20
+            // bytes and leaves `eof` FALSE, where elephc answered TRUE. php sets the flag from the
+            // read op — for a pipe that means a read of ZERO — never from a short count.
             emitter.instruction("ldr x0, [sp, #0]");                            // the opaque stream handle
             emitter.instruction("bl __rt_stream_fd");                           // its backend descriptor
             emitter.instruction("mov w9, #0x4000");                             // USER_WRAPPER_FD_BASE, high half
@@ -637,6 +645,17 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("cmp x0, x10");
             emitter.instruction("b.lo __rt_uwfc_no_guess");                     // a wrapper: it already answered
             emitter.label("__rt_uwfc_guess");
+            emitter.instruction("mov x1, #0");                                  // probe the position without moving it
+            emitter.instruction("mov x2, #1");                                  // SEEK_CUR
+            emitter.syscall(199);
+            if emitter.platform.needs_cmp_before_error_branch() {
+                emitter.instruction("cmp x0, #0");                              // Linux reports a non-seekable descriptor as a negative result
+            }
+            emitter.instruction(
+                &emitter.platform.branch_on_syscall_success("__rt_uwfc_seekable"),
+            );
+            emitter.instruction("b __rt_uwfc_no_guess");                        // a pipe or a socket: the read's own verdict stands
+            emitter.label("__rt_uwfc_seekable");
             emitter.instruction("ldr x9, [sp, #8]");                            // the caller's request
             emitter.instruction("ldr x10, [sp, #40]");                          // what it received
             emitter.instruction("cmp x10, x9");
@@ -739,6 +758,13 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("cmp rax, r10");
             emitter.instruction("jb __rt_uwfc_no_guess_x86");                   // a wrapper: it already answered
             emitter.label("__rt_uwfc_guess_x86");
+            // See the AArch64 counterpart: the judgement only holds for a SEEKABLE backend.
+            emitter.instruction("mov rdi, rax");                                // the descriptor the lookup just resolved
+            emitter.instruction("xor esi, esi");                                // probe the position without moving it
+            emitter.instruction("mov edx, 1");                                  // SEEK_CUR
+            emitter.instruction("call lseek");
+            emitter.instruction("test rax, rax");                               // did the position probe fail?
+            emitter.instruction("js __rt_uwfc_no_guess_x86");                   // a pipe or a socket: the read's own verdict stands
             emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                // what the caller received
             emitter.instruction("cmp r9, QWORD PTR [rbp - 16]");                // against what it asked for
             emitter.instruction("jl __rt_uwfc_short_x86");                      // less than asked: the source is spent

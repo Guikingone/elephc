@@ -22050,3 +22050,77 @@ pclose($h);
         ),
     );
 }
+
+/// A SHORT read proves end-of-file only for a backend that can be SEEKED.
+///
+/// `__rt_fread` already knew: a zero-byte read ends every blocking backend, and a short one ends
+/// only a stream `lseek` accepts, because "sockets and pipes may legally return partial data".
+/// The chunked reader that runs after it did not, and it OVERRODE that answer with a plain length
+/// comparison — so a pipe that handed back 20 of the 100 bytes asked for was declared exhausted.
+///
+/// MEASURED on `php -n` 8.5.6 across five backends, ten answers, all now identical:
+///
+///     regular file   fread($f, 3) on 3 bytes    eof false     fread($f, 10)  eof true
+///     php://memory   fread($m, 3) on 3 bytes    eof false     fread($m, 10)  eof true
+///     php://memory   fread($m, 2) on 1 byte     eof true
+///     process pipe   fread($p, 100) → 20        eof FALSE     then → 0       eof true
+///     socket         fread($c, 100) → 4         eof FALSE     peer closed    eof true
+///
+/// The two `FALSE`s are the ones elephc got wrong. php never sets the flag from a short COUNT: it
+/// sets it from the read op, which for a pipe or a socket means a read of ZERO.
+#[test]
+fn test_a_short_read_ends_only_a_seekable_stream() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$path = __DIR__ . "/eofrule_probe.tmp";
+file_put_contents($path, "abc");
+
+$f = fopen($path, 'r');
+echo "file-exact=", fread($f, 3), "/", feof($f) ? "eof" : "open", "\n";
+fclose($f);
+$f = fopen($path, 'r');
+echo "file-over=", fread($f, 10), "/", feof($f) ? "eof" : "open", "\n";
+fclose($f);
+
+$m = fopen('php://memory', 'w+');
+fwrite($m, "abc");
+rewind($m);
+echo "memory-exact=", fread($m, 3), "/", feof($m) ? "eof" : "open", "\n";
+rewind($m);
+echo "memory-over=", fread($m, 10), "/", feof($m) ? "eof" : "open", "\n";
+fclose($m);
+
+$p = popen("echo here is some output", "rb");
+echo "pipe-short=", strlen(fread($p, 100)), "/", feof($p) ? "eof" : "open", "\n";
+echo "pipe-drained=", strlen(fread($p, 100)), "/", feof($p) ? "eof" : "open", "\n";
+pclose($p);
+
+$srv = stream_socket_server('tcp://127.0.0.1:0');
+$cli = stream_socket_client('tcp://' . stream_socket_get_name($srv, false));
+$peer = stream_socket_accept($srv);
+fwrite($peer, "ping");
+echo "socket-short=", fread($cli, 100), "/", feof($cli) ? "eof" : "open", "\n";
+fclose($peer);
+echo "socket-closed=", strlen(fread($cli, 100)), "/", feof($cli) ? "eof" : "open", "\n";
+fclose($cli);
+fclose($srv);
+unlink($path);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "file-exact=abc/open\n",
+            "file-over=abc/eof\n",
+            "memory-exact=abc/open\n",
+            "memory-over=abc/eof\n",
+            // The two a length comparison got wrong: a pipe and a socket hand back less than was
+            // asked without being anywhere near their end.
+            "pipe-short=20/open\n",
+            "pipe-drained=0/eof\n",
+            "socket-short=ping/open\n",
+            "socket-closed=0/eof\n",
+        ),
+    );
+}
