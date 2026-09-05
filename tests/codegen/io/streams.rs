@@ -21972,3 +21972,60 @@ probe('wtrue', 'true');
         "false=false\nzero=0\nnull=0\ntrue=3\n",
     );
 }
+
+/// `popen()` accepts exactly the four modes php accepts, and strips the `b` before libc sees it.
+///
+/// php does NOT hand the mode to libc as written: `PHP_FUNCTION(popen)` (php-src
+/// ext/standard/file.c:794) strips the FIRST `b` from a copy, refuses anything that is not `"r"`,
+/// `"rb"`, `"w"` or `"wb"` with a ValueError, and calls libc with the STRIPPED mode. MEASURED on
+/// `php -n` 8.5.6 against elephc:
+///
+///     mode   php                                 elephc (before)
+///     r      handle                              handle
+///     rb     handle                              FALSE
+///     w      handle                              handle
+///     wb     handle                              FALSE
+///     r+     ValueError: popen(): Argument #2 …  handle
+///
+/// macOS libc refuses `"rb"` outright, which is where the two `false`s came from, and `"r+"` it
+/// accepts, which is where the missing refusal came from. `"rb"` is the mode php-src's own
+/// `streams/stream_get_meta_data_process_basic.phpt` uses, so the common spelling did not work.
+///
+/// ⚠️ That test still diverges on the META DATA of a pipe — php reports seven keys with no
+/// `wrapper_type`, `eof` false and the ORIGINAL `"rb"` as the mode, while elephc reports eight
+/// keys, `wrapper_type` `"plainfile"`, `eof` true and the stripped `"r"`. Three separate gaps,
+/// none of them this one.
+#[test]
+fn test_popen_takes_the_four_modes_php_takes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+foreach (['r', 'rb', 'w', 'wb'] as $mode) {
+    $h = popen("exit 0", $mode);
+    echo $mode, "=", ($h === false ? "false" : "handle"), "\n";
+    if ($h !== false) { pclose($h); }
+}
+try {
+    popen("exit 0", "r+");
+} catch (ValueError $e) {
+    echo "caught: ", $e->getMessage(), "\n";
+}
+try {
+    popen("exit 0", "rt");
+} catch (ValueError $e) {
+    echo "caught: ", $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "r=handle\n",
+            "rb=handle\n",
+            "w=handle\n",
+            "wb=handle\n",
+            "caught: popen(): Argument #2 ($mode) must be one of \"r\", \"rb\", \"w\", or \"wb\"\n",
+            "caught: popen(): Argument #2 ($mode) must be one of \"r\", \"rb\", \"w\", or \"wb\"\n",
+        ),
+    );
+}

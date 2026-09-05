@@ -478,8 +478,34 @@ pub(crate) fn lower_popen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_popen");
+    emit_popen_mode_value_error(ctx);
     box_stream_fd_or_false_result_kind(ctx, "popen", 3, true, false);
     store_if_result(ctx, inst)
+}
+
+/// php's verbatim `ValueError` for a `popen()` mode it does not accept.
+const POPEN_MODE_MESSAGE: &str =
+    "popen(): Argument #2 ($mode) must be one of \"r\", \"rb\", \"w\", or \"wb\"";
+
+/// Throws that `ValueError` when `__rt_popen` answered its refusal cue.
+///
+/// The runtime cannot throw and the mode is not always a literal, so the check runs THERE and the
+/// throw runs here — the same split `stream_select()` uses for its own refusals. -2 is reserved
+/// for this; -1 stays the ordinary open failure php answers with `false`.
+fn emit_popen_mode_value_error(ctx: &mut FunctionContext<'_>) {
+    let ok_label = ctx.next_label("popen_mode_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmn x0, #2");                              // `cmn` adds, so this compares against -2
+            ctx.emitter.instruction(&format!("b.ne {}", ok_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -2");
+            ctx.emitter.instruction(&format!("jne {}", ok_label));
+        }
+    }
+    super::super::super::exceptions::emit_value_error(ctx, POPEN_MODE_MESSAGE);
+    ctx.emitter.label(&ok_label);
 }
 
 /// Lowers `pclose(handle)` and returns the child process status.
