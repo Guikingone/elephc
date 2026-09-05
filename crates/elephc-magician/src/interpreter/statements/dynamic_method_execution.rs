@@ -114,6 +114,17 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.push_class_scope(class_name.to_string());
     context.push_called_class_scope(called_class_name.to_string());
     context.push_method_magic_scope(class_name, method);
+    // PHP reports the bare method name in `function` and the declaring class in `class`; the
+    // receiver makes the frame an instance call, so `type` becomes `->`.
+    let frame_args = evaluated_args.iter().map(|arg| arg.value).collect();
+    let frame = EvalCallFrame::method(
+        class_name,
+        method.name(),
+        Some(object),
+        Some(frame_args),
+        context,
+    );
+    context.push_call_frame(frame);
     let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
         method.params(),
         method.parameter_types(),
@@ -127,6 +138,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     ) {
         Ok(args) => args,
         Err(status) => {
+            context.pop_call_frame();
             context.pop_magic_scope();
             context.pop_called_class_scope();
             context.pop_class_scope();
@@ -181,6 +193,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
+    context.pop_call_frame();
     context.pop_function();
     if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
         let call_site = context.call_site();
@@ -254,6 +267,10 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.push_class_scope(class_name.to_string());
     context.push_called_class_scope(called_class_name.to_string());
     context.push_method_magic_scope(class_name, method);
+    // A static call has no receiver, so PHP omits `object` and reports `type` as `::`.
+    let frame_args = evaluated_args.iter().map(|arg| arg.value).collect();
+    let frame = EvalCallFrame::method(class_name, method.name(), None, Some(frame_args), context);
+    context.push_call_frame(frame);
     let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
         method.params(),
         method.parameter_types(),
@@ -267,6 +284,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     ) {
         Ok(args) => args,
         Err(status) => {
+            context.pop_call_frame();
             context.pop_magic_scope();
             context.pop_called_class_scope();
             context.pop_class_scope();
@@ -320,6 +338,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
+    context.pop_call_frame();
     context.pop_function();
     return_result
 }

@@ -24,6 +24,21 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
         return Ok(Some(result));
     }
 
+    // `debug_backtrace` and `debug_print_backtrace` are dispatched here as plain runtime
+    // handlers (not PHP-visible builtins) so a dynamic callable reaches the same frames a
+    // written call would. See `builtins::core::debug_backtrace`.
+    if matches!(name, "debug_backtrace" | "debug_print_backtrace") {
+        if evaluated_args.len() > 2 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(Some(eval_debug_backtrace_values_result(
+            name,
+            evaluated_args,
+            context,
+            values,
+        )?));
+    }
+
     // `opcache_get_configuration` is prelude-provided on native and dispatched here as
     // a plain runtime handler (not a PHP-visible builtin); it takes no arguments.
     if name == "opcache_get_configuration" {

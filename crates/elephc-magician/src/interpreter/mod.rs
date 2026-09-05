@@ -33,8 +33,9 @@ mod output_handlers;
 mod throwables;
 
 use crate::context::{
-    decode_callable_descriptor, ElephcEvalContext, ElephcEvalExecutionScope, EvalArrayCursor,
-    EvalArrayReferenceKey, EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget,
+    decode_callable_descriptor, eval_builtin_is_backtrace_visible, ElephcEvalContext,
+    ElephcEvalExecutionScope, EvalArrayCursor, EvalArrayReferenceKey, EvalCallFrame,
+    EvalCallFrameKind, EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget,
     EvalReferenceTarget, NativeCallableDefault, NativeCallableSignature, NativeFunction,
 };
 use crate::errors::{report_fatal_diagnostic, EvalParseDiagnostic, EvalStatus};

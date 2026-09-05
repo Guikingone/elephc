@@ -16,6 +16,7 @@ mod builtins_arrays_iterators;
 mod builtins_arrays_sets;
 mod builtins_bcmath;
 mod builtins_class_metadata;
+mod builtins_debug_backtrace;
 mod builtins_debug_output;
 mod builtins_directory_streams;
 mod builtins_output_buffering;

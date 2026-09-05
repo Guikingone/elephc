@@ -11,6 +11,7 @@
 //! - No Rust-owned layout is promised across the C ABI.
 
 mod alias_metadata;
+mod call_frames;
 mod callable_descriptor;
 mod class_metadata;
 mod classes_aliases;
@@ -45,6 +46,7 @@ use crate::stream_resources::EvalStreamResources;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 pub use alias_metadata::*;
+pub use call_frames::*;
 pub(crate) use callable_descriptor::*;
 pub use closure_metadata::*;
 pub use core::*;

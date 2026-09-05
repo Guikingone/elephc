@@ -81,6 +81,12 @@ pub(in crate::interpreter) fn eval_call(
     if matches!(name, "fsockopen" | "pfsockopen") {
         return eval_builtin_fsockopen_call(args, context, scope, values);
     }
+    // `debug_backtrace` and `debug_print_backtrace` describe interpreter frames, which only
+    // the interpreter has, so they are dispatched as plain runtime handlers rather than
+    // through the PHP-visible builtin registry. See `builtins::core::debug_backtrace`.
+    if matches!(name, "debug_backtrace" | "debug_print_backtrace") {
+        return eval_debug_backtrace_call(name, args, context, scope, values);
+    }
     // `opcache_get_configuration` is prelude-provided on the native side (not a
     // catalog builtin), so eval dispatches it as a plain runtime handler rather than
     // through the PHP-visible builtin registry, keeping the two builtin sets in sync.

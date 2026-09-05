@@ -73,6 +73,11 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let static_names = static_var_names(function.body());
     context.push_function(function.name());
+    // PHP names the frame after the callee and positions it at the caller, so both halves are
+    // captured here, before the body can move the call site.
+    let frame_args = evaluated_args.iter().map(|arg| arg.value).collect();
+    let frame = EvalCallFrame::function(function.name(), Some(frame_args), context);
+    context.push_call_frame(frame);
     let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
         function.params(),
         function.parameter_types(),
@@ -86,6 +91,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     ) {
         Ok(args) => args,
         Err(status) => {
+            context.pop_call_frame();
             context.pop_function();
             return Err(status);
         }
@@ -132,6 +138,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         (Err(status), _) | (_, Err(status)) => Err(status),
         (Ok(()), Ok(())) => Ok(()),
     };
+    context.pop_call_frame();
     context.pop_function();
     merge_activation_result(return_result, cleanup_result)
 }
@@ -374,6 +381,11 @@ fn eval_closure_with_optional_binding(
         context.push_class_scope(binding.class_scope.clone());
         context.push_called_class_scope(binding.called_class.clone());
     }
+    // A closure is a plain-function frame in PHP even when it is bound to a class: the trace
+    // shows no `class` key for it, only the generated closure name.
+    let frame_args = evaluated_args.iter().map(|arg| arg.value).collect();
+    let frame = EvalCallFrame::function(function.name(), Some(frame_args), context);
+    context.push_call_frame(frame);
     let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
         function.params(),
         function.parameter_types(),
@@ -391,6 +403,7 @@ fn eval_closure_with_optional_binding(
                 context.pop_called_class_scope();
                 context.pop_class_scope();
             }
+            context.pop_call_frame();
             context.pop_function();
             return Err(status);
         }
@@ -455,6 +468,7 @@ fn eval_closure_with_optional_binding(
         context.pop_called_class_scope();
         context.pop_class_scope();
     }
+    context.pop_call_frame();
     context.pop_function();
     merge_activation_result(return_result, cleanup_result)
 }

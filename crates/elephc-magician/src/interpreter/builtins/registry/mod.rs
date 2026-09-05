@@ -295,6 +295,34 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
     let Some(hook) = spec.direct else {
         return Ok(None);
     };
+    if eval_builtin_is_backtrace_visible(spec.name) {
+        // The class probes must be visible to a userland autoloader they start: Symfony's
+        // `ClassExistenceResource::throwOnRequiredClass` returns silently only when it finds one
+        // of these frames above itself. PHP shows the probe's arguments too, so a probe whose
+        // parameters are all by value is re-routed through its evaluated-argument hook to make
+        // real handles available; one with a by-reference parameter keeps the direct hook and
+        // pushes a frame with no `args` key, which is a shape PHP itself produces (under
+        // `DEBUG_BACKTRACE_IGNORE_ARGS`) rather than an invented empty list.
+        if spec.by_ref_param_names().is_empty() {
+            if let Some(values_hook) = spec.values {
+                let mut evaluated_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated_args.push(eval_expr(arg, context, scope, values)?);
+                }
+                let frame =
+                    EvalCallFrame::function(spec.name, Some(evaluated_args.clone()), context);
+                context.push_call_frame(frame);
+                let result = values_hook.call(spec.name, &evaluated_args, context, values);
+                context.pop_call_frame();
+                return result.map(Some);
+            }
+        }
+        let frame = EvalCallFrame::function(spec.name, None, context);
+        context.push_call_frame(frame);
+        let result = hook.call(spec.name, args, context, scope, values);
+        context.pop_call_frame();
+        return result.map(Some);
+    }
     hook.call(spec.name, args, context, scope, values).map(Some)
 }
 
@@ -320,6 +348,14 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call(
     let Some(hook) = spec.values else {
         return Ok(None);
     };
+    if eval_builtin_is_backtrace_visible(spec.name) {
+        let frame =
+            EvalCallFrame::function(spec.name, Some(evaluated_args.to_vec()), context);
+        context.push_call_frame(frame);
+        let result = hook.call(spec.name, evaluated_args, context, values);
+        context.pop_call_frame();
+        return result.map(Some);
+    }
     hook.call(spec.name, evaluated_args, context, values)
         .map(Some)
 }
