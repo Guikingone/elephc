@@ -11,6 +11,7 @@
 //! - Dependency resolution stays outside this module; the linker consumes typed paths only.
 
 mod archive_dedup;
+mod asm_split;
 mod bridges;
 mod command;
 mod pdo;
@@ -116,6 +117,134 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     command::run_tool("Assembler", &mut assembler);
 }
 
+/// Default ceiling on concurrent `as` processes for one user object.
+///
+/// `as` is single-threaded and the user object is by far the largest input in
+/// the build, so on a Symfony-scale program the one blocking invocation is the
+/// second-biggest phase of a debug compile. Eight is where the measured curve
+/// flattens: the slices stop being the bottleneck and the residual serial tail
+/// (the data section, which is never cut) starts to dominate.
+const MAX_ASSEMBLER_JOBS: usize = 8;
+
+/// Objects produced from one user assembly file, in slice order, plus a note for `--timings`.
+pub(crate) struct AssembledObjects {
+    /// Object paths in the order the slices must reach the link line. The first
+    /// entry is always the caller's `obj_path`, so every existing cleanup and
+    /// debug-map path keeps working unchanged.
+    pub(crate) objects: Vec<PathBuf>,
+    /// What the split had to publish, when it split at all.
+    pub(crate) note: Option<String>,
+}
+
+/// Returns how many `as` processes may assemble one user object.
+///
+/// `ELEPHC_ASM_JOBS` overrides the host-derived default, and `ELEPHC_ASM_JOBS=1`
+/// is the identity setting: it takes the single-`as` path below, so the `.s` and
+/// the object are byte-for-byte what they are today.
+fn assembler_jobs() -> usize {
+    if let Ok(value) = std::env::var("ELEPHC_ASM_JOBS") {
+        return value.trim().parse::<usize>().unwrap_or(1).clamp(1, 64);
+    }
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .clamp(1, MAX_ASSEMBLER_JOBS)
+}
+
+/// Assembles one user assembly file, splitting it across parallel `as` runs when
+/// the target supports it, and returns the objects in slice order.
+///
+/// Every fallback path here produces exactly today's single object: an
+/// unsupported target or artifact, `ELEPHC_ASM_JOBS=1`, `--debug-info` (whose
+/// dSYM debug map has to name one object per compilation unit and is not worth
+/// re-deriving for a build the developer is about to step through), an
+/// unreadable `.s`, an assembly with no legal cut, or a failed slice write.
+pub(crate) fn assemble_parallel(
+    target: Target,
+    emit: Emit,
+    debug_info: bool,
+    asm_path: &Path,
+    obj_path: &Path,
+) -> AssembledObjects {
+    let single = || AssembledObjects {
+        objects: vec![obj_path.to_path_buf()],
+        note: None,
+    };
+    let jobs = assembler_jobs();
+    if jobs <= 1 || debug_info || !asm_split::supports_split(target, emit) {
+        assemble(target, asm_path, obj_path);
+        return single();
+    }
+    let Ok(source) = std::fs::read_to_string(asm_path) else {
+        assemble(target, asm_path, obj_path);
+        return single();
+    };
+    let outcome =
+        asm_split::split_assembly(&source, jobs, target.platform.local_label_prefix());
+    if !outcome.is_split() {
+        drop(source);
+        assemble(target, asm_path, obj_path);
+        return single();
+    }
+    drop(source);
+
+    let slice_asm = |index: usize| obj_path.with_extension(format!("slice{index}.s"));
+    let slice_obj = |index: usize| match index {
+        0 => obj_path.to_path_buf(),
+        _ => obj_path.with_extension(format!("slice{index}.o")),
+    };
+    for (index, slice) in outcome.slices.iter().enumerate() {
+        if std::fs::write(slice_asm(index), slice).is_err() {
+            for cleanup in 0..=index {
+                let _ = std::fs::remove_file(slice_asm(cleanup));
+            }
+            assemble(target, asm_path, obj_path);
+            return single();
+        }
+    }
+
+    let failed = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..outcome.slices.len())
+            .map(|index| {
+                let asm = slice_asm(index);
+                let obj = slice_obj(index);
+                scope.spawn(move || assemble(target, &asm, &obj))
+            })
+            .collect();
+        // Join every worker, not just up to the first failure: a short-circuit
+        // would leave the rest for the scope to reap with their status unread.
+        let mut failed = false;
+        for handle in handles {
+            failed |= handle.join().is_err();
+        }
+        failed
+    });
+    if failed {
+        // A worker that failed the tool call already exited the process; a
+        // panicking one has to be reported here rather than linked around.
+        eprintln!("Assembler: a parallel slice panicked");
+        process::exit(1);
+    }
+
+    // The slice sources are derived files: the `.s` the developer asked for is
+    // still on disk untouched. A failing `as` exits before this point, so a
+    // slice that could not be assembled is always left behind for inspection.
+    let objects: Vec<PathBuf> = (0..outcome.slices.len()).map(|index| slice_obj(index)).collect();
+    for index in 0..outcome.slices.len() {
+        let _ = std::fs::remove_file(slice_asm(index));
+    }
+    let note = format!(
+        "Assembler: {} parallel slices ({} temporaries promoted, {} locals published)",
+        objects.len(),
+        outcome.promoted.len(),
+        outcome.published
+    );
+    AssembledObjects {
+        objects,
+        note: Some(note),
+    }
+}
+
 /// Packs the compiled objects into a static library with `ar`.
 ///
 /// This deliberately does not go through the link plan. An archive is not a
@@ -201,6 +330,7 @@ pub(crate) fn link(
         emit,
         bin_path,
         obj_path,
+        &[],
         runtime_object_path,
         &plan,
         forced_whole_archive,
@@ -211,11 +341,17 @@ pub(crate) fn link(
 }
 
 /// Resolves bridge inputs and executes a linker command from an already typed plan.
+///
+/// `extra_objects` carries the second and later slices of a parallel-assembled
+/// user object. They are appended immediately after `obj_path`, in slice order,
+/// which is the emission order: `ld` concatenates section contents in input
+/// order, and an emitted `__data` record's meaning depends on its neighbours.
 pub(crate) fn link_with_plan(
     target: Target,
     emit: Emit,
     bin_path: &Path,
     obj_path: &Path,
+    extra_objects: &[PathBuf],
     runtime_object_path: &Path,
     plan: &LinkPlan,
     forced_whole_archive: &[String],
@@ -257,6 +393,7 @@ pub(crate) fn link_with_plan(
         LinkPaths {
             bin: bin_path,
             object: obj_path,
+            extra_objects,
             runtime: runtime_object_path,
         },
         render_plan,

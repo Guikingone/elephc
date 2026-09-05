@@ -318,8 +318,23 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::phase("assemble");
     let phase_started = Instant::now();
-    linker::assemble(target, &output_paths.asm, &output_paths.obj);
+    // `as` is single-threaded and the user object is the largest input in the
+    // build, so on a large program this one call is a serial wall. When the
+    // target supports it the finished `.s` is cut into contiguous slices that
+    // assemble in parallel; every slice object then joins the link line in
+    // emission order. `ELEPHC_ASM_JOBS=1` keeps the single call.
+    let assembled = linker::assemble_parallel(
+        target,
+        emit,
+        emit_debug_info,
+        &output_paths.asm,
+        &output_paths.obj,
+    );
     timings.record_since("assemble", phase_started);
+    if let Some(note) = &assembled.note {
+        timings.note(note.clone());
+    }
+    let extra_objects: &[std::path::PathBuf] = assembled.objects.get(1..).unwrap_or(&[]);
 
     for (lib_name, flag_name) in linker::bridges_in(&planned_link_libraries) {
         let detail = if forced_bridge_libs.iter().any(|l| l == lib_name) {
@@ -342,6 +357,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             emit,
             &output_paths.bin,
             &output_paths.obj,
+            extra_objects,
             &runtime_object.path,
             &link_plan,
             &forced_bridge_libs,
@@ -385,6 +401,13 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     }
     if !keep_obj_for_debug {
         let _ = fs::remove_file(&output_paths.obj);
+        // The extra slice objects only exist for the link that just happened.
+        // `--debug-info` never splits, so `keep_obj_for_debug` cannot be true
+        // while this list is non-empty; the guard is shared anyway so a future
+        // split under a debug map cannot silently delete its own debug objects.
+        for object in extra_objects {
+            let _ = fs::remove_file(object);
+        }
     }
 
     // Write the build key next to the binary: `elephc monitor <address> --key`
