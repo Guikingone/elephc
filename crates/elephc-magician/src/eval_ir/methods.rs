@@ -31,6 +31,15 @@ pub struct EvalClassMethod {
     return_type: Option<EvalParameterType>,
     /// Whether the method was declared `function &name()`, PHP's return-by-reference form.
     returns_by_ref: bool,
+    /// Whether the FILE that declared this was under `declare(strict_types=1)`.
+    ///
+    /// php scopes strict typing to the file containing the code doing the coercing, so a `return`
+    /// obeys the file the function was DECLARED in while an argument obeys the file the CALL was
+    /// written in. Stamping the declaration is what lets the interpreter restore the right mode
+    /// while a body runs. Deliberately absent from `PartialEq`, like `source_location`: two
+    /// declarations of the same shape are the same declaration whatever file mode they were read
+    /// under, and every parser-shape expectation compares shapes.
+    strict_types: bool,
     body: Vec<EvalStmt>,
 }
 
@@ -59,6 +68,17 @@ impl PartialEq for EvalClassMethod {
 }
 
 impl EvalClassMethod {
+    /// Returns a copy of this method stamped with its declaring file's strict-types mode.
+    pub const fn with_strict_types(mut self, strict_types: bool) -> Self {
+        self.strict_types = strict_types;
+        self
+    }
+
+    /// Returns whether the file that declared this method was under `strict_types=1`.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
+    }
+
     /// Creates a public eval class method with source-order parameters and body.
     pub fn new(name: impl Into<String>, params: Vec<String>, body: Vec<EvalStmt>) -> Self {
         Self::with_modifiers(name, false, false, params, body)
@@ -117,6 +137,7 @@ impl EvalClassMethod {
             parameter_is_by_ref,
             parameter_is_variadic,
             returns_by_ref: false,
+            strict_types: false,
             return_type: None,
             body,
         }

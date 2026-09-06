@@ -194,6 +194,11 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     let previous_source = enter_dynamic_class_method_source(class_name, method, context);
     // The RETURN statement needs to know whether this body hands back a reference, and the flag
     // is saved and restored around the body so a nested call cannot leak its own answer out.
+    // A body runs under the strict-types mode of the file that DECLARED it, not the file that
+    // called it: php scopes the directive to the code doing the coercing, and a `return` is
+    // written in the callee. The argument binding above already ran under the caller's mode,
+    // which is the other half of the same rule.
+    let previous_strict_types = context.set_strict_types(method.strict_types());
     let previous_by_ref = context.set_returns_by_ref(method.returns_by_ref());
     let result = execute_statements(method.body(), context, &mut method_scope, values);
     context.set_returns_by_ref(previous_by_ref);
@@ -222,6 +227,9 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
             values,
         ),
     };
+    // Restored only now, AFTER the declared return type has been checked: that check coerces
+    // the returned value, and the coercion is the callee's, so it obeys the callee's file.
+    context.set_strict_types(previous_strict_types);
     let returned = return_result.as_ref().ok().copied();
     let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
     let return_result = match (return_result, arg_cleanup) {
@@ -370,6 +378,11 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let previous_source = enter_dynamic_class_method_source(class_name, method, context);
     // The RETURN statement needs to know whether this body hands back a reference, and the flag
     // is saved and restored around the body so a nested call cannot leak its own answer out.
+    // A body runs under the strict-types mode of the file that DECLARED it, not the file that
+    // called it: php scopes the directive to the code doing the coercing, and a `return` is
+    // written in the callee. The argument binding above already ran under the caller's mode,
+    // which is the other half of the same rule.
+    let previous_strict_types = context.set_strict_types(method.strict_types());
     let previous_by_ref = context.set_returns_by_ref(method.returns_by_ref());
     let result = execute_statements(method.body(), context, &mut method_scope, values);
     context.set_returns_by_ref(previous_by_ref);
@@ -398,6 +411,9 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
             values,
         ),
     };
+    // Restored only now, AFTER the declared return type has been checked: that check coerces
+    // the returned value, and the coercion is the callee's, so it obeys the callee's file.
+    context.set_strict_types(previous_strict_types);
     let returned = return_result.as_ref().ok().copied();
     let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
     let return_result = match (return_result, arg_cleanup) {

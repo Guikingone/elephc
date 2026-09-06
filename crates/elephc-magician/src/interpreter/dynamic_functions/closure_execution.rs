@@ -126,6 +126,11 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     }
     // The RETURN statement needs to know whether this body hands back a reference, and the flag
     // is saved and restored around the body so a nested call cannot leak its own answer out.
+    // A body runs under the strict-types mode of the file that DECLARED it, not the file that
+    // called it: php scopes the directive to the code doing the coercing, and a `return` is
+    // written in the callee. The argument binding above already ran under the caller's mode,
+    // which is the other half of the same rule.
+    let previous_strict_types = context.set_strict_types(function.strict_types());
     let previous_by_ref = context.set_returns_by_ref(function.returns_by_ref());
     let result = execute_statements(function.body(), context, &mut function_scope, values);
     context.set_returns_by_ref(previous_by_ref);
@@ -154,6 +159,9 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             values,
         ),
     };
+    // Restored only now, AFTER the declared return type has been checked: that check coerces
+    // the returned value, and the coercion is the callee's, so it obeys the callee's file.
+    context.set_strict_types(previous_strict_types);
     let returned = return_result.as_ref().ok().copied();
     let scope_cleanup = release_activation_scope(&mut function_scope, returned, context, values);
     let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
@@ -473,6 +481,11 @@ fn eval_closure_with_optional_binding(
     }
     // The RETURN statement needs to know whether this body hands back a reference, and the flag
     // is saved and restored around the body so a nested call cannot leak its own answer out.
+    // A body runs under the strict-types mode of the file that DECLARED it, not the file that
+    // called it: php scopes the directive to the code doing the coercing, and a `return` is
+    // written in the callee. The argument binding above already ran under the caller's mode,
+    // which is the other half of the same rule.
+    let previous_strict_types = context.set_strict_types(function.strict_types());
     let previous_by_ref = context.set_returns_by_ref(function.returns_by_ref());
     let result = execute_statements(function.body(), context, &mut function_scope, values);
     context.set_returns_by_ref(previous_by_ref);
@@ -511,6 +524,9 @@ fn eval_closure_with_optional_binding(
             values,
         ),
     };
+    // Restored only now, AFTER the declared return type has been checked: that check coerces
+    // the returned value, and the coercion is the callee's, so it obeys the callee's file.
+    context.set_strict_types(previous_strict_types);
     let returned = return_result.as_ref().ok().copied();
     let scope_cleanup = release_activation_scope(&mut function_scope, returned, context, values);
     let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);

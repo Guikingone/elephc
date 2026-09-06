@@ -183,7 +183,11 @@ pub(in crate::interpreter) fn execute_stmt(
                 .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
                 .with_parameter_variadic_flags(parameter_is_variadic.clone())
                 .with_return_type(return_type.clone())
-                .with_returns_by_ref(*returns_by_ref);
+                .with_returns_by_ref(*returns_by_ref)
+                // php requires `declare(strict_types=1)` to be a file's FIRST statement, and
+                // declarations run in file order, so the mode in force here is the declaring
+                // file's -- exactly the mode this function's own `return` must obey later.
+                .with_strict_types(context.strict_types());
             if let Some(source_location) = source_location {
                 function = function.with_source_location(*source_location);
             }

@@ -69,7 +69,8 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         "expand_traits",
         expand_eval_class_traits(class, context, values),
     )?
-    .with_readonly_properties();
+    .with_readonly_properties()
+    .with_strict_types(context.strict_types());
     let class = &class;
     trace_class_decl_result(
         class,

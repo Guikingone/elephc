@@ -169,6 +169,10 @@ fn eval_execute_include_code(
         diagnostic.status()
     })?;
     let previous = context.call_site();
+    // An included file's `declare(strict_types=1)` governs that file and stops at its edge. Left
+    // unrestored it made one strict vendor file turn the whole rest of the program strict, which
+    // is most of Symfony's vendor tree.
+    let previous_strict_types = context.strict_types();
     let file = path.to_string_lossy().into_owned();
     let dir = path
         .parent()
@@ -186,6 +190,7 @@ fn eval_execute_include_code(
         }
     }
     context.pop_include_execution();
+    context.set_strict_types(previous_strict_types);
     context.set_call_site(previous.0, previous.1, previous.2);
     context.set_file_magic_override(previous.3);
     result

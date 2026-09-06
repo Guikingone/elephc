@@ -326,6 +326,25 @@ impl EvalClass {
         self
     }
 
+    /// Stamps every method with the strict-types mode of the file that declared the class.
+    ///
+    /// php scopes `declare(strict_types=1)` to the file containing the code doing the coercing,
+    /// so a method's `return` obeys the file its class was DECLARED in, whatever file the call
+    /// came from. Stamping here rather than in the parser keeps the mode on the one thing that
+    /// knows it -- the declaration statement, which php requires to follow the `declare` -- and
+    /// leaves every parser-shape expectation comparing shapes.
+    pub fn with_strict_types(mut self, strict_types: bool) -> Self {
+        if !strict_types {
+            return self;
+        }
+        self.methods = self
+            .methods
+            .into_iter()
+            .map(|method| method.with_strict_types(true))
+            .collect();
+        self
+    }
+
     /// Returns the original source spelling of this eval-declared class name.
     pub fn name(&self) -> &str {
         &self.name
