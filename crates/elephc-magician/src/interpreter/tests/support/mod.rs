@@ -110,10 +110,12 @@ pub(super) struct FakeOps {
     /// `ELEPHC_FAKE_COUNT_REFERENCES` turns it on for every fixture at once, which is how a module
     /// is surveyed before its own tests opt in.
     ///
-    /// Two tests still over-release under that survey and are left uncounted deliberately rather
+    /// One test still over-releases under that survey and is left uncounted deliberately rather
     /// than silenced:
-    /// `classes::promoted_references::execute_program_aliases_by_reference_promoted_static_and_nested_properties`
-    /// and `core::execute_context_function_persists_static_local_inside_catch`.
+    /// `classes::promoted_references::execute_program_aliases_by_reference_promoted_static_and_nested_properties`.
+    /// Its site is the dynamic-property OVERLAY, which stores a value without taking a reference
+    /// while object destruction releases everything the overlay holds — the same ownership rule
+    /// the static-local store needed, across six write points, and its own slice.
     pub(super) counted_mode: bool,
     /// Releases that drove a count below zero, recorded whether or not counting is enforced.
     pub(super) over_releases: Vec<FakeOverRelease>,

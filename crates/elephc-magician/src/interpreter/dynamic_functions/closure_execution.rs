@@ -619,6 +619,12 @@ pub(in crate::interpreter) fn persist_static_locals(
 ) -> Result<(), EvalStatus> {
     for name in names {
         if let Some(cell) = scope.visible_cell(name) {
+            // The store keeps this value until the NEXT call, long after the activation's scope
+            // is drained, so it has to hold a reference of its own. Without it a body that
+            // reassigned the static — the only reason the value is worth persisting — handed the
+            // store a cell the scope was about to release, and the following call gave that dead
+            // cell back a second time when it replaced it.
+            let cell = values.retain(cell)?;
             if let Some(replaced) =
                 context.set_static_local(function_name.to_string(), name.clone(), cell)
             {
