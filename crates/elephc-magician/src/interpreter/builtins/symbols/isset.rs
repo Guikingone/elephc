@@ -70,8 +70,31 @@ pub(in crate::interpreter) fn eval_isset_result(
     values.bool_value(true)
 }
 
-/// Evaluates one `isset` operand without allocating a null cell for missing variables.
+/// Evaluates one `isset` operand in PHP's QUIET fetch mode.
+///
+/// PHP fetches the operand of `isset` without ever raising for an absent slot, and that applies
+/// to an uninitialized typed property as much as to an undefined variable. The mode wraps the
+/// WHOLE operand rather than the outermost node, because the chain below it must be quiet too:
+/// `isset($this->lazy[$id])` is the shape that stopped the Symfony request, and its property
+/// read sits one `ArrayGet` beneath the operand root. Measured against `php -n` 8.5.6, an
+/// uninitialized link in the MIDDLE of a chain is quiet as well.
+///
+/// The mode stops at a call boundary -- see `enter_call_barrier` -- so a callee that reads an
+/// uninitialized typed property still raises.
 pub(in crate::interpreter) fn eval_isset_arg(
+    arg: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    context.push_quiet_property_fetch();
+    let result = eval_isset_arg_quiet(arg, context, scope, values);
+    context.pop_quiet_property_fetch();
+    result
+}
+
+/// Evaluates one `isset` operand without allocating a null cell for missing variables.
+fn eval_isset_arg_quiet(
     arg: &EvalExpr,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,

@@ -161,6 +161,22 @@ fn lower_property_parent_fetch_for_write(
 ) -> Option<LoweredValue> {
     let span = parent_expr.span;
     let object = lower_expr(ctx, object);
+    // A NESTED write auto-initializes its property exactly as a single-level one does:
+    // `$o->p['k']['j'] = 1` makes `$o->p` an array where PHP does, and this path used to read
+    // it with a bare `PropGet` and raise `Typed property C::$p must not be accessed before
+    // initialization`. The one-level writers already call this; only the nested parent chain
+    // did not, so the two shapes disagreed about the same uninitialized property.
+    let initialize_uninitialized = is_concrete_object_receiver(ctx, object.value);
+    if let Some(declared_ty) = generic_object_array_property_type(ctx, object.value, property) {
+        initialize_uninitialized_array_property_for_write(
+            ctx,
+            object.value,
+            property,
+            &declared_ty,
+            initialize_uninitialized,
+            span,
+        );
+    }
     let property_ty = object_property_type(ctx, object.value, property)?.codegen_repr();
     let data = ctx.intern_string(property);
     let property_value = ctx.emit_value(

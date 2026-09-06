@@ -1706,3 +1706,27 @@ echo "unreachable";
         error
     );
 }
+
+/// An indexed write auto-initializes an uninitialized typed property, nullable and nested too.
+///
+/// PHP auto-initializes the CONTAINER of an indexed write rather than raising, and `php -n`
+/// 8.5.6 treats `array`, `?array` and an untyped property alike. The nullable case represents
+/// as `Mixed` (every union does), and the nested case reaches the property through a different
+/// lowering than the one-level case, so all three are asserted together: keying the
+/// auto-initialization on the representation missed the first, and the nested parent chain
+/// missed the second.
+#[test]
+fn test_indexed_write_auto_initializes_uninitialized_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag { public array $a; public ?array $na; public $u; }
+$one = new Bag(); $one->a['k'] = 1;      echo count($one->a), ';';
+$two = new Bag(); $two->a[] = 2;         echo count($two->a), ';';
+$three = new Bag(); $three->na['k'] = 3; echo count($three->na), ';';
+$four = new Bag(); $four->u['k'] = 4;    echo count($four->u), ';';
+$five = new Bag(); $five->a['k']['j'] = 5; echo $five->a['k']['j'], ';';
+$six = new Bag(); $six->a['k'] = 6;      echo isset($six->a) ? 'set' : 'unset';
+"#,
+    );
+    assert_eq!(out, "1;1;1;1;5;set");
+}

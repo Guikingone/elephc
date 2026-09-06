@@ -354,4 +354,55 @@ impl ElephcEvalContext {
     pub const fn errors_suppressed(&self) -> bool {
         self.error_suppression_depth != 0
     }
+
+    /// Enters one `isset`/`empty`/`??`/`??=` operand scope, where an uninitialized typed
+    /// property ANSWERS instead of raising.
+    ///
+    /// This is not error suppression. `@` silences a diagnostic that is still produced, and it
+    /// propagates into calls; PHP's quiet fetch is a different FETCH MODE that answers "absent"
+    /// without ever performing the read, and it stops at a call boundary. Measured against
+    /// `php -n` 8.5.6: `$n->leaf->t ?? 'D'` answers `'D'` with `Node::$leaf` itself
+    /// uninitialized, so the mode reaches down a whole property/dim chain, while
+    /// `readsUninit($n->leaf) ?? 'D'` and `$n->leaf->getT() ?? 'D'` both THROW, so it must not
+    /// reach into a call. `enter_call_barrier` is what implements that second half.
+    pub fn push_quiet_property_fetch(&mut self) {
+        QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.set(depth.get() + 1));
+    }
+
+    /// Leaves one quiet-fetch operand scope.
+    pub fn pop_quiet_property_fetch(&mut self) {
+        QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+
+    /// Reports whether an uninitialized typed property should answer rather than raise.
+    pub fn quiet_property_fetch(&self) -> bool {
+        QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.get() != 0)
+    }
+
+    /// Suspends the quiet-fetch mode for the duration of a call, returning the depth to restore.
+    ///
+    /// PHP's quiet fetch does not cross into a function or method body: a callee that reads an
+    /// uninitialized typed property raises even when the CALL sits in the operand of `??`.
+    #[must_use]
+    pub fn enter_call_barrier(&mut self) -> usize {
+        QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.replace(0))
+    }
+
+    /// Restores the quiet-fetch depth saved by `enter_call_barrier`.
+    pub fn leave_call_barrier(&mut self, saved: usize) {
+        QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.set(saved));
+    }
+}
+
+thread_local! {
+    /// Depth of the enclosing quiet-fetch operand scopes for THIS request.
+    ///
+    /// Deliberately not a field on the context. A single PHP expression routinely crosses
+    /// several eval contexts -- `isset($this->p[$k])` inside an included file reaches an
+    /// AOT-declared class through the bridge -- and a per-context counter would go quiet on the
+    /// context that entered `isset()` while the context that performs the read still raised.
+    /// A request runs on one thread and a forked web worker gets its own copy, so the execution
+    /// stack the mode belongs to is exactly thread-local, the same reasoning the call-frame
+    /// stack already follows.
+    static QUIET_PROPERTY_FETCH_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

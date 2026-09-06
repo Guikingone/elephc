@@ -158,19 +158,37 @@ thread_local! {
     /// A request runs on one thread and a forked web worker gets its own copy, so thread-local is
     /// the request's own stack. Pushes and pops are paired by the callers that own them.
     static EVAL_CALL_FRAMES: RefCell<Vec<EvalCallFrame>> = const { RefCell::new(Vec::new()) };
+
+    /// Quiet-fetch depths suspended by the calls currently on the stack, innermost last.
+    ///
+    /// Parallel to `EVAL_CALL_FRAMES` and pushed and popped with it, so the caller's mode is
+    /// restored exactly when its callee returns.
+    static EVAL_QUIET_FETCH_BARRIERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
 impl ElephcEvalContext {
-    /// Records one call as entered.
+    /// Records one call as entered, and closes the quiet-fetch mode across the call.
+    ///
+    /// Entering a call is exactly where PHP's quiet property fetch stops. `$o->t ?? 'D'` answers
+    /// `'D'` for an uninitialized `$o->t`, but `f($o) ?? 'D'` and `$o->getT() ?? 'D'` both THROW
+    /// when the callee reads one -- measured against `php -n` 8.5.6. Saving and zeroing the
+    /// depth here means no call site has to remember the rule, and the frame stack that already
+    /// marks call boundaries is what carries it.
     pub fn push_call_frame(&mut self, frame: EvalCallFrame) {
+        let saved = self.enter_call_barrier();
         EVAL_CALL_FRAMES.with(|frames| frames.borrow_mut().push(frame));
+        EVAL_QUIET_FETCH_BARRIERS.with(|saved_depths| saved_depths.borrow_mut().push(saved));
     }
 
-    /// Records one call as left.
+    /// Records one call as left, restoring the caller's quiet-fetch mode.
     pub fn pop_call_frame(&mut self) {
         EVAL_CALL_FRAMES.with(|frames| {
             frames.borrow_mut().pop();
         });
+        let saved = EVAL_QUIET_FETCH_BARRIERS
+            .with(|saved_depths| saved_depths.borrow_mut().pop())
+            .unwrap_or(0);
+        self.leave_call_barrier(saved);
     }
 
     /// Reads the live frames, innermost last, for the backtrace builder to reverse.

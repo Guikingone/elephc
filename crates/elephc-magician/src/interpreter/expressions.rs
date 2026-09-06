@@ -442,8 +442,15 @@ fn eval_expr_dispatch(
             // `$x ?? $default` asks whether `$x` is there and must not complain that it is not:
             // php raises no `Undefined variable` for the left operand of `??`. Suppressing around
             // it is exactly that rule, and reuses the depth counter `@` already maintains.
+            //
+            // Suppression alone is not enough, because an uninitialized typed property THROWS
+            // rather than warning, and `@` does not stop a throw: `$o->t ?? 'D'` died with
+            // `Typed property C::$t must not be accessed before initialization` where php
+            // answers `'D'`. The quiet-fetch mode is the second half of the same rule.
             context.push_error_suppression();
+            context.push_quiet_property_fetch();
             let value = eval_expr(value, context, scope, values);
+            context.pop_quiet_property_fetch();
             context.pop_error_suppression();
             let value = value?;
             if values.is_null(value)? {

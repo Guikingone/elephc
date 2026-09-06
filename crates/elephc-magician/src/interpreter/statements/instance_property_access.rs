@@ -40,6 +40,184 @@ pub(in crate::interpreter) fn eval_store_dynamic_property_value(
     Ok(())
 }
 
+/// Reads one object property as the target of a REFERENCE bind (`&$o->p`).
+///
+/// PHP has a third answer here, distinct from both the ordinary read and the quiet fetch.
+/// Measured against `php -n` 8.5.6 on an uninitialized typed property:
+///
+/// - non-nullable (`array $p`) raises `Error: Cannot access uninitialized non-nullable property
+///   C::$p by reference` — a DIFFERENT sentence from the read's "must not be accessed before
+///   initialization", naming the reference and the non-nullability;
+/// - nullable (`?array $p`) does NOT raise: the reference initializes the property to null;
+/// - untyped (`$p`) does not raise either, and neither does an initialized property.
+///
+/// Answering the read's message here was wrong twice over: the wrong sentence for the
+/// non-nullable case, and a raise at all for the nullable one.
+pub(in crate::interpreter) fn eval_property_reference_target_get_result(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_property_reference_bind_precheck(object, property_name, context, values)?;
+    eval_property_get_result(object, property_name, context, values)
+}
+
+/// Applies PHP's by-reference rule to an uninitialized typed property before the bind reads it.
+///
+/// Separate from the read because a reference bind resolves its TARGET and its value through
+/// different machinery; both entry points need the same rule, and only one of them wants the
+/// value back. See `eval_property_reference_target_get_result` for the measured behaviour.
+pub(in crate::interpreter) fn eval_property_reference_bind_precheck(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if let Ok(identity) = values.object_identity(object) {
+        if let Some((declaring_class, property)) = context
+            .dynamic_object_class(identity)
+            .map(|class| class.name().to_string())
+            .and_then(|class_name| {
+                eval_dynamic_property_for_access(&class_name, property_name, context)
+            })
+        {
+            let storage_property_name =
+                eval_instance_property_storage_name(&declaring_class, &property);
+            if let Some(declared) = property.property_type() {
+                if !context.dynamic_property_is_initialized(identity, &storage_property_name) {
+                    if !declared.allows_null() {
+                        return eval_throw_error(
+                            &format!(
+                                "Cannot access uninitialized non-nullable property {}::${} by reference",
+                                declaring_class.trim_start_matches('\\'),
+                                property.name(),
+                            ),
+                            context,
+                            values,
+                        );
+                    }
+                    // A nullable typed property taken by reference is initialized to null.
+                    let null_value = values.null()?;
+                    eval_property_set_result(
+                        object,
+                        property_name,
+                        null_value,
+                        context,
+                        values,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reads one object property as the TARGET of an array write, auto-initializing it like PHP.
+///
+/// `$o->p['k'] = 1` on an uninitialized typed property does not raise in PHP: the property is
+/// auto-initialized to an empty array, exactly as an undefined variable would be. Measured
+/// against `php -n` 8.5.6, that holds for `array`, `?array` and an untyped property, it nests
+/// (`$o->p['k']['j'] = 1`), and it covers the append form `$o->p[] = 1`.
+///
+/// It does NOT hold for every type. A property whose declared type cannot contain an array
+/// raises `TypeError: Cannot auto-initialize an array inside property C::$p of type int` — a
+/// different class and a different sentence from the uninitialized-read `Error`, so the two
+/// cannot share one message.
+///
+/// The read runs in quiet-fetch mode and the callers' existing "not array-like, so make a new
+/// array" fallback performs the auto-initialization. This function only decides whether PHP
+/// would ALLOW it, which needs the DECLARED type and so cannot live at the call sites.
+pub(in crate::interpreter) fn eval_property_array_target_get_result(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Ok(identity) = values.object_identity(object) {
+        if let Some((declaring_class, property)) = context
+            .dynamic_object_class(identity)
+            .map(|class| class.name().to_string())
+            .and_then(|class_name| {
+                eval_dynamic_property_for_access(&class_name, property_name, context)
+            })
+        {
+            let storage_property_name =
+                eval_instance_property_storage_name(&declaring_class, &property);
+            let uninitialized = property.property_type().is_some()
+                && !context.dynamic_property_is_initialized(identity, &storage_property_name);
+            if uninitialized {
+                if let Some(declared) = property.property_type() {
+                    if !eval_property_type_admits_array(declared) {
+                        return eval_throw_type_error(
+                            &format!(
+                                "Cannot auto-initialize an array inside property {}::${} of type {}",
+                                declaring_class.trim_start_matches('\\'),
+                                property.name(),
+                                eval_property_type_name(declared),
+                            ),
+                            context,
+                            values,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    context.push_quiet_property_fetch();
+    let result = eval_property_get_result(object, property_name, context, values);
+    context.pop_quiet_property_fetch();
+    result
+}
+
+/// Reports whether a declared property type can hold an auto-initialized array.
+///
+/// `mixed` and `iterable` admit one, as does an explicit `array`; a union admits one when any
+/// atom does. Everything else is the `TypeError` case.
+fn eval_property_type_admits_array(declared: &EvalParameterType) -> bool {
+    declared.variants().iter().any(|variant| {
+        matches!(
+            variant,
+            EvalParameterTypeVariant::Array
+                | EvalParameterTypeVariant::Mixed
+                | EvalParameterTypeVariant::Iterable
+        )
+    })
+}
+
+/// Renders a declared property type the way PHP names it in the auto-initialize `TypeError`.
+fn eval_property_type_name(declared: &EvalParameterType) -> String {
+    let mut rendered = declared
+        .variants()
+        .iter()
+        .map(|variant| match variant {
+            EvalParameterTypeVariant::Array => "array".to_string(),
+            EvalParameterTypeVariant::Bool => "bool".to_string(),
+            EvalParameterTypeVariant::Callable => "callable".to_string(),
+            EvalParameterTypeVariant::Class(name) => name.trim_start_matches('\\').to_string(),
+            EvalParameterTypeVariant::Float => "float".to_string(),
+            EvalParameterTypeVariant::Int => "int".to_string(),
+            EvalParameterTypeVariant::Iterable => "iterable".to_string(),
+            EvalParameterTypeVariant::Mixed => "mixed".to_string(),
+            EvalParameterTypeVariant::Never => "never".to_string(),
+            EvalParameterTypeVariant::Object => "object".to_string(),
+            EvalParameterTypeVariant::String => "string".to_string(),
+            EvalParameterTypeVariant::Void => "void".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(if declared.is_intersection() { "&" } else { "|" });
+    if declared.allows_null() {
+        if rendered.is_empty() {
+            rendered = "null".to_string();
+        } else if declared.variants().len() == 1 && !declared.is_intersection() {
+            rendered = format!("?{}", rendered);
+        } else {
+            rendered = format!("{}|null", rendered);
+        }
+    }
+    rendered
+}
+
 /// Reads one object property while enforcing eval-declared member visibility.
 pub(in crate::interpreter) fn eval_property_get_result(
     object: RuntimeCellHandle,
@@ -123,6 +301,12 @@ pub(in crate::interpreter) fn eval_property_get_result(
         if property.property_type().is_some()
             && !context.dynamic_property_is_initialized(identity, &storage_property_name)
         {
+            // `isset`/`empty`/`??`/`??=` fetch QUIETLY: PHP answers "absent" for an
+            // uninitialized typed property instead of raising, and the mode reaches down a
+            // whole property/dim chain. Only the ordinary read raises.
+            if context.quiet_property_fetch() {
+                return values.null();
+            }
             return eval_throw_uninitialized_property_error(
                 &declaring_class,
                 property.name(),
@@ -731,7 +915,8 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             access_scope,
         } => {
             let previous_scope = context.replace_execution_scope(access_scope.clone());
-            let result = eval_property_get_result(*object, property, context, values);
+            let result =
+                eval_property_reference_target_get_result(*object, property, context, values);
             context.replace_execution_scope(previous_scope);
             result
         }

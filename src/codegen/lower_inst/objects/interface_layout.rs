@@ -102,11 +102,32 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
         .iter()
         .enumerate()
         .filter_map(|(index, (property, _))| {
-            let is_owned_reference = class_info.owned_reference_properties.contains(property)
-                && class_info.property_slot_is_reference(index, property);
             // Every physical slot without a schema default is PHP-uninitialized. Do not key
             // this on the name-level declared-property set: inherited private slots can be
             // intentionally absent from that visible map while still needing their own marker.
+            //
+            // KNOWN DIVERGENCE, deliberately left in place. Excluding owned REFERENCE slots is
+            // wrong against PHP. Whether a slot is a reference is a WHOLE-PROGRAM property —
+            // one `&$obj->prop` anywhere promotes that property for every instance of the class
+            // — so a single reference somewhere unrelated makes the property born INITIALIZED:
+            // `isset()` answers true, `get_object_vars()` lists it, and a read PHP refuses
+            // returns the empty cell. Two classes identical apart from whether some later line
+            // took a reference disagree about all three, where `php -n` 8.5.6 answers
+            // `n | d | THROW` for both.
+            //
+            // Dropping the exclusion is NOT the fix, though it looks like a one-line one and
+            // the slot has room (the cell pointer takes the low word, the marker loop writes
+            // only the high word, and both reference write paths already zero it). Doing so
+            // makes the guard fire for reference slots, and a caught uninitialized-property
+            // fatal on a reference slot then corrupts an unrelated live heap string: a 9-byte
+            // result came back with its first 8 bytes replaced by a pointer, deterministic in
+            // shape and ASLR-varying in value, i.e. a freed block's free-list link. The same
+            // program with an ordinary `throw new Error` is clean, and so is the same probe on
+            // a NON-reference slot, so the fault is in what the reference-slot fatal frees on
+            // the way out, not in the marker. Fix that release path first; the marker is one
+            // line behind it.
+            let is_owned_reference = class_info.owned_reference_properties.contains(property)
+                && class_info.property_slot_is_reference(index, property);
             let starts_uninitialized = class_info
                 .defaults
                 .get(index)

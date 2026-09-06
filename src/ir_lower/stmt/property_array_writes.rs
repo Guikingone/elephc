@@ -529,7 +529,7 @@ fn lower_generic_object_mixed_property_array_write(
 }
 
 /// Autovivifies an uninitialized declared array property before mutating one of its elements.
-fn initialize_uninitialized_array_property_for_write(
+pub(super) fn initialize_uninitialized_array_property_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
     property: &str,
@@ -540,11 +540,22 @@ fn initialize_uninitialized_array_property_for_write(
     if !initialize_uninitialized {
         return;
     }
-    let op = match property_ty.codegen_repr() {
+    // The slot's REPRESENTATION decides how the empty container is stored, and a nullable
+    // array property does not represent as an array: `?array` is a union, and every union
+    // reaches codegen as `Mixed`. Keying only on the representation therefore skipped
+    // auto-initialization entirely for `?array $p`, and `$o->p['k'] = 1` raised where PHP
+    // initializes — measured against `php -n` 8.5.6, which treats `array` and `?array`
+    // identically here. The DECLARED type says which container to make; the representation
+    // says whether it has to be boxed on the way into the slot.
+    let Some(container_ty) = auto_initialized_container_type(property_ty) else {
+        return;
+    };
+    let op = match container_ty.codegen_repr() {
         PhpType::Array(_) => Op::ArrayNew,
         PhpType::AssocArray { .. } => Op::HashNew,
         _ => return,
     };
+    let slot_is_boxed = matches!(property_ty.codegen_repr(), PhpType::Mixed);
     let data = ctx.intern_string(property);
     let initialized = ctx.emit_value(
         Op::PropInitialized,
@@ -573,10 +584,20 @@ fn initialize_uninitialized_array_property_for_write(
         op,
         Vec::new(),
         Some(Immediate::Capacity(0)),
-        property_ty.clone(),
+        container_ty.clone(),
         op.default_effects(),
         Some(span),
     );
+    // A raw array word stored into a `Mixed` slot is the representation mismatch this codebase
+    // keeps rediscovering, so a boxed slot gets a boxed value.
+    let (empty, stored_ty) = if slot_is_boxed {
+        (
+            ctx.box_value_as_mixed(empty, PhpType::Mixed, Some(span)),
+            PhpType::Mixed,
+        )
+    } else {
+        (empty, container_ty.clone())
+    };
     ctx.emit_void(
         Op::PropSet,
         vec![object, empty.value],
@@ -584,10 +605,31 @@ fn initialize_uninitialized_array_property_for_write(
         Op::PropSet.default_effects(),
         Some(span),
     );
-    release_property_assignment_source_after_retaining_store(ctx, property_ty, empty, span);
+    release_property_assignment_source_after_retaining_store(ctx, &stored_ty, empty, span);
     branch_to(ctx, ready);
 
     ctx.builder.position_at_end(ready);
+}
+
+/// Returns the container type PHP auto-initializes an indexed property write into.
+///
+/// An `array`/`array<T>` slot makes that array. A UNION containing one — `?array`,
+/// `array|null`, `array|string` — makes the array member, because PHP auto-initializes on the
+/// array side of the union rather than refusing. A union with no array member, and every
+/// non-array type, has no auto-initialization: PHP raises
+/// `Cannot auto-initialize an array inside property C::$p of type int` there instead.
+fn auto_initialized_container_type(property_ty: &PhpType) -> Option<PhpType> {
+    match property_ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Some(property_ty.clone()),
+        PhpType::Union(members) => members
+            .iter()
+            .find(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }))
+            .cloned(),
+        _ => match property_ty.codegen_repr() {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => Some(property_ty.codegen_repr()),
+            _ => None,
+        },
+    }
 }
 
 /// Returns whether an EIR receiver carries PHP's bare `object` pseudo-type.
@@ -602,7 +644,7 @@ fn is_generic_object_receiver(
 }
 
 /// Returns whether the receiver names one concrete class with native property slots.
-fn is_concrete_object_receiver(
+pub(super) fn is_concrete_object_receiver(
     ctx: &LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
 ) -> bool {

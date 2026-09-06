@@ -31969,3 +31969,109 @@ echo 'done';
          ProbeS1Enum[piece.php];ProbeS1Aot[main.php];done"
     );
 }
+
+/// `isset`/`empty`/`??`/`??=` answer for an uninitialized typed property instead of raising.
+///
+/// This is the shape that stopped the Symfony request:
+/// `CheckCircularReferencesPass` declares `private array $checkedLazyNodes;` with no default,
+/// never assigns it, and reads it through `empty($this->checkedLazyNodes[$id])`. PHP fetches
+/// the operand of `isset`/`empty`/`??`/`??=` in a QUIET mode that answers "absent" without
+/// performing the read, and the mode reaches down the whole property/dim chain — the failing
+/// read sits one `ArrayGet` beneath the operand root. A plain read still raises, which the
+/// `direct` cell holds in place. Every value here is `php -n` 8.5.6's.
+#[test]
+fn test_eval_quiet_fetch_answers_for_uninitialized_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class ProbeQ {
+    public array $t;
+    public ?string $n;
+    public function emptyDim($k) { return empty($this->t[$k]); }
+    public function issetDim($k) { return isset($this->t[$k]); }
+}
+function y($b) { return $b ? "y" : "n"; }
+$o = new ProbeQ();
+echo y(isset($o->t)), y(empty($o->t)), ";";
+echo ($o->t ?? "D"), ";", ($o->n ?? "D"), ";";
+echo y(isset($o->t["k"])), y(empty($o->t["k"])), ";";
+echo y($o->emptyDim("k")), y($o->issetDim("k")), ";";
+$a = new ProbeQ();
+$a->t ??= ["v"];
+echo implode(",", $a->t), y(isset($a->t)), ";";
+$b = new ProbeQ();
+try { $x = $b->t; echo "NOTHROW"; } catch (Error $e) { echo "direct:", $e->getMessage(); }
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "ny;D;D;ny;yn;vy;direct:Typed property ProbeQ::$t must not be accessed before initialization"
+    );
+}
+
+/// The quiet fetch stops at a call boundary, and a by-reference bind has its own rule.
+///
+/// Two halves of the same family that a single "answer instead of raising" would get wrong.
+/// Measured against `php -n` 8.5.6: `f($o) ?? 'D'` and `$o->getT() ?? 'D'` both RAISE, because
+/// PHP's quiet fetch is a fetch mode that does not cross into a callee — unlike `@`, which
+/// does. And `&$o->p` raises a DIFFERENT sentence naming the reference and the
+/// non-nullability, while the same bind on a NULLABLE typed property does not raise at all.
+#[test]
+fn test_eval_quiet_fetch_stops_at_calls_and_reference_binds() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class ProbeR { public array $t; public ?array $na; public $u;
+    public function getT() { return $this->t; } }
+function readsUninit($o) { return $o->t; }
+function cell($id, $fn) {
+    try { $fn(); echo $id, ":NOTHROW;"; }
+    catch (Error $e) { echo $id, ":", $e->getMessage(), ";"; }
+}
+cell("call", function () { $o = new ProbeR(); return readsUninit($o) ?? "D"; });
+cell("method", function () { $o = new ProbeR(); return $o->getT() ?? "D"; });
+cell("ref", function () { $o = new ProbeR(); $r = &$o->t; return 1; });
+cell("refnull", function () { $o = new ProbeR(); $r = &$o->na; return 1; });
+cell("refuntyped", function () { $o = new ProbeR(); $r = &$o->u; return 1; });
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "call:Typed property ProbeR::$t must not be accessed before initialization;\
+         method:Typed property ProbeR::$t must not be accessed before initialization;\
+         ref:Cannot access uninitialized non-nullable property ProbeR::$t by reference;\
+         refnull:NOTHROW;refuntyped:NOTHROW;"
+    );
+}
+
+/// An indexed write through the bridge auto-initializes, and a scalar-typed one raises TypeError.
+///
+/// The interpreter reaches an indexed property write through two different routes — the
+/// `PropertyArraySet` statement and an expression-position `Assign` whose target is an
+/// `ArrayGet` — and only one of them was auto-initializing, so `$o->p[] = 1` worked while
+/// `$o->p['k'] = 1` raised. PHP's refusal for a type that cannot hold an array is a `TypeError`
+/// with its own sentence, not the uninitialized-read `Error`.
+#[test]
+fn test_eval_indexed_write_auto_initializes_or_raises_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class ProbeW { public array $a; public ?array $na; public $u; public int $i; }
+$one = new ProbeW(); $one->a["k"] = 1; echo count($one->a), ";";
+$two = new ProbeW(); $two->a[] = 2; echo count($two->a), ";";
+$three = new ProbeW(); $three->na["k"] = 3; echo count($three->na), ";";
+$four = new ProbeW(); $four->u["k"] = 4; echo count($four->u), ";";
+$five = new ProbeW(); $five->a["k"]["j"] = 5; echo $five->a["k"]["j"], ";";
+$six = new ProbeW();
+try { $six->i["k"] = 6; echo "NOTHROW"; }
+catch (TypeError $e) { echo get_class($e), ":", $e->getMessage(); }
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1;1;1;1;5;TypeError:Cannot auto-initialize an array inside property ProbeW::$i of type int"
+    );
+}

@@ -549,7 +549,7 @@ pub(super) fn eval_property_array_append_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let array = eval_property_get_result(object, property, context, values)?;
+    let array = eval_property_array_target_get_result(object, property, context, values)?;
     if values.type_tag(array)? == EVAL_TAG_OBJECT {
         if !eval_array_access_object_matches(array, context, values)? {
             return Err(EvalStatus::RuntimeFatal);
@@ -587,7 +587,10 @@ pub(super) fn eval_property_array_set_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let array = eval_property_get_result(object, property, context, values)?;
+    // The write TARGET auto-initializes: `$o->p['k'] = 1` on an uninitialized typed property
+    // makes an array, where the same property READ raises. See
+    // `eval_property_array_target_get_result`.
+    let array = eval_property_array_target_get_result(object, property, context, values)?;
     if values.type_tag(array)? == EVAL_TAG_OBJECT {
         if !eval_array_access_object_matches(array, context, values)? {
             return Err(EvalStatus::RuntimeFatal);

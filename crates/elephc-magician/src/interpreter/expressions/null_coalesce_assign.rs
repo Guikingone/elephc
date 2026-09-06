@@ -72,7 +72,13 @@ pub(super) fn eval_null_coalesce_assign(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let location = evaluate_location(target, context, scope, values)?;
+    // `$t ??= $v` reads the target in PHP's QUIET fetch mode: an uninitialized typed property
+    // is "absent" and gets assigned, it does not raise. Only the READ is quiet — the default
+    // expression is evaluated normally, so a throw inside it still surfaces.
+    context.push_quiet_property_fetch();
+    let location = evaluate_location(target, context, scope, values);
+    context.pop_quiet_property_fetch();
+    let location = location?;
     let current = location.current();
     if !values.is_null(current)? {
         return if location.current_is_borrowed() {
@@ -482,9 +488,35 @@ fn evaluate_plain_assignment_location(
     }
 }
 
+/// How the components of an lvalue chain are fetched.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LocationFetch {
+    /// The location's own value is wanted, so an uninitialized typed property raises.
+    Read,
+    /// The location is the CONTAINER of an array write, so an uninitialized typed property
+    /// auto-initializes to an array instead of raising.
+    ///
+    /// PHP fetches every link of an lvalue chain in write mode: `$o->p['k'] = 1` initializes
+    /// `$o->p` rather than complaining that it was never set, and the same holds nested
+    /// (`$o->p['k']['j'] = 1`). Only the link the assignment finally lands on is a plain write;
+    /// everything to its left is a container fetch.
+    ArrayParent,
+}
+
 /// Evaluates the receiver and index components of one supported writable expression once.
 fn evaluate_location(
     target: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedLocation, EvalStatus> {
+    evaluate_location_with_fetch(target, LocationFetch::Read, context, scope, values)
+}
+
+/// Evaluates one writable expression's components under an explicit fetch mode.
+fn evaluate_location_with_fetch(
+    target: &EvalExpr,
+    fetch: LocationFetch,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
@@ -507,7 +539,7 @@ fn evaluate_location(
         }
         EvalExpr::PropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
-            let current = eval_property_get_result(object, property, context, values)?;
+            let current = evaluate_property_component(object, property, fetch, context, values)?;
             Ok(EvaluatedLocation::Property {
                 object,
                 property: property.clone(),
@@ -517,7 +549,7 @@ fn evaluate_location(
         EvalExpr::DynamicPropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             let property = eval_dynamic_member_name(property, context, scope, values)?;
-            let current = eval_property_get_result(object, &property, context, values)?;
+            let current = evaluate_property_component(object, &property, fetch, context, values)?;
             Ok(EvaluatedLocation::Property {
                 object,
                 property,
@@ -565,7 +597,9 @@ fn evaluate_location(
             })
         }
         EvalExpr::ArrayGet { array, index } => {
-            let parent = evaluate_location(array, context, scope, values)?;
+            // Everything to the left of an index is a CONTAINER, so it auto-initializes.
+            let parent =
+                evaluate_location_with_fetch(array, LocationFetch::ArrayParent, context, scope, values)?;
             let container = parent.current();
             let index = eval_expr(index, context, scope, values)?;
             let current = eval_array_get_result(container, index, context, values)?;
@@ -585,6 +619,22 @@ fn evaluate_location(
             })
         }
         _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Reads one instance-property component of an lvalue chain under the given fetch mode.
+fn evaluate_property_component(
+    object: RuntimeCellHandle,
+    property: &str,
+    fetch: LocationFetch,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match fetch {
+        LocationFetch::Read => eval_property_get_result(object, property, context, values),
+        LocationFetch::ArrayParent => {
+            eval_property_array_target_get_result(object, property, context, values)
+        }
     }
 }
 
@@ -700,6 +750,22 @@ fn eval_reference_source(
             )?;
             return Ok((target, value));
         }
+    }
+    // `&$o->p` on an uninitialized typed property has PHP's own rule, and it is neither the
+    // ordinary read's nor the quiet fetch's: non-nullable raises a DIFFERENT sentence, nullable
+    // initializes to null and binds. The check runs before the generic by-reference
+    // materializer, which would otherwise perform an ordinary read and raise the wrong message.
+    match source {
+        EvalExpr::PropertyGet { object, property } => {
+            let receiver = eval_expr(object, context, scope, values)?;
+            eval_property_reference_bind_precheck(receiver, property, context, values)?;
+        }
+        EvalExpr::DynamicPropertyGet { object, property } => {
+            let receiver = eval_expr(object, context, scope, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_property_reference_bind_precheck(receiver, &property, context, values)?;
+        }
+        _ => {}
     }
     let (value, target) = eval_call_arg_value(source, context, scope, values)?;
     target
