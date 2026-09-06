@@ -296,7 +296,10 @@ return $box->id();"#,
     let mut values = FakeOps::default();
     let err = execute_program(&bad_scalar, &mut scope, &mut values)
         .expect_err("non-numeric string should fail int return type");
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    // `php -n` 8.5.6 raises a CATCHABLE TypeError here, not a fatal:
+    // `EvalReturnBadScalar::id(): Return value must be of type int, string returned`, and the
+    // script keeps running. This expectation said `RuntimeFatal` while php said otherwise.
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 
     let bad_void = parse_fragment(
         br#"class EvalReturnBadVoid {
@@ -325,7 +328,9 @@ return $child->make();"#,
     let mut values = FakeOps::default();
     let err = execute_program(&bad_static, &mut scope, &mut values)
         .expect_err("base instance should fail inherited static return type");
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    // Catchable too: `php -n` 8.5.6 prints
+    // `B::make(): Return value must be of type C, B returned` and keeps running.
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 
     let implicit_return = parse_fragment(
         br#"class EvalReturnImplicitBad {

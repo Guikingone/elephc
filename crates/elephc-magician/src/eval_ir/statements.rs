@@ -82,6 +82,12 @@ pub enum EvalStmt {
         returns_by_ref: bool,
         body: Vec<EvalStmt>,
     },
+    /// `declare(strict_types=1);` -- PHP's per-FILE scalar type-checking mode.
+    ///
+    /// A statement rather than a flag on the program because that is how it reaches the
+    /// interpreter's coercion rules, and because php scopes it to the file whose calls it
+    /// governs rather than to the callee.
+    DeclareStrictTypes(bool),
     Goto(String),
     Global {
         vars: Vec<String>,

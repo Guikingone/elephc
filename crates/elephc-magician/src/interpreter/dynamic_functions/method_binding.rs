@@ -105,7 +105,14 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         }
         if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
             let bound = value.as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-            bound.value = eval_method_parameter_value(param_type, bound.value, context, values)?;
+            bound.value = eval_method_parameter_bound_value(
+                param_type,
+                bound.value,
+                position,
+                params.get(position).map(String::as_str).unwrap_or_default(),
+                context,
+                values,
+            )?;
         }
     }
 
@@ -436,6 +443,9 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
         return Err(EvalStatus::RuntimeFatal);
     }
     for variant in param_type.variants() {
+        if !eval_scalar_coercion_is_allowed(variant, value, context, values)? {
+            continue;
+        }
         if let Some(coerced) =
             eval_method_parameter_scalar_coercion(variant, value, context, values)?
         {
@@ -443,6 +453,45 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
         }
     }
     Err(EvalStatus::RuntimeFatal)
+}
+
+/// Applies a declared parameter type to one bound argument, naming it the way PHP does on failure.
+///
+/// `php -n` 8.5.6 says
+/// `takesInt(): Argument #1 ($n) must be of type int, string given`, and appends
+/// `, called in FILE on line N` when there is a call site to name. It is a catchable `TypeError`
+/// rather than a fatal, which is what lets `try { … } catch (\TypeError)` around a strict call
+/// work at all.
+fn eval_method_parameter_bound_value(
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    position: usize,
+    param_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match eval_method_parameter_value(param_type, value, context, values) {
+        Ok(value) => Ok(value),
+        Err(EvalStatus::RuntimeFatal) => {
+            let (file, _, line, _) = context.call_site();
+            let call_site = if file.is_empty() {
+                String::new()
+            } else {
+                format!(", called in {file} on line {line}")
+            };
+            let message = format!(
+                "{}(): Argument #{} (${}) must be of type {}, {} given{}",
+                context.current_function().unwrap_or_default(),
+                position + 1,
+                param_name,
+                eval_declared_type_spelling(param_type),
+                eval_given_type_spelling(value, values)?,
+                call_site,
+            );
+            eval_throw_type_error(&message, context, values)
+        }
+        Err(status) => Err(status),
+    }
 }
 
 /// Returns whether a value satisfies one eval parameter type without scalar coercion.

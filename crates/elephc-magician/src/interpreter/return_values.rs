@@ -152,13 +152,23 @@ fn eval_declared_return_value(
         return Err(EvalStatus::RuntimeFatal);
     }
     for variant in return_type.variants() {
+        if !eval_scalar_coercion_is_allowed(variant, value, context, values)? {
+            continue;
+        }
         if let Some(coerced) =
             eval_method_parameter_scalar_coercion(variant, value, context, values)?
         {
             return Ok(coerced);
         }
     }
-    Err(EvalStatus::RuntimeFatal)
+    // PHP names the callable, says `Return value`, and names both types.
+    let message = format!(
+        "{}(): Return value must be of type {}, {} returned",
+        context.current_function().unwrap_or_default(),
+        eval_declared_type_spelling(return_type),
+        eval_given_type_spelling(value, values)?
+    );
+    eval_throw_type_error(&message, context, values)
 }
 
 /// Returns whether a value already satisfies one declared return type.
@@ -366,4 +376,79 @@ fn eval_declared_return_type_is_void(return_type: &EvalParameterType) -> bool {
     !return_type.allows_null()
         && !return_type.is_intersection()
         && matches!(return_type.variants(), [EvalParameterTypeVariant::Void])
+}
+
+/// Returns whether one scalar coercion is allowed under the mode in force.
+///
+/// `declare(strict_types=1)` turns every scalar coercion off with ONE exception php keeps: an
+/// int where a float is declared still widens. Measured with `php -n` 8.5.6: `takesInt("5")`
+/// throws under strict and returns 6 without it, while `takesFloat(5)` returns 5 in both.
+pub(in crate::interpreter) fn eval_scalar_coercion_is_allowed(
+    variant: &EvalParameterTypeVariant,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if !context.strict_types() {
+        return Ok(true);
+    }
+    Ok(matches!(variant, EvalParameterTypeVariant::Float)
+        && values.type_tag(value)? == EVAL_TAG_INT)
+}
+
+/// Spells one declared type the way PHP spells it in a `TypeError`.
+pub(in crate::interpreter) fn eval_declared_type_spelling(
+    declared: &EvalParameterType,
+) -> String {
+    let separator = if declared.is_intersection() { "&" } else { "|" };
+    let mut names: Vec<String> = declared
+        .variants()
+        .iter()
+        .map(eval_declared_variant_spelling)
+        .collect();
+    if declared.allows_null() && !names.iter().any(|name| name == "null") {
+        names.push("null".to_string());
+    }
+    names.join(separator)
+}
+
+/// Spells one declared type atom.
+fn eval_declared_variant_spelling(variant: &EvalParameterTypeVariant) -> String {
+    match variant {
+        EvalParameterTypeVariant::Array => "array".to_string(),
+        EvalParameterTypeVariant::Bool => "bool".to_string(),
+        EvalParameterTypeVariant::Callable => "callable".to_string(),
+        EvalParameterTypeVariant::Class(name) => name.trim_start_matches('\\').to_string(),
+        EvalParameterTypeVariant::Float => "float".to_string(),
+        EvalParameterTypeVariant::Int => "int".to_string(),
+        EvalParameterTypeVariant::Iterable => "iterable".to_string(),
+        EvalParameterTypeVariant::Mixed => "mixed".to_string(),
+        EvalParameterTypeVariant::Never => "never".to_string(),
+        EvalParameterTypeVariant::Object => "object".to_string(),
+        EvalParameterTypeVariant::String => "string".to_string(),
+        EvalParameterTypeVariant::Void => "void".to_string(),
+    }
+}
+
+/// Spells one runtime value's type the way PHP names it in a `TypeError`.
+pub(in crate::interpreter) fn eval_given_type_spelling(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    Ok(match values.type_tag(value)? {
+        EVAL_TAG_NULL => "null".to_string(),
+        EVAL_TAG_BOOL => "bool".to_string(),
+        EVAL_TAG_INT => "int".to_string(),
+        EVAL_TAG_FLOAT => "float".to_string(),
+        EVAL_TAG_STRING => "string".to_string(),
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array".to_string(),
+        EVAL_TAG_RESOURCE => "resource".to_string(),
+        EVAL_TAG_OBJECT => {
+            let name = values.object_class_name(value)?;
+            let bytes = values.string_bytes(name)?;
+            values.release(name)?;
+            String::from_utf8(bytes).unwrap_or_else(|_| "object".to_string())
+        }
+        _ => "mixed".to_string(),
+    })
 }

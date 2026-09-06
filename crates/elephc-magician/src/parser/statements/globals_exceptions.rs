@@ -10,6 +10,33 @@
 use super::*;
 
 impl Parser {
+    /// Parses `declare(strict_types=1);`, PHP's per-file scalar type-checking mode.
+    ///
+    /// `declare` was in the reserved-word list with no statement behind it, so the whole
+    /// directive was parsed as a CALL and died on the `=` inside it -- an assignment to a
+    /// constant. Only `strict_types` is accepted: `ticks` and `encoding` change behaviour this
+    /// interpreter does not model, and accepting them silently would be worse than refusing.
+    pub(in crate::parser) fn parse_declare_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let TokenKind::Ident(directive) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        if !ident_eq(directive, "strict_types") {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        self.advance();
+        self.expect(TokenKind::Equal)?;
+        let TokenKind::Int(value) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let enabled = *value != 0;
+        self.advance();
+        self.expect(TokenKind::RParen)?;
+        self.expect_semicolon()?;
+        Ok(vec![EvalStmt::DeclareStrictTypes(enabled)])
+    }
+
     /// Parses `global $name, $other;` declarations in eval fragments.
     pub(in crate::parser) fn parse_global_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();

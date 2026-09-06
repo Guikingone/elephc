@@ -49,7 +49,10 @@ fn execute_program_checks_registered_native_function_return_type() {
     let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect_err("native return type mismatch should fail");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    // A return-type violation is a CATCHABLE TypeError in php whatever the callee is, so a
+    // registered native function answers the same way an eval-declared one does. The
+    // expectation said `RuntimeFatal` because nothing threw before.
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 }
 
 /// Verifies raw native by-reference staging is released when invoker argument setup fails.

@@ -152,6 +152,7 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "class") => self.parse_class_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "enum") => self.parse_enum_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_function_decl_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "declare") => self.parse_declare_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "global") => self.parse_global_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "if") => self.parse_if_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "interface") => {

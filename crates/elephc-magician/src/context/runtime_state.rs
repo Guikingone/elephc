@@ -312,6 +312,22 @@ impl ElephcEvalContext {
         self.function_stack.push(name.into());
     }
 
+    /// Turns PHP's `declare(strict_types=1)` on or off, returning the previous setting.
+    ///
+    /// php scopes this to the FILE whose calls it governs, not to the callee, so a caller in a
+    /// strict file checking a function declared in a lenient one is checked strictly. One flag
+    /// with save/restore around each program gives that for a single file; a call CROSSING files
+    /// still uses the flag in force at the moment of binding, which is the caller's only when
+    /// the callee does not itself call across files. That limit is stated rather than implied.
+    pub fn set_strict_types(&mut self, strict_types: bool) -> bool {
+        std::mem::replace(&mut self.strict_types, strict_types)
+    }
+
+    /// Returns whether scalar arguments and returns are checked strictly.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
+    }
+
     /// Marks whether the body about to run returns BY REFERENCE, returning the previous value.
     ///
     /// Saved and restored by the caller rather than kept on a stack, because the three places

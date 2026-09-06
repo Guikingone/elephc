@@ -99,6 +99,10 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::Break(level) => Ok(EvalControl::Break(*level)),
         EvalStmt::Continue(level) => Ok(EvalControl::Continue(*level)),
+        EvalStmt::DeclareStrictTypes(enabled) => {
+            context.set_strict_types(*enabled);
+            Ok(EvalControl::None)
+        }
         EvalStmt::Goto(label) => Ok(EvalControl::Goto(label.clone())),
         EvalStmt::DoWhile { body, condition } => {
             execute_do_while_stmt(body, condition, context, scope, values)

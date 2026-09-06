@@ -58,6 +58,7 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         | EvalStmt::Goto(_)
         | EvalStmt::InterfaceDecl(_)
         | EvalStmt::Label(_)
+        | EvalStmt::DeclareStrictTypes(_)
         | EvalStmt::ReferenceAssign { .. }
         | EvalStmt::TraitDecl(_)
         | EvalStmt::UnsetVar { .. } => false,

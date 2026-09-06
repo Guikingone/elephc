@@ -717,7 +717,8 @@ fn visit_static_var_declarations(
                 }
                 visit_static_var_declarations(finally_body, seen, visitor);
             }
-            EvalStmt::ArrayAppendVar { .. }
+            EvalStmt::DeclareStrictTypes(_)
+            | EvalStmt::ArrayAppendVar { .. }
             | EvalStmt::ArrayAppend { .. }
             | EvalStmt::ArrayAppendReferenceBind { .. }
             | EvalStmt::ArrayDestructure { .. }

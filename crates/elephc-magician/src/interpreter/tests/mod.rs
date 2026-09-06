@@ -79,5 +79,6 @@ mod object_cast;
 mod reference_bind_expression;
 mod reflection_property_store;
 mod static_members;
+mod strict_types;
 mod support;
 mod trait_adaptations;
