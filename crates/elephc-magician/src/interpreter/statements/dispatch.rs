@@ -112,6 +112,10 @@ pub(in crate::interpreter) fn execute_stmt(
         EvalStmt::DeclareDirective { name, body } => {
             execute_declare_directive_stmt(name, body.as_deref(), context, scope, values)
         }
+        EvalStmt::SourceLine(line) => {
+            context.set_call_line(*line);
+            Ok(EvalControl::None)
+        }
         EvalStmt::Goto(label) => Ok(EvalControl::Goto(label.clone())),
         EvalStmt::DoWhile { body, condition } => {
             execute_do_while_stmt(body, condition, context, scope, values)

@@ -105,6 +105,15 @@ pub enum EvalStmt {
         body: Option<Vec<EvalStmt>>,
     },
     Goto(String),
+    /// The source line the statements after it were written on.
+    ///
+    /// Emitted only when a whole FILE is parsed, which is the case that needs it: an included
+    /// file's diagnostics, `debug_backtrace()` frames and `eval()`'d-code spellings all report a
+    /// position, and without a per-statement marker that position stayed at the line the include
+    /// itself began on. A fragment is a piece of a file whose position its caller already knows,
+    /// and `__LINE__` is stamped by the lexer either way, so fragments carry no markers and every
+    /// statement-shape expectation written against them is unaffected.
+    SourceLine(i64),
     Global {
         vars: Vec<String>,
     },

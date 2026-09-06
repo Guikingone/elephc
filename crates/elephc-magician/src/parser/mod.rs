@@ -51,7 +51,9 @@ pub fn parse_source_file(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic
         let code_end = close.unwrap_or(code.len());
         push_php_block_tokens(&mut tokens, code, open.code_start, code_end)?;
         let Some(close) = close else {
-            return Parser::new(tokens, code.len()).parse_program();
+            return Parser::new(tokens, code.len())
+                .tracking_source_lines()
+                .parse_program();
         };
         // A closing tag terminates the statement it interrupts, exactly like a semicolon, and PHP
         // swallows one newline directly after it so a template does not emit a blank line per tag.
@@ -59,7 +61,9 @@ pub fn parse_source_file(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic
         cursor = skip_one_newline(code, close + 2);
     }
     push_inline_html_token(&mut tokens, code, cursor, code.len());
-    Parser::new(tokens, code.len()).parse_program()
+    Parser::new(tokens, code.len())
+                .tracking_source_lines()
+                .parse_program()
 }
 
 /// One PHP opening tag: where it starts, where its code starts, and whether it echoes.

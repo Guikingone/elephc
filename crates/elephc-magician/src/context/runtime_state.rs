@@ -682,6 +682,22 @@ impl ElephcEvalContext {
         self.file_magic_override = None;
     }
 
+    /// Moves the current line without disturbing the file or directory it belongs to.
+    ///
+    /// `set_call_site` replaces all three and clears the `__FILE__` override, which is right when
+    /// ENTERING a file and wrong for every statement inside it. This is what an
+    /// `EvalStmt::SourceLine` marker calls, and what makes a `debug_backtrace()` frame, a
+    /// diagnostic's `on line N` and an `eval()`'d-code spelling name the statement that is
+    /// actually running rather than the line the file was entered on.
+    pub fn set_call_line(&mut self, line: i64) -> i64 {
+        std::mem::replace(&mut self.call_line, line)
+    }
+
+    /// Returns the line currently being executed.
+    pub const fn call_line(&self) -> i64 {
+        self.call_line
+    }
+
     /// Returns a copy of the current call-site metadata for temporary overrides.
     pub fn call_site(&self) -> (String, String, i64, Option<String>) {
         (

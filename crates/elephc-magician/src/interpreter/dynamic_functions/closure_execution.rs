@@ -130,6 +130,10 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     // called it: php scopes the directive to the code doing the coercing, and a `return` is
     // written in the callee. The argument binding above already ran under the caller's mode,
     // which is the other half of the same rule.
+    // A body's own `SourceLine` markers move the current line; the caller's is put back after,
+    // so a diagnostic raised later in the CALLING statement still names the caller's line rather
+    // than wherever the callee happened to stop.
+    let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(function.strict_types());
     let previous_by_ref = context.set_returns_by_ref(function.returns_by_ref());
     let result = execute_statements(function.body(), context, &mut function_scope, values);
@@ -162,6 +166,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     // Restored only now, AFTER the declared return type has been checked: that check coerces
     // the returned value, and the coercion is the callee's, so it obeys the callee's file.
     context.set_strict_types(previous_strict_types);
+    context.set_call_line(previous_call_line);
     let returned = return_result.as_ref().ok().copied();
     let scope_cleanup = release_activation_scope(&mut function_scope, returned, context, values);
     let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
@@ -485,6 +490,10 @@ fn eval_closure_with_optional_binding(
     // called it: php scopes the directive to the code doing the coercing, and a `return` is
     // written in the callee. The argument binding above already ran under the caller's mode,
     // which is the other half of the same rule.
+    // A body's own `SourceLine` markers move the current line; the caller's is put back after,
+    // so a diagnostic raised later in the CALLING statement still names the caller's line rather
+    // than wherever the callee happened to stop.
+    let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(function.strict_types());
     let previous_by_ref = context.set_returns_by_ref(function.returns_by_ref());
     let result = execute_statements(function.body(), context, &mut function_scope, values);
@@ -527,6 +536,7 @@ fn eval_closure_with_optional_binding(
     // Restored only now, AFTER the declared return type has been checked: that check coerces
     // the returned value, and the coercion is the callee's, so it obeys the callee's file.
     context.set_strict_types(previous_strict_types);
+    context.set_call_line(previous_call_line);
     let returned = return_result.as_ref().ok().copied();
     let scope_cleanup = release_activation_scope(&mut function_scope, returned, context, values);
     let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
@@ -708,7 +718,7 @@ fn visit_static_var_declarations(
             | EvalStmt::Foreach { body, .. }
             | EvalStmt::For { body, .. }
             | EvalStmt::While { body, .. } => visit_static_var_declarations(body, seen, visitor),
-            EvalStmt::FunctionDecl { .. } => {}
+            EvalStmt::FunctionDecl { .. } | EvalStmt::SourceLine(_) => {}
             // A `declare(…) { … }` body is ordinary statements in the SAME scope, so a `static`
             // written inside one is the enclosing function's, exactly as in an `if` branch.
             EvalStmt::DeclareTicks { body, .. } | EvalStmt::DeclareDirective { body, .. } => {

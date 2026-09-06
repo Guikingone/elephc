@@ -202,13 +202,14 @@ impl EvalRuntimeFailure {
     /// Renders the clause that follows one of the bridge's fixed fatal prefixes.
     ///
     /// EACH HALF OF THE LOCATION IS OMITTED RATHER THAN FAKED. A fragment executed with no
-    /// context handle has no file at all. A file included at run time has one, but no line: the
-    /// call site an eval context carries is the `eval()` or `include` that started the fragment,
-    /// which for an include is the top of the included file rather than the statement that
-    /// failed inside it, and EvalIR statements carry no line of their own to correct it with.
-    /// Printing `on line 1` for a failure forty lines down would be worse than printing nothing,
-    /// so the line appears only for an `eval()`, where the call site is the line PHP itself
-    /// names. Giving EvalIR statements a line is what would close the rest.
+    /// context handle has no file at all, and prints neither half.
+    ///
+    /// The line used to be omitted for an included file too: the call site an eval context
+    /// carried was the `include` that started it, so the number available was the top of the
+    /// file rather than the statement that failed, and printing `on line 1` for a failure forty
+    /// lines down would have been worse than printing nothing. That is no longer the situation.
+    /// `EvalStmt::SourceLine` markers, emitted for every statement of a parsed FILE, move the
+    /// call site as the file executes, so an included file now prints both halves.
     pub fn clause(&self) -> String {
         match (self.file.as_str(), self.line) {
             ("", _) => format!(": {}", self.what),

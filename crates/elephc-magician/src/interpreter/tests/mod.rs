@@ -73,6 +73,7 @@ mod expressions;
 mod foreach_object;
 mod functions_namespaces;
 mod generators;
+mod include_line_tracking;
 mod include_reflection;
 mod interleaved_html_include;
 mod method_arguments;

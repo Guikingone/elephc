@@ -40,7 +40,16 @@ pub(super) fn eval_nested_eval(
     let frame = EvalCallFrame::function("eval", None, context);
     context.push_call_frame(frame);
     context.push_include_execution(false);
+    // Code inside `eval()` is not IN the file that called it, and php spells that:
+    // `FILE(LINE) : eval()'d code`. `eval_file_magic()` builds exactly that string, but only
+    // when no `__FILE__` override is set -- and an include sets one, to its own path. Left in
+    // place it made an `eval()` inside an included file report the include's plain path, so a
+    // class declared there had the wrong `getFileName()`. Cleared for the eval and put back
+    // after, because the including file's own `__FILE__` is still its path.
+    let previous_file_magic = context.call_site().3;
+    context.set_file_magic_override(None);
     let result = execute_program_with_context(context, program.as_ref(), scope, values);
+    context.set_file_magic_override(previous_file_magic);
     context.pop_include_execution();
     context.pop_call_frame();
     result

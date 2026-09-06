@@ -16,17 +16,17 @@ use super::*;
 /// travels beside it and `__elephc_eval_report_runtime_fatal` prints the pair. Only failures
 /// that are NOT Throwables need this: a Throwable already names itself.
 ///
-/// The line is dropped while an included file is executing. A context's call site is the
-/// `eval()` or `include` that started the fragment, so for an `eval()` it is exactly the line
-/// PHP names, and for an include it is the top of the included file rather than the statement
-/// that failed inside it.
+/// The line is the one the failing STATEMENT was written on. It used to be dropped whenever an
+/// included file was executing, because a context's call site was the `include` that started the
+/// file and naming the top of a file for a failure forty lines down is worse than naming nothing.
+/// `EvalStmt::SourceLine` markers moved the call site to the statement being executed, so the
+/// number is now the one php prints and there is nothing left to suppress.
 pub(in crate::interpreter) fn note_eval_runtime_failure(
     what: impl Into<String>,
     context: &ElephcEvalContext,
 ) {
     let (file, _, line, _) = context.call_site();
-    let line = (!context.executing_include()).then_some(line);
-    crate::errors::note_eval_runtime_failure(what, file, line);
+    crate::errors::note_eval_runtime_failure(what, file, Some(line));
 }
 
 /// Creates and schedules an `Error` through eval's normal Throwable channel.

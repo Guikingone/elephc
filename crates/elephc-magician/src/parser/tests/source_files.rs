@@ -7,6 +7,12 @@
 //! Key details:
 //! - A source file is one token stream, so a brace one block opens and a later block closes is
 //!   ordinary nesting rather than an unterminated body.
+//! - A FILE parse also emits an `EvalStmt::SourceLine` marker whenever the line moves, which is
+//!   what lets an included file's diagnostics, `debug_backtrace()` frames and `eval()`'d-code
+//!   spellings name the statement running rather than the line the include began on. Fragments
+//!   emit none, which is why every statement-shape expectation written against `parse_fragment`
+//!   is unaffected -- these four files are the whole blast radius, and they are the tests that
+//!   document the markers.
 
 use super::super::parse_source_file;
 use super::support::*;
@@ -21,13 +27,16 @@ fn parse_source_file_spans_a_brace_across_two_php_blocks() {
         .expect("source file should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::If {
-            condition: EvalExpr::Const(EvalConst::Bool(true)),
-            then_branch: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
-                "X".to_string()
-            )))],
-            else_branch: Vec::new(),
-        }]
+        &[
+            EvalStmt::SourceLine(1),
+            EvalStmt::If {
+                condition: EvalExpr::Const(EvalConst::Bool(true)),
+                then_branch: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
+                    "X".to_string()
+                )))],
+                else_branch: Vec::new(),
+            }
+        ]
     );
 }
 
@@ -38,13 +47,16 @@ fn parse_source_file_spans_an_alternative_body_across_two_php_blocks() {
         .expect("source file should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::If {
-            condition: EvalExpr::LoadVar("a".to_string()),
-            then_branch: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
-                "yes".to_string()
-            )))],
-            else_branch: Vec::new(),
-        }]
+        &[
+            EvalStmt::SourceLine(1),
+            EvalStmt::If {
+                condition: EvalExpr::LoadVar("a".to_string()),
+                then_branch: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
+                    "yes".to_string()
+                )))],
+                else_branch: Vec::new(),
+            }
+        ]
     );
 }
 
@@ -59,13 +71,18 @@ fn parse_source_file_echoes_inline_html_and_short_echo_tags() {
     assert_eq!(
         program.statements(),
         &[
+            // The leading HTML and the `<?=` that follows it are both on line 1, so they share
+            // one marker: a marker is emitted when the line MOVES, not per statement.
+            EvalStmt::SourceLine(1),
             EvalStmt::Echo(EvalExpr::Const(EvalConst::String("a".to_string()))),
             EvalStmt::Echo(EvalExpr::LoadVar("x".to_string())),
+            EvalStmt::SourceLine(2),
             EvalStmt::Echo(EvalExpr::Const(EvalConst::String("b".to_string()))),
             EvalStmt::StoreVar {
                 name: "y".to_string(),
                 value: EvalExpr::Const(EvalConst::Int(1)),
             },
+            EvalStmt::SourceLine(3),
             EvalStmt::Echo(EvalExpr::Const(EvalConst::String("c".to_string()))),
         ]
     );
@@ -77,9 +94,12 @@ fn parse_source_file_treats_a_file_without_tags_as_inline_html() {
     let program = parse_source_file(b"<html>plain</html>").expect("source file should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
-            "<html>plain</html>".to_string()
-        )))]
+        &[
+            EvalStmt::SourceLine(1),
+            EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
+                "<html>plain</html>".to_string()
+            )))
+        ]
     );
 }
 

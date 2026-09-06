@@ -76,8 +76,44 @@ pub(super) enum EvalTypePosition {
 }
 
 impl Parser {
-    /// Parses one source statement, expanding `unset($a, $b)` to one statement per variable.
+    /// Parses one source statement, prefixing its source line when a file is being parsed.
+    ///
+    /// The single funnel every statement passes through -- top level, loop and branch bodies,
+    /// function and method bodies -- so one marker here reaches every statement list the
+    /// interpreter later walks, including the ones inside a declaration.
+    ///
+    /// A marker is skipped when the line has not moved, which is what keeps a `for (…) { … }`
+    /// written on one line from emitting one marker per clause.
     pub(super) fn parse_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        if !self.track_source_lines {
+            return self.parse_stmt_at_source_line();
+        }
+        let line = self.current_source_line();
+        let previous = self.last_source_line;
+        self.last_source_line = line;
+        let parsed = match self.parse_stmt_at_source_line() {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                self.last_source_line = previous;
+                return Err(error);
+            }
+        };
+        if parsed.is_empty() || line == previous {
+            return Ok(parsed);
+        }
+        let mut marked = Vec::with_capacity(parsed.len() + 1);
+        marked.push(EvalStmt::SourceLine(line));
+        marked.extend(parsed);
+        Ok(marked)
+    }
+
+    /// Returns the source line of the token the next statement starts at.
+    fn current_source_line(&self) -> i64 {
+        self.token_lines.get(self.pos).copied().unwrap_or(1)
+    }
+
+    /// Parses one source statement, expanding `unset($a, $b)` to one statement per variable.
+    fn parse_stmt_at_source_line(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         if let TokenKind::DocComment(doc_comment) = self.current() {
             let doc_comment = doc_comment.clone();
             self.advance();
@@ -86,7 +122,7 @@ impl Parser {
             } else if starts_doc_commented_declaration(self.current()) {
                 self.parse_class_decl_stmt_with_doc_comment(Some(doc_comment))
             } else {
-                self.parse_stmt()
+                self.parse_stmt_at_source_line()
             };
         }
         if matches!(self.current(), TokenKind::AttributeStart) {

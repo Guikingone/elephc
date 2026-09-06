@@ -56,6 +56,13 @@ pub(super) struct Parser {
     /// always the token PHP names. This parser never backtracks, so exactly one error is ever
     /// created per fragment and the first stamp is the one that describes it.
     pub(super) error_pos: Option<usize>,
+    /// Whether to emit `EvalStmt::SourceLine` markers before each parsed statement.
+    ///
+    /// Set only by `parse_source_file`. See the variant's own docblock for why a fragment does
+    /// not carry them.
+    pub(super) track_source_lines: bool,
+    /// Line of the last marker emitted, so an unchanged line does not emit a second one.
+    pub(super) last_source_line: i64,
 }
 
 /// A parsed PHP name plus whether it used a leading global namespace separator.
@@ -190,7 +197,15 @@ impl Parser {
             allow_use_imports: true,
             class_scope_depth: 0,
             error_pos: None,
+            track_source_lines: false,
+            last_source_line: 0,
         }
+    }
+
+    /// Turns on `EvalStmt::SourceLine` markers for a whole-file parse.
+    pub(super) const fn tracking_source_lines(mut self) -> Self {
+        self.track_source_lines = true;
+        self
     }
 
     /// Runs one class-like body parser with `self` and `parent` legal in every nested type.

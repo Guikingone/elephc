@@ -198,6 +198,10 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     // called it: php scopes the directive to the code doing the coercing, and a `return` is
     // written in the callee. The argument binding above already ran under the caller's mode,
     // which is the other half of the same rule.
+    // A body's own `SourceLine` markers move the current line; the caller's is put back after,
+    // so a diagnostic raised later in the CALLING statement still names the caller's line rather
+    // than wherever the callee happened to stop.
+    let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(method.strict_types());
     let previous_by_ref = context.set_returns_by_ref(method.returns_by_ref());
     let result = execute_statements(method.body(), context, &mut method_scope, values);
@@ -230,6 +234,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     // Restored only now, AFTER the declared return type has been checked: that check coerces
     // the returned value, and the coercion is the callee's, so it obeys the callee's file.
     context.set_strict_types(previous_strict_types);
+    context.set_call_line(previous_call_line);
     let returned = return_result.as_ref().ok().copied();
     let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
     let return_result = match (return_result, arg_cleanup) {
@@ -382,6 +387,10 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     // called it: php scopes the directive to the code doing the coercing, and a `return` is
     // written in the callee. The argument binding above already ran under the caller's mode,
     // which is the other half of the same rule.
+    // A body's own `SourceLine` markers move the current line; the caller's is put back after,
+    // so a diagnostic raised later in the CALLING statement still names the caller's line rather
+    // than wherever the callee happened to stop.
+    let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(method.strict_types());
     let previous_by_ref = context.set_returns_by_ref(method.returns_by_ref());
     let result = execute_statements(method.body(), context, &mut method_scope, values);
@@ -414,6 +423,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     // Restored only now, AFTER the declared return type has been checked: that check coerces
     // the returned value, and the coercion is the callee's, so it obeys the callee's file.
     context.set_strict_types(previous_strict_types);
+    context.set_call_line(previous_call_line);
     let returned = return_result.as_ref().ok().copied();
     let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
     let return_result = match (return_result, arg_cleanup) {
