@@ -242,67 +242,77 @@ pub(in crate::interpreter) fn eval_new_object_result(
     // class_exists`, which calls `eval_spl_autoload_class` after its declared-check misses); this
     // is the same call, on the same terms, at the other place PHP resolves a class name.
     //
-    // AND WHEN NOTHING SUPPLIES IT, PHP'S ANSWER IS A CATCHABLE `Error`, not a fatal. That
-    // distinction is the whole point: `try { new NoSuchClass(); } catch (\Throwable $e) { … }`
-    // exits 0 under `php -n` 8.5.6 printing `Error: Class "NoSuchClass" not found`, and a fatal
-    // here would take the catch away. It matters more now that the checker defers unknown class
-    // names for programs that include PHP at run time — deferring a diagnostic is only honest if
-    // the runtime still raises the right thing, in a form user code can catch.
+    // THE CHAIN IS AN OPPORTUNITY, NOT A GATE, and getting that backwards is a real defect I made
+    // and had to measure my way out of. A first cut treated a chain MISS as the decision — no
+    // loader supplied the name, therefore the class does not exist — and that is wrong, because
+    // the RUNTIME has not been asked yet: `values.new_object` consults the generated AOT name
+    // table, which is a different table from the one `eval_autoload_target_exists` reads. Twelve
+    // interpreter tests said so immediately, `new Box()` among them, failing `UncaughtThrowable`
+    // where they had returned an object; measured green on the same tree with the magician
+    // reverted, so the attribution was not a guess. The boolean is therefore DISCARDED here: the
+    // chain runs for its side effect — it may declare the class — and the verdict is left to the
+    // runtime below.
     //
-    // The declared-check is asked FIRST and separately from allocation, so this cannot swallow a
-    // compiler defect: a class that IS declared but fails to allocate still reports the fatal
-    // below, exactly as before.
-    if !eval_spl_autoload_class(class_name, context, values)? {
-        // TWO FAILURES WEAR THE SAME FACE HERE, and they must not get the same message.
-        //
-        // A name PHP itself provides as a builtin class — a Throwable, an SPL container, Fiber,
-        // Phar, stdClass — that resolves nowhere is a GAP IN THIS BUILD, not a user error: PHP
-        // would have constructed the object. Saying `Class "Fiber" not found` would blame the
-        // program for the compiler's omission and read as an ordinary PHP error, which is the
-        // worst outcome — a missing pay-for-use gate would look like working software. Measured:
-        // a runtime-included `new Fiber(function () { Fiber::suspend("s"); })` reports this,
-        // where `php -n` 8.5.6 prints `s;done`, because `program_may_reference_fiber` does not
-        // read `usage.includes_runtime_php` and the family is never registered.
-        //
-        // Any OTHER name absent from every table is genuinely undefined, and PHP's answer is a
-        // catchable `Error` reading `Class "X" not found` — the thing a surrounding
-        // `catch (\Throwable $e)` is written to receive.
-        //
-        // The catalog is `reflection::class_lookup::eval_reflection_class_like_is_internal`, the
-        // same predicate `ReflectionClass::isInternal()` answers from, rather than a second list
-        // free to drift from it.
-        if eval_reflection_class_like_is_internal(class_name) {
-            note_eval_runtime_failure(
-                format!(
-                    "builtin class \"{class_name}\" is not available in this build",
-                ),
-                context,
+    // AND PHP NEVER AUTOLOADS AN INTERNAL CLASS. `new Exception(...)` consults no loader in PHP,
+    // because the name is already a class; only a name the engine does not know starts the chain.
+    // Skipping the catalog here is therefore php-correct rather than an optimisation, and it is
+    // also what keeps this call free of observable side effects for the overwhelmingly common
+    // case: running the chain for `Exception` allocated and released cells of its own, which
+    // reordered the interpreter's release log and broke two tests asserting that the FIRST
+    // released handle is the thrown object (`execute_program_finally_return_overrides_uncaught_
+    // throw` and `execute_program_catches_throwable_without_variable_inside_eval`, both seeing
+    // tag 1 where they expect tag 6).
+    if !eval_reflection_class_like_is_internal(class_name) {
+        let _ = eval_spl_autoload_class(class_name, context, values)?;
+        // A LOADER USUALLY DECLARES THE CLASS INTO THIS CONTEXT rather than into the AOT tables —
+        // it runs `eval(...)` or includes a file, and either way the result is an interpreter
+        // class. The `context.class(...)` branch above ran BEFORE the loader did, so it has to be
+        // asked again; without this the freshly loaded class falls through to `new_object`, which
+        // only knows the AOT name table, and construction fails with the class sitting right
+        // there.
+        if let Some(class) = context.class(class_name).cloned() {
+            return eval_dynamic_class_new_object(&class, args, context, scope, values).map_err(
+                |status| trace_new_object_error("eval_class", class_name, status, context),
             );
-            return Err(trace_new_object_error(
-                "builtin_not_available",
-                class_name,
-                EvalStatus::RuntimeFatal,
-                context,
-            ));
         }
-        return eval_throw_class_not_found_error(class_name, context, values);
     }
-    // A LOADER USUALLY DECLARES THE CLASS INTO THIS CONTEXT rather than into the AOT tables — it
-    // runs `eval(...)` or includes a file, and either way the result is an interpreter class. The
-    // `context.class(...)` branch above ran BEFORE the loader did, so it has to be asked again;
-    // without this the freshly loaded class falls through to `new_object`, which only knows the
-    // AOT name table, and the construction fails with the class sitting right there.
-    if let Some(class) = context.class(class_name).cloned() {
-        return eval_dynamic_class_new_object(&class, args, context, scope, values)
-            .map_err(|status| trace_new_object_error("eval_class", class_name, status, context));
-    }
-    let object = values.new_object(class_name).map_err(|status| {
-        note_eval_runtime_failure(
-            format!("could not construct class \"{class_name}\""),
-            context,
-        );
-        trace_new_object_error("allocation", class_name, status, context)
-    })?;
+    // THE RUNTIME HAS NOW BEEN ASKED, so a failure here is the last word and can be classified.
+    // Two very different things used to share one wording, `could not construct class "X"`.
+    //
+    // A name PHP itself provides as a builtin class — a Throwable, an SPL container, Fiber, Phar,
+    // stdClass — that reaches this point is a GAP IN THIS BUILD, not a user error: PHP would have
+    // constructed the object, so blaming the program with `Class "X" not found` would read as an
+    // ordinary PHP error and a missing pay-for-use gate would look like working software.
+    // Measured: a runtime-included `new Fiber(function () { Fiber::suspend("s"); })` reports this,
+    // where `php -n` 8.5.6 prints `s;done`, because `program_may_reference_fiber` does not read
+    // `usage.includes_runtime_php` and the family is never registered.
+    //
+    // Any OTHER name is genuinely undefined, and PHP's answer is a CATCHABLE `Error` reading
+    // `Class "X" not found` — the thing a surrounding `catch (\Throwable $e)` is written to
+    // receive, and the reason the checker may now defer such a name instead of refusing it.
+    //
+    // The catalog is `reflection::class_lookup::eval_reflection_class_like_is_internal`, the same
+    // predicate `ReflectionClass::isInternal()` answers from, rather than a second list free to
+    // drift from it.
+    let object = match values.new_object(class_name) {
+        Ok(object) => object,
+        Err(status) => {
+            if eval_reflection_class_like_is_internal(class_name) {
+                note_eval_runtime_failure(
+                    format!("builtin class \"{class_name}\" is not available in this build"),
+                    context,
+                );
+                return Err(trace_new_object_error(
+                    "builtin_not_available",
+                    class_name,
+                    status,
+                    context,
+                ));
+            }
+            trace_new_object_error("allocation", class_name, status, context);
+            return eval_throw_class_not_found_error(class_name, context, values);
+        }
+    };
     if let Err(err) =
         eval_native_constructor_with_evaluated_args(class_name, object, args, context, values)
     {
