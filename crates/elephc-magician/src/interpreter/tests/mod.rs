@@ -73,6 +73,7 @@ mod foreach_object;
 mod functions_namespaces;
 mod generators;
 mod include_reflection;
+mod interleaved_html_include;
 mod method_arguments;
 mod native_scope;
 mod nested_increment;
