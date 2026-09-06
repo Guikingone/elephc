@@ -106,9 +106,43 @@ fn lower_builtin_reflection_property_init_thunk(
     );
 }
 
+/// Keeps every member of the Reflection classes when interpreted code can call one.
+///
+/// A member's body is lowered when COMPILED code names it, and only then, because that is all this
+/// pass can see. Interpreted code names members no compiled line mentions -- a
+/// `ReflectionParameter`'s `getName()` above all -- and reached a method with no body:
+/// `native_method_error stage=invoke`, which the process prints as the six-word
+/// `Fatal error: eval() runtime failed`. The interpreter answers the CLASS-level members itself,
+/// which is why only the member classes fell over.
+///
+/// The gate is the bridge flag, the same authority the SPL discovery pass reads: a program that
+/// can reach the interpreter at all may reflect on a parameter exactly as it may reflect on a
+/// class, and a program with no route into the interpreter keeps paying nothing.
+fn insert_bridge_reachable_reflection_methods(
+    module: &Module,
+    methods: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    if !module.required_runtime_features.eval_bridge {
+        return;
+    }
+    for class_name in BUILTIN_REFLECTION_CLASS_NAMES {
+        let Some(class_info) = module.class_infos.get(*class_name) else {
+            continue;
+        };
+        let entry = methods.entry((*class_name).to_string()).or_default();
+        for method_key in class_info.methods.keys() {
+            entry.insert(method_key.clone());
+        }
+        for method_key in class_info.static_methods.keys() {
+            entry.insert(method_key.clone());
+        }
+    }
+}
+
 /// Collects Reflection constructors and methods reachable from EIR calls and descriptors.
 fn referenced_builtin_reflection_methods(module: &Module) -> BTreeMap<String, BTreeSet<String>> {
     let mut methods = BTreeMap::new();
+    insert_bridge_reachable_reflection_methods(module, &mut methods);
     for function in all_lowered_functions(module) {
         for inst in &function.instructions {
             if instruction_uses_mixed_string_dispatch(function, inst) {

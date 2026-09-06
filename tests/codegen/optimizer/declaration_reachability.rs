@@ -658,7 +658,20 @@ fn test_eval_keeps_user_function_observable() {
     assert_eq!(out, "eval");
 }
 
-/// Verifies an eval bridge does not eagerly lower unrelated Reflection implementations.
+/// Verifies an eval bridge keeps the Reflection MEMBER-class bodies interpreted code may call.
+///
+/// This assertion is inverted from what it said, deliberately and temporarily. It used to require
+/// that a bridge "must not eagerly lower unrelated Reflection methods", which is the rule
+/// `spl_discovery.rs` records: reflection values owned by the bridge are dispatched by the
+/// interpreter, so their bodies never enter AOT. That holds for the CLASS-level members, which the
+/// interpreter does answer. It does not hold for `ReflectionParameter`, `ReflectionNamedType` and
+/// the parts of `ReflectionMethod` the interpreter does not answer: those are generated slot
+/// getters and real methods, and interpreted code calling one reached a body that was never
+/// lowered -- `native_method_error stage=invoke`, printed as `Fatal error: eval() runtime failed`.
+///
+/// Keeping them costs 1,652,592 bytes on the Symfony build, measured. That is the price of the
+/// interim: echelon 57 makes the interpreter answer those members itself and removes the keeping,
+/// and THIS assertion flips back with it -- it is the tripwire for that work, not a new rule.
 #[test]
 fn test_eval_bridge_keeps_only_aot_referenced_reflection_methods() {
     let dir = make_cli_test_dir("elephc_decl_reach_eval_reflection");
@@ -678,8 +691,8 @@ fn test_eval_bridge_keeps_only_aot_referenced_reflection_methods() {
         "the directly called ReflectionClass method must remain"
     );
     assert!(
-        !user_asm.contains(&elephc::names::method_symbol("ReflectionParameter", "getdefaultvalue")),
-        "an eval bridge must not eagerly lower unrelated Reflection methods"
+        user_asm.contains(&elephc::names::method_symbol("ReflectionParameter", "getdefaultvalue")),
+        "a bridge must keep the member-class bodies until the interpreter answers them (echelon 57)"
     );
     let _ = fs::remove_dir_all(&dir);
 }

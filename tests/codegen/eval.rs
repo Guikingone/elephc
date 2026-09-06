@@ -31681,3 +31681,128 @@ echo 'done';
          ProbeEvalShape[main.php(8) : eval()'d code|1|1];ArrayObject[false|false|false];done"
     );
 }
+
+/// The probe both provider tests run: one method, every parameter member php reports.
+const PROBE_SIG_PIECE: &str = r#"<?php
+
+class ProbeIncSig
+{
+    public function shape(int $n, ?string $tag = 't', int ...$rest): string
+    {
+        return $n . $tag . count($rest);
+    }
+}
+
+function probe_sig(string $class): void
+{
+    $m = new ReflectionMethod($class, 'shape');
+    echo $class, '[', $m->getNumberOfParameters(), '|', $m->getNumberOfRequiredParameters(), '|';
+    foreach ($m->getParameters() as $p) {
+        echo $p->getName(), ':', $p->getPosition(), ':';
+        echo $p->hasType() ? $p->getType()->getName() : '-', ':';
+        echo $p->getType() && $p->getType()->allowsNull() ? 'null' : 'nonull', ':';
+        echo $p->getType() && $p->getType()->isBuiltin() ? 'builtin' : 'class', ':';
+        echo $p->isOptional() ? 'opt' : 'req', ':';
+        echo $p->isVariadic() ? 'var' : 'fix', ';';
+    }
+    echo ']';
+}
+
+probe_sig('ProbeIncSig');
+"#;
+
+/// The same probe pointed at the compiled class.
+const PROBE_SIG_PIECE_AOT: &str = r#"<?php
+
+class ProbeIncSig
+{
+    public function shape(int $n, ?string $tag = 't', int ...$rest): string
+    {
+        return $n . $tag . count($rest);
+    }
+}
+
+function probe_sig(string $class): void
+{
+    $m = new ReflectionMethod($class, 'shape');
+    echo $class, '[', $m->getNumberOfParameters(), '|', $m->getNumberOfRequiredParameters(), '|';
+    foreach ($m->getParameters() as $p) {
+        echo $p->getName(), ':', $p->getPosition(), ':';
+        echo $p->hasType() ? $p->getType()->getName() : '-', ':';
+        echo $p->getType() && $p->getType()->allowsNull() ? 'null' : 'nonull', ':';
+        echo $p->getType() && $p->getType()->isBuiltin() ? 'builtin' : 'class', ':';
+        echo $p->isOptional() ? 'opt' : 'req', ':';
+        echo $p->isVariadic() ? 'var' : 'fix', ';';
+    }
+    echo ']';
+}
+
+probe_sig('ProbeAotSig');
+"#;
+
+/// Verifies interpreted code reads a method signature the INTERPRETER declared.
+///
+/// Oracle: `php -n` 8.5.6 prints `main;ProbeIncSig[3|1|n:0:int:nonull:builtin:req:fix;tag:1:string:null:builtin:opt:fix;rest:2:int:nonull:builtin:opt:var;];done`.
+///
+/// `ReflectionMethod::getParameters()` and everything reachable through it -- the parameter's
+/// name, position, type, the type's nullability and builtin-ness, optionality and variadicity --
+/// were a fatal for every class, whichever way it was declared. A reflection member's body is
+/// lowered only when COMPILED code names it, and interpreted code names members no compiled line
+/// mentions, so the call reached a method with no body: `native_method_error stage=invoke`, which
+/// the process prints as the six-word `Fatal error: eval() runtime failed`.
+#[test]
+fn test_interpreted_code_reads_an_interpreter_declared_method_signature() {
+    let out = compile_and_run_files(
+        &[
+            ("piece.php", PROBE_SIG_PIECE),
+            (
+                "main.php",
+                r#"<?php
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo ';done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "main;ProbeIncSig[3|1|n:0:int:nonull:builtin:req:fix;tag:1:string:null:builtin:opt:fix;rest:2:int:nonull:builtin:opt:var;];done");
+}
+
+/// Verifies interpreted code reads a method signature the COMPILER produced.
+///
+/// Oracle: `php -n` 8.5.6 prints `main;ProbeAotSig[3|1|n:0:int:nonull:builtin:req:fix;tag:1:string:null:builtin:opt:fix;rest:2:int:nonull:builtin:opt:var;];done`.
+///
+/// The same members, the other provider: this class is compiled, so its shape comes from the AOT
+/// signature table the bridge imports rather than from a declaration the interpreter holds. The
+/// two answers are asserted separately and are the same string, which is the point -- the object
+/// is materialized from the same slots either way, so the providers cannot drift apart.
+#[test]
+fn test_interpreted_code_reads_a_compiled_method_signature() {
+    let out = compile_and_run_files(
+        &[
+            ("piece.php", PROBE_SIG_PIECE_AOT),
+            (
+                "main.php",
+                r#"<?php
+
+class ProbeAotSig
+{
+    public function shape(int $n, ?string $tag = 't', int ...$rest): string
+    {
+        return $n . $tag . count($rest);
+    }
+}
+
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo ';done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "main;ProbeAotSig[3|1|n:0:int:nonull:builtin:req:fix;tag:1:string:null:builtin:opt:fix;rest:2:int:nonull:builtin:opt:var;];done");
+}

@@ -78,6 +78,12 @@ cargo test <feature_or_regression_filter>      # or the narrower --test <binary>
 git diff --check
 ```
 
+Every commit that touches the builtin catalog or the registry: build the binary and compile one PHP
+file; a startup panic passes every cargo gate. A contract added without its registry binding aborts
+`elephc` before it reads its argument, and the type-check build, the magician suite and the
+builtin-contract census all stay green through it -- only running the built binary on one file
+catches that class of failure.
+
 For docs-only, workflow-only, or configuration-only changes, replace Rust test runs with the relevant syntax/metadata checks. For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for affected supported targets when local evidence is needed; otherwise rely on CI for sharded Linux x86_64/Linux ARM64/macOS ARM64 executable coverage and the target-specific iOS device/Simulator compile and emitter checks.
 
 ### Test structure
