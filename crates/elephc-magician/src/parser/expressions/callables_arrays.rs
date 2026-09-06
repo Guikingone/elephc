@@ -312,6 +312,20 @@ impl Parser {
             return Ok(EvalExpr::Array(elements));
         }
         loop {
+            if self.consume(TokenKind::Ellipsis) {
+                // PHP's array unpacking. It reuses the variadic token but is a THIRD element
+                // shape: the operand's integer keys are renumbered and its string keys kept, so
+                // it is neither `Value` nor `KeyValue`.
+                let value = self.parse_expr()?;
+                elements.push(EvalArrayElement::Spread(value));
+                if !self.consume(TokenKind::Comma) {
+                    break;
+                }
+                if self.consume(close.clone()) {
+                    return Ok(EvalExpr::Array(elements));
+                }
+                continue;
+            }
             if self.consume(TokenKind::Ampersand) {
                 let value = self.parse_expr()?;
                 elements.push(EvalArrayElement::Reference(value));
@@ -392,7 +406,9 @@ fn collect_arrow_expr_variables(expr: &EvalExpr, names: &mut Vec<String>) {
         EvalExpr::Array(elements) => {
             for element in elements {
                 match element {
-                    EvalArrayElement::Value(value) | EvalArrayElement::Reference(value) => {
+                    EvalArrayElement::Value(value)
+                    | EvalArrayElement::Reference(value)
+                    | EvalArrayElement::Spread(value) => {
                         collect_arrow_expr_variables(value, names);
                     }
                     EvalArrayElement::KeyValue { key, value }

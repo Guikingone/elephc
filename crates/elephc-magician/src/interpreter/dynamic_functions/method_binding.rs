@@ -806,7 +806,7 @@ fn eval_method_default_call_arg_is_supported(arg: &EvalCallArg) -> bool {
 fn eval_method_default_array_element_is_supported(element: &EvalArrayElement) -> bool {
     match element {
         EvalArrayElement::Value(value) => eval_method_default_expr_is_supported(value),
-        // A spread needs a runtime array, which a compile-time default may not be.
+        // A spread has to READ its operand, so it is never a compile-time constant default.
         EvalArrayElement::Reference(_) | EvalArrayElement::Spread(_) => false,
         EvalArrayElement::KeyValue { key, value } => {
             eval_method_default_expr_is_supported(key)

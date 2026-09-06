@@ -324,7 +324,7 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
     match expr {
         EvalExpr::Array(elements) => elements.iter().any(|element| match element {
             EvalArrayElement::Value(value) => eval_expr_uses_this_property(value, property_name),
-            EvalArrayElement::Reference(value) => {
+            EvalArrayElement::Reference(value) | EvalArrayElement::Spread(value) => {
                 eval_expr_uses_this_property(value, property_name)
             }
             EvalArrayElement::KeyValue { key, value } => {

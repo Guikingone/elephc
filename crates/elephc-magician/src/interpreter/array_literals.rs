@@ -18,13 +18,25 @@ pub(super) fn eval_indexed_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.array_new(elements.len())?;
+    // A running counter rather than the element POSITION: one `...` element can contribute any
+    // number of entries, and PHP renumbers the integer keys it contributes from this same
+    // counter -- `["a", "b"]` spread after two literals occupies keys 2 and 3, and a bare value
+    // after it takes key 4.
+    let mut next_index = 0_i64;
     for element in elements {
-        // The key is the array's CURRENT length, not the element's position in the literal: a
-        // spread contributes as many entries as its operand holds, so after `[1, ...$tail, 4]`
-        // the last element belongs at 3, and keying it by its position 2 silently overwrote the
-        // spread's last entry.
-        let position = values.array_len(array)? as i64;
-        let index = values.int(position)?;
+        if let EvalArrayElement::Spread(operand) = element {
+            array = eval_spread_into_array(
+                array,
+                operand,
+                &mut next_index,
+                context,
+                scope,
+                values,
+            )?;
+            continue;
+        }
+        let index = values.int(next_index)?;
+        next_index += 1;
         let (value, owned, target) = match element {
             EvalArrayElement::Value(element) => (
                 eval_expr(element, context, scope, values)?,
@@ -36,11 +48,7 @@ pub(super) fn eval_indexed_array(
                     eval_reference_array_element_value(element, context, scope, values)?;
                 (value, false, Some(target))
             }
-            EvalArrayElement::Spread(source) => {
-                let source = eval_expr(source, context, scope, values)?;
-                array = eval_spread_into_indexed_array(array, source, context, scope, values)?;
-                continue;
-            }
+            EvalArrayElement::Spread(_) => unreachable!("handled above"),
             EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
                 return Err(EvalStatus::UnsupportedConstruct);
             }
@@ -64,6 +72,25 @@ pub(super) fn eval_assoc_array(
     let mut array = values.assoc_new(elements.len())?;
     let mut next_key = None;
     for (element_index, element) in elements.iter().enumerate() {
+        if let EvalArrayElement::Spread(operand) = element {
+            // The integer counter is SHARED with the keyed elements around it, which is what
+            // makes `["z" => 0, ...["a", "b"], "y" => 9, 7]` put `7` at key 2 rather than 0.
+            let mut next_index = match next_key {
+                Some(next_key) => eval_int_value(next_key, values)?,
+                None => 0,
+            };
+            array = eval_spread_into_array(
+                array,
+                operand,
+                &mut next_index,
+                context,
+                scope,
+                values,
+            )
+            .map_err(|status| trace_array_literal_error("spread", element_index, status, context))?;
+            next_key = Some(values.int(next_index)?);
+            continue;
+        }
         let (key, value, owned, target) = match element {
             EvalArrayElement::Value(value) => {
                 let key = match next_key {
@@ -107,14 +134,7 @@ pub(super) fn eval_assoc_array(
                     eval_reference_array_element_value(value, context, scope, values)?;
                 (key, value, false, Some(target))
             }
-            EvalArrayElement::Spread(source) => {
-                let source = eval_expr(source, context, scope, values)?;
-                let (updated, key_after) =
-                    eval_spread_into_assoc_array(array, source, next_key, context, values)?;
-                array = updated;
-                next_key = key_after;
-                continue;
-            }
+            EvalArrayElement::Spread(_) => unreachable!("handled above"),
         };
         array = values.array_set(array, key, value).map_err(|status| {
             trace_array_literal_error("store", element_index, status, context)
@@ -127,77 +147,126 @@ pub(super) fn eval_assoc_array(
     Ok(array)
 }
 
-/// Appends every element of a spread operand to an indexed array literal under construction.
+/// Appends one `...operand` element's entries to the array literal under construction.
 ///
-/// This is the list case, `[1, ...$tail]`, and PHP renumbers the integer keys exactly as the
-/// running index already does. A STRING key is refused rather than renumbered: PHP keeps it, an
-/// indexed array cannot express it, and answering with a renumbered element would be a wrong
-/// value with no diagnostic. The associative builder below handles the keyed case properly, and a
-/// literal that mixes a spread with an explicit key goes there.
-fn eval_spread_into_indexed_array(
-    array: RuntimeCellHandle,
-    source: RuntimeCellHandle,
+/// PHP's two unpacking rules, which is why this cannot be desugared into a plain element:
+/// INTEGER keys are renumbered from the literal's own running counter, and STRING keys are
+/// carried through untouched. Writing a string key through `array_set` promotes an indexed
+/// container to an associative one, so `[...["a" => 1]]` ends up a hash and `[...[5 => "a"]]`
+/// stays a list -- the same two shapes `php -n` produces.
+fn eval_spread_into_array(
+    mut array: RuntimeCellHandle,
+    operand: &EvalExpr,
+    next_index: &mut i64,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let _ = scope;
-    if !values.is_array_like(source)? {
-        return Err(EvalStatus::RuntimeFatal);
+    let source = eval_expr(operand, context, scope, values)?;
+    let source_owned = eval_expr_is_owning_temporary(operand);
+    let entries = eval_spread_source_entries(source, context, values);
+    if source_owned {
+        values.release(source)?;
     }
-    let mut array = array;
-    let len = values.array_len(source)?;
-    for position in 0..len {
-        let key = values.array_iter_key(source, position)?;
-        if values.type_tag(key)? != EVAL_TAG_INT {
-            eval_release_value(context, values, key)?;
-            return Err(EvalStatus::UnsupportedConstruct);
-        }
-        let value = values.array_get(source, key)?;
-        eval_release_value(context, values, key)?;
-        let position = values.array_len(array)? as i64;
-        let index = values.int(position)?;
-        array = values.array_set(array, index, value)?;
-        eval_release_value(context, values, index)?;
+    for (key, value) in entries? {
+        let storage_key = if values.type_tag(key)? == EVAL_TAG_STRING {
+            key
+        } else {
+            values.release(key)?;
+            let index = values.int(*next_index)?;
+            *next_index += 1;
+            index
+        };
+        array = values.array_set(array, storage_key, value)?;
     }
     Ok(array)
 }
 
-/// Appends every element of a spread operand to an associative array literal under construction.
+/// Reads one spread operand into owned key/value pairs.
 ///
-/// PHP 8.1's rule is `array_merge`'s: an integer key is renumbered to the literal's running next
-/// key, a string key is kept and overwrites an earlier entry of the same name.
-fn eval_spread_into_assoc_array(
-    array: RuntimeCellHandle,
+/// PHP accepts an array or ANY Traversable here and refuses everything else with the fatal
+/// `Only arrays and Traversables can be unpacked` -- an error `catch (\Throwable)` does not
+/// catch, so it is a refusal rather than an exception. The three traversable shapes are the same
+/// three `foreach` distinguishes: an eval generator, an `IteratorAggregate` that hands over
+/// another traversable, and an `Iterator` driven through `rewind`/`valid`/`current`/`key`/`next`.
+fn eval_spread_source_entries(
     source: RuntimeCellHandle,
-    next_key: Option<RuntimeCellHandle>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, Option<RuntimeCellHandle>), EvalStatus> {
-    if !values.is_array_like(source)? {
+) -> Result<Vec<(RuntimeCellHandle, RuntimeCellHandle)>, EvalStatus> {
+    match values.type_tag(source)? {
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
+            let len = values.array_len(source)?;
+            let mut entries = Vec::with_capacity(len);
+            for position in 0..len {
+                let key = values.array_iter_key(source, position)?;
+                let value = values.array_get(source, key)?;
+                entries.push((key, value));
+            }
+            Ok(entries)
+        }
+        EVAL_TAG_OBJECT => eval_spread_object_entries(source, 0, context, values),
+        _ => {
+            note_eval_runtime_failure(
+                String::from("only arrays and Traversables can be unpacked"),
+                context,
+            );
+            Err(EvalStatus::RuntimeFatal)
+        }
+    }
+}
+
+/// Reads one traversable OBJECT spread operand into owned key/value pairs.
+///
+/// `depth` bounds the `IteratorAggregate` hand-off: PHP lets one aggregate return another, and
+/// a cycle would otherwise recurse forever. Ten is far past any real chain and is a refusal, not
+/// a silent truncation.
+fn eval_spread_object_entries(
+    object: RuntimeCellHandle,
+    depth: usize,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<(RuntimeCellHandle, RuntimeCellHandle)>, EvalStatus> {
+    if depth > 10 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut array = array;
-    let mut next_key = next_key;
-    let len = values.array_len(source)?;
-    for position in 0..len {
-        let key = values.array_iter_key(source, position)?;
-        let value = values.array_get(source, key)?;
-        let key = if values.type_tag(key)? == EVAL_TAG_INT {
-            eval_release_value(context, values, key)?;
-            let renumbered = match next_key {
-                Some(next_key) => next_key,
-                None => values.int(0)?,
-            };
-            let one = values.int(1)?;
-            next_key = Some(values.add(renumbered, one)?);
-            renumbered
-        } else {
-            key
-        };
-        array = values.array_set(array, key, value)?;
+    let identity = values.object_identity(object)?;
+    if context.has_eval_generator(identity) {
+        return eval_generator_collect_entries(identity, context, values);
     }
-    Ok((array, next_key))
+    if eval_foreach_object_is_a(object, "IteratorAggregate", context, values)? {
+        let inner = eval_method_call_result(object, "getIterator", Vec::new(), context, values)?;
+        let entries = match values.type_tag(inner)? {
+            EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => eval_spread_source_entries(inner, context, values),
+            EVAL_TAG_OBJECT => eval_spread_object_entries(inner, depth + 1, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        };
+        values.release(inner)?;
+        return entries;
+    }
+    if !eval_foreach_object_is_a(object, "Iterator", context, values)? {
+        note_eval_runtime_failure(
+            String::from("only arrays and Traversables can be unpacked"),
+            context,
+        );
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let result = eval_method_call_result(object, "rewind", Vec::new(), context, values)?;
+    values.release(result)?;
+    let mut entries = Vec::new();
+    loop {
+        let valid = eval_method_call_result(object, "valid", Vec::new(), context, values)?;
+        let is_valid = values.truthy(valid)?;
+        values.release(valid)?;
+        if !is_valid {
+            return Ok(entries);
+        }
+        let value = eval_method_call_result(object, "current", Vec::new(), context, values)?;
+        let key = eval_method_call_result(object, "key", Vec::new(), context, values)?;
+        entries.push((key, value));
+        let result = eval_method_call_result(object, "next", Vec::new(), context, values)?;
+        values.release(result)?;
+    }
 }
 
 /// Drops the builder's own reference on an element the literal has just stored.

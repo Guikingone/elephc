@@ -240,7 +240,8 @@ pub(super) fn eval_attribute_array_arg_from_elements(
         .iter()
         .map(|element| match element {
             EvalArrayElement::Value(value) => eval_attribute_arg_from_expr(value),
-            EvalArrayElement::Reference(_) => None,
+            // An attribute argument is a compile-time constant; a spread reads an operand.
+            EvalArrayElement::Reference(_) | EvalArrayElement::Spread(_) => None,
             EvalArrayElement::KeyValue { key, value } => {
                 let value = eval_attribute_arg_from_expr(value)?;
                 eval_attribute_array_keyed_arg(key, value)

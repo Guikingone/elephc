@@ -298,10 +298,11 @@ pub enum EvalArrayElement {
     Reference(EvalExpr),
     KeyValue { key: EvalExpr, value: EvalExpr },
     KeyReference { key: EvalExpr, value: EvalExpr },
-    /// `...$rest` inside an array literal: every element of the operand, in order.
+    /// `...$operand` inside an array literal: PHP's unpacking, not the variadic parameter form.
     ///
-    /// PHP 8.1 renumbers the integer keys and keeps the string ones, which is `array_merge`'s
-    /// rule. `[...$path, $name]` appears eleven times across the Symfony tree.
+    /// The operand's INTEGER keys are renumbered from the literal's own running key while its
+    /// STRING keys are carried through untouched, so this is neither a plain value nor a keyed
+    /// one and cannot be desugared into either.
     Spread(EvalExpr),
 }
 

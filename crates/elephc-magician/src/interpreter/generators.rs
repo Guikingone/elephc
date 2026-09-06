@@ -864,6 +864,45 @@ fn eval_throw_exception_message<T>(
 }
 
 /// Drives `foreach` over one generator, which PHP refuses once the generator has finished.
+/// Drains one generator into owned key/value pairs, for the array-literal spread.
+///
+/// PHP's array unpacking materializes the whole operand into the new array, so the generator is
+/// run to completion here rather than suspended. Both handles in each pair are OWNED: the frame
+/// keeps its own reference to the current key and value, and the caller stores these into an
+/// array that takes them over.
+pub(in crate::interpreter) fn eval_generator_collect_entries(
+    identity: u64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<(RuntimeCellHandle, RuntimeCellHandle)>, EvalStatus> {
+    let already_closed = context
+        .eval_generator(identity, |frame| {
+            frame.state == EvalGeneratorState::Finished && frame.advanced
+        })
+        .unwrap_or(false);
+    if already_closed {
+        eval_throw_exception_message(
+            "Cannot traverse an already closed generator",
+            context,
+            values,
+        )?;
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_generator_prime(identity, context, values)?;
+    let mut entries = Vec::new();
+    loop {
+        let Some((key, value)) = context
+            .eval_generator(identity, |frame| frame.current_key.zip(frame.current_value))
+            .flatten()
+        else {
+            return Ok(entries);
+        };
+        entries.push((values.retain(key)?, values.retain(value)?));
+        eval_generator_mark_advanced(identity, context);
+        eval_generator_step(identity, None, true, context, values)?;
+    }
+}
+
 pub(in crate::interpreter) fn execute_foreach_generator_stmt(
     identity: u64,
     key_name: Option<&str>,
