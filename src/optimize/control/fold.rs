@@ -181,16 +181,23 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             variadic_type,
             return_type,
             body,
-        } => StmtKind::FunctionDecl {
-            by_ref_return,
-            name,
-            params: fold_params(params),
-            param_attributes,
-            variadic,
-            variadic_by_ref,
-            variadic_type,
-            return_type,
-            body: fold_block(body),
+        } => {
+            let body = super::super::target_guards::fold_callable_body(
+                body,
+                params.iter().filter(|(_, _, _, by_ref)| *by_ref)
+                    .map(|(name, _, _, _)| name.as_str()),
+            );
+            StmtKind::FunctionDecl {
+                by_ref_return,
+                name,
+                params: fold_params(params),
+                param_attributes,
+                variadic,
+                variadic_by_ref,
+                variadic_type,
+                return_type,
+                body,
+            }
         },
         StmtKind::Return(expr) => StmtKind::Return(expr.map(fold_expr)),
         StmtKind::ConstDecl { name, value } => StmtKind::ConstDecl {
@@ -367,8 +374,13 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
 /// - `body`: A vector of statements representing a block body.
 /// Returns a new `Vec<Stmt>` with each statement folded.
 pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
+    let mut guard_values = super::super::target_guards::GuardValues::default();
     body.into_iter()
-        .flat_map(|stmt| {
+        .flat_map(|mut stmt| {
+            if active_fold_target().is_some() {
+                guard_values.prepare(&mut stmt);
+                guard_values.observe(&stmt);
+            }
             let target_dependent_if = match &stmt.kind {
                 StmtKind::If {
                     condition,

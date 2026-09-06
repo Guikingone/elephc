@@ -1,5 +1,11 @@
 <?php
 
+$cpuFunction = 'pcntl_getcpu';
+if (!function_exists($cpuFunction)) {
+    function pcntl_getcpu(): int { return -1; }
+}
+echo 'Current CPU (-1 when unavailable): ' . pcntl_getcpu() . "\n";
+
 $pid = pcntl_fork();
 
 if ($pid === -1) {

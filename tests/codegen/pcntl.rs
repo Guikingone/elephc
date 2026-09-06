@@ -177,6 +177,73 @@ fn test_pcntl_target_polyfill_updates_later_function_exists() {
     assert_eq!(compile_and_run(source), "bool(true)\nint(7)\n");
 }
 
+/// Resolves variable and constant-expression names before checking a target polyfill.
+#[test]
+fn test_pcntl_target_polyfill_nonliteral_guard_names() {
+    #[cfg(target_os = "linux")]
+    let unavailable = "pcntl_getqos_class";
+    #[cfg(target_os = "macos")]
+    let unavailable = "pcntl_getcpu";
+    for (setup, argument) in [
+        (format!("$name = '{unavailable}';"), "$name".to_string()),
+        (format!("$name = 'strtoupper'; if ($argc > 1) {{ $name = 'strlen'; }}
+            $name = '{unavailable}';"), "$name".to_string()),
+        (format!("const FALLBACK_NAME = '{unavailable}';"), "FALLBACK_NAME".to_string()),
+        (String::new(), format!("'pcntl_' . '{}'", &unavailable[6..])),
+        (format!("$prefix = 'pcntl_'; $name = $prefix . '{}';", &unavailable[6..]), "$name".to_string()),
+    ] {
+        let source = format!("<?php
+            {setup}
+            if (!function_exists({argument})) {{
+                function {unavailable}(): int {{ return 7; }}
+            }}
+            var_dump(function_exists({argument}));
+            var_dump({unavailable}());");
+        assert_eq!(compile_and_run(&source), "bool(true)\nint(7)\n", "{source}");
+    }
+}
+
+/// Rechecks a reassigned name and discards a fallback for an available builtin.
+#[test]
+fn test_pcntl_target_guard_nonliteral_name_reassignment() {
+    let source = "<?php
+        $name = 'pcntl_getqos_class'; $name = 'strtoupper';
+        if (!function_exists($name)) {
+            function strtoupper(string $s): string { return 'wrong fallback'; }
+        }
+        echo strtoupper('ok');";
+    assert_eq!(compile_and_run(source), "OK");
+}
+
+/// Prunes unavailable calls from guards with locally assigned names inside callable scopes.
+#[test]
+fn test_pcntl_target_guard_nonliteral_callable_scopes() {
+    #[cfg(target_os = "linux")]
+    let unavailable = "pcntl_getqos_class";
+    #[cfg(target_os = "macos")]
+    let unavailable = "pcntl_getcpu";
+    let source = format!("<?php
+        function probe(): string {{
+            $name = '{unavailable}';
+            if (function_exists($name)) {{ {unavailable}(); }}
+            return 'function|';
+        }}
+        class Probe {{
+            public function run(): string {{
+                $name = '{unavailable}';
+                if (function_exists($name)) {{ {unavailable}(); }}
+                return 'method|';
+            }}
+        }}
+        $callback = function (): string {{
+            $name = '{unavailable}';
+            if (function_exists($name)) {{ {unavailable}(); }}
+            return 'closure';
+        }};
+        echo probe(); echo (new Probe())->run(); echo $callback();");
+    assert_eq!(compile_and_run(&source), "function|method|closure");
+}
+
 /// Resolves a namespaced guarded polyfill before falling back to a global target builtin.
 #[test]
 fn test_pcntl_namespaced_target_unavailable_builtin_can_be_polyfilled() {

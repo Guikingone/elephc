@@ -24,6 +24,13 @@ use crate::names::php_symbol_key;
 
 use super::*;
 
+/// Records reference exposure during pre-check guard scans, before statement propagation exists.
+fn mark_guard_reference(name: &str) {
+    if active_fold_target().is_some() {
+        mark_reference_volatile(name);
+    }
+}
+
 /// The set of caller locals a construct can write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Invalidation {
@@ -100,6 +107,9 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         // the outer variables from this point on: any existing fact for them
         // must die here (the volatility ledger only blocks *future* facts).
         ExprKind::Closure { capture_refs, .. } => {
+            for name in capture_refs {
+                mark_guard_reference(name);
+            }
             Invalidation::Names(capture_refs.iter().cloned().collect())
         }
         ExprKind::FirstClassCallable(target) => match target {
@@ -507,7 +517,9 @@ pub(crate) fn foreach_invalidation(
 ) -> Invalidation {
     let mut inv = expr_invalidation(array).union(block_invalidation(body));
     if value_by_ref {
+        mark_guard_reference(value_var);
         if let Some(root) = lvalue_root(array) {
+            mark_guard_reference(root);
             inv.add(root);
         }
     }
@@ -551,9 +563,11 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
             inv
         }
         StmtKind::RefAssign { target, source } => {
+            mark_guard_reference(target);
             let mut inv = expr_invalidation(source);
             inv.add(target);
             if let Some(root) = lvalue_root(source) {
+                mark_guard_reference(root);
                 inv.add(root);
             }
             inv
@@ -695,8 +709,14 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_invalidation(index).union(expr_invalidation(value))
         }
-        StmtKind::Global { vars } => Invalidation::Names(vars.iter().cloned().collect()),
+        StmtKind::Global { vars } => {
+            for name in vars {
+                mark_guard_reference(name);
+            }
+            Invalidation::Names(vars.iter().cloned().collect())
+        }
         StmtKind::StaticVar { name, init } => {
+            mark_guard_reference(name);
             let mut inv = expr_invalidation(init);
             inv.add(name);
             inv

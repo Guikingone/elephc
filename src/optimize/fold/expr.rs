@@ -59,6 +59,11 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
 
 /// Folds default expressions and block body in a class method declaration.
 pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
+    let body = super::super::target_guards::fold_callable_body(
+        method.body,
+        method.params.iter().filter(|(_, _, _, by_ref)| *by_ref)
+            .map(|(name, _, _, _)| name.as_str()),
+    );
     ClassMethod {
         name: method.name,
         visibility: method.visibility,
@@ -73,7 +78,7 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
         variadic_type: method.variadic_type,
         return_type: method.return_type,
         by_ref_return: method.by_ref_return,
-        body: fold_block(method.body),
+        body,
         span: method.span,
         attributes: method.attributes,
     }
@@ -301,18 +306,26 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             captures,
             capture_refs,
             by_ref_return,
-        } => ExprKind::Closure {
-            params: fold_params(params),
-            variadic,
-            variadic_by_ref,
-            variadic_type,
-            return_type,
-            body: fold_block(body),
-            is_arrow,
-            is_static,
-            captures,
-            capture_refs,
-            by_ref_return,
+        } => {
+            let body = super::super::target_guards::fold_callable_body(
+                body,
+                params.iter().filter(|(_, _, _, by_ref)| *by_ref)
+                    .map(|(name, _, _, _)| name.as_str())
+                    .chain(capture_refs.iter().map(String::as_str)),
+            );
+            ExprKind::Closure {
+                params: fold_params(params),
+                variadic,
+                variadic_by_ref,
+                variadic_type,
+                return_type,
+                body,
+                is_arrow,
+                is_static,
+                captures,
+                capture_refs,
+                by_ref_return,
+            }
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
             name,

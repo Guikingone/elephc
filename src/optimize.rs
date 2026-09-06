@@ -27,6 +27,7 @@ mod effects;
 mod exception_flow;
 mod fold;
 mod propagate;
+mod target_guards;
 pub mod reachability;
 
 use binding_decisions::{with_local_binding_decision_spans, with_mixed_storage_locals};
@@ -102,23 +103,25 @@ pub fn fold_constants(program: Program) -> Program {
 /// This variant is used before type checking so portable `PHP_OS[_FAMILY]` and
 /// `function_exists()` guards can remove branches containing target-unavailable builtins.
 pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
-    ACTIVE_FOLD_TARGET.with(|slot| {
-        let previous = slot.replace(Some(target));
-        let user_functions = collect_top_level_user_functions(&program);
-        let previous_functions =
-            ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
-        let folded = fold_constants(program);
-        // A target guard can turn a conditional polyfill declaration into an unconditional
-        // declaration. Rebuild the function inventory and fold once more so later probes in
-        // the same program observe the function that the retained branch just defined. Use
-        // `fold_block` directly here because `fold_constants` would seed CLI superglobals twice.
-        let materialized_functions = collect_top_level_user_functions(&folded);
-        ACTIVE_FOLD_USER_FUNCTIONS
-            .with(|functions| functions.replace(Some(materialized_functions)));
-        let folded = fold_block(folded);
-        ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
-        slot.replace(previous);
-        folded
+    let signatures = collect_by_ref_signatures(&program);
+    with_fresh_reference_volatile(|| {
+        with_by_ref_signatures(signatures, || ACTIVE_FOLD_TARGET.with(|slot| {
+            let previous = slot.replace(Some(target));
+            let user_functions = collect_top_level_user_functions(&program);
+            let previous_functions =
+                ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
+            let folded = fold_constants(program);
+            // A target guard can turn a conditional polyfill declaration into an unconditional
+            // declaration. Refresh the inventory so later probes see the retained function.
+            // Avoid `fold_constants` here, which would seed CLI superglobals twice.
+            let materialized_functions = collect_top_level_user_functions(&folded);
+            ACTIVE_FOLD_USER_FUNCTIONS
+                .with(|functions| functions.replace(Some(materialized_functions)));
+            let folded = fold_block(folded);
+            ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
+            slot.replace(previous);
+            folded
+        }))
     })
 }
 
