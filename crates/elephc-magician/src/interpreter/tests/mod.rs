@@ -53,6 +53,7 @@ mod builtins_strings_openssl;
 mod builtins_strings_text;
 mod builtins_symbols;
 mod builtins_system_network;
+mod cast_precedence;
 mod class_constants;
 mod classes;
 mod closures;

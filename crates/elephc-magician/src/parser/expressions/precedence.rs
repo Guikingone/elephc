@@ -506,7 +506,14 @@ impl Parser {
             self.advance();
             self.advance();
             self.advance();
-            let expr = self.parse_concat()?;
+            // A cast is a UNARY operator in PHP and binds exactly as tightly as the others, so
+            // its operand is another unary expression -- not `parse_concat`, which swallowed the
+            // whole concatenation and every additive term with it. `(int) $a . "4x"` is
+            // `((int) $a) . "4x"` and prints `34x`; taking the concatenation as the operand made
+            // it `(int) "34x"` and printed a NUMBER. `**` still binds tighter, because
+            // `parse_unary` reaches `parse_power` on the way down: `(int) "2.9" ** 2` is 8 in
+            // both, and `-(int) "3"` is -3.
+            let expr = self.parse_unary()?;
             return Ok(EvalExpr::Cast {
                 target,
                 expr: Box::new(expr),

@@ -210,22 +210,45 @@ fn parse_fragment_accepts_dynamic_instanceof_targets() {
     );
 }
 
-/// Verifies scalar cast syntax parses with PHP cast precedence across concatenation.
+/// Verifies a cast binds TIGHTER than concatenation, as PHP's unary precedence says.
+///
+/// This expectation used to pin the opposite shape under a docblock claiming PHP cast
+/// precedence: the operand was parsed with `parse_concat`, so the cast swallowed the whole
+/// concatenation. `php -n` 8.5.6 prints `34x` for `(int) $a . "4x"` with `$a = "3"` while elephc
+/// printed a number, so the shape below is the one php actually builds.
 #[test]
 fn parse_fragment_accepts_scalar_cast_source() {
     let program =
         parse_fragment(br#"return (string)$value . "!";"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::Return(Some(EvalExpr::Cast {
-            target: EvalCastType::String,
-            expr: Box::new(EvalExpr::Binary {
-                op: EvalBinOp::Concat,
-                left: Box::new(EvalExpr::LoadVar("value".to_string())),
-                right: Box::new(EvalExpr::Const(EvalConst::String("!".to_string()))),
+        &[EvalStmt::Return(Some(EvalExpr::Binary {
+            op: EvalBinOp::Concat,
+            left: Box::new(EvalExpr::Cast {
+                target: EvalCastType::String,
+                expr: Box::new(EvalExpr::LoadVar("value".to_string())),
             }),
+            right: Box::new(EvalExpr::Const(EvalConst::String("!".to_string()))),
         }))]
     );
+}
+
+/// Verifies `**` still binds tighter than a cast, which unary precedence does NOT change.
+///
+/// `php -n` 8.5.6 gives `int(8)` for `(int) "2.9" ** 2`: the power runs first and the cast
+/// truncates 8.41. Parsing the operand with `parse_unary` keeps that, because `parse_unary`
+/// reaches `parse_power` on the way down -- so this is the case that says the operand moved to
+/// the right LEVEL rather than merely becoming narrower.
+#[test]
+fn parse_fragment_keeps_power_tighter_than_a_cast() {
+    let program = parse_fragment(br#"return (int) "2.9" ** 2;"#).expect("fragment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Cast {
+            target: EvalCastType::Int,
+            expr,
+        }))] if matches!(expr.as_ref(), EvalExpr::Binary { op: EvalBinOp::Pow, .. })
+    ));
 }
 
 /// Verifies `(array)` casts lower through the dynamic cast expression node.
