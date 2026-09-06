@@ -342,6 +342,23 @@ pub(super) fn eval_aot_method_signature_requirement(
     }))
 }
 
+/// Returns whether an override may stand in for a declaration that returns BY REFERENCE.
+///
+/// php's rule is one-directional: an override may ADD `&` where the declaration it replaces does
+/// not ask for it, but may never DROP one it does. `php -n` 8.5.6 refuses that with
+/// `Declaration of C::f() must be compatible with & P::f()` -- note the `&` in front of the
+/// PARENT signature, which is how the message says which side wanted it.
+///
+/// It lives here, called from both the interface path and the parent-class path, because it was
+/// written once for interfaces and the class path silently had no rule at all: a subclass could
+/// replace a by-reference parent method with a by-value one and nothing said so.
+pub(super) fn override_by_ref_return_is_compatible(
+    override_returns_by_ref: bool,
+    required_returns_by_ref: bool,
+) -> bool {
+    override_returns_by_ref || !required_returns_by_ref
+}
+
 /// Returns whether one eval class method can accept every call accepted by its parent method.
 pub(super) fn class_method_signature_accepts(
     method: &EvalClassMethod,
@@ -351,7 +368,8 @@ pub(super) fn class_method_signature_accepts(
     pending_class: Option<&EvalClass>,
     context: &ElephcEvalContext,
 ) -> bool {
-    method_signature_accepts(
+    override_by_ref_return_is_compatible(method.returns_by_ref(), required.returns_by_ref())
+        && method_signature_accepts(
         method.params().len(),
         method.parameter_defaults(),
         method.parameter_is_by_ref(),

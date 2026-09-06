@@ -509,11 +509,10 @@ pub(super) fn class_method_satisfies_interface_signature_with_return_mode(
     context: &ElephcEvalContext,
     allow_missing_return_type: bool,
 ) -> bool {
-    // PHP's rule is one-directional: an implementation may ADD `&` where the interface does not
-    // ask for it, but may never DROP one it does -- `php -n` 8.5.6 refuses that with
-    // `Declaration of Bad::get() must be compatible with & Ref::get()`. Accepting it silently
-    // would let a by-value method stand in for a by-reference contract.
-    if requirement.returns_by_ref() && !method.returns_by_ref() {
+    // One shared rule with the parent-class path, so the two cannot drift: an implementation may
+    // ADD `&` where the interface does not ask for it, but may never DROP one it does.
+    if !override_by_ref_return_is_compatible(method.returns_by_ref(), requirement.returns_by_ref())
+    {
         return false;
     }
     method_signature_accepts(

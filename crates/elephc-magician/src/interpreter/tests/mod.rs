@@ -80,6 +80,7 @@ mod native_scope;
 mod nested_increment;
 mod new_class_expressions;
 mod object_cast;
+mod parent_override_compatibility;
 mod reference_bind_expression;
 mod reflection_property_store;
 mod static_members;
