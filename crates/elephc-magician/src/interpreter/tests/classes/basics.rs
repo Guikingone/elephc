@@ -28,6 +28,7 @@ return $user->label();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -64,6 +65,7 @@ return $self instanceof EvalRelativeFactoryBase
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -104,6 +106,7 @@ return $self instanceof Base
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -146,6 +149,7 @@ return true;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -179,6 +183,7 @@ return $box->sum() + $traitBox->sum();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -209,6 +214,7 @@ return EvalForwardB::relayStatic();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -251,6 +257,7 @@ return true;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -282,6 +289,7 @@ return $box->own();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -309,6 +317,7 @@ class EvalInvalidThrowableMarkerClass implements EvalThrowableMarker {}"#,
         let program = parse_fragment(source).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
+    values.count_references();
 
         let err = execute_program(&program, &mut scope, &mut values).expect_err(label);
 
@@ -353,6 +362,7 @@ fn execute_program_rejects_invalid_builtin_interface_implementations() {
         let program = parse_fragment(source).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
+    values.count_references();
 
         let err = execute_program(&program, &mut scope, &mut values).expect_err(label);
 
@@ -370,6 +380,7 @@ return class_exists("EvalAbstractCountable");"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -419,6 +430,7 @@ return $box["y"];"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 

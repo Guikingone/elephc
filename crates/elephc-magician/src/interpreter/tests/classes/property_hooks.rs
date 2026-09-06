@@ -29,6 +29,7 @@ return $person->full;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -57,6 +58,7 @@ return $person->full;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -85,6 +87,7 @@ return $name->value;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -119,6 +122,7 @@ return $label->text;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -143,6 +147,7 @@ return $box->value;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&valid_program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -165,6 +170,7 @@ return $box->value;"#,
         let program = parse_fragment(source).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
+    values.count_references();
         let err = execute_program(&program, &mut scope, &mut values)
             .expect_err("incompatible set-hook parameter type should fail");
         assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -201,6 +207,7 @@ return $box->Total;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 

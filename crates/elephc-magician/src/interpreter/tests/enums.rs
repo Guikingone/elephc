@@ -16,6 +16,7 @@ fn assert_invalid_enum_fragment(source: &[u8], message: &str) {
     let program = parse_fragment(source).expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let err = execute_program(&program, &mut scope, &mut values).expect_err(message);
 
@@ -41,6 +42,7 @@ return get_class(EvalSuit::Clubs);"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -66,6 +68,7 @@ return EvalColor::tryFrom(99);"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -92,6 +95,7 @@ return false;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -122,6 +126,7 @@ return EvalSuit::fallback() === EvalSuit::Hearts;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -158,6 +163,7 @@ return EvalTraitEnum::Ready->label();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -205,6 +211,7 @@ echo is_callable([EvalBackedSynthetic::Ready, "cases"]) ? "callable" : "bad";"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values);
     assert!(
@@ -235,6 +242,7 @@ return is_callable([EvalPureDirectFrom::Ready, "from"]);"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -280,6 +288,7 @@ echo $pure->hasMethod("from") ? "bad" : "nofrom";"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values);
     assert!(
@@ -321,6 +330,7 @@ return EvalMarkedBacked::Ready->value;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -439,6 +449,7 @@ return enum_exists("EvalAllowedEnumMagic");"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 

@@ -40,6 +40,7 @@ return true;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -69,6 +70,7 @@ return true;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -98,6 +100,7 @@ return true;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -122,6 +125,7 @@ class EvalAsymSetContractBox implements EvalAsymSetContract {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("private(set) property should fail public interface set contract");
@@ -143,6 +147,7 @@ class EvalAsymAbstractSetBox extends EvalAsymAbstractSetBase {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("private(set) property should fail public abstract set contract");
@@ -172,6 +177,7 @@ return true;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -193,6 +199,7 @@ class EvalAsymPrivateSetInterfaceBox implements EvalAsymPrivateSetInterfaceContr
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("private(set) interface contract should be final");
@@ -214,6 +221,7 @@ class EvalAsymPrivateSetAbstractBox extends EvalAsymPrivateSetAbstractBase {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("private(set) abstract property should be final");
@@ -263,6 +271,7 @@ return $box->value . ":" . $readonly->count . ":" . $widened->count . ":" . $wid
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -283,6 +292,7 @@ class EvalPropertyStringChild extends EvalPropertyTypeBase {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let err = execute_program(&incompatible_type, &mut scope, &mut values)
         .expect_err("incompatible inherited property type should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -298,6 +308,7 @@ class EvalPropertyProtectedChild extends EvalPropertyPublicBase {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let err = execute_program(&reduced_visibility, &mut scope, &mut values)
         .expect_err("reduced inherited property visibility should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -313,6 +324,7 @@ class EvalPropertyTypedChild extends EvalPropertyUntypedBase {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let err = execute_program(&typed_from_untyped, &mut scope, &mut values)
         .expect_err("typed inherited property redeclaration should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -328,6 +340,7 @@ class EvalPropertyInstanceChild extends EvalPropertyStaticBase {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let err = execute_program(&static_mismatch, &mut scope, &mut values)
         .expect_err("static inherited property redeclaration should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -343,6 +356,7 @@ class EvalPropertyMutableChild extends EvalPropertyReadonlyBase {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let err = execute_program(&readonly_mismatch, &mut scope, &mut values)
         .expect_err("readonly inherited property redeclaration should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -358,6 +372,7 @@ class EvalPropertyPrivateSetChild extends EvalPropertyProtectedSetBase {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let err = execute_program(&reduced_write_visibility, &mut scope, &mut values)
         .expect_err("reduced inherited property write visibility should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -373,6 +388,7 @@ readonly class EvalReadonlyParentMismatchChild extends EvalReadonlyParentMismatc
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("readonly class cannot extend non-readonly parent");

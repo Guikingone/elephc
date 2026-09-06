@@ -27,6 +27,7 @@ return function_exists("iterator_count") && function_exists("iterator_to_array")
         .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -45,6 +46,7 @@ return function_exists("iterator_apply");"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let iterator = values.alloc(FakeValue::Iterator {
         len: 3,
         position: 0,
@@ -67,6 +69,7 @@ return call_user_func("iterator_apply", $it, [$box, "add_x"], [1]);"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let iterator = values.alloc(FakeValue::Iterator {
         len: 3,
         position: 0,
@@ -88,6 +91,7 @@ return iterator_apply($it, "eval_stop");"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let iterator = values.alloc(FakeValue::Iterator {
         len: 3,
         position: 0,
@@ -129,6 +133,7 @@ return function_exists("array_filter");"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 

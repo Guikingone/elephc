@@ -33,6 +33,7 @@ echo $box->name() . ":" . $box->label();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     execute_program(&valid, &mut scope, &mut values).expect("execute eval ir");
 
@@ -47,6 +48,7 @@ echo $box->name() . ":" . $box->label();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let err = execute_program(&invalid, &mut scope, &mut values)
         .expect_err("override marker without target should fail");
 
@@ -73,6 +75,7 @@ echo $box->label();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     execute_program(&valid, &mut scope, &mut values).expect("execute eval ir");
 
@@ -92,6 +95,7 @@ echo $box;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     execute_program(&builtin_parent, &mut scope, &mut values).expect("execute eval ir");
 
@@ -106,6 +110,7 @@ echo $box;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let err = execute_program(&invalid, &mut scope, &mut values)
         .expect_err("interface override marker without parent method should fail");
 
@@ -154,6 +159,7 @@ fn execute_program_rejects_invalid_builtin_attribute_targets() {
         let program = parse_fragment(source).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
+    values.count_references();
         let err = execute_program(&program, &mut scope, &mut values).expect_err(label);
 
         assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -173,6 +179,7 @@ echo EvalReadonlyStaticBox::$count;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -197,6 +204,7 @@ return $box->id();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 

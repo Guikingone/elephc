@@ -110,13 +110,9 @@ pub(super) struct FakeOps {
     /// `ELEPHC_FAKE_COUNT_REFERENCES` turns it on for every fixture at once, which is how a module
     /// is surveyed before its own tests opt in.
     ///
-    /// Six tests still over-release under that survey and are left uncounted deliberately, one
-    /// family at a time rather than silenced:
-    /// `builtins_arrays_iterators::{execute_program_dispatches_iterator_apply_object_builtin,
-    /// execute_program_iterator_apply_dispatches_object_method_array}`,
-    /// `builtins_class_metadata::property_values::execute_program_reflects_eval_parameter_declaring_class`,
-    /// `classes::basics::execute_program_supports_legacy_var_properties`,
-    /// `classes::promoted_references::execute_program_aliases_by_reference_promoted_static_and_nested_properties`,
+    /// Two tests still over-release under that survey and are left uncounted deliberately rather
+    /// than silenced:
+    /// `classes::promoted_references::execute_program_aliases_by_reference_promoted_static_and_nested_properties`
     /// and `core::execute_context_function_persists_static_local_inside_catch`.
     pub(super) counted_mode: bool,
     /// Releases that drove a count below zero, recorded whether or not counting is enforced.
@@ -325,6 +321,23 @@ impl FakeOps {
         properties
             .iter()
             .find_map(|(property, value)| (property == name).then_some(*value))
+    }
+
+    /// Returns whether one handle is among an object's stored property values.
+    ///
+    /// Used to tell a method result that was MINTED for the call from one that is a stored slot
+    /// handed straight back: the first is already owned, the second is a borrow the real bridge
+    /// would have boxed.
+    pub(super) fn object_holds_property_value(
+        &mut self,
+        object: RuntimeCellHandle,
+        candidate: RuntimeCellHandle,
+    ) -> bool {
+        matches!(
+            self.values.get(&(object.as_ptr() as usize)),
+            Some(FakeValue::Object(properties))
+                if properties.iter().any(|(_, value)| *value == candidate)
+        )
     }
 
     /// Configures one fake array-set call to fail for cleanup-path tests.
