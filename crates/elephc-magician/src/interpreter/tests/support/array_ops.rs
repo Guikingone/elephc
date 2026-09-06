@@ -60,15 +60,24 @@ impl FakeOps {
                 if index < 0 {
                     return self.null();
                 }
-                elements
-                    .get(index as usize)
-                    .copied()
-                    .map_or_else(|| self.null(), Ok)
+                // `mixed_array_get` returns an OWNED `Mixed*` on every path: it increfs a stored
+                // boxed cell, or freshly boxes a typed slot. Handing back the stored handle
+                // unretained made every caller that correctly released it look like an
+                // over-release.
+                match elements.get(index as usize).copied() {
+                    Some(value) => self.runtime_retain(value),
+                    None => self.null(),
+                }
             }
-            FakeValue::Assoc(entries) => entries
-                .iter()
-                .find_map(|(entry_key, value)| (entry_key == &key).then_some(*value))
-                .map_or_else(|| self.null(), Ok),
+            FakeValue::Assoc(entries) => {
+                let found = entries
+                    .iter()
+                    .find_map(|(entry_key, value)| (entry_key == &key).then_some(*value));
+                match found {
+                    Some(value) => self.runtime_retain(value),
+                    None => self.null(),
+                }
+            }
             _ => self.null(),
         }
     }

@@ -18,10 +18,19 @@ impl FakeOps {
         property: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match self.get(object) {
-            FakeValue::Object(properties) => properties
-                .iter()
-                .find_map(|(name, value)| (name == property).then_some(*value))
-                .map_or_else(|| self.null(), Ok),
+            FakeValue::Object(properties) => {
+                let found = properties
+                    .iter()
+                    .find_map(|(name, value)| (name == property).then_some(*value));
+                match found {
+                    // The real helper BOXES the slot through `__rt_mixed_from_value`, which
+                    // retains an object payload, so a property read hands the caller an OWNED
+                    // cell. Handing back the stored handle unretained made every caller that
+                    // correctly released it look like an over-release.
+                    Some(value) => self.runtime_retain(value),
+                    None => self.null(),
+                }
+            }
             _ => Err(EvalStatus::UnsupportedConstruct),
         }
     }

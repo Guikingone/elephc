@@ -430,6 +430,25 @@ fn eval_generator_execute_step(
     })
 }
 
+/// Evaluates one yielded expression as a value the FRAME may keep.
+///
+/// `eval_expr` hands back a BORROWED cell for a variable read, and the frame's current pair is
+/// given back by `eval_generator_clear_current`, so storing the borrow releases a cell the
+/// generator's own scope still holds — `yield $i` inside a loop gave back `$i` on every pass.
+/// This is the rule assignment already applies with `copy_value`.
+fn eval_generator_kept_expr(
+    expr: &EvalExpr,
+    frame: &mut EvalGeneratorFrame,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = eval_expr(expr, context, &mut frame.scope, values)?;
+    if matches!(expr, EvalExpr::LoadVar(_)) {
+        return values.copy_value(value);
+    }
+    Ok(value)
+}
+
 /// Runs the steps that evaluate expressions or move the iteration on.
 fn eval_generator_execute_value_step(
     frame: &mut EvalGeneratorFrame,
@@ -439,9 +458,9 @@ fn eval_generator_execute_value_step(
 ) -> Result<EvalGeneratorFlow, EvalStatus> {
     Ok(match step {
         EvalGeneratorStep::Yield { key, value, into } => {
-            let value = eval_expr(&value, context, &mut frame.scope, values)?;
+            let value = eval_generator_kept_expr(&value, frame, context, values)?;
             let key = match key {
-                Some(key) => eval_expr(&key, context, &mut frame.scope, values)?,
+                Some(key) => eval_generator_kept_expr(&key, frame, context, values)?,
                 None => {
                     let key = values.int(frame.auto_key)?;
                     frame.auto_key += 1;

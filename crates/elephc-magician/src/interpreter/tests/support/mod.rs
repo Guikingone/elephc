@@ -92,6 +92,28 @@ pub(super) struct FakeOps {
     /// counter would keep advancing exactly as the buggy runtime's did.
     pub(super) inert_resources: std::collections::HashSet<i64>,
     pub(super) object_classes: HashMap<usize, String>,
+    /// Live reference count per fake cell, so a release can tell FINAL from one of several.
+    ///
+    /// WHY THIS EXISTS. The fake used to answer "final" for every object release and to make
+    /// `retain` a no-op, which left every ownership question structurally unaskable here: a test
+    /// could be green while asserting the opposite of PHP, and a genuine refcount fix looked like
+    /// a no-op. Counting makes the three behaviours that depend on a second live reference
+    /// observable — an `IteratorAggregate` temporary dying with `getIterator()`, a generator
+    /// method's receiver outliving the call that built it, and any release of a cell the releaser
+    /// never owned.
+    pub(super) refcounts: HashMap<usize, i64>,
+    /// Whether a release that drives a count below zero fails the test instead of being recorded.
+    ///
+    /// Off by default so the whole suite does not have to be corrected in one step. A test opts
+    /// in with `count_references()`, and the modules that are ABOUT ownership run counted.
+    ///
+    /// Enforcing it everywhere today fails 24 further tests, almost all in reflection member
+    /// construction: the metadata objects (`__name`, `__attrs`, `__properties`, …) and
+    /// `ReflectionNamedType` cells are released by a path that never took a reference. They are
+    /// left uncounted deliberately, one family at a time, rather than silenced.
+    pub(super) counted_mode: bool,
+    /// Releases that drove a count below zero, recorded whether or not counting is enforced.
+    pub(super) over_releases: Vec<FakeOverRelease>,
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
     pub(super) warnings: Vec<String>,
@@ -99,6 +121,17 @@ pub(super) struct FakeOps {
     pub(super) array_set_calls: usize,
     pub(super) ob_stack: Vec<FakeObLevel>,
     pub(super) ob_implicit_flush: bool,
+}
+
+/// One release that took a fake cell's reference count below zero.
+///
+/// The count and the value's shape are both recorded because "handle 41 went to -1" alone does
+/// not say what was released; the shape is usually enough to recognize the site.
+#[derive(Clone, Debug)]
+pub(super) struct FakeOverRelease {
+    pub(super) handle: usize,
+    pub(super) count_after: i64,
+    pub(super) value: String,
 }
 
 /// One fake output-buffer level: captured text plus the ob_start metadata the
@@ -126,7 +159,38 @@ impl FakeOps {
         self.next_id += 1;
         let id = self.next_id;
         self.values.insert(id, value);
+        self.refcounts.insert(id, 1);
         RuntimeCellHandle::from_raw(id as *mut RuntimeCell)
+    }
+
+    /// Turns on reference counting for this fixture.
+    ///
+    /// A release that drives a count below zero then FAILS the test, naming the handle and the
+    /// value it held. That is the point: a path that gives back a cell it never owned is exactly
+    /// what silently destroyed live objects, and each one has to surface on its own.
+    pub(super) fn count_references(&mut self) {
+        self.counted_mode = true;
+    }
+
+    /// Returns one fake cell's live reference count.
+    pub(super) fn refcount(&self, value: RuntimeCellHandle) -> i64 {
+        self.refcounts
+            .get(&(value.as_ptr() as usize))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Returns every release that took a count below zero, in the order they happened.
+    pub(super) fn over_releases(&self) -> &[FakeOverRelease] {
+        &self.over_releases
+    }
+
+    /// Adds `delta` to one cell's count and reports the result.
+    pub(super) fn adjust_refcount(&mut self, value: RuntimeCellHandle, delta: i64) -> i64 {
+        let id = value.as_ptr() as usize;
+        let count = self.refcounts.entry(id).or_insert(0);
+        *count += delta;
+        *count
     }
 
     /// Records a payload as inert, so no PHP resource id is ever bound to it.
@@ -252,6 +316,58 @@ impl FakeOps {
         self.fail_array_set_call = Some(call_index);
         self.array_set_calls = 0;
     }
+}
+
+/// Verifies the fixture counts references, so a release with another reference live is not final.
+///
+/// This is what the fixture could not answer before: `final_object_identity_for_release` said
+/// "final" for every object, which made a destructor fire while a second reference was still
+/// live and made a real refcount fix look like a no-op.
+#[test]
+fn a_second_reference_makes_a_release_not_final() {
+    let mut values = FakeOps::default();
+    values.count_references();
+    let object = values.alloc(FakeValue::Object(Vec::new()));
+    values.object_classes.insert(object.as_ptr() as usize, "C".to_string());
+    assert_eq!(values.refcount(object), 1);
+
+    let second = values.retain(object).expect("retain the fake object");
+    assert_eq!(values.refcount(object), 2);
+    assert_eq!(
+        values
+            .final_object_identity_for_release(second)
+            .expect("ask whether the release is final"),
+        None,
+        "a release with another reference live must not be final",
+    );
+
+    values.release(second).expect("give the second reference back");
+    assert_eq!(values.refcount(object), 1);
+    assert!(
+        values
+            .final_object_identity_for_release(object)
+            .expect("ask whether the last release is final")
+            .is_some(),
+        "the last release must be final",
+    );
+}
+
+/// Verifies an over-release is recorded even when counting is not enforced.
+///
+/// The record is what lets a whole module be surveyed before any of it is enforced.
+#[test]
+fn an_over_release_is_recorded_without_being_enforced() {
+    let mut values = FakeOps::default();
+    let cell = values.alloc(FakeValue::Int(7));
+    values.release(cell).expect("give the only reference back");
+    assert!(values.over_releases().is_empty());
+
+    values.release(cell).expect("release a cell nobody owns");
+    let recorded = values.over_releases();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].handle, cell.as_ptr() as usize);
+    assert_eq!(recorded[0].count_after, -1);
+    assert_eq!(recorded[0].value, "Int(7)");
 }
 
 /// Test native invoker that returns the descriptor pointer as a runtime cell.

@@ -23,6 +23,7 @@ fn out(fragment: &[u8]) -> String {
     let program = parse_fragment(fragment).expect("parse reflection property fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     execute_program(&program, &mut scope, &mut values).expect("execute reflection property fragment");
     values.output.clone()
 }

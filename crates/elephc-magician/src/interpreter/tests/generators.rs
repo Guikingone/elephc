@@ -23,6 +23,7 @@ fn out(fragment: &[u8]) -> String {
     let program = parse_fragment(fragment).expect("parse generator fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     execute_program(&program, &mut scope, &mut values).expect("execute generator fragment");
     values.output.clone()
 }
@@ -32,6 +33,7 @@ fn throws(fragment: &[u8]) -> (String, EvalStatus) {
     let program = parse_fragment(fragment).expect("parse generator fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.count_references();
     let status = execute_program(&program, &mut scope, &mut values)
         .expect_err("fragment should raise");
     (values.output.clone(), status)
