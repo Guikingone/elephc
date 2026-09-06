@@ -657,29 +657,6 @@ pub(in crate::parser) fn is_assignment_target(target: &EvalExpr) -> bool {
     )
 }
 
-/// Returns whether a lvalue is handled by the statement-level reference binder.
-///
-/// The expression parser hands these targets back UNCONSUMED when a `&` follows the `=`, so the
-/// statement tail can build a binding statement instead of an assignment expression. An array
-/// ELEMENT belongs here for the same reason a property does: `$this->data["bag"] = &$rows;` is
-/// `EvalStmt::ArrayReferenceBind`, and without this the expression parser marched past the `=`
-/// and refused the `&` as the start of a value it could not parse.
-fn is_property_reference_target(target: &EvalExpr) -> bool {
-    matches!(
-        target,
-        EvalExpr::PropertyGet { .. }
-            | EvalExpr::DynamicPropertyGet { .. }
-            | EvalExpr::DynamicStaticPropertyGet { .. }
-            | EvalExpr::DynamicStaticPropertyNameGet { .. }
-            // An array element of any writable chain, `$this->data[$key] = &$rows;` above all.
-            // Leaving the `= &` to the statement tail is what routes it to
-            // `property_reference_bind_stmt`, which builds the `ArrayReferenceBind` that writes
-            // through a whole element path; reading the `&` here instead would try to parse it as
-            // the start of a value.
-            | EvalExpr::ArrayGet { .. }
-    )
-}
-
 /// Extracts the lvalue assigned before PHP applies a leading logical negation.
 fn negated_assignment_target(target: &EvalExpr) -> Option<EvalExpr> {
     let EvalExpr::Unary {

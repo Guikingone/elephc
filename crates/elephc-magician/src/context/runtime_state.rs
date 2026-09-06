@@ -312,6 +312,43 @@ impl ElephcEvalContext {
         self.function_stack.push(name.into());
     }
 
+    /// Marks whether the body about to run returns BY REFERENCE, returning the previous value.
+    ///
+    /// Saved and restored by the caller rather than kept on a stack, because the three places
+    /// that run a body -- function, closure, method -- already own that save/restore shape and a
+    /// parallel stack could desync from `function_stack` on an early return.
+    pub fn set_returns_by_ref(&mut self, returns_by_ref: bool) -> bool {
+        std::mem::replace(&mut self.returns_by_ref, returns_by_ref)
+    }
+
+    /// Returns whether the currently executing body was declared to return by reference.
+    pub const fn returns_by_ref(&self) -> bool {
+        self.returns_by_ref
+    }
+
+    /// Records the reference a by-reference `return` produced, with the value already RETAINED.
+    ///
+    /// Whatever outlives the call owns its reference: the callee's activation scope is drained
+    /// the moment it returns, so the cell handed to the caller has to carry a reference of its
+    /// own. Any previous unclaimed reference is given back, which is what a `&f();` statement --
+    /// a by-reference call whose result nobody binds -- leaves behind.
+    pub fn set_pending_return_reference(
+        &mut self,
+        target: EvalReferenceTarget,
+        value: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        self.pending_return_reference
+            .replace((target, value))
+            .map(|(_, value)| value)
+    }
+
+    /// Takes the reference a by-reference `return` produced, handing its ownership to the caller.
+    pub fn take_pending_return_reference(
+        &mut self,
+    ) -> Option<(EvalReferenceTarget, RuntimeCellHandle)> {
+        self.pending_return_reference.take()
+    }
+
     /// Pops the current eval-executed function name after its body completes.
     pub fn pop_function(&mut self) {
         self.function_stack.pop();

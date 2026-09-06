@@ -310,6 +310,17 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             context,
             values,
         ),
+        EvalReferenceTarget::StaticLocal { function, name } => {
+            // The store keeps this until the NEXT call, so it takes a reference of its own and
+            // gives back the one it displaces -- the same rule `persist_static_locals` applies.
+            let stored = values.retain(value)?;
+            if let Some(replaced) =
+                context.set_static_local(function.clone(), name.clone(), stored)
+            {
+                values.release(replaced)?;
+            }
+            Ok(())
+        }
         EvalReferenceTarget::Cell { .. } => Ok(()),
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
             write_back_invoker_slot_ref_target(*slot, *source_tag, value, values)

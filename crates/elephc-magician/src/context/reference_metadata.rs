@@ -57,6 +57,15 @@ pub enum EvalReferenceTarget {
         property: String,
         access_scope: ElephcEvalExecutionScope,
     },
+    /// One function's `static` local, which lives in the context and outlives every activation.
+    ///
+    /// A by-reference RETURN of a static local must name it this way. The scope-based
+    /// `Variable` target points into the activation scope, which is drained the moment the call
+    /// returns, so the caller would hold a reference into freed storage.
+    StaticLocal {
+        function: String,
+        name: String,
+    },
     Cell {
         cell: RuntimeCellHandle,
     },

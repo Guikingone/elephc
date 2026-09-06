@@ -207,6 +207,122 @@ pub(in crate::interpreter) fn eval_array_append_reference_bind(
     write_reference_location(location, source_target, source_value, context, scope, values)
 }
 
+/// Executes `return EXPR;` inside a function declared to return BY REFERENCE.
+///
+/// The caller may bind to what comes back, so the reference has to survive the activation being
+/// drained. Whatever outlives the call owns its reference: the value cell is RETAINED into the
+/// context, and the target is rewritten to one that outlives the frame -- a static local names
+/// the context store, a by-reference parameter's element names the CALLER's target, and a plain
+/// local, whose storage really does die with the call, keeps only the cell.
+///
+/// A non-reference return is not an error: `php -n` 8.5.6 emits
+/// `Notice: Only variable references should be returned by reference` and binds a copy.
+pub(in crate::interpreter) fn eval_by_ref_return(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    if !eval_expr_binds_a_reference_source(expr) {
+        // Same diagnostic channel every other notice-level message here uses.
+        values.warning("Only variable references should be returned by reference")?;
+        let value = eval_expr(expr, context, scope, values)?;
+        return Ok(EvalControl::Return(value));
+    }
+    let (target, value) = eval_reference_source(expr, context, scope, values)?;
+    let target = eval_persistent_return_target(target, context, scope);
+    let retained = values.retain(value)?;
+    if let Some(unclaimed) = context.set_pending_return_reference(target, retained) {
+        eval_release_value(context, values, unclaimed)?;
+    }
+    Ok(EvalControl::Return(value))
+}
+
+/// Returns whether one expression is a CALL, whose reference comes from the callee's `return`.
+fn eval_expr_is_call_shaped(expr: &EvalExpr) -> bool {
+    matches!(
+        expr,
+        EvalExpr::Call { .. }
+            | EvalExpr::NamespacedCall { .. }
+            | EvalExpr::DynamicCall { .. }
+            | EvalExpr::MethodCall { .. }
+            | EvalExpr::NullsafeMethodCall { .. }
+            | EvalExpr::DynamicMethodCall { .. }
+            | EvalExpr::NullsafeDynamicMethodCall { .. }
+            | EvalExpr::StaticMethodCall { .. }
+            | EvalExpr::DynamicStaticMethodCall { .. }
+    )
+}
+
+/// Returns whether one returned expression names storage PHP can hand back by reference.
+fn eval_expr_binds_a_reference_source(expr: &EvalExpr) -> bool {
+    matches!(
+        expr,
+        EvalExpr::LoadVar(_)
+            | EvalExpr::ArrayGet { .. }
+            | EvalExpr::PropertyGet { .. }
+            | EvalExpr::DynamicPropertyGet { .. }
+            | EvalExpr::StaticPropertyGet { .. }
+            | EvalExpr::DynamicStaticPropertyGet { .. }
+            | EvalExpr::DynamicStaticPropertyNameGet { .. }
+    )
+}
+
+/// Rewrites a returned reference target into one that outlives the activation scope.
+fn eval_persistent_return_target(
+    target: EvalReferenceTarget,
+    context: &ElephcEvalContext,
+    scope: &ElephcEvalScope,
+) -> EvalReferenceTarget {
+    let function = context.current_function().unwrap_or_default().to_string();
+    match target {
+        EvalReferenceTarget::Variable { scope: _, name } => {
+            eval_persistent_name_target(&function, &name, context, scope)
+        }
+        EvalReferenceTarget::ArrayElement {
+            scope: _,
+            array_name,
+            index,
+        } => {
+            let array_target =
+                eval_persistent_name_target(&function, &array_name, context, scope);
+            EvalReferenceTarget::NestedArrayElement {
+                array_target: Box::new(array_target),
+                index,
+            }
+        }
+        target => target,
+    }
+}
+
+/// Returns the persistent target one scope NAME denotes, or a bare cell when nothing outlives it.
+fn eval_persistent_name_target(
+    function: &str,
+    name: &str,
+    context: &ElephcEvalContext,
+    scope: &ElephcEvalScope,
+) -> EvalReferenceTarget {
+    if let Some(target) = scope.reference_target(name) {
+        // A by-reference PARAMETER already points at the caller's storage, which outlives this
+        // call by construction.
+        return target.clone();
+    }
+    if context.static_local(function, name).is_some() {
+        return EvalReferenceTarget::StaticLocal {
+            function: function.to_string(),
+            name: name.to_string(),
+        };
+    }
+    // A plain local's storage really does die with the call. PHP keeps the VALUE alive because
+    // the reference is refcounted, and that is what the retained cell does here; there is no
+    // storage left for a write to reach, which is what php shows too.
+    EvalReferenceTarget::Cell {
+        cell: scope
+            .visible_cell(name)
+            .unwrap_or_else(|| RuntimeCellHandle::from_raw(std::ptr::null_mut())),
+    }
+}
+
 /// Binds one reference and returns the bound VALUE, for `TARGET = &SOURCE` in expression position.
 ///
 /// PHP's value here is the bound value as a COPY rather than a second alias: after
@@ -564,6 +680,17 @@ fn eval_reference_source(
             index: Box::new(EvalExpr::Const(EvalConst::Int(index))),
         };
         return eval_reference_source(&element, context, scope, values);
+    }
+    if eval_expr_is_call_shaped(source) {
+        // A by-reference RETURN leaves its reference on the context, already retained. Taking it
+        // transfers that ownership to this bind; a callee that was NOT declared by reference
+        // leaves nothing, and php binds a copy there rather than failing.
+        let value = eval_expr(source, context, scope, values)?;
+        if let Some((target, referenced)) = context.take_pending_return_reference() {
+            eval_release_value(context, values, referenced)?;
+            return Ok((target, value));
+        }
+        return Ok((EvalReferenceTarget::Cell { cell: value }, value));
     }
     if let EvalExpr::LoadVar(source) = source {
         if let Some(target) = scope.reference_target(source).cloned() {

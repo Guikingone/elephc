@@ -192,7 +192,11 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         };
     }
     let previous_source = enter_dynamic_class_method_source(class_name, method, context);
+    // The RETURN statement needs to know whether this body hands back a reference, and the flag
+    // is saved and restored around the body so a nested call cannot leak its own answer out.
+    let previous_by_ref = context.set_returns_by_ref(method.returns_by_ref());
     let result = execute_statements(method.body(), context, &mut method_scope, values);
+    context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
         &qualified_method_name,
@@ -364,7 +368,11 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
         };
     }
     let previous_source = enter_dynamic_class_method_source(class_name, method, context);
+    // The RETURN statement needs to know whether this body hands back a reference, and the flag
+    // is saved and restored around the body so a nested call cannot leak its own answer out.
+    let previous_by_ref = context.set_returns_by_ref(method.returns_by_ref());
     let result = execute_statements(method.body(), context, &mut method_scope, values);
+    context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
         &qualified_method_name,

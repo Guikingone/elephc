@@ -745,6 +745,9 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             context.replace_execution_scope(previous_scope);
             result
         }
+        EvalReferenceTarget::StaticLocal { function, name } => context
+            .static_local(function, name)
+            .map_or_else(|| values.null(), Ok),
         EvalReferenceTarget::Cell { cell } => Ok(*cell),
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
             eval_invoker_slot_ref_target_value(*slot, *source_tag, values)

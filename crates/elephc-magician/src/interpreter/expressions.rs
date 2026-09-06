@@ -25,7 +25,8 @@ pub(in crate::interpreter) use evaluation::{
 use evaluation::*;
 pub(in crate::interpreter) use null_coalesce_assign::{
     eval_array_append, eval_array_append_reference_bind, eval_array_append_result,
-    eval_array_reference_bind, eval_reference_bind_result, eval_store_value_in_lvalue,
+    eval_array_reference_bind, eval_by_ref_return, eval_reference_bind_result,
+    eval_store_value_in_lvalue,
     eval_var_reference_bind,
 };
 use null_coalesce_assign::{

@@ -104,21 +104,17 @@ fn parse_fragment_refuses_a_reference_append_in_expression_position() {
     assert_eq!(error.error(), EvalParseError::ExpectedSemicolon);
 }
 
-/// Verifies a by-reference DECLARATION parses while binding to its result is still refused.
+/// Verifies a by-reference declaration and a bind to its result both parse.
 ///
-/// SCOPE, pinned rather than implied. `function &f()` now parses, and called by value it is
-/// indistinguishable from a by-value function, which is how nearly all PHP code calls one.
-/// `$r = &f();` is a DIFFERENT construct: it needs the callee to hand a writable target back to
-/// the caller, which nothing in the interpreter does yet. `php -n` 8.5.6 accepts it, so this is
-/// a gap, and it is recorded here as a refusal rather than left to be discovered as a wrong
-/// answer -- binding by value would silently make `$r = 9` a no-op on the original.
+/// The gap this test was written to pin -- the declaration parsing while the BIND stayed refused
+/// -- is closed. Both halves parse now, and what the bind DOES is a behavioural question
+/// answered against `php -n` in `interpreter::tests::by_ref_return`.
 #[test]
-fn parse_fragment_accepts_a_by_ref_declaration_and_refuses_binding_to_its_result() {
+fn parse_fragment_accepts_a_by_ref_declaration_and_a_bind_to_its_result() {
     parse_fragment(br#"function &counter() { static $n = 1; return $n; }"#)
         .expect("a by-reference declaration should parse");
-    let error = parse_fragment(br#"function &counter() { static $n = 1; return $n; } $r = &counter();"#)
-        .expect_err("binding to a by-reference call result should still be refused");
-    assert_eq!(error.error(), EvalParseError::UnsupportedConstruct);
+    parse_fragment(br#"function &counter() { static $n = 1; return $n; } $r = &counter();"#)
+        .expect("binding to a by-reference call result should parse");
 }
 
 /// Verifies null-coalescing assignment is an expression with a writable array target.
@@ -497,17 +493,16 @@ fn parse_fragment_accepts_a_static_property_as_a_reference_source() {
     );
 }
 
-/// Verifies a reference source that names no storage is refused, not silently copied.
+/// Verifies a CALL is a legal reference source while a literal is still refused.
 ///
-/// PHP accepts `&f()` and either aliases a by-reference return or warns and assigns by value.
-/// The interpreter can do neither, so it reports an unsupported construct rather than lowering
-/// a binding whose behavior would differ from PHP's without saying so.
+/// This expectation used to refuse both, on the ground that the interpreter could neither alias
+/// a by-reference return nor warn and copy. It can now do exactly that, so a call parses and the
+/// RUNTIME decides: a callee declared to return by reference hands its reference over, and one
+/// that is not raises php's `Only variable references should be returned by reference` and binds
+/// a copy. A literal names no storage under any callee and stays a refusal.
 #[test]
-fn parse_fragment_rejects_a_non_lvalue_reference_source() {
-    assert_eq!(
-        parse_fragment_error(b"$shared = &make_it();"),
-        Err(EvalParseError::UnsupportedConstruct)
-    );
+fn parse_fragment_accepts_a_call_reference_source_and_refuses_a_literal() {
+    parse_fragment(b"$shared = &make_it();").expect("a call is a legal reference source");
     assert_eq!(
         parse_fragment_error(b"$shared = &1;"),
         Err(EvalParseError::UnsupportedConstruct)

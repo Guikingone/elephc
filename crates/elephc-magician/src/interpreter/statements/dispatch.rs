@@ -204,9 +204,12 @@ pub(in crate::interpreter) fn execute_stmt(
                 execute_statements(else_branch, context, scope, values)
             }
         }
-        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(eval_expr(
-            expr, context, scope, values,
-        )?)),
+        EvalStmt::Return(Some(expr)) => {
+            if context.returns_by_ref() {
+                return eval_by_ref_return(expr, context, scope, values);
+            }
+            Ok(EvalControl::Return(eval_expr(expr, context, scope, values)?))
+        }
         EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
         EvalStmt::ReferenceAssign { target, source } => {
             for replaced in set_reference_alias(context, scope, target, source, values)? {

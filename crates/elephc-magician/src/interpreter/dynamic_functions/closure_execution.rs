@@ -124,7 +124,11 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             (Ok(generator), Ok(())) => Ok(generator),
         };
     }
+    // The RETURN statement needs to know whether this body hands back a reference, and the flag
+    // is saved and restored around the body so a nested call cannot leak its own answer out.
+    let previous_by_ref = context.set_returns_by_ref(function.returns_by_ref());
     let result = execute_statements(function.body(), context, &mut function_scope, values);
+    context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -467,7 +471,11 @@ fn eval_closure_with_optional_binding(
             (Ok(generator), Ok(())) => Ok(generator),
         };
     }
+    // The RETURN statement needs to know whether this body hands back a reference, and the flag
+    // is saved and restored around the body so a nested call cannot leak its own answer out.
+    let previous_by_ref = context.set_returns_by_ref(function.returns_by_ref());
     let result = execute_statements(function.body(), context, &mut function_scope, values);
+    context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
         function.name(),

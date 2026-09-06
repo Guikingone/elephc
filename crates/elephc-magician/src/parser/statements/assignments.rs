@@ -958,7 +958,20 @@ enum ReferenceSource {
 fn eval_expr_binds_a_reference(expr: &EvalExpr) -> bool {
     matches!(
         expr,
-        EvalExpr::ArrayAppendSlot { .. }
+        // A CALL is a legal source: `$r = &$obj->get();` binds what a function declared
+        // `function &get()` returned. Whether the callee actually returned a reference is a
+        // RUNTIME question -- php answers a plain `return 5;` there with a notice and a copy,
+        // not a parse error -- so the grammar accepts every call shape.
+        EvalExpr::Call { .. }
+            | EvalExpr::NamespacedCall { .. }
+            | EvalExpr::DynamicCall { .. }
+            | EvalExpr::MethodCall { .. }
+            | EvalExpr::NullsafeMethodCall { .. }
+            | EvalExpr::DynamicMethodCall { .. }
+            | EvalExpr::NullsafeDynamicMethodCall { .. }
+            | EvalExpr::StaticMethodCall { .. }
+            | EvalExpr::DynamicStaticMethodCall { .. }
+            | EvalExpr::ArrayAppendSlot { .. }
             | EvalExpr::LoadVar(_)
             | EvalExpr::ArrayGet { .. }
             | EvalExpr::PropertyGet { .. }
