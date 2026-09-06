@@ -9,7 +9,7 @@
 //! - The pass removes declarations only after a fixed-point reachability proof.
 //! - The AST and `CheckResult` are pruned together so lowering cannot resurrect dead methods.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::Program;
 use crate::types::CheckResult;
@@ -25,8 +25,11 @@ pub use inventory::PreludeInventory;
 /// Inputs that add compiler-owned roots to the declaration graph.
 pub struct PruneOptions<'a> {
     pub inventory: &'a PreludeInventory,
-    pub forced_groups: &'a HashSet<String>,
-    pub exported_functions: &'a HashSet<String>,
+    // These two stay STD-hashed on purpose. They are inputs handed in by the pipeline and are read
+    // a handful of times, not keys in the fixed point's hot path, so there is nothing to gain by
+    // making every caller build them with the fast hasher — and this is a public signature.
+    pub forced_groups: &'a std::collections::HashSet<String>,
+    pub exported_functions: &'a std::collections::HashSet<String>,
     pub eval_forced: bool,
 }
 

@@ -11,7 +11,7 @@
 //! - Scoped parent edges stay class-specific while preserving matching slots on the whole vtable lineage.
 //! - Checker-injected interface contracts retain implementations even without source interface AST.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::Stmt;
@@ -91,7 +91,14 @@ pub fn compute(
     let mut state = GraphState::new(
         index,
         executable_usage.hazards,
-        options.inventory.internal_callable_methods(),
+        // The inventory hands back a std-hashed set; the graph keys everything with the fast
+        // hasher, so it is rebuilt once here rather than left as the one SipHash set in the
+        // fixed point's hot path.
+        options
+            .inventory
+            .internal_callable_methods()
+            .into_iter()
+            .collect(),
         check_result,
     );
     state.apply_usage(executable_usage, true);
@@ -245,19 +252,19 @@ impl GraphState {
                 ..Reachability::default()
             },
             behavioral: BehavioralReachability::default(),
-            structural_referenced_methods: HashSet::new(),
-            scoped_methods: HashSet::new(),
-            behavioral_scoped_methods: HashSet::new(),
-            instantiated_classes: HashSet::new(),
-            scanned_functions: HashSet::new(),
-            behaviorally_scanned_functions: HashSet::new(),
-            scanned_classes: HashSet::new(),
-            behaviorally_scanned_classes: HashSet::new(),
-            scanned_methods: HashSet::new(),
-            behaviorally_scanned_methods: HashSet::new(),
-            opaque_variables: HashSet::new(),
+            structural_referenced_methods: HashSet::default(),
+            scoped_methods: HashSet::default(),
+            behavioral_scoped_methods: HashSet::default(),
+            instantiated_classes: HashSet::default(),
+            scanned_functions: HashSet::default(),
+            behaviorally_scanned_functions: HashSet::default(),
+            scanned_classes: HashSet::default(),
+            behaviorally_scanned_classes: HashSet::default(),
+            scanned_methods: HashSet::default(),
+            behaviorally_scanned_methods: HashSet::default(),
+            opaque_variables: HashSet::default(),
             all_variables_opaque: false,
-            behavioral_variable_methods: HashMap::new(),
+            behavioral_variable_methods: HashMap::default(),
             internal_callable_methods,
             checker_magic_methods_by_class: magic_methods_by_visible_class(
                 &checker_method_implementations,
@@ -505,7 +512,7 @@ impl GraphState {
                 .cloned()
                 .or_else(|| {
                     let mut current = Some(class.clone());
-                    let mut seen = HashSet::new();
+                    let mut seen = HashSet::default();
                     while let Some(candidate) = current {
                         if !seen.insert(candidate.clone()) {
                             return None;
@@ -562,8 +569,8 @@ impl GraphState {
                 }
             }
             let mut current = Some(class.clone());
-            let mut seen_classes = HashSet::new();
-            let mut found_methods = HashSet::new();
+            let mut seen_classes = HashSet::default();
+            let mut found_methods = HashSet::default();
             while let Some(owner) = current {
                 if !seen_classes.insert(owner.clone()) {
                     break;
@@ -622,7 +629,7 @@ impl GraphState {
                     continue;
                 }
                 let mut current = Some(class.clone());
-                let mut seen = HashSet::new();
+                let mut seen = HashSet::default();
                 while let Some(owner) = current {
                     if !seen.insert(owner.clone()) {
                         break;
@@ -779,7 +786,7 @@ impl GraphState {
     /// instead of promoting the global dynamic-method hazard and retaining unrelated classes.
     fn keep_class_alias_target_methods(&mut self, target: &str, behavioral: bool) {
         let mut current = php_symbol_key(target);
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         loop {
             if !seen.insert(current.clone()) {
                 return;
@@ -834,7 +841,7 @@ impl GraphState {
     /// Returns the oldest ancestor that still occupies the same virtual slot.
     fn vtable_lineage_root(&self, class: &str, method: &str, is_static: bool) -> String {
         let mut current = class.to_string();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         loop {
             if !seen.insert(current.clone()) {
                 return current;
@@ -956,7 +963,7 @@ fn walk_class_ancestors(
     mut visit: impl FnMut(&str) -> bool,
 ) {
     let mut current = Some(class.to_string());
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(candidate) = current {
         if !seen.insert(candidate.clone()) {
             return;
@@ -986,7 +993,7 @@ fn walk_class_ancestors(
 fn magic_methods_by_visible_class(
     checker_method_implementations: &HashMap<(String, String, bool), String>,
 ) -> HashMap<String, Vec<(String, bool, String)>> {
-    let mut by_class: HashMap<String, Vec<(String, bool, String)>> = HashMap::new();
+    let mut by_class: HashMap<String, Vec<(String, bool, String)>> = HashMap::default();
     for ((visible_class, method, is_static), owner) in checker_method_implementations {
         if !is_magic_method(method) {
             continue;
@@ -1009,7 +1016,7 @@ fn live_descendants_by_root(
     index: &DeclarationIndex,
     live_classes: &[String],
 ) -> HashMap<String, Vec<usize>> {
-    let mut descendants: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut descendants: HashMap<String, Vec<usize>> = HashMap::default();
     for (position, class) in live_classes.iter().enumerate() {
         walk_class_ancestors(index, class, |candidate| {
             descendants
@@ -1034,7 +1041,7 @@ mod vtable_lineage_index_tests {
         root: &str,
     ) -> bool {
         let mut current = Some(class.to_string());
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(candidate) = current {
             if !seen.insert(candidate.clone()) {
                 return false;
@@ -1060,7 +1067,7 @@ mod vtable_lineage_index_tests {
         ClassNode {
             kind,
             usage: Usage::default(),
-            methods: HashMap::new(),
+            methods: HashMap::default(),
             parent: parent.map(str::to_string),
             interfaces: interfaces.iter().map(|name| (*name).to_string()).collect(),
             traits: traits.iter().map(|name| (*name).to_string()).collect(),

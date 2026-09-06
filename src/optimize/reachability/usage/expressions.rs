@@ -8,7 +8,7 @@
 //! - Local new-object facts refine ordinary method calls without weakening dynamic-call hazards.
 //! - Registry-backed builtin requirements are recorded so checker libraries can be reconciled.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::names::{
     php_symbol_key, property_hook_get_method, property_hook_set_method, DYNAMIC_INCLUDE_FUNCTION,
@@ -58,7 +58,7 @@ impl Scanner<'_> {
                 self.scan_expr(name_expr);
                 self.scan_exprs(args);
                 self.scan_method_signature_arguments(
-                    &HashSet::new(),
+                    &HashSet::default(),
                     "__construct",
                     false,
                     args,
@@ -69,7 +69,7 @@ impl Scanner<'_> {
                 self.record_class(fallback_class.as_str()); self.record_class(required_parent.as_str());
                 self.scan_expr(class_name); self.scan_exprs(args);
                 self.scan_method_signature_arguments(
-                    &HashSet::new(),
+                    &HashSet::default(),
                     "__construct",
                     false,
                     args,
@@ -835,7 +835,7 @@ impl Scanner<'_> {
                 classes.extend(self.expr_classes(default));
                 classes
             }
-            _ => HashSet::new(),
+            _ => HashSet::default(),
         }
     }
 
@@ -852,7 +852,7 @@ impl Scanner<'_> {
                 .iter()
                 .flat_map(|type_expr| self.type_classes(type_expr))
                 .collect(),
-            _ => HashSet::new(),
+            _ => HashSet::default(),
         }
     }
 
@@ -952,7 +952,7 @@ impl Scanner<'_> {
 
     /// Uses the shared argument planner to find storage that a reachable callable may rebind.
     fn invalidate_ref_arguments(&mut self, signatures: &[FunctionSig], args: &[Expr]) {
-        let mut variables = HashSet::new();
+        let mut variables = HashSet::default();
         for signature in signatures {
             if !signature.ref_params.iter().any(|by_ref| *by_ref) {
                 continue;

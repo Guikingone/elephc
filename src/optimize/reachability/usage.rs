@@ -11,7 +11,7 @@
 //! - Local receiver facts union known classes and remain poisoned after any opaque write.
 //! - Reachable global aliases and by-reference call arguments invalidate cross-scope facts.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{
@@ -352,7 +352,7 @@ impl CallSignatureIndex {
             .keys()
             .filter(|class| {
                 let mut current = Some((*class).clone());
-                let mut seen = HashSet::new();
+                let mut seen = HashSet::default();
                 while let Some(candidate) = current {
                     if !seen.insert(candidate.clone()) {
                         return false;
@@ -646,7 +646,7 @@ impl Scanner<'_> {
         body: &[Stmt],
         declarations: bool,
     ) {
-        let mut guarded = HashSet::new();
+        let mut guarded = HashSet::default();
         collect_is_array_guards(condition, &mut guarded);
         let added: Vec<_> = guarded
             .into_iter()

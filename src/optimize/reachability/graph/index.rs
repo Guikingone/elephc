@@ -62,7 +62,7 @@ impl DeclarationIndex {
         for (class_name, info) in &check_result.classes {
             let class_key = php_symbol_key(class_name);
             let parent = info.parent.as_deref().map(php_symbol_key);
-            let mut methods: std::collections::HashMap<_, _> = info
+            let mut methods: crate::fast_hash::FastMap<_, _> = info
                 .method_decls
                 .iter()
                 .map(|method| {

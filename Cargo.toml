@@ -42,6 +42,12 @@ path = "tools/gen_builtins.rs"
 elephc-builtin-contract = { path = "crates/elephc-builtin-contract" }
 inventory = "0.3"
 libc = "0.2"
+# The compiler keys almost everything on `String` and `(String, String, bool)`, and a sampled
+# profile of a Symfony `--web` build put SipHash at the top of the leaf frames in every window —
+# 4,164 samples against 617 for the hottest elephc frame beside it. `rustc_hash` is the hasher
+# rustc itself uses for exactly this workload: short, non-adversarial, internal keys. Already in
+# the lock as a transitive dependency, so this pins no new version. See `crate::fast_hash`.
+rustc-hash = "1.1"
 # Grows the stack on demand inside the recursive-descent parser so deeply
 # nested expressions never overflow small (2 MiB test-thread) stacks.
 stacker = "0.1"

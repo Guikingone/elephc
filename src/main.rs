@@ -25,6 +25,7 @@ mod errors;
 mod eval_aot;
 mod exports;
 mod filter_var_prelude;
+mod fast_hash;
 mod func_args;
 mod global_decls;
 mod globals_array;
