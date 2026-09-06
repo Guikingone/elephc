@@ -104,6 +104,23 @@ fn parse_fragment_refuses_a_reference_append_in_expression_position() {
     assert_eq!(error.error(), EvalParseError::ExpectedSemicolon);
 }
 
+/// Verifies a by-reference DECLARATION parses while binding to its result is still refused.
+///
+/// SCOPE, pinned rather than implied. `function &f()` now parses, and called by value it is
+/// indistinguishable from a by-value function, which is how nearly all PHP code calls one.
+/// `$r = &f();` is a DIFFERENT construct: it needs the callee to hand a writable target back to
+/// the caller, which nothing in the interpreter does yet. `php -n` 8.5.6 accepts it, so this is
+/// a gap, and it is recorded here as a refusal rather than left to be discovered as a wrong
+/// answer -- binding by value would silently make `$r = 9` a no-op on the original.
+#[test]
+fn parse_fragment_accepts_a_by_ref_declaration_and_refuses_binding_to_its_result() {
+    parse_fragment(br#"function &counter() { static $n = 1; return $n; }"#)
+        .expect("a by-reference declaration should parse");
+    let error = parse_fragment(br#"function &counter() { static $n = 1; return $n; } $r = &counter();"#)
+        .expect_err("binding to a by-reference call result should still be refused");
+    assert_eq!(error.error(), EvalParseError::UnsupportedConstruct);
+}
+
 /// Verifies null-coalescing assignment is an expression with a writable array target.
 #[test]
 fn parse_fragment_accepts_null_coalesce_assignment_expression() {

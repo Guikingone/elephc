@@ -73,6 +73,8 @@ pub enum EvalStmt {
         parameter_is_by_ref: Vec<bool>,
         parameter_is_variadic: Vec<bool>,
         return_type: Option<EvalParameterType>,
+        /// Whether the declaration was `function &name()`, PHP's return-by-reference form.
+        returns_by_ref: bool,
         body: Vec<EvalStmt>,
     },
     Goto(String),

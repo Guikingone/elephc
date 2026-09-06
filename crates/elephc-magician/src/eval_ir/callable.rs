@@ -49,6 +49,8 @@ pub struct EvalFunction {
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
+    /// Whether the function was declared `function &name()`, PHP's return-by-reference form.
+    returns_by_ref: bool,
     body: Vec<EvalStmt>,
 }
 
@@ -64,6 +66,7 @@ impl PartialEq for EvalFunction {
             && self.parameter_is_by_ref == other.parameter_is_by_ref
             && self.parameter_is_variadic == other.parameter_is_variadic
             && self.return_type == other.return_type
+            && self.returns_by_ref == other.returns_by_ref
             && self.body == other.body
     }
 }
@@ -87,6 +90,7 @@ impl EvalFunction {
             parameter_is_by_ref,
             parameter_is_variadic,
             return_type: None,
+            returns_by_ref: false,
             body,
         }
     }
@@ -140,6 +144,22 @@ impl EvalFunction {
     pub fn with_return_type(mut self, return_type: Option<EvalParameterType>) -> Self {
         self.return_type = return_type;
         self
+    }
+
+    /// Returns a copy of this function marked as returning by reference.
+    ///
+    /// PHP's `function &name()`. It is recorded rather than dropped because an implementation
+    /// may ADD the `&` its interface does not require but may never REMOVE one it does:
+    /// `php -n` 8.5.6 refuses that with `Declaration of Bad::get() must be compatible with
+    /// & Ref::get()`.
+    pub const fn with_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
+        self.returns_by_ref = returns_by_ref;
+        self
+    }
+
+    /// Returns whether this function was declared to return by reference.
+    pub const fn returns_by_ref(&self) -> bool {
+        self.returns_by_ref
     }
 
     /// Returns the original source spelling of this eval-declared function name.

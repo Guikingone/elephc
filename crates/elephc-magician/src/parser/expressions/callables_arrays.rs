@@ -130,7 +130,9 @@ impl Parser {
             self.advance();
         }
         self.advance();
-        self.consume_by_reference_return_marker();
+        // PHP's return-by-reference marker sits between the keyword and the parameter list. It
+        // was never consumed here, so `function &()` and `fn &()` died on the `&`.
+        let returns_by_ref = self.consume(TokenKind::Ampersand);
         self.expect(TokenKind::LParen)?;
         let ParsedMethodParams {
             params,
@@ -156,7 +158,8 @@ impl Parser {
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic)
-            .with_return_type(return_type);
+            .with_return_type(return_type)
+            .with_returns_by_ref(returns_by_ref);
         Ok(EvalExpr::Closure {
             function,
             captures,
@@ -204,7 +207,9 @@ impl Parser {
             return Err(EvalParseError::UnexpectedToken);
         }
         self.advance();
-        self.consume_by_reference_return_marker();
+        // PHP's return-by-reference marker sits between the keyword and the parameter list. It
+        // was never consumed here, so `function &()` and `fn &()` died on the `&`.
+        let returns_by_ref = self.consume(TokenKind::Ampersand);
         self.expect(TokenKind::LParen)?;
         let ParsedMethodParams {
             params,
@@ -236,7 +241,8 @@ impl Parser {
         .with_parameter_defaults(parameter_defaults)
         .with_parameter_by_ref_flags(parameter_is_by_ref)
         .with_parameter_variadic_flags(parameter_is_variadic)
-        .with_return_type(return_type);
+        .with_return_type(return_type)
+        .with_returns_by_ref(returns_by_ref);
         Ok(EvalExpr::Closure {
             function,
             captures,

@@ -167,6 +167,7 @@ pub(in crate::interpreter) fn execute_stmt(
             parameter_is_by_ref,
             parameter_is_variadic,
             return_type,
+            returns_by_ref,
             body,
         } => {
             let key = name.to_ascii_lowercase();
@@ -177,7 +178,8 @@ pub(in crate::interpreter) fn execute_stmt(
                 .with_parameter_defaults(parameter_defaults.clone())
                 .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
                 .with_parameter_variadic_flags(parameter_is_variadic.clone())
-                .with_return_type(return_type.clone());
+                .with_return_type(return_type.clone())
+                .with_returns_by_ref(*returns_by_ref);
             if let Some(source_location) = source_location {
                 function = function.with_source_location(*source_location);
             }

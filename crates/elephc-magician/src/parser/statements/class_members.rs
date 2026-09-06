@@ -20,7 +20,9 @@ impl Parser {
     ) -> Result<(EvalClassMethod, Vec<EvalClassProperty>), EvalParseError> {
         let source_start_line = self.current_line();
         self.advance();
-        self.consume_by_reference_return_marker();
+        // PHP's return-by-reference marker sits between the keyword and the name. It was never
+        // consumed here, so `function &f()` died on an `Ident` that was an `&`.
+        let returns_by_ref = self.consume(TokenKind::Ampersand);
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
@@ -70,7 +72,8 @@ impl Parser {
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic)
-            .with_return_type(return_type),
+            .with_return_type(return_type)
+            .with_returns_by_ref(returns_by_ref),
             promoted_properties,
         ))
     }

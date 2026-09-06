@@ -14,6 +14,7 @@ mod array_append_expression;
 mod array_spread;
 mod array_literals;
 mod builtin_interface_covariance;
+mod by_ref_declarations;
 mod builtins_arrays_core;
 mod builtins_arrays_iterators;
 mod builtins_arrays_sets;
