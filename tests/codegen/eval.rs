@@ -31395,3 +31395,86 @@ echo 'done';
          top<0:Probe\\Deep\\frames|-|-|top;1:none;2:none;>done"
     );
 }
+
+/// Verifies the autoload queue runs in registration order across the contexts that own it.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `ctxA;ctxB;aot:ProbeMissingOne:null;closure:ProbeMissingOne;ctxC;aot:ProbeMissingTwo:null;closure:ProbeMissingTwo;n;ctxCdone;n;ctxBdone;seen=ProbeMissingOne,ProbeMissingTwo;done`.
+///
+/// PHP has ONE autoload queue per request and runs it in registration order. elephc keeps each
+/// callback on the context that registered it -- that is where it is retained and released -- and
+/// ran one context's whole list before starting the next one, so the loader registered FIRST ran
+/// LAST whenever two contexts were involved. Here the compiled `arm()` registers before the
+/// included file's closure does, so php runs `aot:` before `closure:` at both levels; elephc ran
+/// the closure first, took the nested include from inside it, and only then came back for the
+/// compiled loader, which the recorded order in `$seen` shows reversed.
+///
+/// This is the request's shape, not a contrivance: Symfony appends
+/// `ClassExistenceResource::throwOnRequiredClass` from one context and needs it to run AFTER
+/// Composer's loader, which lives in another. The registration order is now carried on each
+/// callback as a request-wide number, so merging the owners' lists reproduces the single queue.
+#[test]
+fn test_the_autoload_queue_runs_in_registration_order_across_owner_contexts() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "nested.php",
+                r#"<?php
+echo 'ctxC;';
+echo class_exists('ProbeMissingTwo') ? 'y' : 'n', ';';
+echo 'ctxCdone;';
+"#,
+            ),
+            (
+                "driver.php",
+                r#"<?php
+echo 'ctxB;';
+spl_autoload_register(function (string $class): void {
+    echo 'closure:', $class, ';';
+    if ('ProbeMissingOne' === $class) {
+        $nested = __DIR__ . '/nested.php';
+        require $nested;
+    }
+});
+echo class_exists('ProbeMissingOne') ? 'y' : 'n', ';';
+echo 'ctxBdone;';
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class ProbeExistence
+{
+    public static array $seen = [];
+
+    public static function throwOnRequired(string $class, ?Exception $previous = null): void
+    {
+        self::$seen[] = $class;
+        echo 'aot:', $class, ':', null === $previous ? 'null' : 'exc', ';';
+    }
+
+    public static function arm(): void
+    {
+        spl_autoload_register(__CLASS__ . '::throwOnRequired');
+        echo 'ctxA;';
+    }
+}
+
+ProbeExistence::arm();
+$driver = __DIR__ . '/driver.php';
+include $driver;
+echo 'seen=', implode(',', ProbeExistence::$seen), ';';
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "ctxA;ctxB;aot:ProbeMissingOne:null;closure:ProbeMissingOne;ctxC;\
+         aot:ProbeMissingTwo:null;closure:ProbeMissingTwo;n;ctxCdone;n;ctxBdone;\
+         seen=ProbeMissingOne,ProbeMissingTwo;done"
+    );
+}

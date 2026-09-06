@@ -11,6 +11,25 @@
 
 use super::*;
 
+/// Hands out the request-wide registration order of SPL autoload callbacks.
+///
+/// Appends count up from zero and prepends count down, so ordering the two together puts every
+/// prepend ahead of every append and keeps each group in the order PHP would run it.
+static EVAL_AUTOLOAD_APPEND_SEQUENCE: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0);
+static EVAL_AUTOLOAD_PREPEND_SEQUENCE: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0);
+
+/// Returns the next registration number for one callback.
+fn next_autoload_registration_sequence(prepend: bool) -> i64 {
+    use std::sync::atomic::Ordering;
+    if prepend {
+        EVAL_AUTOLOAD_PREPEND_SEQUENCE.fetch_sub(1, Ordering::Relaxed) - 1
+    } else {
+        EVAL_AUTOLOAD_APPEND_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1
+    }
+}
+
 impl ElephcEvalContext {
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
     pub fn has_function(&self, name: &str) -> bool {
@@ -198,22 +217,37 @@ impl ElephcEvalContext {
         self.autoload_callbacks.is_empty()
     }
 
-    /// Reports whether one exact retained callback cell is already registered.
     /// Stores one already-retained SPL autoload callback at PHP's requested position.
+    ///
+    /// The position is recorded as a request-wide number, not merely as a place in THIS context's
+    /// list. PHP has one autoload queue per request and runs it in registration order, while
+    /// elephc keeps each callback on the context that registered it, because that is where it is
+    /// retained and released. Sorting the contexts' callbacks by this number reproduces the single
+    /// queue -- an append takes the next number up, a prepend the next number down, so a prepend
+    /// lands ahead of everything registered before it no matter which context owns it.
     pub(crate) fn register_autoload_callback(
         &mut self,
         callback: RuntimeCellHandle,
         prepend: bool,
     ) {
+        let sequence = next_autoload_registration_sequence(prepend);
         if prepend {
-            self.autoload_callbacks.insert(0, callback);
+            self.autoload_callbacks.insert(0, (sequence, callback));
         } else {
-            self.autoload_callbacks.push(callback);
+            self.autoload_callbacks.push((sequence, callback));
         }
     }
 
-    /// Returns a snapshot of the callbacks in their PHP invocation order.
+    /// Returns a snapshot of this context's callbacks in their PHP invocation order.
     pub(crate) fn autoload_callbacks(&self) -> Vec<RuntimeCellHandle> {
+        self.autoload_callbacks
+            .iter()
+            .map(|(_, callback)| *callback)
+            .collect()
+    }
+
+    /// Returns this context's callbacks with the request-wide order they were registered in.
+    pub(crate) fn autoload_callbacks_ordered(&self) -> Vec<(i64, RuntimeCellHandle)> {
         self.autoload_callbacks.clone()
     }
 
@@ -224,12 +258,17 @@ impl ElephcEvalContext {
     /// and one callback. Identity matching made unregistration answer `false` for a callback that
     /// was plainly there, and let the same loader be registered twice.
     pub(crate) fn remove_autoload_callback_at(&mut self, index: usize) -> Option<RuntimeCellHandle> {
-        (index < self.autoload_callbacks.len()).then(|| self.autoload_callbacks.remove(index))
+        (index < self.autoload_callbacks.len())
+            .then(|| self.autoload_callbacks.remove(index))
+            .map(|(_, callback)| callback)
     }
 
     /// Drains every retained callback when the surrounding PHP request ends.
     pub(crate) fn take_autoload_callbacks(&mut self) -> Vec<RuntimeCellHandle> {
         std::mem::take(&mut self.autoload_callbacks)
+            .into_iter()
+            .map(|(_, callback)| callback)
+            .collect()
     }
 
     /// Starts one class-autoload attempt and rejects recursive attempts for the same class.

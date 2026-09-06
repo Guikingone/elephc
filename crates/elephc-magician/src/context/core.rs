@@ -91,7 +91,7 @@ pub struct ElephcEvalContext {
     pub(super) eval_object_callables: HashMap<usize, EvalObjectCallableMetadata>,
     pub(super) global_scope: Option<*mut ElephcEvalScope>,
     pub(super) owns_global_scope: bool,
-    pub(super) autoload_callbacks: Vec<RuntimeCellHandle>,
+    pub(super) autoload_callbacks: Vec<(i64, RuntimeCellHandle)>,
     pub(super) autoloading_classes: HashSet<String>,
     pub(super) function_stack: Vec<String>,
     pub(super) class_stack: Vec<String>,

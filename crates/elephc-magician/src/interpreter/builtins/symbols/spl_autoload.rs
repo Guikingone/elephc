@@ -83,6 +83,13 @@ pub(in crate::interpreter) fn eval_spl_autoload_void_result(
 }
 
 /// Invokes registered callbacks for one unresolved class and reports whether a class became visible.
+///
+/// PHP has ONE autoload queue per request and runs it in registration order. elephc stores each
+/// callback on the context that registered it, so the queue is assembled here: every owner's
+/// callbacks are merged and ordered by the request-wide number each was given at registration.
+/// Running each context's list to the end before starting the next one gave the wrong order the
+/// moment two contexts were involved -- Symfony appends `ClassExistenceResource::throwOnRequiredClass`
+/// from one context and needs it to run AFTER Composer's loader, which lives in another.
 pub(crate) fn eval_spl_autoload_class(
     class_name: &str,
     context: &mut ElephcEvalContext,
@@ -94,27 +101,69 @@ pub(crate) fn eval_spl_autoload_class(
     if eval_autoload_target_exists(class_name, context, values)? {
         return Ok(true);
     }
-    if eval_spl_autoload_class_local(class_name, context, values)? {
-        return Ok(true);
+    #[cfg(test)]
+    {
+        return eval_spl_autoload_class_local(class_name, context, values);
     }
     #[cfg(not(test))]
-    for owner in crate::context::global_eval_autoload_contexts_snapshot() {
-        if std::ptr::eq(owner, context) {
-            continue;
+    {
+        if !context.begin_autoload_class(class_name) {
+            return Ok(false);
         }
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
-            eprintln!("[elephc-eval-trace] phase=spl_autoload_owner class={class_name:?} owner={owner:p}");
+        let result = eval_spl_autoload_queue(class_name, context, values);
+        context.end_autoload_class(class_name);
+        result
+    }
+}
+
+/// Runs the request's whole autoload queue in registration order for one class name.
+#[cfg(not(test))]
+fn eval_spl_autoload_queue(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let here = context as *mut ElephcEvalContext;
+    let mut owners = crate::context::global_eval_autoload_contexts_snapshot();
+    if !owners.iter().any(|owner| std::ptr::eq(*owner, here)) {
+        owners.push(here);
+    }
+    let mut queue: Vec<(i64, *mut ElephcEvalContext, RuntimeCellHandle)> = Vec::new();
+    for owner in owners {
+        let callbacks = if std::ptr::eq(owner, here) {
+            context.autoload_callbacks_ordered()
+        } else {
+            match unsafe { owner.as_ref() } {
+                Some(owner) => owner.autoload_callbacks_ordered(),
+                None => continue,
+            }
+        };
+        for (sequence, callback) in callbacks {
+            queue.push((sequence, owner, callback));
         }
-        let owner_loaded = unsafe { eval_spl_autoload_class_in_owner(owner, class_name) }?;
-        context.sync_global_eval_classes();
-        if !context.has_class(class_name) && owner_loaded {
+    }
+    queue.sort_by_key(|(sequence, _, _)| *sequence);
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=spl_autoload_queue class={class_name:?} callbacks={}",
+            queue.len(),
+        );
+    }
+    for (_, owner, callback) in queue {
+        if std::ptr::eq(owner, here) {
+            eval_invoke_autoload_callback(callback, class_name, context, values)?;
+        } else {
+            unsafe { eval_spl_autoload_callback_in_owner(owner, callback, class_name) }?;
+            context.sync_global_eval_classes();
             let loaded_class = unsafe {
                 owner
                     .as_ref()
                     .and_then(|owner| owner.class(class_name).cloned())
             };
-            if let Some(loaded_class) = loaded_class {
-                context.define_class(loaded_class);
+            if !context.has_class(class_name) {
+                if let Some(loaded_class) = loaded_class {
+                    context.define_class(loaded_class);
+                }
             }
         }
         if eval_autoload_target_exists(class_name, context, values)? {
@@ -122,6 +171,79 @@ pub(crate) fn eval_spl_autoload_class(
         }
     }
     Ok(false)
+}
+
+/// Invokes ONE callback with runtime hooks bound to the context that registered it.
+#[cfg(not(test))]
+unsafe fn eval_spl_autoload_callback_in_owner(
+    owner: *mut ElephcEvalContext,
+    callback: RuntimeCellHandle,
+    class_name: &str,
+) -> Result<(), EvalStatus> {
+    let Some(owner) = owner.as_mut() else {
+        return Ok(());
+    };
+    crate::context::sync_global_eval_aot_metadata_when_empty(owner);
+    let mut values = crate::runtime_hooks::ElephcRuntimeOps::with_context(owner as *const _);
+    eval_invoke_autoload_callback(callback, class_name, owner, &mut values)
+}
+
+/// Normalizes one autoload callback, calls it with the class name, and releases what it made.
+fn eval_invoke_autoload_callback(
+    callback: RuntimeCellHandle,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let class = values.string(class_name)?;
+    let outcome = (|| {
+        let callback = eval_callable(callback, context, values).map_err(|status| {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!("[elephc-eval-trace] phase=spl_autoload_callback stage=normalize status={status:?}");
+            }
+            status
+        })?;
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            eprintln!(
+                "[elephc-eval-trace] phase=spl_autoload_callback stage=normalized kind={}",
+                eval_autoload_callback_trace_kind(&callback),
+            );
+        }
+        let result = eval_evaluated_callable_with_values(&callback, vec![class], context, values)
+            .map_err(|status| {
+                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                    eprintln!("[elephc-eval-trace] phase=spl_autoload_callback stage=invoke status={status:?}");
+                }
+                status
+            })?;
+        eval_release_value(context, values, result)
+    })();
+    let release = eval_release_value(context, values, class);
+    outcome?;
+    release?;
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
+    Ok(())
+}
+
+/// Names one normalized callback for the opt-in autoload trace.
+fn eval_autoload_callback_trace_kind(callback: &EvaluatedCallable) -> String {
+    match callback {
+        EvaluatedCallable::Named { name, .. } => format!("named:{name}"),
+        EvaluatedCallable::BoundClosure { name, .. } => format!("closure:{name}"),
+        EvaluatedCallable::InvokableObject { .. } => "invokable-object".to_string(),
+        EvaluatedCallable::ObjectMethod {
+            method,
+            native_class,
+            ..
+        } => format!("object-method:{native_class:?}::{method}"),
+        EvaluatedCallable::StaticMethod {
+            class_name,
+            method,
+            native_class,
+            ..
+        } => format!("static-method:{class_name}:{native_class:?}::{method}"),
+    }
 }
 
 /// Loads a class-like declaration body needed by dynamic composition even when AOT metadata exists.

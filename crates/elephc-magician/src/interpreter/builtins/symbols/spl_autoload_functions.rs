@@ -57,11 +57,51 @@ pub(in crate::interpreter) fn eval_spl_autoload_functions_result(
     if !evaluated_args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let callbacks = context.autoload_callbacks();
+    let callbacks = eval_registered_autoload_callbacks(context);
     let mut result = values.array_new(callbacks.len())?;
     for (index, callback) in callbacks.into_iter().enumerate() {
         let index = values.int(index as i64)?;
+        // The array TAKES the value it is given. Handing it the cell the registry holds put a
+        // reference the registry still owns into userland, and the entries read back as integers
+        // rather than as the callables that were registered.
+        let callback = values.retain(callback)?;
         result = values.array_set(result, index, callback)?;
     }
     Ok(result)
+}
+
+/// Returns every registered callback in the request's own registration order.
+///
+/// PHP keeps ONE autoload queue per request. elephc keeps each callback on the context that
+/// registered it, because that is where it is retained and released, so the list is assembled from
+/// every owner and ordered by the request-wide number each registration was given. Reporting only
+/// the asking context's callbacks left out every loader registered by an included file.
+fn eval_registered_autoload_callbacks(context: &ElephcEvalContext) -> Vec<RuntimeCellHandle> {
+    #[cfg(test)]
+    {
+        context.autoload_callbacks()
+    }
+    #[cfg(not(test))]
+    {
+        let here = context as *const ElephcEvalContext;
+        let mut owners = crate::context::global_eval_autoload_contexts_snapshot();
+        if !owners
+            .iter()
+            .any(|owner| std::ptr::eq(*owner as *const ElephcEvalContext, here))
+        {
+            owners.push(here as *mut ElephcEvalContext);
+        }
+        let mut ordered: Vec<(i64, RuntimeCellHandle)> = Vec::new();
+        for owner in owners {
+            if std::ptr::eq(owner as *const ElephcEvalContext, here) {
+                ordered.extend(context.autoload_callbacks_ordered());
+                continue;
+            }
+            if let Some(owner) = unsafe { owner.as_ref() } {
+                ordered.extend(owner.autoload_callbacks_ordered());
+            }
+        }
+        ordered.sort_by_key(|(sequence, _)| *sequence);
+        ordered.into_iter().map(|(_, callback)| callback).collect()
+    }
 }
