@@ -462,8 +462,34 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     let signature_owner = bridge_scope.unwrap_or(class_name);
     let signature = context.native_static_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
-    let bound_args =
-        bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
+    // Three things can refuse below and every one of them meant the same anonymous fatal: no
+    // signature recorded for the owner, a binding that rejects the arguments, and the generated
+    // static-call helper itself.
+    let traced = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
+    if traced {
+        eprintln!(
+            "[elephc-eval-trace] phase=native_static_call class={class_name:?} method={method_name:?} owner={signature_owner:?} signature={} args={}",
+            signature.is_some(),
+            evaluated_args.len(),
+        );
+    }
+    let bound_args = match bind_native_callable_bound_args_with_mode(
+        signature,
+        evaluated_args,
+        by_ref_mode,
+        context,
+        values,
+    ) {
+        Ok(bound_args) => bound_args,
+        Err(status) => {
+            if traced {
+                eprintln!(
+                    "[elephc-eval-trace] phase=native_static_call stage=bind class={class_name:?} method={method_name:?} status={status:?}"
+                );
+            }
+            return Err(status);
+        }
+    };
     let result = if let Some(scope) = bridge_scope {
         eval_native_static_method_call_with_scope(
             scope,
@@ -477,6 +503,15 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     } else {
         values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
     };
+    if traced {
+        eprintln!(
+            "[elephc-eval-trace] phase=native_static_call stage=called class={class_name:?} method={method_name:?} outcome={}",
+            match &result {
+                Ok(_) => "ok".to_string(),
+                Err(status) => format!("{status:?}"),
+            },
+        );
+    }
     let writeback = if native_bound_args_require_writeback(&bound_args) {
         write_back_native_callable_ref_args(&bound_args, context, values)
     } else {
