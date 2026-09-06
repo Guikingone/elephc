@@ -497,12 +497,16 @@ pub(in crate::codegen::lower_inst) fn static_parent_chain_method_exists(
 }
 
 /// Returns whether a method should be visible for a class-string member probe.
-pub(in crate::codegen::lower_inst) fn method_visible_from_class_string(
+pub(in crate::codegen::lower_inst) fn method_visible_from_class_string<S1, S2>(
     resolved_class: &str,
     method_key: &str,
-    visibilities: &std::collections::HashMap<String, Visibility>,
-    declaring_classes: &std::collections::HashMap<String, String>,
-) -> bool {
+    visibilities: &std::collections::HashMap<String, Visibility, S1>,
+    declaring_classes: &std::collections::HashMap<String, String, S2>,
+) -> bool
+where
+    S1: std::hash::BuildHasher,
+    S2: std::hash::BuildHasher,
+{
     visibilities.get(method_key) != Some(&Visibility::Private)
         || declaring_classes
             .get(method_key)
@@ -533,12 +537,16 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
 }
 
 /// Returns whether a property exists for a class-string or ordinary object probe.
-pub(in crate::codegen::lower_inst) fn property_visible_from_class_string(
+pub(in crate::codegen::lower_inst) fn property_visible_from_class_string<S1, S2>(
     resolved_class: &str,
     property_name: &str,
-    visibilities: &std::collections::HashMap<String, Visibility>,
-    declaring_classes: &std::collections::HashMap<String, String>,
-) -> bool {
+    visibilities: &std::collections::HashMap<String, Visibility, S1>,
+    declaring_classes: &std::collections::HashMap<String, String, S2>,
+) -> bool
+where
+    S1: std::hash::BuildHasher,
+    S2: std::hash::BuildHasher,
+{
     let Some(visibility) = visibilities.get(property_name) else {
         return false;
     };

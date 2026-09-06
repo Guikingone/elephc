@@ -276,12 +276,12 @@ fn prune_class_methods(
 }
 
 /// Returns whether a method is reachable through its visible, implementing, or declaring class.
-fn method_is_live(
+fn method_is_live<S1: std::hash::BuildHasher, S2: std::hash::BuildHasher>(
     class_key: &str,
     method: &str,
     is_static: bool,
-    implementations: &HashMap<String, String>,
-    declaring: &HashMap<String, String>,
+    implementations: &std::collections::HashMap<String, String, S1>,
+    declaring: &std::collections::HashMap<String, String, S2>,
     reachability: &Reachability,
 ) -> bool {
     let visible = (
@@ -306,7 +306,10 @@ fn method_is_live(
 }
 
 /// Retains string-keyed map entries selected by one canonical method keep-set.
-fn retain_keys<T>(map: &mut HashMap<String, T>, keep: &HashSet<String>) {
+fn retain_keys<T, S: std::hash::BuildHasher>(
+    map: &mut std::collections::HashMap<String, T, S>,
+    keep: &HashSet<String>,
+) {
     map.retain(|key, _| keep.contains(key));
 }
 

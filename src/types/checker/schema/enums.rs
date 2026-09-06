@@ -315,11 +315,11 @@ pub(crate) fn insert_enum_metadata(
         &mut property_reference_slots,
     );
 
-    let mut static_methods = HashMap::new();
+    let mut static_methods = crate::fast_hash::FastMap::default();
     let mut late_static_static_method_returns = HashMap::new();
-    let mut static_method_visibilities = HashMap::new();
-    let mut static_method_declaring_classes = HashMap::new();
-    let mut static_method_impl_classes = HashMap::new();
+    let mut static_method_visibilities = crate::fast_hash::FastMap::default();
+    let mut static_method_declaring_classes = crate::fast_hash::FastMap::default();
+    let mut static_method_impl_classes = crate::fast_hash::FastMap::default();
     static_methods.insert(
         "cases".to_string(),
         FunctionSig {
@@ -376,12 +376,12 @@ pub(crate) fn insert_enum_metadata(
 
     // User-declared enum methods. Enum cases are singleton objects, so instance methods dispatch
     // on the case like a class. Lexical hints resolve to the enum while return `static` is retained.
-    let mut methods = HashMap::new();
+    let mut methods = crate::fast_hash::FastMap::default();
     let mut late_static_method_returns = HashMap::new();
     let mut method_decls = Vec::new();
-    let mut method_visibilities = HashMap::new();
-    let mut method_declaring_classes = HashMap::new();
-    let mut method_impl_classes = HashMap::new();
+    let mut method_visibilities = crate::fast_hash::FastMap::default();
+    let mut method_declaring_classes = crate::fast_hash::FastMap::default();
+    let mut method_impl_classes = crate::fast_hash::FastMap::default();
     for method in user_methods {
         // Clone + rewrite self/static on this enum method (enums have no parent).
         // Must happen before build_method_sig because bare "self" is rejected later.

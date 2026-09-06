@@ -194,12 +194,16 @@ fn method_exists_for_class(
 }
 
 /// Returns whether a method remains visible through a class-string target.
-fn method_visible_from_class_string(
+fn method_visible_from_class_string<S1, S2>(
     class_name: &str,
     method_key: &str,
-    visibilities: &std::collections::HashMap<String, Visibility>,
-    declaring_classes: &std::collections::HashMap<String, String>,
-) -> bool {
+    visibilities: &std::collections::HashMap<String, Visibility, S1>,
+    declaring_classes: &std::collections::HashMap<String, String, S2>,
+) -> bool
+where
+    S1: std::hash::BuildHasher,
+    S2: std::hash::BuildHasher,
+{
     visibilities.get(method_key) != Some(&Visibility::Private)
         || declaring_classes
             .get(method_key)
@@ -252,12 +256,16 @@ fn property_exists_for_class(
 }
 
 /// Returns whether a property exists without exposing an inherited private declaration.
-fn property_visible_from_class_string(
+fn property_visible_from_class_string<S1, S2>(
     class_name: &str,
     property_name: &str,
-    visibilities: &std::collections::HashMap<String, Visibility>,
-    declaring_classes: &std::collections::HashMap<String, String>,
-) -> bool {
+    visibilities: &std::collections::HashMap<String, Visibility, S1>,
+    declaring_classes: &std::collections::HashMap<String, String, S2>,
+) -> bool
+where
+    S1: std::hash::BuildHasher,
+    S2: std::hash::BuildHasher,
+{
     let Some(visibility) = visibilities.get(property_name) else {
         return false;
     };
@@ -426,21 +434,21 @@ mod tests {
             final_static_properties: HashSet::new(),
             method_decls: Vec::new(),
             methods,
-            static_methods: HashMap::new(),
+            static_methods: crate::fast_hash::FastMap::default(),
             late_static_method_returns: HashMap::new(),
             late_static_static_method_returns: HashMap::new(),
             callable_method_return_sigs: HashMap::new(),
             callable_array_method_return_sigs: HashMap::new(),
-            method_visibilities: HashMap::new(),
+            method_visibilities: crate::fast_hash::FastMap::default(),
             final_methods: HashSet::new(),
-            method_declaring_classes: HashMap::new(),
-            method_impl_classes: HashMap::new(),
+            method_declaring_classes: crate::fast_hash::FastMap::default(),
+            method_impl_classes: crate::fast_hash::FastMap::default(),
             vtable_methods: Vec::new(),
             vtable_slots: HashMap::new(),
-            static_method_visibilities: HashMap::new(),
+            static_method_visibilities: crate::fast_hash::FastMap::default(),
             final_static_methods: HashSet::new(),
-            static_method_declaring_classes: HashMap::new(),
-            static_method_impl_classes: HashMap::new(),
+            static_method_declaring_classes: crate::fast_hash::FastMap::default(),
+            static_method_impl_classes: crate::fast_hash::FastMap::default(),
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
             interfaces: Vec::new(),

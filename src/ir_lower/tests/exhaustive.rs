@@ -165,9 +165,9 @@ fn class_info(_class_name: &str) -> ClassInfo {
         variadic: None,
         deprecation: None,
     };
-    let mut methods = HashMap::new();
+    let mut methods = crate::fast_hash::FastMap::default();
     methods.insert("m".to_string(), method_sig.clone());
-    let mut static_methods = HashMap::new();
+    let mut static_methods = crate::fast_hash::FastMap::default();
     static_methods.insert("sm".to_string(), method_sig);
     ClassInfo {
         class_id: 1,
@@ -223,16 +223,16 @@ fn class_info(_class_name: &str) -> ClassInfo {
         late_static_static_method_returns: Default::default(),
         callable_method_return_sigs: HashMap::new(),
         callable_array_method_return_sigs: HashMap::new(),
-        method_visibilities: HashMap::new(),
+        method_visibilities: crate::fast_hash::FastMap::default(),
         final_methods: Default::default(),
-        method_declaring_classes: HashMap::new(),
-        method_impl_classes: HashMap::new(),
+        method_declaring_classes: crate::fast_hash::FastMap::default(),
+        method_impl_classes: crate::fast_hash::FastMap::default(),
         vtable_methods: Vec::new(),
         vtable_slots: HashMap::new(),
-        static_method_visibilities: HashMap::new(),
+        static_method_visibilities: crate::fast_hash::FastMap::default(),
         final_static_methods: Default::default(),
-        static_method_declaring_classes: HashMap::new(),
-        static_method_impl_classes: HashMap::new(),
+        static_method_declaring_classes: crate::fast_hash::FastMap::default(),
+        static_method_impl_classes: crate::fast_hash::FastMap::default(),
         static_vtable_methods: Vec::new(),
         static_vtable_slots: HashMap::new(),
         interfaces: Vec::new(),

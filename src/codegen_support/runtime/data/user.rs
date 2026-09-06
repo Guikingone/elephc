@@ -3231,7 +3231,7 @@ mod boxed_result_mask_tests {
     /// Builds a class info whose named methods carry the given return types.
     fn class_with(methods: &[(&str, PhpType)]) -> crate::types::ClassInfo {
         let mut class_info = super::tests::empty_class_info(1, "stream_open");
-        class_info.methods = HashMap::new();
+        class_info.methods = crate::fast_hash::FastMap::default();
         for (name, return_type) in methods {
             class_info
                 .methods
@@ -3359,7 +3359,7 @@ mod tests {
 
     /// Provides the Empty class info helper used by the user module.
     pub(super) fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
-        let mut method_impl_classes = HashMap::new();
+        let mut method_impl_classes = crate::fast_hash::FastMap::default();
         method_impl_classes.insert(method_name.to_string(), "Exception".to_string());
 
         let mut vtable_slots = HashMap::new();
@@ -3413,22 +3413,22 @@ mod tests {
             declared_static_properties: HashSet::new(),
             final_static_properties: HashSet::new(),
             method_decls: Vec::new(),
-            methods: HashMap::new(),
-            static_methods: HashMap::new(),
+            methods: crate::fast_hash::FastMap::default(),
+            static_methods: crate::fast_hash::FastMap::default(),
             late_static_method_returns: HashMap::new(),
             late_static_static_method_returns: HashMap::new(),
             callable_method_return_sigs: HashMap::new(),
             callable_array_method_return_sigs: HashMap::new(),
-            method_visibilities: HashMap::<String, Visibility>::new(),
+            method_visibilities: crate::fast_hash::FastMap::default(),
             final_methods: HashSet::new(),
-            method_declaring_classes: HashMap::new(),
+            method_declaring_classes: crate::fast_hash::FastMap::default(),
             method_impl_classes,
             vtable_methods: vec![method_name.to_string()],
             vtable_slots,
-            static_method_visibilities: HashMap::new(),
+            static_method_visibilities: crate::fast_hash::FastMap::default(),
             final_static_methods: HashSet::new(),
-            static_method_declaring_classes: HashMap::new(),
-            static_method_impl_classes: HashMap::new(),
+            static_method_declaring_classes: crate::fast_hash::FastMap::default(),
+            static_method_impl_classes: crate::fast_hash::FastMap::default(),
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
             interfaces: Vec::new(),

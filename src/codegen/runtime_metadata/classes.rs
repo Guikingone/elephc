@@ -453,12 +453,12 @@ pub(in crate::codegen) fn eir_class_method_keys(module: &Module) -> HashSet<(Str
 }
 
 /// Returns true when all vtable methods resolve to emitted EIR method symbols.
-pub(in crate::codegen) fn class_method_symbols_supported(
+pub(in crate::codegen) fn class_method_symbols_supported<S: std::hash::BuildHasher>(
     class_info: &ClassInfo,
     fallback_class: &str,
     is_static: bool,
     methods: &[String],
-    impl_classes: &HashMap<String, String>,
+    impl_classes: &std::collections::HashMap<String, String, S>,
     emitted_methods: &HashSet<(String, String, bool)>,
 ) -> bool {
     methods.iter().all(|method_name| {

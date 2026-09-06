@@ -353,8 +353,8 @@ pub struct ClassInfo {
     pub declared_static_properties: HashSet<String>,
     pub final_static_properties: HashSet<String>,
     pub method_decls: Vec<ClassMethod>,
-    pub methods: HashMap<String, FunctionSig>,
-    pub static_methods: HashMap<String, FunctionSig>,
+    pub methods: crate::fast_hash::FastMap<String, FunctionSig>,
+    pub static_methods: crate::fast_hash::FastMap<String, FunctionSig>,
     /// Exact return syntax for instance methods containing PHP's late-bound `static` type.
     pub late_static_method_returns: HashMap<String, TypeExpr>,
     /// Exact return syntax for static methods containing PHP's late-bound `static` type.
@@ -365,16 +365,16 @@ pub struct ClassInfo {
     /// Callable element signatures returned by methods whose effective return
     /// type is `array<callable>` or an assoc array of callable values.
     pub callable_array_method_return_sigs: HashMap<String, FunctionSig>,
-    pub method_visibilities: HashMap<String, Visibility>,
+    pub method_visibilities: crate::fast_hash::FastMap<String, Visibility>,
     pub final_methods: HashSet<String>,
-    pub method_declaring_classes: HashMap<String, String>,
-    pub method_impl_classes: HashMap<String, String>,
+    pub method_declaring_classes: crate::fast_hash::FastMap<String, String>,
+    pub method_impl_classes: crate::fast_hash::FastMap<String, String>,
     pub vtable_methods: Vec<String>,
     pub vtable_slots: HashMap<String, usize>,
-    pub static_method_visibilities: HashMap<String, Visibility>,
+    pub static_method_visibilities: crate::fast_hash::FastMap<String, Visibility>,
     pub final_static_methods: HashSet<String>,
-    pub static_method_declaring_classes: HashMap<String, String>,
-    pub static_method_impl_classes: HashMap<String, String>,
+    pub static_method_declaring_classes: crate::fast_hash::FastMap<String, String>,
+    pub static_method_impl_classes: crate::fast_hash::FastMap<String, String>,
     pub static_vtable_methods: Vec<String>,
     pub static_vtable_slots: HashMap<String, usize>,
     pub interfaces: Vec<String>,

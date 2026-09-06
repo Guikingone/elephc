@@ -167,9 +167,9 @@ fn direct_this_property_return_types(class_info: &ClassInfo) -> Vec<(String, Php
 }
 
 /// Normalizes one instance/static method table for EIR call and bridge metadata.
-pub(super) fn normalize_method_map_for_eir(
+pub(super) fn normalize_method_map_for_eir<S: std::hash::BuildHasher>(
     class_name: &str,
-    methods: &mut HashMap<String, FunctionSig>,
+    methods: &mut std::collections::HashMap<String, FunctionSig, S>,
     method_decls: &[ClassMethod],
     is_static: bool,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
