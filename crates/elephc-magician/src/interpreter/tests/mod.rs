@@ -60,6 +60,7 @@ mod control_flow;
 mod core;
 mod dynamic_calls;
 mod dynamic_property_store;
+mod element_reference_bind;
 mod enums;
 mod expressions;
 mod foreach_object;

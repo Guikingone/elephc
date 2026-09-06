@@ -384,6 +384,27 @@ impl Parser {
                 return Err(EvalParseError::UnexpectedToken);
             };
             self.advance();
+            if op.is_none() && self.consume(TokenKind::Ampersand) {
+                // An ELEMENT of a static property binds like any other array element, and
+                // `EvalStmt::ArrayReferenceBind` already writes through a general lvalue --
+                // `evaluate_plain_assignment_location` handles a static-property root. Only this
+                // parse path never offered it the chance: it read the `=` and then demanded a
+                // VALUE, so `self::$cache[$a] = &self::$cache[$b];` died on the `&`.
+                let source = self.parse_reference_source_expr()?;
+                if require_semicolon {
+                    self.expect_semicolon()?;
+                }
+                return Ok(vec![EvalStmt::ArrayReferenceBind {
+                    target: EvalExpr::ArrayGet {
+                        array: Box::new(EvalExpr::StaticPropertyGet {
+                            class_name,
+                            property,
+                        }),
+                        index: Box::new(index),
+                    },
+                    source,
+                }]);
+            }
             let value = self.parse_expr()?;
             if require_semicolon {
                 self.expect_semicolon()?;
@@ -784,6 +805,16 @@ impl Parser {
         let operator_pos = self.pos;
         self.advance();
         if op.is_none() && self.consume(TokenKind::Ampersand) {
+            // An ELEMENT target is not a property target. `property_reference_bind_stmt` knows
+            // property shapes only, so `$this->data["bag"] = &$rows;` was refused even though
+            // `EvalStmt::ArrayReferenceBind` writes through exactly this lvalue already.
+            if matches!(target, EvalExpr::ArrayGet { .. }) {
+                let source = self.parse_reference_source_expr()?;
+                if require_semicolon {
+                    self.expect_semicolon()?;
+                }
+                return Ok(vec![EvalStmt::ArrayReferenceBind { target, source }]);
+            }
             let (mut stmts, source) = self.parse_reference_source_via_alias()?;
             if require_semicolon {
                 self.expect_semicolon()?;

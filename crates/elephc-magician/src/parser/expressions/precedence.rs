@@ -636,7 +636,13 @@ pub(in crate::parser) fn is_assignment_target(target: &EvalExpr) -> bool {
     )
 }
 
-/// Returns whether a lvalue is handled by the statement-level property reference binder.
+/// Returns whether a lvalue is handled by the statement-level reference binder.
+///
+/// The expression parser hands these targets back UNCONSUMED when a `&` follows the `=`, so the
+/// statement tail can build a binding statement instead of an assignment expression. An array
+/// ELEMENT belongs here for the same reason a property does: `$this->data["bag"] = &$rows;` is
+/// `EvalStmt::ArrayReferenceBind`, and without this the expression parser marched past the `=`
+/// and refused the `&` as the start of a value it could not parse.
 fn is_property_reference_target(target: &EvalExpr) -> bool {
     matches!(
         target,
