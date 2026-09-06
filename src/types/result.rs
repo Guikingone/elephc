@@ -72,7 +72,7 @@ pub struct CheckResult {
     #[allow(dead_code)]
     pub callable_array_return_sigs: HashMap<String, FunctionSig>,
     pub interfaces: HashMap<String, InterfaceInfo>,
-    pub classes: HashMap<String, ClassInfo>,
+    pub classes: crate::fast_hash::FastMap<String, ClassInfo>,
     pub enums: HashMap<String, EnumInfo>,
     pub packed_classes: HashMap<String, PackedClassInfo>,
     pub extern_functions: HashMap<String, ExternFunctionSig>,

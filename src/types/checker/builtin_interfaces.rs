@@ -337,7 +337,7 @@ pub(crate) fn inject_builtin_interfaces(
 /// - `classes`: mutable map of `ClassInfo` entries; `Stringable` is pushed into each
 ///   qualifying class's `interfaces` vector in-place
 pub(crate) fn apply_implicit_stringable_interfaces(
-    classes: &mut HashMap<String, ClassInfo>,
+    classes: &mut crate::fast_hash::FastMap<String, ClassInfo>,
 ) {
     let tostring_key = php_symbol_key("__toString");
     for class_info in classes.values_mut() {

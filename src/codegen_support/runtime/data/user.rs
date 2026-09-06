@@ -61,7 +61,7 @@ pub(crate) fn emit_runtime_data_user(
     trait_names: &[String],
     declared_trait_uses: &HashMap<String, Vec<String>>,
     declared_trait_source_lines: &HashMap<String, u32>,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     allowed_class_names: Option<&HashSet<String>>,
     emit_eval_reflection_metadata: bool,
@@ -2826,7 +2826,7 @@ fn interface_method_table_symbol(
     interface_info: &InterfaceInfo,
     method_name: &str,
     impl_class: &str,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> String {
     if interface_method_needs_return_wrapper(interface_info, method_name, impl_class, classes) {
         interface_method_wrapper_symbol(
@@ -2847,7 +2847,7 @@ fn interface_method_needs_return_wrapper(
     interface_info: &InterfaceInfo,
     method_name: &str,
     impl_class: &str,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> bool {
     let Some(interface_sig) = interface_info.methods.get(method_name) else {
         return false;
@@ -3439,7 +3439,7 @@ mod tests {
     /// Verifies that emit runtime data user can filter built in classes.
     #[test]
     fn test_emit_runtime_data_user_can_filter_built_in_classes() {
-        let mut classes = HashMap::new();
+        let mut classes = crate::fast_hash::FastMap::default();
         classes.insert(
             "Exception".to_string(),
             empty_class_info(0, "__construct"),
@@ -3485,7 +3485,7 @@ mod tests {
     /// broken ancestor chain was indistinguishable from a class that simply had no parent.
     #[test]
     fn test_emit_runtime_data_user_keeps_dense_class_tables_when_ids_start_at_one() {
-        let mut classes = HashMap::new();
+        let mut classes = crate::fast_hash::FastMap::default();
         classes.insert("Animal".to_string(), empty_class_info(1, "label"));
         classes.insert("Dog".to_string(), empty_class_info(2, "label"));
         classes.insert("Cat".to_string(), empty_class_info(3, "label"));
@@ -3526,7 +3526,7 @@ mod tests {
             .property_offsets
             .insert("callback".to_string(), 8);
 
-        let mut classes = HashMap::new();
+        let mut classes = crate::fast_hash::FastMap::default();
         classes.insert("CallableOwner".to_string(), class_info);
 
         let asm = emit_runtime_data_user(

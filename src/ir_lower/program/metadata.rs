@@ -83,7 +83,7 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
 /// cell because a bare `object` receiver can initialize it at runtime. Declared PHP properties and
 /// static properties retain their explicit or specialized contracts.
 fn normalize_untyped_instance_storage_for_eir(
-    classes: &mut HashMap<String, ClassInfo>,
+    classes: &mut crate::fast_hash::FastMap<String, ClassInfo>,
 ) {
     for class_info in classes.values_mut() {
         for index in 0..class_info.properties.len() {

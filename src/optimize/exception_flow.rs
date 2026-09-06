@@ -320,7 +320,7 @@ impl ExceptionFlowAnalysis {
         program: &[Stmt],
         type_metadata: Option<(
             &HashMap<String, FunctionSig>,
-            &HashMap<String, ClassInfo>,
+            &crate::fast_hash::FastMap<String, ClassInfo>,
             &HashMap<String, InterfaceInfo>,
         )>,
     ) -> Self {

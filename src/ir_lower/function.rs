@@ -1255,7 +1255,7 @@ fn lower_body_into_function(
     callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
     return_alias_summaries: &crate::types::ReturnAliasSummaries,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
     enums: &std::collections::HashMap<String, crate::types::EnumInfo>,
     interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
@@ -1837,7 +1837,7 @@ fn closure_signature_from_ast(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
     current_class: Option<&str>,
 ) -> FunctionSig {
     let parent_class = current_class.and_then(|class_name| {
@@ -1894,7 +1894,7 @@ fn direct_closure_return_type(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
 ) -> Option<PhpType> {
     let [stmt] = body else {
         return None;
@@ -1918,7 +1918,7 @@ fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
 ) -> PhpType {
     // An array literal returned directly is stamped with this inferred type and its elements
     // are coerced into it by `lower_return_expr`, so its slots must be resolved against the
@@ -2005,7 +2005,7 @@ fn direct_closure_return_array_element_type(
     items: &[crate::parser::ast::Expr],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
 ) -> PhpType {
     let mut elem_ty = PhpType::Never;
     for item in items {
@@ -2026,7 +2026,7 @@ fn direct_closure_return_array_item_type(
     item: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
 ) -> PhpType {
     if let ExprKind::Spread(inner) = &item.kind {
         let source = direct_closure_return_array_item_type(inner, captures, params, classes);
@@ -2059,7 +2059,7 @@ fn direct_closure_return_assoc_literal_type(
     pairs: &[(crate::parser::ast::Expr, crate::parser::ast::Expr)],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
 ) -> PhpType {
     let mut key_ty = PhpType::Never;
     let mut value_ty = PhpType::Never;

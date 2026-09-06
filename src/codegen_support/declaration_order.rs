@@ -30,7 +30,7 @@ fn set_declared_name_order(classes: Vec<String>, interfaces: Vec<String>, traits
 /// Prepares declaration-order registries shared by EIR introspection builtins.
 pub fn prepare_declared_name_order(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     interfaces: &HashMap<String, InterfaceInfo>,
 ) {
     let declared_trait_order = collect_declared_trait_names(program);
@@ -64,7 +64,7 @@ pub(crate) fn declared_trait_names() -> Vec<String> {
 /// with internal names prepended and sorted.
 fn collect_declared_class_names(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Vec<String> {
     let mut user_names = Vec::new();
     collect_program_declared_names(
@@ -125,9 +125,9 @@ fn collect_declared_trait_names(program: &Program) -> Vec<String> {
 /// Walks the program (recursing into namespace blocks), asks the `pick` callback
 /// to extract a name from each statement, and outputs it only if it exists in
 /// `known` and hasn't been seen before (deduplicated by PHP symbol key).
-fn collect_program_declared_names<T>(
+fn collect_program_declared_names<T, S: std::hash::BuildHasher>(
     program: &Program,
-    known: &HashMap<String, T>,
+    known: &std::collections::HashMap<String, T, S>,
     seen: &mut HashSet<String>,
     out: &mut Vec<String>,
     pick: impl Copy + Fn(&crate::parser::ast::Stmt) -> Option<&str>,

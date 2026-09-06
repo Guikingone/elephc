@@ -43,7 +43,7 @@ use rustc_hash::FxHasher;
 /// symbol the compiler itself derived from a source file it is compiling; there is no adversary
 /// choosing keys to degrade a lookup, and a program crafted to collide would only slow its own
 /// compilation.
-pub(crate) type FastMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub type FastMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 /// A `HashSet` keyed with `FxHasher` rather than SipHash. See [`FastMap`] for the argument.
-pub(crate) type FastSet<T> = std::collections::HashSet<T, BuildHasherDefault<FxHasher>>;
+pub type FastSet<T> = std::collections::HashSet<T, BuildHasherDefault<FxHasher>>;

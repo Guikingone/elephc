@@ -221,7 +221,7 @@ impl PostTypecheckOptimizer {
     pub fn new_with_type_metadata(
         program: &Program,
         functions: &HashMap<String, crate::types::FunctionSig>,
-        classes: &HashMap<String, crate::types::ClassInfo>,
+        classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
         interfaces: &HashMap<String, crate::types::InterfaceInfo>,
     ) -> Self {
         Self::new_with_optional_type_metadata(program, Some((functions, classes, interfaces)))
@@ -232,7 +232,7 @@ impl PostTypecheckOptimizer {
         program: &Program,
         type_metadata: Option<(
             &HashMap<String, crate::types::FunctionSig>,
-            &HashMap<String, crate::types::ClassInfo>,
+            &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
             &HashMap<String, crate::types::InterfaceInfo>,
         )>,
     ) -> Self {

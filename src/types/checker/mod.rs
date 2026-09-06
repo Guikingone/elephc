@@ -130,7 +130,7 @@ pub(crate) struct Checker {
     /// Interface definitions collected during the first pass, keyed by canonical name.
     pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during the first pass, keyed by canonical name.
-    pub classes: HashMap<String, ClassInfo>,
+    pub classes: crate::fast_hash::FastMap<String, ClassInfo>,
     /// Canonical class names declared in the program, available for forward references
     /// before the full class definitions are available.
     pub declared_classes: HashSet<String>,
@@ -1127,7 +1127,7 @@ pub fn check_types_with_options(
 }
 
 /// Copies direct class declaration doc comments into the completed AOT class schema map.
-fn attach_class_doc_comments(program: &Program, classes: &mut HashMap<String, ClassInfo>) {
+fn attach_class_doc_comments(program: &Program, classes: &mut crate::fast_hash::FastMap<String, ClassInfo>) {
     for stmt in program {
         match &stmt.kind {
             StmtKind::ClassDecl {

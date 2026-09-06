@@ -103,7 +103,7 @@ pub struct Module {
     pub declared_trait_final_constants: HashMap<String, HashSet<String>>,
     /// Prescanned global constant values used by EIR lowering and eval metadata registration.
     pub global_constants: HashMap<String, (ExprKind, PhpType)>,
-    pub class_infos: HashMap<String, ClassInfo>,
+    pub class_infos: crate::fast_hash::FastMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
     pub enum_infos: HashMap<String, EnumInfo>,
     pub extern_class_infos: HashMap<String, ExternClassInfo>,
@@ -159,7 +159,7 @@ impl Module {
             declared_trait_constant_visibilities: HashMap::new(),
             declared_trait_final_constants: HashMap::new(),
             global_constants: HashMap::new(),
-            class_infos: HashMap::new(),
+            class_infos: crate::fast_hash::FastMap::default(),
             interface_infos: HashMap::new(),
             enum_infos: HashMap::new(),
             extern_class_infos: HashMap::new(),

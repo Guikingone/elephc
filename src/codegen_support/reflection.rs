@@ -39,7 +39,7 @@ pub(crate) struct ReflectionAttributeFactory {
 /// Returns the canonical class name string from the HashMap key, or `None`
 /// if the class is not registered.
 pub(crate) fn resolve_class_name<'a>(
-    classes: &'a HashMap<String, ClassInfo>,
+    classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
     class_name: &str,
 ) -> Option<&'a str> {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
@@ -54,7 +54,7 @@ pub(crate) fn resolve_class_name<'a>(
 /// pairs into a sorted vector of `ReflectionAttributeFactory` records with
 /// sequential ids.
 pub(crate) fn collect_attribute_factories(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Vec<ReflectionAttributeFactory> {
     collect_attribute_factories_with_extra(classes, &[])
 }
@@ -62,7 +62,7 @@ pub(crate) fn collect_attribute_factories(
 /// Scans class metadata plus additional attribute metadata sources and collects
 /// all distinct attribute name/argument pairs into deterministic factory records.
 pub(crate) fn collect_attribute_factories_with_extra(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     extra_attrs: &[AttributeMetadataSource<'_>],
 ) -> Vec<ReflectionAttributeFactory> {
     let mut unique = BTreeMap::new();
@@ -124,7 +124,7 @@ pub(crate) fn collect_attribute_factories_with_extra(
 /// Returns the factory id for an attribute, considering classes plus extra
 /// metadata sources such as top-level function attributes retained by EIR.
 pub(crate) fn attribute_factory_id_with_extra(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     extra_attrs: &[AttributeMetadataSource<'_>],
     attr_name: &str,
     attr_args: &[AttrArgEntry],
@@ -145,7 +145,7 @@ pub(crate) fn attribute_factory_id_with_extra(
 /// Builds the synthetic `ReflectionAttribute::newInstance()` body using class
 /// metadata plus additional attribute metadata sources.
 pub(crate) fn build_attribute_new_instance_body_with_extra(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     extra_attrs: &[AttributeMetadataSource<'_>],
 ) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
@@ -334,7 +334,7 @@ fn attr_key_expr(key: &AttrKey) -> Expr {
 /// Builds the synthetic `ReflectionAttribute::getArguments()` body using class
 /// metadata plus additional attribute metadata sources.
 pub(crate) fn build_attribute_get_arguments_body_with_extra(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     extra_attrs: &[AttributeMetadataSource<'_>],
 ) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
@@ -381,7 +381,7 @@ fn name_from_canonical(class_name: &str) -> Name {
 /// resolved (class-name, args) pair into `unique`. Skips entries where
 /// args is `None` or the class name cannot be resolved.
 fn collect_from_attribute_lists(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     names: &[String],
     args: &[Option<Vec<AttrArgEntry>>],
     unique: &mut BTreeMap<(String, Vec<AttrArgEntry>), bool>,
@@ -414,7 +414,7 @@ mod tests {
     /// Verifies factory-zero attributes fall back to dynamic name construction with arg spread.
     #[test]
     fn new_instance_body_ends_with_runtime_metadata_fallback() {
-        let body = build_attribute_new_instance_body_with_extra(&HashMap::new(), &[]);
+        let body = build_attribute_new_instance_body_with_extra(&crate::fast_hash::FastMap::default(), &[]);
         let Some(Stmt {
             kind: StmtKind::Return(Some(Expr {
                 kind: ExprKind::NewDynamic { name_expr, args },

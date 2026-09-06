@@ -23,7 +23,7 @@ const MAX_EFFECT_ITERATIONS: usize = 64;
 /// Read-only module facts used while summarizing and rewriting instructions.
 struct RefinementContext<'a> {
     data: &'a crate::ir::DataPool,
-    classes: &'a HashMap<String, ClassInfo>,
+    classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
     summaries: &'a HashMap<String, Effects>,
     /// True when the runtime eval bridge can register subclasses absent from `classes`.
     has_dynamic_class_barrier: bool,
@@ -333,7 +333,7 @@ fn method_summary_for_class(
 /// Expands an object or nullable-object type to all concrete checked runtime classes.
 fn receiver_runtime_classes(
     receiver_type: &PhpType,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Option<Vec<String>> {
     let mut bases = Vec::new();
     match receiver_type {
@@ -374,7 +374,7 @@ fn receiver_runtime_classes(
 
 /// Returns true when one class is the requested base or inherits from it.
 fn class_is_same_or_subclass(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     candidate: &str,
     base: &str,
 ) -> bool {

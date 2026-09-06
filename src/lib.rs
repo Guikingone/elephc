@@ -40,7 +40,7 @@ pub mod exports;
 /// Dynamic-filter dispatch prelude used by source-sensitive `filter_var()` lowering.
 pub mod filter_var_prelude;
 /// Fast non-cryptographic hash-map aliases for the compiler's internal keying.
-pub(crate) mod fast_hash;
+pub mod fast_hash;
 /// PHP variadic-argument introspection (`func_num_args`/`func_get_args`/`func_get_arg`) desugaring.
 pub mod func_args;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.

@@ -34,7 +34,9 @@ pub(super) fn lower_property_init_thunks(
 }
 
 /// Returns deterministic sorted keys for metadata placeholder tables.
-pub(super) fn sorted_keys<T>(map: &std::collections::HashMap<String, T>) -> Vec<String> {
+pub(super) fn sorted_keys<T, S: std::hash::BuildHasher>(
+    map: &std::collections::HashMap<String, T, S>,
+) -> Vec<String> {
     let mut keys = map.keys().cloned().collect::<Vec<_>>();
     keys.sort();
     keys
@@ -43,7 +45,7 @@ pub(super) fn sorted_keys<T>(map: &std::collections::HashMap<String, T>) -> Vec<
 /// Collects PHP-visible class and enum names in the order `get_declared_classes()` must expose.
 pub(super) fn collect_declared_class_names(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Vec<String> {
     let mut user_names = Vec::new();
     collect_program_declared_names(
@@ -400,9 +402,9 @@ pub(super) fn collect_declared_trait_final_constants(program: &Program) -> HashM
 }
 
 /// Recursively collects source-declared names that are present in checked metadata.
-pub(super) fn collect_program_declared_names<T>(
+pub(super) fn collect_program_declared_names<T, S: std::hash::BuildHasher>(
     program: &Program,
-    known: &HashMap<String, T>,
+    known: &std::collections::HashMap<String, T, S>,
     seen: &mut HashSet<String>,
     out: &mut Vec<String>,
     pick: impl Copy + Fn(&Stmt) -> Option<&str>,

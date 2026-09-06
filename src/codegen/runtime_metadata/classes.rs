@@ -10,7 +10,7 @@
 use super::*;
 
 /// Returns class metadata trimmed to method symbols emitted by the EIR backend.
-pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> HashMap<String, ClassInfo> {
+pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> crate::fast_hash::FastMap<String, ClassInfo> {
     let emitted_methods = emitted_class_method_keys(module);
     let emitted_property_init_thunks = module
         .functions
@@ -508,7 +508,7 @@ pub(in crate::codegen) fn interface_metadata_supported_for_dynamic_instanceof(
 }
 
 /// Adds parent classes needed by runtime class-id tables.
-pub(in crate::codegen) fn expand_class_dependencies(names: &mut HashSet<String>, classes: &HashMap<String, ClassInfo>) {
+pub(in crate::codegen) fn expand_class_dependencies(names: &mut HashSet<String>, classes: &crate::fast_hash::FastMap<String, ClassInfo>) {
     loop {
         let mut changed = false;
         let snapshot = names.iter().cloned().collect::<Vec<_>>();

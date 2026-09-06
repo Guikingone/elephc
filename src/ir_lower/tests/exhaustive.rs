@@ -86,7 +86,7 @@ fn dummy_check_result() -> CheckResult {
         },
     );
 
-    let mut classes = HashMap::new();
+    let mut classes = crate::fast_hash::FastMap::default();
     classes.insert("C".to_string(), class_info("C"));
 
     let mut extern_functions = HashMap::new();

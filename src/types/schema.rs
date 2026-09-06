@@ -394,7 +394,7 @@ pub struct ClassInfo {
 /// The owner is the instantiated class itself whenever its own map has the entry, so an
 /// inherited public or protected constructor resolves exactly as before.
 pub fn constructor_owner<'a>(
-    classes: &'a HashMap<String, ClassInfo>,
+    classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
     class_name: &str,
 ) -> Option<(&'a str, &'a ClassInfo)> {
     let mut current = Some(class_name);

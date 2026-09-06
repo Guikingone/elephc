@@ -255,7 +255,7 @@ fn runtime_features_for_program(program: &Program) -> RuntimeFeatures {
 /// Returns optional runtime features referenced by the program and emitted class metadata.
 pub fn runtime_features_for_program_and_classes(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> RuntimeFeatures {
     runtime_features_for_program_and_classes_opt(program, Some(classes))
 }
@@ -297,7 +297,7 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
 /// Builds the optional runtime feature set, using class metadata when codegen has it.
 fn runtime_features_for_program_and_classes_opt(
     program: &Program,
-    classes: Option<&HashMap<String, ClassInfo>>,
+    classes: Option<&crate::fast_hash::FastMap<String, ClassInfo>>,
 ) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
     features.regex = program_requires_regex(program, classes);
@@ -307,14 +307,14 @@ fn runtime_features_for_program_and_classes_opt(
 }
 
 /// Returns true when user code or emitted builtin class methods can call regex helpers.
-fn program_requires_regex(program: &Program, classes: Option<&HashMap<String, ClassInfo>>) -> bool {
+fn program_requires_regex(program: &Program, classes: Option<&crate::fast_hash::FastMap<String, ClassInfo>>) -> bool {
     body_has_regex_call(program) || class_emission_can_reference_regex(program, classes)
 }
 
 /// Returns true when class method emission can reference RegexIterator methods.
 fn class_emission_can_reference_regex(
     program: &Program,
-    classes: Option<&HashMap<String, ClassInfo>>,
+    classes: Option<&crate::fast_hash::FastMap<String, ClassInfo>>,
 ) -> bool {
     match classes {
         Some(classes) => emitted_classes_include_regex_iterators(program, classes),
@@ -325,7 +325,7 @@ fn class_emission_can_reference_regex(
 /// Returns true when the actual emitted class set includes regex iterator classes.
 fn emitted_classes_include_regex_iterators(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> bool {
     if program_has_dynamic_instanceof(program) {
         return classes.keys().any(|name| is_regex_iterator_name(name));
@@ -353,7 +353,7 @@ fn is_regex_iterator_name(name: &str) -> bool {
 /// Returns true when class method emission can reference PHAR bridge helpers.
 fn class_emission_can_reference_phar_archive(
     program: &Program,
-    classes: Option<&HashMap<String, ClassInfo>>,
+    classes: Option<&crate::fast_hash::FastMap<String, ClassInfo>>,
 ) -> bool {
     match classes {
         Some(classes) => emitted_classes_include_phar_archive_helpers(program, classes),
@@ -364,7 +364,7 @@ fn class_emission_can_reference_phar_archive(
 /// Returns true when the actual emitted class set includes stream/archive helpers.
 fn emitted_classes_include_phar_archive_helpers(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> bool {
     if program_has_dynamic_instanceof(program) {
         return classes

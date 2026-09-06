@@ -146,7 +146,7 @@ fn retain_class_metadata(
 
 /// Asserts shared virtual methods retain one slot number across each live inheritance edge.
 #[cfg(debug_assertions)]
-fn assert_inherited_vtable_slots_aligned(classes: &HashMap<String, ClassInfo>) {
+fn assert_inherited_vtable_slots_aligned(classes: &crate::fast_hash::FastMap<String, ClassInfo>) {
     let by_key: HashMap<_, _> = classes
         .iter()
         .map(|(name, info)| (php_symbol_key(name), info))

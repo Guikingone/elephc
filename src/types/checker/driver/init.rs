@@ -196,7 +196,7 @@ impl Checker {
             first_class_callable_targets: HashMap::new(),
             reflection_class_targets: HashMap::new(),
             interfaces: HashMap::new(),
-            classes: HashMap::new(),
+            classes: crate::fast_hash::FastMap::default(),
             declared_classes: HashSet::new(),
             declared_class_parents: HashMap::new(),
             declared_class_interfaces: HashMap::new(),
