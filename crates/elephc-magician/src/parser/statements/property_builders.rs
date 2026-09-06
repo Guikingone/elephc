@@ -129,11 +129,19 @@ pub(super) fn property_array_append_stmt(target: EvalExpr, value: EvalExpr) -> R
             value,
         }),
         // Any other writable chain — `$this->listeners[$name][$priority][] = $listener;` above
-        // all. `interpreter::eval_array_append` already appends through ANY writable lvalue; only
-        // this builder refused to hand it one, because it enumerated property shapes alone. That
-        // refusal cost twenty-one Symfony files, and it surfaced at the NEXT statement's first
-        // token, which is why they were reported as `unexpected "}"` and `unexpected "return"`.
-        target if is_assignment_target(&target) => Ok(EvalStmt::ArrayAppend { target, value }),
+        // all. Only this builder refused to hand one over, because it enumerated property shapes
+        // alone. That refusal cost twenty-one Symfony files, and it surfaced at the NEXT
+        // statement's first token, which is why they were reported as `unexpected "}"` and
+        // `unexpected "return"`.
+        //
+        // The append is built as the EXPRESSION form even here. PHP's append is an assignment
+        // expression whose value is the assigned one, so the statement spelling is that
+        // expression with its result discarded, and building the same node either way keeps one
+        // evaluator for both positions.
+        target if is_assignment_target(&target) => Ok(EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
+            target: Box::new(target),
+            value: Box::new(value),
+        })),
         _ => Err(EvalParseError::UnexpectedToken),
     }
 }
