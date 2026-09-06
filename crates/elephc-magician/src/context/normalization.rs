@@ -84,14 +84,19 @@ pub(super) fn same_class_name(left: &str, right: &str) -> bool {
     normalize_class_name(left) == normalize_class_name(right)
 }
 
-/// Returns the interfaces one PHP BUILTIN interface extends, in PHP's own order.
+/// Returns the interfaces one PHP BUILTIN class-like name extends or implements, in PHP's order.
 ///
-/// A builtin interface carries no eval declaration, so an interface-parent walk over eval
-/// metadata alone stops at it: a class implementing `Iterator` was never seen as a `Traversable`.
+/// A builtin name carries no eval declaration, so a parent walk over eval metadata alone stops
+/// at it: a class implementing `Iterator` was never seen as a `Traversable`, and a return type
+/// narrowed to `Iterator` was refused where php accepts it.
 /// The list is transitive because PHP reports it that way — measured with `php -n` 8.5.6,
 /// `ReflectionClass('OuterIterator')->getInterfaceNames()` is `Iterator,Traversable`, and a class
 /// implementing `Iterator` reports `Iterator,Traversable`.
-pub(super) fn builtin_interface_parent_names(name: &str) -> &'static [&'static str] {
+///
+/// `Generator` is a builtin CLASS rather than an interface and belongs here for the same
+/// reason: it implements `Iterator`, so `getIterator(): Generator` is a legal narrowing of
+/// `IteratorAggregate::getIterator(): Traversable`.
+pub(super) fn builtin_class_like_parent_names(name: &str) -> &'static [&'static str] {
     let name = name.trim_start_matches('\\');
     if name.eq_ignore_ascii_case("Iterator") || name.eq_ignore_ascii_case("IteratorAggregate") {
         return &["Traversable"];
@@ -99,6 +104,7 @@ pub(super) fn builtin_interface_parent_names(name: &str) -> &'static [&'static s
     if name.eq_ignore_ascii_case("OuterIterator")
         || name.eq_ignore_ascii_case("RecursiveIterator")
         || name.eq_ignore_ascii_case("SeekableIterator")
+        || name.eq_ignore_ascii_case("Generator")
     {
         return &["Iterator", "Traversable"];
     }

@@ -289,7 +289,7 @@ impl ElephcEvalContext {
             // cosmetic gap: `foreach` over an `IteratorAggregate` whose
             // `getIterator(): Traversable` returns an eval Iterator failed the return-type check
             // and the whole loop became a fatal.
-            for parent in builtin_interface_parent_names(interface_name) {
+            for parent in builtin_class_like_parent_names(interface_name) {
                 if skip_enum_markers && is_php_enum_marker_interface(parent) {
                     continue;
                 }
@@ -602,6 +602,13 @@ impl ElephcEvalContext {
         seen: &mut HashSet<String>,
     ) {
         let Some(interface) = self.interface(interface_name) else {
+            // A PHP BUILTIN interface has no eval declaration, so this used to report that
+            // `Iterator` extends nothing -- and a return type narrowed from `Traversable` to
+            // `Iterator`, which php allows and Symfony writes, was refused at class declaration.
+            // The class-side walk already consults the same table.
+            for parent in builtin_class_like_parent_names(interface_name) {
+                push_unique_class_name(parent, names, seen);
+            }
             return;
         };
         for parent in interface.parents() {

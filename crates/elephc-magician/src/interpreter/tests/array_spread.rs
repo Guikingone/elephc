@@ -169,8 +169,8 @@ echo json_encode([...new It()]);"#
 /// `php -n` 8.5.6 prints `{"p":1,"q":2};{"g":3,"0":4}`. The second half is the aggregate handing
 /// over a GENERATOR rather than an `Iterator`, which is a different arm of the hand-off.
 ///
-/// TWO neighbouring gaps kept out of this expectation on purpose, because writing the natural
-/// version of this test would have blamed unpacking for either of them.
+/// TWO neighbouring gaps were found while writing this test, and neither is an unpacking
+/// defect -- writing the natural version would have blamed unpacking for them.
 ///
 /// `new ArrayIterator([...])` -- the obvious inner iterator -- does NOT work in the eval
 /// interpreter: `ArrayIterator` appears in the known-class list in `interpreter/constants.rs`
@@ -178,10 +178,9 @@ echo json_encode([...new It()]);"#
 /// The inner iterator here is a user class instead.
 ///
 /// `getIterator(): Iterator` -- php's own covariant narrowing, and the spelling Symfony uses --
-/// is REFUSED at class declaration: the interface-contract check resolves the declared return
-/// atom against eval-declared classes and interfaces only, so a BUILTIN interface like `Iterator`
-/// has no parents and fails to be a `Traversable`. The return type here is spelled `Traversable`
-/// to keep this test about unpacking.
+/// was REFUSED at class declaration until the commit that follows this one, so this test first
+/// landed spelling the return type `Traversable`. Both spellings now work and the narrowed one
+/// is what is pinned, because it is the one real code writes.
 #[test]
 fn an_aggregate_operand_unpacks_through_its_inner_iterator() {
     assert_eq!(
@@ -197,11 +196,11 @@ fn an_aggregate_operand_unpacks_through_its_inner_iterator() {
     public function next(): void { $this->i++; }
 }
 class Agg implements IteratorAggregate {
-    public function getIterator(): Traversable { return new Pairs(); }
+    public function getIterator(): Iterator { return new Pairs(); }
 }
 echo json_encode([...new Agg()]), ";";
 class AggGen implements IteratorAggregate {
-    public function getIterator(): Traversable { yield "g" => 3; yield 4; }
+    public function getIterator(): Generator { yield "g" => 3; yield 4; }
 }
 echo json_encode([...new AggGen()]);"#
         ),

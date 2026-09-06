@@ -531,8 +531,20 @@ fn eval_return_class_type_is_a(
             .iter()
             .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved));
     }
-    context
+    if context
         .class_parent_names(&actual_resolved)
+        .iter()
+        .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved))
+    {
+        return true;
+    }
+    // A PHP BUILTIN interface reaches NEITHER branch above: it is not an eval-declared class and
+    // not an eval-declared interface, so it had no parents at all and `Iterator` could never be
+    // a `Traversable`. That made `getIterator(): Iterator` -- php's own covariant narrowing of
+    // `IteratorAggregate::getIterator(): Traversable`, and the spelling Symfony writes -- a
+    // fatal at class declaration.
+    context
+        .interface_parent_names(&actual_resolved)
         .iter()
         .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved))
 }
