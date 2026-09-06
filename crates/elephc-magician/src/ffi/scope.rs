@@ -21,6 +21,7 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 /// Allocates a materialized activation scope handle for generated code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_scope_new() -> *mut ElephcEvalScope {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_scope_new");
     Box::into_raw(Box::new(ElephcEvalScope::new()))
 }
 
@@ -31,6 +32,7 @@ pub extern "C" fn __elephc_eval_scope_new() -> *mut ElephcEvalScope {
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_scope_free(scope: *mut ElephcEvalScope) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_scope_free");
     if !scope.is_null() {
         let mut scope = Box::from_raw(scope);
         release_owned_scope_cells(&mut scope);
@@ -51,6 +53,7 @@ pub unsafe extern "C" fn __elephc_eval_scope_set(
     cell: *mut RuntimeCell,
     flags: u32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_scope_set");
     let Some(scope) = scope.as_mut() else {
         return EvalStatus::RuntimeFatal.code();
     };
@@ -81,6 +84,7 @@ pub unsafe extern "C" fn __elephc_eval_scope_get(
     out_cell: *mut *mut RuntimeCell,
     out_flags: *mut u32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_scope_get");
     let Some(scope) = scope.as_ref() else {
         return EvalStatus::RuntimeFatal.code();
     };
@@ -111,6 +115,7 @@ pub unsafe extern "C" fn __elephc_eval_scope_unset(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_scope_unset");
     let Some(scope) = scope.as_mut() else {
         return EvalStatus::RuntimeFatal.code();
     };
@@ -136,6 +141,7 @@ pub unsafe extern "C" fn __elephc_eval_scope_mark_global_alias(
     global_name_ptr: *const u8,
     global_name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_scope_mark_global_alias");
     let Some(scope) = scope.as_mut() else {
         return EvalStatus::RuntimeFatal.code();
     };
@@ -155,6 +161,7 @@ pub unsafe extern "C" fn __elephc_eval_scope_mark_global_alias(
 /// `scope` must be a valid eval scope handle allocated by the eval bridge.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_scope_clear_dirty(scope: *mut ElephcEvalScope) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_scope_clear_dirty");
     let Some(scope) = scope.as_mut() else {
         return EvalStatus::RuntimeFatal.code();
     };

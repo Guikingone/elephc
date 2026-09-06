@@ -114,3 +114,35 @@ pub(crate) unsafe fn write_outcome(outcome: EvalOutcome, out: *mut ElephcEvalRes
         }
     }
 }
+
+/// Announces one bridge entry point, so a fatal is always preceded by the call that raised it.
+///
+/// A refusal can happen in a region that emits nothing: a Symfony request ended in 527 consecutive
+/// `object_is_a` lines and then a fatal, with the failing call somewhere between them and no line
+/// to name it. Every `__elephc_eval_*` symbol announces itself here, and the last line before a
+/// fatal is then the call that failed rather than the last call that happened to be instrumented.
+///
+/// It is a level of its own because it is loud -- a request makes hundreds of thousands of bridge
+/// calls -- so `ELEPHC_EVAL_TRACE=1` keeps the readable phase trace, and `ffi` or `all` adds this.
+pub(crate) fn trace_eval_ffi_entry(symbol: &str) {
+    let Some(level) = std::env::var_os("ELEPHC_EVAL_TRACE") else {
+        return;
+    };
+    let level = level.to_string_lossy();
+    if level != "ffi" && level != "all" {
+        return;
+    }
+    eprintln!("[elephc-eval-trace] phase=ffi_entry symbol={symbol}");
+}
+
+/// Reads an object's runtime class name for a diagnostic, giving nothing up if it cannot.
+#[cfg(not(test))]
+pub(crate) fn eval_object_class_name_for_diagnostic(
+    object: RuntimeCellHandle,
+    values: &mut impl crate::interpreter::RuntimeValueOps,
+) -> Option<String> {
+    let handle = values.object_class_name(object).ok()?;
+    let bytes = values.string_bytes(handle).ok();
+    let _ = values.release(handle);
+    bytes.and_then(|bytes| String::from_utf8(bytes).ok())
+}

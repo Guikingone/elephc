@@ -47,6 +47,7 @@ pub unsafe extern "C" fn __elephc_eval_function_exists(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_function_exists");
     std::panic::catch_unwind(|| unsafe { eval_function_exists_inner(ctx, name_ptr, name_len) })
         .unwrap_or(0)
 }
@@ -71,6 +72,7 @@ pub unsafe extern "C" fn __elephc_eval_bridge_can_call_function(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_bridge_can_call_function");
     std::panic::catch_unwind(|| {
         let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
             return 0;
@@ -98,6 +100,7 @@ pub unsafe extern "C" fn __elephc_eval_constant_exists(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_constant_exists");
     std::panic::catch_unwind(|| unsafe { eval_constant_exists_inner(ctx, name_ptr, name_len) })
         .unwrap_or(0)
 }
@@ -115,6 +118,7 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_class_exists(
     name_len: u64,
     autoload: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_dynamic_class_exists");
     std::panic::catch_unwind(|| unsafe {
         eval_dynamic_class_like_exists_inner(
             ctx,
@@ -140,6 +144,7 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_interface_exists(
     name_len: u64,
     autoload: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_dynamic_interface_exists");
     std::panic::catch_unwind(|| unsafe {
         eval_dynamic_class_like_exists_inner(
             ctx,
@@ -165,6 +170,7 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_trait_exists(
     name_len: u64,
     autoload: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_dynamic_trait_exists");
     std::panic::catch_unwind(|| unsafe {
         eval_dynamic_class_like_exists_inner(
             ctx,
@@ -190,6 +196,7 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_enum_exists(
     name_len: u64,
     autoload: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_dynamic_enum_exists");
     std::panic::catch_unwind(|| unsafe {
         eval_dynamic_class_like_exists_inner(
             ctx,
@@ -215,6 +222,7 @@ pub unsafe extern "C" fn __elephc_eval_constant_fetch(
     name_len: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_constant_fetch");
     std::panic::catch_unwind(|| unsafe { eval_constant_fetch_inner(ctx, name_ptr, name_len, out) })
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }

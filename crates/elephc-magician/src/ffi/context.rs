@@ -23,12 +23,14 @@ use std::ptr;
 /// Returns the ABI version expected by generated elephc eval call sites.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_abi_version() -> u32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_abi_version");
     ABI_VERSION
 }
 
 /// Allocates a process-level eval context handle for generated code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_context_new");
     #[cfg(not(test))]
     install_dynamic_object_destructor_hook();
     #[cfg(not(test))]
@@ -44,6 +46,7 @@ pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
 pub unsafe extern "C" fn __elephc_eval_context_publish_aot_metadata(
     ctx: *const ElephcEvalContext,
 ) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_context_publish_aot_metadata");
     #[cfg(not(test))]
     if let Some(context) = unsafe { ctx.as_ref() } {
         crate::context::publish_global_eval_aot_metadata(context);
@@ -63,6 +66,7 @@ pub unsafe extern "C" fn __elephc_eval_context_publish_aot_metadata(
 pub unsafe extern "C" fn __elephc_eval_context_try_sync_aot_metadata(
     ctx: *mut ElephcEvalContext,
 ) -> i64 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_context_try_sync_aot_metadata");
     #[cfg(not(test))]
     {
         let Some(context) = (unsafe { ctx.as_mut() }) else {
@@ -89,6 +93,7 @@ pub unsafe extern "C" fn __elephc_eval_trace_aot_null_method_receiver(
     method_len: u64,
     line: u64,
 ) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_trace_aot_null_method_receiver");
     if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
         return;
     }
@@ -117,6 +122,7 @@ pub unsafe extern "C" fn __elephc_eval_trace_aot_raw_null_method_receiver(
     line: u64,
     receiver: usize,
 ) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_trace_aot_raw_null_method_receiver");
     if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
         return;
     }
@@ -150,6 +156,7 @@ pub unsafe extern "C" fn __elephc_eval_trace_aot_handler_top(
     function_ptr: *const u8,
     function_len: u64,
 ) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_trace_aot_handler_top");
     if std::env::var_os("ELEPHC_HANDLER_TRACE").is_none() {
         return;
     }
@@ -182,6 +189,7 @@ pub unsafe extern "C" fn __elephc_eval_trace_aot_property_cell(
     site_len: u64,
     cell: *const usize,
 ) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_trace_aot_property_cell");
     if std::env::var_os("ELEPHC_AOT_PROPERTY_TRACE").is_none() {
         return;
     }
@@ -215,6 +223,7 @@ pub unsafe extern "C" fn __elephc_eval_trace_aot_raw_property_receiver(
     value: usize,
     value_is_object: u64,
 ) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_trace_aot_raw_property_receiver");
     if std::env::var_os("ELEPHC_AOT_PROPERTY_TRACE").is_none() {
         return;
     }
@@ -245,6 +254,7 @@ pub unsafe extern "C" fn __elephc_eval_trace_aot_raw_property_receiver(
 /// covers the program lifetime.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_set_strict_php(enabled: u8) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_set_strict_php");
     crate::strict_php_mode::set_strict_php_mode(enabled != 0);
 }
 
@@ -258,6 +268,7 @@ pub extern "C" fn __elephc_eval_set_strict_php(enabled: u8) {
 /// in this crate included — on the default profile.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_set_php_version_id");
     crate::eval_php_profile::set_eval_php_version_id(version_id);
 }
 
@@ -268,6 +279,7 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_context_free");
     let should_finalize = unsafe { ctx.as_ref() }
         .is_some_and(ElephcEvalContext::request_retained_context_free);
     if should_finalize {
@@ -309,6 +321,7 @@ pub unsafe extern "C" fn __elephc_eval_context_retain_global_scope(
     ctx: *mut ElephcEvalContext,
     scope: *mut ElephcEvalScope,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_context_retain_global_scope");
     std::panic::catch_unwind(|| unsafe {
         ctx.as_mut()
             .is_some_and(|context| context.retain_global_scope_for_request(scope))
@@ -331,6 +344,7 @@ pub unsafe extern "C" fn __elephc_eval_context_set_call_site(
     dir_len: u64,
     line: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_context_set_call_site");
     std::panic::catch_unwind(|| unsafe {
         eval_context_set_call_site_inner(ctx, file_ptr, file_len, dir_ptr, dir_len, line)
     })
@@ -348,6 +362,7 @@ pub unsafe extern "C" fn __elephc_eval_context_set_global_scope(
     ctx: *mut ElephcEvalContext,
     scope: *mut ElephcEvalScope,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_context_set_global_scope");
     std::panic::catch_unwind(|| unsafe { eval_context_set_global_scope_inner(ctx, scope) })
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -365,6 +380,7 @@ pub unsafe extern "C" fn __elephc_eval_context_push_class_scope(
     called_class_ptr: *const u8,
     called_class_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_context_push_class_scope");
     std::panic::catch_unwind(|| unsafe {
         eval_context_push_class_scope_inner(
             ctx,
@@ -384,6 +400,7 @@ pub unsafe extern "C" fn __elephc_eval_context_push_class_scope(
 /// `__elephc_eval_context_push_class_scope`.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_pop_class_scope(ctx: *mut ElephcEvalContext) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_context_pop_class_scope");
     std::panic::catch_unwind(|| unsafe { eval_context_pop_class_scope_inner(ctx) })
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -402,6 +419,7 @@ pub unsafe extern "C" fn __elephc_eval_native_frame_called_class_override(
     out_ptr: *mut *const u8,
     out_len: *mut u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_native_frame_called_class_override");
     std::panic::catch_unwind(|| unsafe {
         eval_native_frame_called_class_override_inner(class_ptr, class_len, out_ptr, out_len)
     })

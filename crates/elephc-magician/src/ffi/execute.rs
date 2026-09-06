@@ -46,6 +46,7 @@ pub unsafe extern "C" fn __elephc_eval_execute(
     code_len: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_execute");
     std::panic::catch_unwind(|| unsafe { execute_eval_inner(ctx, scope, code_ptr, code_len, out) })
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -107,6 +108,7 @@ unsafe fn execute_eval_inner(
 /// Called from generated assembly with no arguments beyond the ABI status code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_report_runtime_fatal(status: i64) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_report_runtime_fatal");
     let _ = std::panic::catch_unwind(|| {
         let prefix = if status == i64::from(EvalStatus::RuntimeFatal.code()) {
             "Fatal error: eval() runtime failed"

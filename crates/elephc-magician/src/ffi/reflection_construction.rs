@@ -31,6 +31,7 @@ pub unsafe extern "C" fn __elephc_eval_reflection_new_object(
     arg_count: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_reflection_new_object");
     std::panic::catch_unwind(|| unsafe {
         reflection_new_object_inner(ctx, name_ptr, name_len, args, arg_count, out)
     })

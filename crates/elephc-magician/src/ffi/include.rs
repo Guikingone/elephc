@@ -31,6 +31,7 @@ use std::ffi::c_void;
 /// lasts for the single PHP request represented by the process lifetime.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_include_request_reset() {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_include_request_reset");
     let _ = std::panic::catch_unwind(|| {
         crate::context::reset_global_eval_included_files();
         crate::context::reset_global_eval_function_contexts();
@@ -52,6 +53,7 @@ pub unsafe extern "C" fn __elephc_eval_include(
     once: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_include");
     std::panic::catch_unwind(|| unsafe {
         execute_include_inner(ctx, scope, path, required != 0, once != 0, out)
     })

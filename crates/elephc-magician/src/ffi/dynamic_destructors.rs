@@ -95,6 +95,7 @@ pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcE
 pub unsafe extern "C" fn __elephc_eval_dynamic_object_destruct(
     object: *mut RuntimeCell,
 ) -> u64 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_dynamic_object_destruct");
     std::panic::catch_unwind(|| unsafe { dynamic_object_destruct_inner(object) }).unwrap_or(0)
 }
 

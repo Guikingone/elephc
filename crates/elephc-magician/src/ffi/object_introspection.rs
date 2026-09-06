@@ -44,6 +44,7 @@ pub unsafe extern "C" fn __elephc_eval_object_class_name(
     lookup_kind: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_object_class_name");
     std::panic::catch_unwind(|| unsafe {
         eval_object_class_name_inner(ctx, object_or_class, lookup_kind, out)
     })
@@ -65,6 +66,7 @@ pub unsafe extern "C" fn __elephc_eval_object_is_a(
     target_len: u64,
     exclude_self: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_object_is_a");
     std::panic::catch_unwind(|| unsafe {
         eval_object_is_a_inner(ctx, object, target_ptr, target_len, exclude_self)
     })
@@ -85,6 +87,7 @@ pub unsafe extern "C" fn __elephc_eval_object_is_a_dynamic(
     target: *mut RuntimeCell,
     exclude_self: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_object_is_a_dynamic");
     std::panic::catch_unwind(|| unsafe {
         eval_object_is_a_dynamic_inner(ctx, object, target, exclude_self)
     })
@@ -104,6 +107,7 @@ pub unsafe extern "C" fn __elephc_eval_member_exists(
     member: *mut RuntimeCell,
     lookup_kind: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_member_exists");
     std::panic::catch_unwind(|| unsafe {
         eval_member_exists_inner(ctx, target, member, lookup_kind)
     })
@@ -124,6 +128,7 @@ pub unsafe extern "C" fn __elephc_eval_class_relation(
     relation_kind: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_class_relation");
     std::panic::catch_unwind(|| unsafe {
         eval_class_relation_inner(ctx, target, relation_kind, out)
     })

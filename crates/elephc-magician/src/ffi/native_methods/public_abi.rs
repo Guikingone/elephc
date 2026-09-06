@@ -23,6 +23,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method(
     method_key_len: u64,
     param_count: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_method");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_inner(ctx, method_key_ptr, method_key_len, false, param_count)
     })
@@ -41,6 +42,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method(
     method_key_len: u64,
     param_count: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_static_method");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_inner(ctx, method_key_ptr, method_key_len, true, param_count)
     })
@@ -62,6 +64,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_interface_property(
     type_spec_len: u64,
     flags: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_interface_property");
     std::panic::catch_unwind(|| unsafe {
         register_native_interface_property_inner(
             ctx,
@@ -90,6 +93,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_abstract_property(
     type_spec_len: u64,
     flags: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_abstract_property");
     std::panic::catch_unwind(|| unsafe {
         register_native_abstract_property_inner(
             ctx,
@@ -117,6 +121,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param(
     param_name_ptr: *const u8,
     param_name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_method_param");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_inner(
             ctx,
@@ -145,6 +150,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param(
     param_name_ptr: *const u8,
     param_name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_static_method_param");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_inner(
             ctx,
@@ -173,6 +179,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_flags(
     is_by_ref: i32,
     is_variadic: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_method_param_flags");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_flags_inner(
             ctx,
@@ -201,6 +208,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_flags
     is_by_ref: i32,
     is_variadic: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_static_method_param_flags");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_flags_inner(
             ctx,
@@ -227,6 +235,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_bridge_support(
     method_key_len: u64,
     supported: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_method_bridge_support");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_bridge_support_inner(
             ctx,
@@ -251,6 +260,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_bridge_supp
     method_key_len: u64,
     supported: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_static_method_bridge_support");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_bridge_support_inner(
             ctx,
@@ -277,6 +287,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_method_param_type");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_type_inner(
             ctx,
@@ -305,6 +316,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_static_method_param_type");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_type_inner(
             ctx,
@@ -332,6 +344,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_return_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_method_return_type");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_return_type_inner(
             ctx,
@@ -358,6 +371,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_return_type
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_static_method_return_type");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_return_type_inner(
             ctx,
@@ -385,6 +399,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_scal
     default_kind: u64,
     default_payload: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_method_param_default_scalar");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_scalar_inner(
             ctx,
@@ -413,6 +428,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
     default_kind: u64,
     default_payload: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_static_method_param_default_scalar");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_scalar_inner(
             ctx,
@@ -441,6 +457,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_stri
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_method_param_default_string");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_string_inner(
             ctx,
@@ -469,6 +486,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_static_method_param_default_string");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_string_inner(
             ctx,
@@ -497,6 +515,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_obje
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_method_param_default_object");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_object_inner(
             ctx,
@@ -525,6 +544,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_static_method_param_default_object");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_object_inner(
             ctx,
@@ -553,6 +573,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_arra
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_method_param_default_array");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_array_inner(
             ctx,
@@ -581,6 +602,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_static_method_param_default_array");
     std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_array_inner(
             ctx,
@@ -607,6 +629,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor(
     class_name_len: u64,
     param_count: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_constructor");
     std::panic::catch_unwind(|| unsafe {
         register_native_constructor_inner(ctx, class_name_ptr, class_name_len, param_count)
     })
@@ -627,6 +650,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param(
     param_name_ptr: *const u8,
     param_name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_constructor_param");
     std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_inner(
             ctx,
@@ -654,6 +678,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_flags(
     is_by_ref: i32,
     is_variadic: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_constructor_param_flags");
     std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_flags_inner(
             ctx,
@@ -679,6 +704,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_bridge_suppor
     class_name_len: u64,
     supported: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_constructor_bridge_support");
     std::panic::catch_unwind(|| unsafe {
         register_native_constructor_bridge_support_inner(
             ctx,
@@ -704,6 +730,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_constructor_param_type");
     std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_type_inner(
             ctx,
@@ -731,6 +758,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
     default_kind: u64,
     default_payload: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_constructor_param_default_scalar");
     std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_default_scalar_inner(
             ctx,
@@ -758,6 +786,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_constructor_param_default_string");
     std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_default_string_inner(
             ctx,
@@ -785,6 +814,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_constructor_param_default_object");
     std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_default_object_inner(
             ctx,
@@ -812,6 +842,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_constructor_param_default_array");
     std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_default_array_inner(
             ctx,
@@ -838,6 +869,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_class_parent(
     parent_name_ptr: *const u8,
     parent_name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_class_parent");
     std::panic::catch_unwind(|| unsafe {
         register_native_class_parent_inner(
             ctx,
@@ -864,6 +896,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_property_type");
     std::panic::catch_unwind(|| unsafe {
         register_native_property_type_inner(
             ctx,
@@ -889,6 +922,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_scalar(
     default_kind: u64,
     default_payload: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_property_default_scalar");
     std::panic::catch_unwind(|| unsafe {
         register_native_property_default_scalar_inner(
             ctx,
@@ -914,6 +948,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_string(
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_property_default_string");
     std::panic::catch_unwind(|| unsafe {
         register_native_property_default_string_inner(
             ctx,
@@ -939,6 +974,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_array(
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_property_default_array");
     std::panic::catch_unwind(|| unsafe {
         register_native_property_default_array_inner(
             ctx,
@@ -962,6 +998,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_member_attribute(
     record_ptr: *const u8,
     record_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_member_attribute");
     std::panic::catch_unwind(|| unsafe {
         register_native_member_attribute_inner(ctx, record_ptr, record_len)
     })

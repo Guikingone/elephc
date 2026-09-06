@@ -43,6 +43,7 @@ pub unsafe extern "C" fn __elephc_eval_extract(
     prefix_ptr: *const u8,
     prefix_len: u64,
 ) -> i64 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_extract");
     std::panic::catch_unwind(|| unsafe {
         extract_inner(scope, array, flags, prefix_ptr, prefix_len)
     })

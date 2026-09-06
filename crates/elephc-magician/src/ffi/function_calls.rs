@@ -32,6 +32,7 @@ pub unsafe extern "C" fn __elephc_eval_call_function_zero_args(
     name_len: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_call_function_zero_args");
     std::panic::catch_unwind(|| unsafe {
         call_eval_function_inner(ctx, name_ptr, name_len, std::ptr::null(), 0, out)
     })
@@ -54,6 +55,7 @@ pub unsafe extern "C" fn __elephc_eval_call_function(
     arg_count: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_call_function");
     std::panic::catch_unwind(|| unsafe {
         call_eval_function_inner(ctx, name_ptr, name_len, args, arg_count, out)
     })
@@ -75,6 +77,7 @@ pub unsafe extern "C" fn __elephc_eval_call_function_array(
     arg_array: *mut RuntimeCell,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_call_function_array");
     std::panic::catch_unwind(|| unsafe {
         call_eval_function_array_inner(ctx, name_ptr, name_len, arg_array, out)
     })

@@ -42,6 +42,7 @@ pub unsafe extern "C" fn __elephc_eval_new_object(
     arg_count: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_new_object");
     std::panic::catch_unwind(|| unsafe {
         eval_new_object_inner(ctx, name_ptr, name_len, args, arg_count, out)
     })
@@ -65,6 +66,7 @@ pub unsafe extern "C" fn __elephc_eval_try_new_object(
     arg_count: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_try_new_object");
     std::panic::catch_unwind(|| unsafe {
         eval_try_new_object_inner(ctx, name_ptr, name_len, args, arg_count, out)
     })
@@ -90,6 +92,7 @@ pub unsafe extern "C" fn __elephc_eval_method_call(
     arg_pack: *const usize,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_method_call");
     std::panic::catch_unwind(|| unsafe {
         eval_method_call_inner(ctx, object, method_ptr, method_len, arg_pack, out)
     })
@@ -110,6 +113,7 @@ pub unsafe extern "C" fn __elephc_eval_property_get(
     property_len: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_property_get");
     std::panic::catch_unwind(|| unsafe {
         eval_property_get_inner(ctx, object, property_ptr, property_len, out)
     })
@@ -129,6 +133,7 @@ pub unsafe extern "C" fn __elephc_eval_string_context(
     value: *mut RuntimeCell,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_string_context");
     std::panic::catch_unwind(|| unsafe { eval_string_context_inner(ctx, value, out) })
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -146,6 +151,7 @@ pub unsafe extern "C" fn __elephc_eval_sprintf_numeric_warning(
     object: *mut RuntimeCell,
     is_float: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_sprintf_numeric_warning");
     std::panic::catch_unwind(|| unsafe {
         eval_sprintf_numeric_warning_inner(ctx, object, is_float)
     })
@@ -168,6 +174,7 @@ pub unsafe extern "C" fn __elephc_eval_static_method_call(
     arg_pack: *const usize,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_static_method_call");
     std::panic::catch_unwind(|| unsafe {
         eval_static_method_call_inner(ctx, target_ptr, target_len, arg_pack, out)
     })
@@ -190,6 +197,7 @@ pub unsafe extern "C" fn __elephc_eval_native_frame_static_method_call(
     arg_pack: *const usize,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_native_frame_static_method_call");
     std::panic::catch_unwind(|| unsafe {
         eval_native_frame_static_method_call_inner(
             frame_class_ptr,
@@ -633,14 +641,34 @@ unsafe fn eval_property_get_inner(
     };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_property_get_outcome(
-        context,
-        RuntimeCellHandle::from_raw(object),
-        &property,
-        &mut values,
-    ) {
+    let object = RuntimeCellHandle::from_raw(object);
+    match interpreter::execute_context_property_get_outcome(context, object, &property, &mut values)
+    {
         Ok(outcome) => write_outcome(outcome, out).code(),
-        Err(status) => status.code(),
+        Err(status) => {
+            // A refusal that reaches the user as six words is a defect of its own. Name the class
+            // the object actually has, the property asked for, and the scope it was asked from --
+            // the three facts that separate "no such property" from "not visible from here".
+            if status == EvalStatus::RuntimeFatal {
+                let class_name = crate::ffi::util::eval_object_class_name_for_diagnostic(
+                    object,
+                    &mut values,
+                );
+                let scope = context
+                    .current_class_scope()
+                    .map_or_else(|| "no class scope".to_string(), str::to_string);
+                let (file, _, line, _) = context.call_site();
+                crate::errors::note_eval_runtime_failure(
+                    format!(
+                        "property {}::${property} could not be read from {scope}",
+                        class_name.as_deref().unwrap_or("an object of unknown class"),
+                    ),
+                    file,
+                    Some(line),
+                );
+            }
+            status.code()
+        }
     }
 }
 

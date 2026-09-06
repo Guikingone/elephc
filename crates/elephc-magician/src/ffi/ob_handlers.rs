@@ -103,6 +103,7 @@ pub unsafe extern "C" fn __elephc_eval_ob_handler(
     len: i64,
     phase: i64,
 ) -> *mut RuntimeCell {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_ob_handler");
     std::panic::catch_unwind(|| unsafe { ob_handler_inner(id, buf, len, phase) })
         .unwrap_or(std::ptr::null_mut())
 }

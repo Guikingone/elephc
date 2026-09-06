@@ -30,6 +30,7 @@ pub unsafe extern "C" fn __elephc_eval_is_callable(
     ctx: *mut ElephcEvalContext,
     callback: *mut RuntimeCell,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_is_callable");
     std::panic::catch_unwind(|| unsafe { eval_is_callable_inner(ctx, callback) }).unwrap_or(0)
 }
 
@@ -43,6 +44,7 @@ pub unsafe extern "C" fn __elephc_eval_is_callable(
 pub unsafe extern "C" fn __elephc_eval_callable_owner_context(
     callback: *mut RuntimeCell,
 ) -> *mut ElephcEvalContext {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_callable_owner_context");
     std::panic::catch_unwind(|| unsafe { eval_callable_owner_context_inner(callback) })
         .unwrap_or(std::ptr::null_mut())
 }
@@ -58,6 +60,7 @@ pub unsafe extern "C" fn __elephc_eval_function_owner_context(
     name_ptr: *const u8,
     name_len: u64,
 ) -> *mut ElephcEvalContext {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_function_owner_context");
     std::panic::catch_unwind(|| unsafe { eval_function_owner_context_inner(name_ptr, name_len) })
         .unwrap_or(std::ptr::null_mut())
 }
@@ -73,6 +76,7 @@ pub unsafe extern "C" fn __elephc_eval_register_spl_autoload(
     callback: *mut RuntimeCell,
     prepend: i32,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_spl_autoload");
     std::panic::catch_unwind(|| unsafe {
         let (context, created_context) = if let Some(context) = ctx.as_mut() {
             (context, false)
@@ -123,6 +127,7 @@ pub unsafe extern "C" fn __elephc_eval_callable_call_array(
     arg_array: *mut RuntimeCell,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_callable_call_array");
     std::panic::catch_unwind(|| unsafe {
         eval_callable_call_array_inner(ctx, callback, arg_array, out)
     })
