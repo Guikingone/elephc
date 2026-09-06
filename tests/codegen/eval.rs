@@ -31604,3 +31604,80 @@ echo 'done';
          anon=n;enum=n;ifn=1];done"
     );
 }
+
+/// Verifies `getFileName`, `getStartLine` and `getEndLine` name the file that DECLARED the class.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `main;ProbeIncShape[piece.php|3|6];ProbeAotShape[main.php|3|6];ProbeEvalShape[main.php(8) : eval()'d code|1|1];ArrayObject[false|false|false];done`.
+///
+/// The generated program has ONE source file, its entry point, and that is what these three
+/// answered for every class: a class an include declared reported the entry file, and the
+/// compiled class reported its declaration line as BOTH ends, so every class looked one line long.
+/// php has three different answers here -- the include's own path, the compiled file, and
+/// `FILE(LINE) : eval()'d code` for a class an `eval()` declared -- and a builtin has no file at
+/// all, which is `false` three times.
+///
+/// Two things had to change to say that. The declaring path was already recorded when a
+/// declaration runs, and reflection simply was not reading it. And the compiler packed the
+/// declaration line into both the start and the end slot of the class flag word, because the
+/// declaration span itself ended where it started; the span now reaches the closing brace, which
+/// is the line php reports.
+///
+/// STILL SHORT, and left out rather than asserted wrong: an `eval()` written INSIDE an included
+/// file names the right file but line 1, because entering an included file sets the interpreter's
+/// position to line 1 and nothing moves it per statement. An eval written in compiled code, the
+/// case this test uses, carries its real line.
+#[test]
+fn test_reflection_names_the_file_and_lines_that_declared_the_class() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+class ProbeIncShape
+{
+    public int $n = 1;
+}
+
+function probe_where(string $name): void
+{
+    $r = new ReflectionClass($name);
+    $file = $r->getFileName();
+    echo $name, '[', false === $file ? 'false' : basename($file), '|';
+    $start = $r->getStartLine();
+    $end = $r->getEndLine();
+    echo false === $start ? 'false' : $start, '|', false === $end ? 'false' : $end, '];';
+}
+
+probe_where('ProbeIncShape');
+probe_where('ProbeAotShape');
+probe_where('ProbeEvalShape');
+probe_where('ArrayObject');
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class ProbeAotShape
+{
+    public int $n = 1;
+}
+
+eval('class ProbeEvalShape { public int $n = 1; }');
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "main;ProbeIncShape[piece.php|3|6];ProbeAotShape[main.php|3|6];\
+         ProbeEvalShape[main.php(8) : eval()'d code|1|1];ArrayObject[false|false|false];done"
+    );
+}

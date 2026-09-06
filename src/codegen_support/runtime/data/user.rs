@@ -1950,28 +1950,44 @@ fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
     if class_info.is_readonly_class {
         flags |= EVAL_REFLECTION_CLASS_FLAG_READONLY;
     }
-    flags |= eval_reflection_source_line_flags(class_info.declaration_span.line);
+    flags |= eval_reflection_source_line_flags(
+        class_info.declaration_span.line,
+        class_info.declaration_span.end_line,
+    );
     flags
 }
 
 /// Returns eval ReflectionClass source-location bits retained for one generated/AOT interface.
 fn eval_reflection_interface_flags(interface_info: &InterfaceInfo) -> u64 {
-    eval_reflection_source_line_flags(interface_info.declaration_span.line)
+    eval_reflection_source_line_flags(
+        interface_info.declaration_span.line,
+        interface_info.declaration_span.end_line,
+    )
 }
 
 /// Returns eval ReflectionClass source-location bits retained for one generated/AOT trait.
 fn eval_reflection_trait_flags(line: u32) -> u64 {
-    eval_reflection_source_line_flags(line)
+    eval_reflection_source_line_flags(line, line)
 }
 
 /// Encodes declaration line metadata into high ReflectionClass flag bits.
-fn eval_reflection_source_line_flags(line: u32) -> u64 {
+///
+/// The declaration's START and END lines are different numbers -- php's `getEndLine()` is the line
+/// the closing brace sits on -- and packing the start into both slots made every generated class
+/// report a one-line body.
+fn eval_reflection_source_line_flags(line: u32, end_line: u32) -> u64 {
     let start_line = u64::from(line);
     if start_line == 0 || start_line > EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK {
         return 0;
     }
+    let end_line = u64::from(end_line.max(line));
+    let end_line = if end_line > EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK {
+        start_line
+    } else {
+        end_line
+    };
     (start_line << EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT)
-        | (start_line << EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT)
+        | (end_line << EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT)
 }
 
 /// Emits class-like/interface-name rows consumed by eval ReflectionClass metadata probes.

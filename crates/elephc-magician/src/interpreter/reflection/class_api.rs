@@ -220,8 +220,17 @@ pub(in crate::interpreter) fn eval_reflection_class_source_location_result(
     let Some(reflected_name) = context.eval_reflection_class_name(identity) else {
         return Ok(None);
     };
-    let (source_file, aot_source_location) =
+    let (aot_source_file, aot_source_location) =
         eval_reflection_aot_class_source_metadata(reflected_name, values)?;
+    // The generated program has ONE source file, the entry point, and answering with it named the
+    // wrong file for every class interpreted code declared: a class from an included file reported
+    // the entry file rather than the include's own path. The declaring path is recorded when the
+    // declaration runs -- already in php's spelling, `FILE(LINE) : eval()'d code` for an eval
+    // fragment and the included file's own path for an include -- so it only has to be preferred.
+    let source_file = context
+        .class_source_file(reflected_name)
+        .map(str::to_string)
+        .or(aot_source_file);
     let source_location = eval_reflection_class_like_attributes(reflected_name, context)
         .and_then(|metadata| metadata.source_location)
         .or(aot_source_location);

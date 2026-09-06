@@ -10,6 +10,7 @@
 //! - Included code runs against the current eval context and materialized scope.
 //! - Missing include emits a warning and returns false; missing require is fatal.
 
+use crate::context::EvalCallFrame;
 use super::*;
 use crate::parse_cache::{parse_fragment_cached, parse_source_file_cached};
 
@@ -32,9 +33,16 @@ pub(super) fn eval_nested_eval(
         report_fatal_diagnostic(&diagnostic.eval_message(&file, line));
         diagnostic.status()
     })?;
+    // php describes `eval()` as a frame of its own wherever it is written. The bridge entry point
+    // pushes one for an eval called from compiled code; an eval written INSIDE interpreted code
+    // comes through here instead and pushed none, so it was missing from `debug_backtrace()` and
+    // from the declaring-file question a class declared inside it has to answer.
+    let frame = EvalCallFrame::function("eval", None, context);
+    context.push_call_frame(frame);
     context.push_include_execution(false);
     let result = execute_program_with_context(context, program.as_ref(), scope, values);
     context.pop_include_execution();
+    context.pop_call_frame();
     result
 }
 

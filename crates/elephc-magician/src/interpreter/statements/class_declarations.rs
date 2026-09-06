@@ -141,7 +141,31 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
             validate_concrete_class_aot_interface_requirements(class, context, values),
         )?;
     }
-    let declaration_file = context.eval_file_magic();
+    // php names the declaring file two ways and `__FILE__` only tells them apart at the OUTERMOST
+    // level: inside eval'd code `__FILE__` is the file the eval was written in, while
+    // `ReflectionClass::getFileName()` is `FILE(LINE) : eval()'d code`. An `eval()` inside an
+    // included file keeps the include's file magic, so the marker has to come from the call stack
+    // instead: the innermost include-or-eval frame says which of the two this declaration is in,
+    // and an eval frame carries the very file and line php prints.
+    let declaration_file = context
+        .with_call_frames(|frames| {
+            frames.iter().rev().find_map(|frame| match frame.function.as_str() {
+                // A frame's `file` is php's `__FILE__` for the code inside it, which for an eval
+                // called from COMPILED code is already the marked form; for an eval written inside
+                // an included file it is the include's plain path and the marker is added here.
+                "eval" if frame.file.ends_with(") : eval()'d code") => {
+                    Some(Some(frame.file.clone()))
+                }
+                "eval" => Some(Some(format!(
+                    "{}({}) : eval()'d code",
+                    frame.file, frame.line
+                ))),
+                "include" | "include_once" | "require" | "require_once" => Some(None),
+                _ => None,
+            })
+        })
+        .flatten()
+        .unwrap_or_else(|| context.eval_file_magic());
     if context.define_class(class.clone()) {
         context.set_class_source_file(class.name(), declaration_file);
         if let Some(parent) = native_parent.as_deref() {
