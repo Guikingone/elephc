@@ -46,6 +46,13 @@ pub enum UnsupportedReason {
     EvalImplementationPending,
     /// Reflection behavior currently exists only for eval-declared/runtime objects.
     EvalOnlyReflection,
+    /// PHP-visible Magician implementation whose AOT counterpart has not landed.
+    ///
+    /// The mirror of `EvalImplementationPending`. The interpreter can grow a surface the compiler
+    /// has no machinery for at all -- `declare(ticks=N)` needs a per-statement hook the AOT
+    /// backend does not emit -- and the registry gate demands that every `Function` contract have
+    /// an AOT binding, so the absence has to be declared rather than left to panic.
+    AotImplementationPending,
 }
 
 /// Expected support for one contract/backend pair.
@@ -120,6 +127,9 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
     if is_eval_only_reflection(contract.id) {
         return BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection);
     }
+    if is_aot_implementation_pending(contract.id) {
+        return BackendSupport::Unsupported(UnsupportedReason::AotImplementationPending);
+    }
     let implementation = match contract.kind {
         BuiltinKind::Function => BackendImplementation::Registry,
         BuiltinKind::LanguageConstruct => BackendImplementation::LanguageConstruct,
@@ -192,6 +202,21 @@ pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
 }
 
 /// Returns whether a function contract is intentionally available only in Magician.
+fn is_aot_implementation_pending(id: BuiltinId) -> bool {
+    AOT_IMPLEMENTATION_PENDING
+        .iter()
+        .any(|name| id == BuiltinId::from_canonical_name(name))
+}
+
+/// PHP-visible Magician contracts with no AOT implementation yet.
+///
+/// `declare(ticks=N)` runs a handler after every statement of the declared scope. The interpreter
+/// walks statements and can do it; the compiled backend emits no per-statement hook, so these two
+/// have nowhere to bind. Listed rather than silently registered, because a registry binding that
+/// did nothing would report a handler installed and never call it.
+const AOT_IMPLEMENTATION_PENDING: &[&str] =
+    &["register_tick_function", "unregister_tick_function"];
+
 fn is_eval_only_reflection(id: BuiltinId) -> bool {
     [
         "get_called_class",
@@ -279,7 +304,8 @@ mod tests {
                     aot_registry += 1;
                 }
                 BackendSupport::Implemented(_) => aot_external += 1,
-                BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection) => {
+                BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection)
+                | BackendSupport::Unsupported(UnsupportedReason::AotImplementationPending) => {
                     aot_unsupported += 1;
                 }
                 other => panic!("unexpected AOT support for {}: {other:?}", contract.name),
@@ -293,10 +319,12 @@ mod tests {
         assert_eq!(eval_registry, 491);
         assert_eq!(eval_internal, 39);
         assert_eq!(eval_pending, 40);
-        // 555 + the two tick-function contracts.
-        assert_eq!(aot_registry, 557);
+        // Unchanged: the two tick-function contracts are eval-only, so they raise
+        // `aot_unsupported` rather than `aot_registry`.
+        assert_eq!(aot_registry, 555);
         assert_eq!(aot_external, 10);
-        assert_eq!(aot_unsupported, 3);
+        // 3 reflection contracts + the two tick functions.
+        assert_eq!(aot_unsupported, 5);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
