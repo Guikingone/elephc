@@ -36,6 +36,14 @@ pub(in crate::interpreter) fn execute_statements(
             }
             Ok(control) => return Ok(control),
             Err(status) => {
+                if status == EvalStatus::RuntimeFatal {
+                    // Same first-writer-wins rule as the expression dispatcher: this only lands
+                    // for a statement whose failure nothing inside it described.
+                    note_eval_runtime_failure(
+                        format!("unsupported {} statement", eval_stmt_kind(stmt)),
+                        context,
+                    );
+                }
                 trace_failed_statement(stmt, status, context);
                 return Err(status);
             }
@@ -141,7 +149,18 @@ pub(in crate::interpreter) fn execute_stmt(
             values,
         ),
         EvalStmt::ClassDecl(class) => {
-            execute_class_decl_stmt(class, context, scope, values)?;
+            // Named here rather than inside `execute_class_decl_stmt`: its stage helper cannot
+            // hold `context`, because every call already borrows it mutably for the validation it
+            // wraps. The stage itself stays available through ELEPHC_EVAL_TRACE; what the user
+            // gets is the class, which is what makes 55 anonymous failures groupable.
+            let result = execute_class_decl_stmt(class, context, scope, values);
+            if matches!(result, Err(EvalStatus::RuntimeFatal)) {
+                note_eval_runtime_failure(
+                    format!("class {} could not be declared", class.name()),
+                    context,
+                );
+            }
+            result?;
             Ok(EvalControl::None)
         }
         EvalStmt::EnumDecl(enum_decl) => {
@@ -438,4 +457,14 @@ fn eval_run_due_tick(
     }
     context.set_tick_running(previous);
     result
+}
+
+/// Names one statement variant for a diagnostic, the way `eval_expr_kind` names an expression.
+fn eval_stmt_kind(stmt: &EvalStmt) -> String {
+    let rendered = format!("{stmt:?}");
+    rendered
+        .split(|ch: char| ch == '(' || ch == '{' || ch == ' ')
+        .next()
+        .unwrap_or("")
+        .to_string()
 }

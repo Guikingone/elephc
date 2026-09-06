@@ -83,6 +83,7 @@ mod new_class_expressions;
 mod object_cast;
 mod parent_override_compatibility;
 mod reference_bind_expression;
+mod refusal_diagnostics;
 mod reflection_property_store;
 mod static_members;
 mod strict_types;

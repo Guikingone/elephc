@@ -69,7 +69,45 @@ pub(in crate::interpreter) fn eval_expr_result_aliases_storage(expr: &EvalExpr) 
     }
 }
 
+/// Evaluates one expression, naming it when it fails with nothing else to say.
+///
+/// A quarter of php-src's language corpus used to end in a bare `Fatal error: eval() runtime
+/// failed` with no phase, no name and no line -- 225 of 2556 cases, which cannot even be GROUPED,
+/// let alone fixed. The descriptions are first-writer-wins and the innermost frame writes first,
+/// so a path that already names itself keeps its message and only the genuinely anonymous ones
+/// pick up the expression kind here.
 pub(in crate::interpreter) fn eval_expr(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = eval_expr_dispatch(expr, context, scope, values);
+    if matches!(result, Err(EvalStatus::RuntimeFatal)) {
+        note_eval_runtime_failure(
+            format!("unsupported {} expression", eval_expr_kind(expr)),
+            context,
+        );
+    }
+    result
+}
+
+/// Names one expression variant for a diagnostic.
+///
+/// Reads the variant name off `Debug` rather than repeating sixty match arms that would drift from
+/// the enum the first time somebody added a variant. Only ever reached on the failure path, which
+/// is terminal, so rendering the node once costs nothing that matters.
+fn eval_expr_kind(expr: &EvalExpr) -> String {
+    let rendered = format!("{expr:?}");
+    rendered
+        .split(|ch: char| ch == '(' || ch == '{' || ch == ' ')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Evaluates one expression by variant.
+fn eval_expr_dispatch(
     expr: &EvalExpr,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
