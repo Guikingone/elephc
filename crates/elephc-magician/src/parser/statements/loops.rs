@@ -187,18 +187,6 @@ impl Parser {
         if let Some(prologue) = key_prologue {
             body.insert(0, prologue);
         }
-        let key_name = match key_target {
-            None => None,
-            Some(EvalForeachTarget::Variable(name)) => Some(name),
-            Some(target) => {
-                let hidden = FOREACH_KEY_BINDING_NAME.to_string();
-                let writes = self.foreach_target_writes(&target, &hidden)?;
-                for statement in writes.into_iter().rev() {
-                    body.insert(0, statement);
-                }
-                Some(hidden)
-            }
-        };
         Ok(vec![EvalStmt::Foreach {
             array,
             key_name,

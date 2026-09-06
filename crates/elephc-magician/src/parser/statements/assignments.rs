@@ -8,7 +8,6 @@
 //! - Compound assignment and property targets lower directly into explicit EvalIR statement variants.
 
 use super::*;
-use crate::parser::expressions::precedence::is_assignment_target;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 impl Parser {
@@ -57,7 +56,7 @@ impl Parser {
                 break;
             }
             if self.consume(TokenKind::Comma) {
-                elements.push(EvalDestructureElement::Skip);
+                targets.push(None);
                 continue;
             }
             targets.push(Some(self.parse_destructure_target()?));
@@ -66,8 +65,8 @@ impl Parser {
             }
             self.expect(TokenKind::Comma)?;
         }
-        if elements.is_empty() {
-            return Err(self.fail(EvalParseError::UnexpectedToken));
+        if targets.is_empty() {
+            return Err(EvalParseError::UnexpectedToken);
         }
         Ok(targets)
     }
@@ -130,11 +129,11 @@ impl Parser {
 
     /// Parses one comma-separated `for` clause list.
     ///
-    /// PHP's grammar makes each of the three `for` clauses a `for_exprs` list, so
+    /// PHP's grammar makes each of the three `for` clauses a `for_exprs` LIST, so
     /// `for ($i = 0, $n = 3; $i < $n; ++$i, --$n)` runs both elements of the first clause once and
-    /// both elements of the third clause on every iteration, in source order. Each element lowers
-    /// to its own statement, which is exactly the vector the `For` statement's init and update
-    /// fields already hold.
+    /// both elements of the third on every iteration, in source order. Each element lowers to its
+    /// own statement, which is exactly the vector the `For` statement's init and update fields
+    /// already hold. Ten files of the Symfony tree are written this way.
     fn parse_for_clause_stmt_list(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         let mut statements = self.parse_for_clause_stmt()?;
         while self.consume(TokenKind::Comma) {
@@ -749,21 +748,6 @@ impl Parser {
             }
             let index = self.parse_expr()?;
             self.expect(TokenKind::RBracket)?;
-            // `$this->errorCount[$key] ??= 0;` — `??=` is not in `assignment_op()`, which lists the
-            // operators that lower to a binary op, and it lowers to its own expression instead.
-            if self.consume(TokenKind::QuestionQuestionEqual) {
-                let default = self.parse_expr()?;
-                if require_semicolon {
-                    self.expect_semicolon()?;
-                }
-                return Ok(vec![EvalStmt::Expr(EvalExpr::NullCoalesceAssign {
-                    target: Box::new(EvalExpr::ArrayGet {
-                        array: Box::new(target),
-                        index: Box::new(index),
-                    }),
-                    default: Box::new(default),
-                })]);
-            }
             let Some(op) = assignment_op(self.current()) else {
                 return Err(EvalParseError::UnexpectedToken);
             };
@@ -983,57 +967,6 @@ fn eval_expr_binds_a_reference(expr: &EvalExpr) -> bool {
             | EvalExpr::DynamicStaticPropertyGet { .. }
             | EvalExpr::DynamicStaticPropertyNameGet { .. }
     )
-}
-
-/// One element of a PHP list-assignment pattern, as written.
-pub(super) enum EvalDestructureElement {
-    /// A hole, `[$a, , $b] = $v`, which consumes a position and assigns nothing.
-    Skip,
-    /// An assignable expression, with the explicit key that selects its element when there is one.
-    Target {
-        key: Option<EvalExpr>,
-        target: EvalExpr,
-    },
-    /// A pattern of its own, `[[$a, $b], $c] = $v`.
-    Nested {
-        key: Option<EvalExpr>,
-        elements: Vec<EvalDestructureElement>,
-    },
-}
-
-/// Returns the plain scope names of a destructuring pattern, or None when it holds anything else.
-///
-/// `EvalStmt::ArrayDestructure` names its targets by scope name and is kept for the shape it can
-/// carry — `[$a, , $b] = $v` — because that statement evaluates the subject without a hidden
-/// variable. Everything richer goes through the lowering above.
-pub(super) fn plain_variable_destructure_targets(
-    elements: &[EvalDestructureElement],
-) -> Option<Vec<Option<String>>> {
-    if elements.is_empty() {
-        return None;
-    }
-    elements
-        .iter()
-        .map(|element| match element {
-            EvalDestructureElement::Skip => Some(None),
-            EvalDestructureElement::Target {
-                key: None,
-                target: EvalExpr::LoadVar(name),
-            } => Some(Some(name.clone())),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Returns a scope name for one hidden destructuring subject.
-///
-/// The leading NUL byte cannot appear in a PHP variable name, so the subject is invisible to user
-/// code, the same convention `next_reference_binding_name()` and the `foreach` destructuring
-/// target already use.
-fn next_destructure_subject_name() -> String {
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("\0elephc_destructure_subject:{id}")
 }
 
 /// Returns a scope name for one hidden reference binding.

@@ -889,7 +889,8 @@ fn parse_fragment_accepts_a_reference_binding_used_as_a_value() {
     };
     assert!(matches!(
         right.as_ref(),
-        EvalExpr::ReferenceBindAssign { target, .. } if target == "exists"
+        EvalExpr::ReferenceBind { target, .. }
+            if matches!(target.as_ref(), EvalExpr::LoadVar(name) if name == "exists")
     ));
 }
 /// Verifies a `&` before a declaration name is the by-reference return marker, not a syntax error.
@@ -947,18 +948,26 @@ fn parse_fragment_accepts_a_spread_inside_an_array_literal() {
 }
 /// Verifies a destructuring pattern PHP accepts parses, whatever its targets.
 ///
-/// `EvalStmt::ArrayDestructure` names its targets by scope name and is kept for the shape it can
-/// carry; every richer pattern lowers to one read of the subject plus one ordinary assignment per
-/// element. `[$this->keys, $this->values] = $values;` sits at
-/// `symfony/cache/Adapter/PhpArrayAdapter.php:357`, and the keyed form at
-/// `http-kernel/DataCollector/DumpDataCollector.php:91`.
+/// A pattern's slots are LVALUES, not scope names: `[$this->keys, $this->values] = $values;` sits
+/// at `symfony/cache/Adapter/PhpArrayAdapter.php:357` and the keyed form at
+/// `http-kernel/DataCollector/DumpDataCollector.php:91`, and a hole carries no slot at all.
 #[test]
 fn parse_fragment_accepts_every_destructuring_target_shape() {
     let program = parse_fragment(br#"[$a, , $b] = $v;"#).expect("the plain form should parse");
     assert_eq!(
         program.statements(),
         &[EvalStmt::ArrayDestructure {
-            targets: vec![Some("a".to_string()), None, Some("b".to_string())],
+            targets: vec![
+                Some(EvalDestructureTarget {
+                    key: None,
+                    slot: EvalDestructureSlot::Lvalue(EvalExpr::LoadVar("a".to_string())),
+                }),
+                None,
+                Some(EvalDestructureTarget {
+                    key: None,
+                    slot: EvalDestructureSlot::Lvalue(EvalExpr::LoadVar("b".to_string())),
+                }),
+            ],
             value: EvalExpr::LoadVar("v".to_string()),
         }]
     );
