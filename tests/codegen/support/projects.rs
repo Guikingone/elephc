@@ -479,8 +479,19 @@ pub(crate) fn compile_and_run_files_with_defines(
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result =
-        elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    // ALSO mirrors `pipeline::compile`, and it has to. `Registry::build` above CONSUMED every
+    // `spl_autoload_register` call it could collect and stripped it from the AST, so the checker
+    // cannot rediscover that this program registers a loader — the pipeline hands the answer in,
+    // and a harness that did not would type-check a different program than the one that ships.
+    let check_result = elephc::types::check_with_target_and_options(
+        &resolved,
+        target(),
+        elephc::types::CheckOptions {
+            registers_autoloader: autoload_registry.rule_count() > 0,
+            ..Default::default()
+        },
+    )
+    .expect("type check failed");
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
     let optimized = elephc::optimize::prune_constant_control_flow(
@@ -616,7 +627,13 @@ pub(crate) fn check_files_diagnostics(
         let check_result = elephc::types::check_with_target_and_options(
             &resolved,
             target(),
-            elephc::types::CheckOptions { strict_locals },
+            // `..Default::default()` rather than naming every field: this helper reports WARNINGS
+            // and runs no autoload registry, so `registers_autoloader` is correctly false here,
+            // and a future option must not break this build merely by existing.
+            elephc::types::CheckOptions {
+                strict_locals,
+                ..Default::default()
+            },
         )
         .map_err(|e| e.message.clone())?;
         Ok(check_result

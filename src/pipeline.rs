@@ -501,7 +501,15 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
-    let check_options = types::CheckOptions { strict_locals };
+    // The autoload registry has already CONSUMED (and removed from the AST) every
+    // `spl_autoload_register` call it could collect, so the checker cannot rediscover them by
+    // scanning. It needs to know, because a registered loader means an unknown class name is a
+    // name that arrives at run time rather than one that does not exist — see
+    // `Checker::program_defers_unknown_classes`.
+    let check_options = types::CheckOptions {
+        strict_locals,
+        registers_autoloader: autoload_registry.rule_count() > 0,
+    };
     let mut check_result = match types::check_with_target_and_options(&ast, target, check_options) {
         Ok(result) => result,
         Err(e) => {

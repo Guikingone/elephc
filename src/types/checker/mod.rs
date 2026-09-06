@@ -218,6 +218,33 @@ pub(crate) struct Checker {
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because
     /// eval fragments can create caller-scope variables at runtime.
     pub eval_barrier_active: bool,
+    /// Whether this PROGRAM can bring a class into existence at run time, so a name the walk
+    /// cannot resolve must be deferred to runtime resolution instead of refused.
+    ///
+    /// PROGRAM-WIDE AND POINT-IN-TIME-FREE, which is the whole reason it is not
+    /// `eval_barrier_active`. That flag is set only once the walk has PASSED a literal `eval()`
+    /// call (`inference::expr::effects` is its sole writer), and neither of the two routes this
+    /// records is an `eval` call at all: an `include`/`require` whose path is not a literal, and
+    /// a registered autoloader. Both make classes appear that no static walk can see, and both
+    /// can sit textually BELOW the `new` that needs them — `spl_autoload_register` at the top of
+    /// a bootstrap and the `new` in a function called later is the ordinary Symfony shape.
+    ///
+    /// Filled once in `check_types_impl`, before the first walk, from the same
+    /// `prelude_prune::usage` scan the builtin-class gates read.
+    ///
+    /// THE FAILURE THIS FIXES IS A REFUSED COMPILE, not a miscompile. `php -n` 8.5.6 exits 0 on
+    /// both reducers; elephc reported `Undefined class: MadeByLoader` and
+    /// `ReflectionClass::__construct(): undefined class 'S1Plain'` at TYPE CHECK. Lowering was
+    /// always ready for this: `ir_lower::stmt::includes::lower_include` calls
+    /// `ctx.apply_eval_barrier()`, so `ir_lower::expr::object_construction` already lowers a
+    /// `new` of an unknown class to `Op::EvalObjectNew`, which resolves the name at run time
+    /// through the bridge. Only the checker stood in the way.
+    ///
+    /// DEFERRING IS NOT ACCEPTING. A name nothing supplies still has to fail, and it fails where
+    /// PHP fails it — at run time, with the catchable `Error` reading `Class "X" not found`,
+    /// which `interpreter::expressions::evaluation::eval_new_object_result` raises after the
+    /// autoload chain comes back empty.
+    pub program_defers_unknown_classes: bool,
     /// Types recorded for `return <expr>;` statements at the moment each one was checked,
     /// keyed by the statement node's address in the AST plus its span.
     ///
@@ -513,8 +540,15 @@ impl Checker {
     ///
     /// Function, method, and closure bodies can contain optional-extension code that is never
     /// reached. Top-level fixed construction remains a compile-time diagnostic for compatibility.
+    ///
+    /// The third clause is the one that covers a class only a RUNTIME INCLUDE or a registered
+    /// autoloader can supply — see [`Checker::program_defers_unknown_classes`]. It is program-wide
+    /// rather than point-in-time because both of its routes can sit textually below the `new` that
+    /// needs them, which is exactly the case `eval_barrier_active` cannot express.
     pub(crate) fn allows_absent_runtime_class(&self) -> bool {
-        !self.null_probe_scope_is_top_level || self.eval_barrier_active
+        !self.null_probe_scope_is_top_level
+            || self.eval_barrier_active
+            || self.program_defers_unknown_classes
     }
 
     /// True when `name`'s current binding may be killed (by `unset`) or re-bound to an
@@ -898,6 +932,20 @@ pub struct CheckOptions {
     /// Make an incompatible local retype (e.g. a variable assigned `int` then later
     /// `string`) a compile error instead of a warning.
     pub strict_locals: bool,
+    /// Whether the program registered an autoloader that `autoload::Registry::build` CONSUMED.
+    ///
+    /// THE CHECKER CANNOT SEE THIS FOR ITSELF, and that is the whole reason it is passed in.
+    /// `Registry::build` returns "the program with consumed register sites stripped", so by the
+    /// time the type checker walks the AST a successfully collected
+    /// `spl_autoload_register(function (string $c) { … })` IS NO LONGER THERE. A `usage` scan of
+    /// the checker's program therefore answers `false` for it — measured with a probe printing the
+    /// scan's own fields: a program whose only autoloader argument was a closure, or a named
+    /// function that actually exists, reported `spl_autoload_register=false introspects=false`,
+    /// while the one case the collector had to REJECT (a string naming a function that does not
+    /// exist) reported `true`. Reading the registry instead of re-scanning is the fix, and it is
+    /// the same lesson as `required_runtime_features.eval_bridge` in echelon 44: ask the pass that
+    /// owns the answer.
+    pub registers_autoloader: bool,
 }
 
 /// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.

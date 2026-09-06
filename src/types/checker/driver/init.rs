@@ -227,6 +227,11 @@ impl Checker {
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             eval_barrier_active: false,
+            // Filled by `check_types_impl` from the whole program before the first walk, like
+            // `program_global_names` above. `false` here means "this program cannot conjure a
+            // class at run time", which is the conservative answer for the handful of tests that
+            // build a `Checker` directly: it keeps the compile-time diagnostic.
+            program_defers_unknown_classes: false,
             flow_typed_returns: HashMap::new(),
             flow_typed_property_accesses: HashMap::new(),
             null_probe_scope_is_top_level: false,

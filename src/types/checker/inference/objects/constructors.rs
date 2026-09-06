@@ -844,17 +844,31 @@ impl Checker {
                 ));
             }
         };
-        self.resolve_reflection_class_name(&raw_class_name)
-            .map(str::to_string)
-            .ok_or_else(|| {
-                CompileError::new(
-                    arg.span,
-                    &format!(
-                        "{}::__construct(): undefined class '{}'",
-                        reflection_type, raw_class_name
-                    ),
-                )
-            })
+        if let Some(resolved) = self.resolve_reflection_class_name(&raw_class_name) {
+            return Ok(resolved.to_string());
+        }
+        // THIS IS THE GATE, not the per-owner validators downstream. Resolution happens BEFORE
+        // `validate_reflection_class_attrs` and friends are reached, so opening only those left
+        // this refusal in place: `new ReflectionClass("S1Plain")` in compiled code, with
+        // `S1Plain` declared by a file included at run time, still reported
+        // `error[4:26]: ReflectionClass::__construct(): undefined class 'S1Plain'` where
+        // `php -n` 8.5.6 printed `loaded;S1Plain;done`.
+        //
+        // When the program can bring a class into existence at run time — a non-literal
+        // `include`, or a registered autoloader; see `Checker::program_defers_unknown_classes` —
+        // the WRITTEN name is carried through unresolved. The downstream validators accept it on
+        // the same flag, and the reflection itself resolves through the eval bridge at run time,
+        // where a name nothing supplies raises PHP's own `ReflectionException`.
+        if self.program_defers_unknown_classes {
+            return Ok(raw_class_name.trim_start_matches('\\').to_string());
+        }
+        Err(CompileError::new(
+            arg.span,
+            &format!(
+                "{}::__construct(): undefined class '{}'",
+                reflection_type, raw_class_name
+            ),
+        ))
     }
 
     /// Extracts a string literal argument from a reflection constructor call.

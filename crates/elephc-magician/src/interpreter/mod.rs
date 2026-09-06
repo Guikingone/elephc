@@ -277,14 +277,56 @@ pub fn execute_context_is_callable(
 }
 
 /// Constructs a class declared in the shared eval context with prepared positional arguments.
+///
+/// THE TERMINAL DECISION for `new` through the bridge. Its `try_` half answers `None` when no
+/// route could construct the name — not AOT metadata, not this context, not an autoloader — and
+/// that `None` used to become `EvalStatus::UnsupportedConstruct`, printed as
+/// `Fatal error: eval() fragment uses an unsupported construct`. That wording is wrong for both
+/// of the two things it covered, and they are not the same thing:
+///
+/// A name PHP itself provides as a builtin class is a GAP IN THIS BUILD. PHP would have
+/// constructed the object, so the message has to say so in elephc's own voice rather than blame
+/// the program. The catalog is `reflection::class_lookup::eval_reflection_class_like_is_internal`,
+/// the predicate `ReflectionClass::isInternal()` already answers from, so the two cannot drift.
+///
+/// Any other name is genuinely undefined, and PHP's answer is a CATCHABLE `Error` reading
+/// `Class "X" not found`. Measured with `php -n` 8.5.6: a runtime include followed by
+/// `try { new NoSuchClassAnywhere(); } catch (\Throwable $e) { … }` prints
+/// `loaded;Error: Class "NoSuchClassAnywhere" not found;done` and exits 0. Reporting a fatal
+/// there took the `catch` away, and it matters more now that the checker DEFERS unknown class
+/// names for programs that include PHP at run time — deferring a compile-time diagnostic is only
+/// honest if the runtime raises the right thing, in a form user code can receive.
+///
+/// The throwable is handed back as an `EvalOutcome::Throwable`, the same channel the arms inside
+/// `execute_context_try_new_object_outcome` already use, so the AOT side unwinds into the
+/// caller's `catch` instead of aborting.
 pub fn execute_context_new_object_outcome(
     context: &mut ElephcEvalContext,
     name: &str,
     args: Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    execute_context_try_new_object_outcome(context, name, args, values)?
-        .ok_or(EvalStatus::UnsupportedConstruct)
+    if let Some(outcome) = execute_context_try_new_object_outcome(context, name, args, values)? {
+        return Ok(outcome);
+    }
+    if eval_reflection_class_like_is_internal(name) {
+        note_eval_runtime_failure(
+            format!(
+                "builtin class \"{}\" is not available in this build",
+                name.trim_start_matches('\\')
+            ),
+            context,
+        );
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    match eval_throw_class_not_found_error::<()>(name, context, values) {
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+        Ok(()) => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Constructs a runtime Reflection owner from prepared positional arguments.

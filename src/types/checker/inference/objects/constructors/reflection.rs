@@ -77,6 +77,24 @@ impl Checker {
         if self.interfaces.contains_key(class_name) || self.declared_traits.contains(class_name) {
             return Ok(());
         }
+        // A NAME THIS WALK CANNOT SEE IS NOT THE SAME AS A NAME THAT DOES NOT EXIST. When the
+        // program includes PHP at run time or registers an autoloader, the reflected class can be
+        // declared by text that does not exist at compile time, and refusing here turns a program
+        // `php -n` 8.5.6 runs to completion into a compile error. Measured: `main.php` doing
+        // `include $computedPath;` then `new ReflectionClass("S1Plain")`, with `S1Plain` declared
+        // by the included file, reported
+        // `error[4:26]: ReflectionClass::__construct(): undefined class 'S1Plain'` where PHP
+        // printed `loaded;S1Plain;done`. `include_reflection::
+        // test_caller_reflects_on_a_class_a_runtime_include_declared` is the pinned case.
+        //
+        // Only the ATTRIBUTE validation is skipped by deferring, and that is the honest trade:
+        // this function exists to reject attribute argument metadata the reflection surface
+        // cannot materialize, and there is no metadata to inspect for a class the compiler has
+        // never seen. The reflection itself resolves at run time through the bridge, and a name
+        // nothing supplies still raises PHP's own `ReflectionException` there.
+        if self.program_defers_unknown_classes {
+            return Ok(());
+        }
         Err(CompileError::new(
             expr.span,
             &format!(
@@ -178,6 +196,12 @@ impl Checker {
                 ),
             ));
         }
+        // Same reasoning as `validate_reflection_class_attrs`: a class a runtime include or an
+        // autoloader supplies is not a class that does not exist, and its METHOD set is unknown
+        // for the same reason its attributes are. Refusing here would reject a program PHP runs.
+        if self.program_defers_unknown_classes {
+            return Ok(());
+        }
         Err(CompileError::new(
             expr.span,
             &format!(
@@ -198,6 +222,12 @@ impl Checker {
         expr: &Expr,
     ) -> Result<(), CompileError> {
         let Some(class_info) = self.classes.get(class_name) else {
+            // Same reasoning as the two validators above: a class a runtime include or an
+            // autoloader supplies has no property set this walk can read, and refusing here would
+            // reject a program PHP runs to completion.
+            if self.program_defers_unknown_classes {
+                return Ok(());
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!(

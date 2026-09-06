@@ -40,6 +40,7 @@ mod process_control;
 mod type_builtins;
 mod casts_and_constants;
 mod include_builtin_classes;
+mod include_deferred_classes;
 mod include_paths;
 mod include_reflection;
 mod magic_constants;

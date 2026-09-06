@@ -234,6 +234,68 @@ pub(in crate::interpreter) fn eval_new_object_result(
         return eval_dynamic_class_new_object(&class, args, context, scope, values)
             .map_err(|status| trace_new_object_error("eval_class", class_name, status, context));
     }
+    // `new` IS AN AUTOLOAD TRIGGER IN PHP, and this path never was one. Nothing above consults a
+    // loader: the reflection owners are handled first, then classes this context already declares,
+    // and then allocation was attempted straight away. So a class only a registered autoloader
+    // could supply reported `could not construct class "X"` — a FATAL — where PHP loads it and
+    // constructs the object. `class_exists` already had the chain (see `builtins::symbols::
+    // class_exists`, which calls `eval_spl_autoload_class` after its declared-check misses); this
+    // is the same call, on the same terms, at the other place PHP resolves a class name.
+    //
+    // AND WHEN NOTHING SUPPLIES IT, PHP'S ANSWER IS A CATCHABLE `Error`, not a fatal. That
+    // distinction is the whole point: `try { new NoSuchClass(); } catch (\Throwable $e) { … }`
+    // exits 0 under `php -n` 8.5.6 printing `Error: Class "NoSuchClass" not found`, and a fatal
+    // here would take the catch away. It matters more now that the checker defers unknown class
+    // names for programs that include PHP at run time — deferring a diagnostic is only honest if
+    // the runtime still raises the right thing, in a form user code can catch.
+    //
+    // The declared-check is asked FIRST and separately from allocation, so this cannot swallow a
+    // compiler defect: a class that IS declared but fails to allocate still reports the fatal
+    // below, exactly as before.
+    if !eval_spl_autoload_class(class_name, context, values)? {
+        // TWO FAILURES WEAR THE SAME FACE HERE, and they must not get the same message.
+        //
+        // A name PHP itself provides as a builtin class — a Throwable, an SPL container, Fiber,
+        // Phar, stdClass — that resolves nowhere is a GAP IN THIS BUILD, not a user error: PHP
+        // would have constructed the object. Saying `Class "Fiber" not found` would blame the
+        // program for the compiler's omission and read as an ordinary PHP error, which is the
+        // worst outcome — a missing pay-for-use gate would look like working software. Measured:
+        // a runtime-included `new Fiber(function () { Fiber::suspend("s"); })` reports this,
+        // where `php -n` 8.5.6 prints `s;done`, because `program_may_reference_fiber` does not
+        // read `usage.includes_runtime_php` and the family is never registered.
+        //
+        // Any OTHER name absent from every table is genuinely undefined, and PHP's answer is a
+        // catchable `Error` reading `Class "X" not found` — the thing a surrounding
+        // `catch (\Throwable $e)` is written to receive.
+        //
+        // The catalog is `reflection::class_lookup::eval_reflection_class_like_is_internal`, the
+        // same predicate `ReflectionClass::isInternal()` answers from, rather than a second list
+        // free to drift from it.
+        if eval_reflection_class_like_is_internal(class_name) {
+            note_eval_runtime_failure(
+                format!(
+                    "builtin class \"{class_name}\" is not available in this build",
+                ),
+                context,
+            );
+            return Err(trace_new_object_error(
+                "builtin_not_available",
+                class_name,
+                EvalStatus::RuntimeFatal,
+                context,
+            ));
+        }
+        return eval_throw_class_not_found_error(class_name, context, values);
+    }
+    // A LOADER USUALLY DECLARES THE CLASS INTO THIS CONTEXT rather than into the AOT tables — it
+    // runs `eval(...)` or includes a file, and either way the result is an interpreter class. The
+    // `context.class(...)` branch above ran BEFORE the loader did, so it has to be asked again;
+    // without this the freshly loaded class falls through to `new_object`, which only knows the
+    // AOT name table, and the construction fails with the class sitting right there.
+    if let Some(class) = context.class(class_name).cloned() {
+        return eval_dynamic_class_new_object(&class, args, context, scope, values)
+            .map_err(|status| trace_new_object_error("eval_class", class_name, status, context));
+    }
     let object = values.new_object(class_name).map_err(|status| {
         note_eval_runtime_failure(
             format!("could not construct class \"{class_name}\""),

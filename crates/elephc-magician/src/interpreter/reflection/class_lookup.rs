@@ -439,7 +439,15 @@ pub(super) fn eval_reflection_builtin_class_is_iterable(class_name: &str) -> boo
 }
 
 /// Returns whether one reflected class-like name belongs to compiler-injected metadata.
-pub(super) fn eval_reflection_class_like_is_internal(class_name: &str) -> bool {
+///
+/// ALSO THE CATALOG-MEMBERSHIP TEST for object construction, which is why it is visible beyond
+/// reflection. `expressions::evaluation::eval_new_object_result` asks it to tell two very
+/// different failures apart when a name resolves nowhere: a name PHP itself provides as a builtin
+/// class is a GAP IN THIS BUILD — PHP would have constructed the object, so reporting
+/// `Class "X" not found` would blame the user for the compiler's omission — while any other name
+/// is genuinely undefined and gets PHP's own catchable `Error`. The list is the same either way,
+/// which is the point of reusing it rather than growing a second one.
+pub(in crate::interpreter) fn eval_reflection_class_like_is_internal(class_name: &str) -> bool {
     let trimmed = class_name.trim_start_matches('\\');
     if EVAL_SPL_CLASS_NAMES
         .iter()

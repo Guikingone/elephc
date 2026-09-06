@@ -91,6 +91,26 @@ pub(super) fn check_types_impl(
     // drift — see `crate::global_decls`, whose preamble also records the measured reason the veto
     // must NOT see further than lowering does.
     checker.program_global_names = crate::global_decls::collect_global_var_names(program);
+    // Program-wide and computed once, for the same reason as the line above and with an even
+    // sharper need: both routes that let a class appear at run time can sit textually BELOW the
+    // `new` that needs them. `spl_autoload_register(...)` in a bootstrap and the `new` inside a
+    // function called afterwards is the ordinary Symfony shape, and a point-in-time flag walking
+    // top to bottom would still be `false` at the `new`.
+    //
+    // The two routes, and why each is here. `includes_runtime_php` is an `include`/`require`
+    // whose path is not a literal: the file is chosen at run time and its declarations are
+    // executed by the interpreter. `spl_autoload_register` is the loader itself. `introspects` is
+    // NOT consulted wholesale — it also covers `get_defined_functions`, which supplies no class,
+    // and deferring on it would give up a real compile-time diagnostic for nothing. A literal
+    // `eval()` needs nothing here either: `eval_barrier_active` already covers the code AFTER it,
+    // and code BEFORE it is refused by PHP too.
+    let program_usage = crate::prelude_prune::usage::collect(program);
+    checker.program_defers_unknown_classes = program_usage.includes_runtime_php
+        || options.registers_autoloader
+        // The register call that the autoload collector REJECTED is still in the program, and it
+        // is still an autoloader as far as the runtime is concerned: it reaches the interpreter's
+        // SPL callback chain instead of the compile-time rule list. Both forms have to count.
+        || program_usage.references("spl_autoload_register");
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));

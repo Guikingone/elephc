@@ -42,6 +42,10 @@ pub(in crate::interpreter) use callable_api::*;
 pub(in crate::interpreter) use class_api::*;
 pub(in crate::interpreter) use class_construction::*;
 use class_lookup::*;
+// Re-exported by NAME rather than by widening the glob above: object construction asks this one
+// predicate to tell a missing builtin (a gap in this build) from a genuinely undefined class
+// name (PHP's catchable `Error`), and nothing else in `class_lookup` belongs outside reflection.
+pub(in crate::interpreter) use class_lookup::eval_reflection_class_like_is_internal;
 pub(in crate::interpreter) use class_member_api::*;
 use constant_construction::*;
 use flags::*;
