@@ -32,7 +32,7 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
         // The caller asks this BEFORE releasing, so the release is final when exactly one
         // reference is left. Uncounted fixtures keep the old answer -- every release is final --
         // because the suite's existing destructor expectations were written against it.
-        if self.counted_mode && self.refcount(value) > 1 {
+        if self.counting_enforced() && self.refcount(value) > 1 {
             return Ok(None);
         }
         self.runtime_object_identity(value).map(Some)

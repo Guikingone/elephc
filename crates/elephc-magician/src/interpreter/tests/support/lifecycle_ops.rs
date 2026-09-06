@@ -28,7 +28,7 @@ impl FakeOps {
                 value: held.clone(),
             });
             assert!(
-                !self.counted_mode,
+                !self.counting_enforced(),
                 "released a fake cell nobody owned: handle {handle} reached count {count_after} \
                  holding {held}. Something gave back a reference it never took -- find the \
                  releasing site in the backtrace below and either stop releasing there or retain \

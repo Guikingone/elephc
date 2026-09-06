@@ -107,10 +107,17 @@ pub(super) struct FakeOps {
     /// Off by default so the whole suite does not have to be corrected in one step. A test opts
     /// in with `count_references()`, and the modules that are ABOUT ownership run counted.
     ///
-    /// Enforcing it everywhere today fails 24 further tests, almost all in reflection member
-    /// construction: the metadata objects (`__name`, `__attrs`, `__properties`, …) and
-    /// `ReflectionNamedType` cells are released by a path that never took a reference. They are
-    /// left uncounted deliberately, one family at a time, rather than silenced.
+    /// `ELEPHC_FAKE_COUNT_REFERENCES` turns it on for every fixture at once, which is how a module
+    /// is surveyed before its own tests opt in.
+    ///
+    /// Six tests still over-release under that survey and are left uncounted deliberately, one
+    /// family at a time rather than silenced:
+    /// `builtins_arrays_iterators::{execute_program_dispatches_iterator_apply_object_builtin,
+    /// execute_program_iterator_apply_dispatches_object_method_array}`,
+    /// `builtins_class_metadata::property_values::execute_program_reflects_eval_parameter_declaring_class`,
+    /// `classes::basics::execute_program_supports_legacy_var_properties`,
+    /// `classes::promoted_references::execute_program_aliases_by_reference_promoted_static_and_nested_properties`,
+    /// and `core::execute_context_function_persists_static_local_inside_catch`.
     pub(super) counted_mode: bool,
     /// Releases that drove a count below zero, recorded whether or not counting is enforced.
     pub(super) over_releases: Vec<FakeOverRelease>,
@@ -170,6 +177,15 @@ impl FakeOps {
     /// what silently destroyed live objects, and each one has to surface on its own.
     pub(super) fn count_references(&mut self) {
         self.counted_mode = true;
+    }
+
+    /// Returns whether this fixture enforces reference counting.
+    ///
+    /// `ELEPHC_FAKE_COUNT_REFERENCES` turns it on for every fixture, which is how a module is
+    /// SURVEYED before its own tests opt in: the failures name the releasing sites, and the
+    /// module is switched over once they are fixed.
+    pub(super) fn counting_enforced(&self) -> bool {
+        self.counted_mode || std::env::var_os("ELEPHC_FAKE_COUNT_REFERENCES").is_some()
     }
 
     /// Returns one fake cell's live reference count.
@@ -357,6 +373,11 @@ fn a_second_reference_makes_a_release_not_final() {
 /// The record is what lets a whole module be surveyed before any of it is enforced.
 #[test]
 fn an_over_release_is_recorded_without_being_enforced() {
+    // The survey switch enforces counting for every fixture, which is the opposite of what this
+    // test is about, so it has nothing to check while that switch is on.
+    if std::env::var_os("ELEPHC_FAKE_COUNT_REFERENCES").is_some() {
+        return;
+    }
     let mut values = FakeOps::default();
     let cell = values.alloc(FakeValue::Int(7));
     values.release(cell).expect("give the only reference back");

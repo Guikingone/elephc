@@ -32,6 +32,38 @@ use null_coalesce_assign::{
 };
 
 /// Evaluates one expression to an opaque runtime-cell handle.
+/// Returns whether this expression's value is an alias of storage that still owns it.
+///
+/// `eval_expr` normally hands the caller a reference it may keep, but four shapes give back a
+/// cell some storage holds: a variable read returns the scope's own cell, and the three
+/// assignment forms return the very cell they just wrote. A caller that discards such a value
+/// must NOT release it — the variable, property or element is still pointing at it.
+///
+/// `?:` and `??` are transparent, so they inherit the answer from whichever side can be taken.
+/// A postfix `++`/`--` is deliberately absent: it retains before returning the old value.
+pub(in crate::interpreter) fn eval_expr_result_aliases_storage(expr: &EvalExpr) -> bool {
+    match expr {
+        EvalExpr::LoadVar(_)
+        | EvalExpr::Assign { .. }
+        | EvalExpr::CompoundAssign { .. }
+        | EvalExpr::NullCoalesceAssign { .. } => true,
+        EvalExpr::Ternary {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            then_branch
+                .as_deref()
+                .is_some_and(eval_expr_result_aliases_storage)
+                || eval_expr_result_aliases_storage(else_branch)
+        }
+        EvalExpr::NullCoalesce { value, default } => {
+            eval_expr_result_aliases_storage(value) || eval_expr_result_aliases_storage(default)
+        }
+        _ => false,
+    }
+}
+
 pub(in crate::interpreter) fn eval_expr(
     expr: &EvalExpr,
     context: &mut ElephcEvalContext,

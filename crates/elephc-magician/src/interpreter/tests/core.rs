@@ -553,6 +553,38 @@ fn execute_program_missing_include_warns_and_returns_false() {
     assert_eq!(values.get(result), FakeValue::Bool(false));
     assert_eq!(values.warnings.len(), 2);
 }
+/// Verifies an expression used as a statement does not release storage it only read.
+///
+/// `php -n` 8.5.6 prints `xy` for this fragment. An expression STATEMENT discards its value, but
+/// a variable read hands back the scope's own cell and an assignment hands back the very cell it
+/// just stored — releasing either gave back a reference the statement never took, which in a
+/// counting runtime destroys the object the variable still points at. The fixture counts here,
+/// so the over-release fails the test instead of passing silently.
+#[test]
+fn execute_program_expression_statements_do_not_release_borrowed_values() {
+    let program = parse_fragment(
+        br#"$a = "x";
+$a;
+$a .= "y";
+$c = 1;
+$c ??= 2;
+$d = new stdClass();
+$d->k = 3;
+echo $a; echo $c; echo $d->k;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    values.count_references();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "xy13");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert!(values.over_releases().is_empty());
+}
+
 /// Verifies missing require emits warnings and aborts the eval program.
 #[test]
 fn execute_program_missing_require_is_runtime_fatal() {

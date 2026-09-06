@@ -326,7 +326,13 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::Expr(expr) => {
             let result = eval_expr(expr, context, scope, values)?;
-            eval_release_value(context, values, result)?;
+            // An expression used as a statement discards its value, but an ASSIGNMENT hands back
+            // the very cell it just stored and a variable read hands back the scope's own. The
+            // storage owns those; releasing them here gave back a reference the statement never
+            // took, which destroyed the object the variable still pointed at.
+            if !eval_expr_result_aliases_storage(expr) {
+                eval_release_value(context, values, result)?;
+            }
             Ok(EvalControl::None)
         }
     }
