@@ -32075,3 +32075,58 @@ catch (TypeError $e) { echo get_class($e), ":", $e->getMessage(); }
         "1;1;1;1;5;TypeError:Cannot auto-initialize an array inside property ProbeW::$i of type int"
     );
 }
+
+/// COMPILED code sets PHP's quiet fetch before reading an EVAL-OWNED uninitialized property.
+///
+/// This is the Symfony stop reduced. `CheckCircularReferencesPass` declares
+/// `private array $checkedLazyNodes;` with no default and reads it through
+/// `empty($this->checkedLazyNodes[$id])`; the class arrives by a runtime include, so the object
+/// is eval-owned and the read leaves compiled code through the bridge — a route on which
+/// nothing had entered the quiet mode, so the same source that answered when interpreted raised
+/// when compiled. The include path here is COMPUTED for that reason: a literal one is resolved
+/// at compile time and the class stops being eval-owned, which is a different path entirely and
+/// hides this defect.
+///
+/// `filled` is in the probe so the mode cannot be mistaken for "always answer": an INITIALIZED
+/// property still reports its real emptiness. Every value is `php -n` 8.5.6's.
+#[test]
+fn test_compiled_quiet_fetch_reaches_an_eval_owned_uninitialized_property() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+class BridgeProbe
+{
+    public array $lazy;
+    public ?string $maybe;
+    public array $filled = ['k' => 1];
+}
+
+return new BridgeProbe();
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+function emptyDim($o, $k) { return empty($o->lazy[$k]) ? 'y' : 'n'; }
+function issetDim($o, $k) { return isset($o->lazy[$k]) ? 'y' : 'n'; }
+function issetProp($o) { return isset($o->lazy) ? 'y' : 'n'; }
+function emptyProp($o) { return empty($o->lazy) ? 'y' : 'n'; }
+function coalesceProp($o) { return $o->lazy ?? 'D'; }
+function coalesceNullable($o) { return $o->maybe ?? 'D'; }
+function filledStillWorks($o) { return empty($o->filled['k']) ? 'y' : 'n'; }
+
+$name = 'piece';
+$probe = include __DIR__ . '/' . $name . '.php';
+echo emptyDim($probe, 'k'), issetDim($probe, 'k'), issetProp($probe), emptyProp($probe), ';';
+echo coalesceProp($probe), ';', coalesceNullable($probe), ';', filledStillWorks($probe);
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ynny;D;D;n");
+}

@@ -16,7 +16,11 @@ pub(super) fn lower_null_coalesce(
     default: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let value = lower_null_coalesce_value(ctx, value);
+    // Only the LEFT operand is fetched quietly. The default is ordinary code and must keep
+    // raising: `$o->t ?? $o->u` answers for `$o->t` and still refuses `$o->u`.
+    let value = lower_operand_in_quiet_property_fetch(ctx, value, |ctx| {
+        lower_null_coalesce_value(ctx, value)
+    });
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![value.value],

@@ -366,17 +366,17 @@ impl ElephcEvalContext {
     /// `readsUninit($n->leaf) ?? 'D'` and `$n->leaf->getT() ?? 'D'` both THROW, so it must not
     /// reach into a call. `enter_call_barrier` is what implements that second half.
     pub fn push_quiet_property_fetch(&mut self) {
-        QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        push_thread_quiet_property_fetch();
     }
 
     /// Leaves one quiet-fetch operand scope.
     pub fn pop_quiet_property_fetch(&mut self) {
-        QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        pop_thread_quiet_property_fetch();
     }
 
     /// Reports whether an uninitialized typed property should answer rather than raise.
     pub fn quiet_property_fetch(&self) -> bool {
-        QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.get() != 0)
+        thread_quiet_property_fetch()
     }
 
     /// Suspends the quiet-fetch mode for the duration of a call, returning the depth to restore.
@@ -385,13 +385,42 @@ impl ElephcEvalContext {
     /// uninitialized typed property raises even when the CALL sits in the operand of `??`.
     #[must_use]
     pub fn enter_call_barrier(&mut self) -> usize {
-        QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.replace(0))
+        take_thread_quiet_property_fetch()
     }
 
     /// Restores the quiet-fetch depth saved by `enter_call_barrier`.
     pub fn leave_call_barrier(&mut self, saved: usize) {
-        QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.set(saved));
+        set_thread_quiet_property_fetch(saved);
     }
+}
+
+/// Enters one quiet-fetch operand scope on this thread.
+///
+/// The free-function form is what COMPILED code reaches through
+/// `__elephc_eval_quiet_property_fetch_push`: it has no eval context in hand at that point, and
+/// does not need one, because the depth belongs to the thread rather than to any context.
+pub fn push_thread_quiet_property_fetch() {
+    QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.set(depth.get() + 1));
+}
+
+/// Leaves one quiet-fetch operand scope on this thread.
+pub fn pop_thread_quiet_property_fetch() {
+    QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+}
+
+/// Reports whether this thread is inside a quiet-fetch operand scope.
+pub fn thread_quiet_property_fetch() -> bool {
+    QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.get() != 0)
+}
+
+/// Suspends the quiet-fetch mode across a call, returning the depth to restore.
+pub fn take_thread_quiet_property_fetch() -> usize {
+    QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.replace(0))
+}
+
+/// Restores a quiet-fetch depth taken by `take_thread_quiet_property_fetch`.
+pub fn set_thread_quiet_property_fetch(saved: usize) {
+    QUIET_PROPERTY_FETCH_DEPTH.with(|depth| depth.set(saved));
 }
 
 thread_local! {

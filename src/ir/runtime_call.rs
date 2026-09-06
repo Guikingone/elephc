@@ -78,6 +78,21 @@ pub enum RuntimeCallTarget {
     /// Creates an independently mutable boxed Mixed cell from one stored
     /// Mixed cell while retaining its tag-4/tag-5 payload ownership.
     MixedCellClone,
+    /// Enters or leaves PHP's QUIET property fetch for the operand of `isset`, `empty` or `??`.
+    ///
+    /// Compiled code reaching an EVAL-OWNED object's property goes through the bridge, and the
+    /// bridge raises for an uninitialized typed property unless the mode is on. The interpreter
+    /// sets it around its own operands; this is the same door for the compiled side, and the
+    /// depth behind it is thread-local so one chain crossing between the two sees one mode.
+    ///
+    /// PHP fixes the quiet fetch at COMPILE time -- it propagates down property and dim fetch
+    /// nodes and never into a call -- so this is emitted only around operands whose whole chain
+    /// is a property/dim walk. That keeps "does not cross a call" without a barrier at every
+    /// compiled call site.
+    EvalQuietPropertyFetch {
+        /// Whether this enters the scope (true) or leaves it (false).
+        enter: bool,
+    },
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
@@ -116,6 +131,12 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
+            RuntimeCallTarget::EvalQuietPropertyFetch { .. } => {
+                Some(RuntimeCallSignature::Polymorphic {
+                    min_operands: 0,
+                    max_operands: Some(0),
+                })
+            }
             RuntimeCallTarget::UnaryString(_) => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
@@ -166,6 +187,8 @@ impl RuntimeCallTarget {
                 "array.mixed_cell_promote_attached_to_hash"
             }
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
+            RuntimeCallTarget::EvalQuietPropertyFetch { enter: true } => "eval.quiet_fetch_enter",
+            RuntimeCallTarget::EvalQuietPropertyFetch { enter: false } => "eval.quiet_fetch_leave",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),
             RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),

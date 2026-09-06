@@ -39,12 +39,31 @@ pub(super) fn lower(
             lower_mixed_cell_promote_to_hash(ctx, inst, sort)
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
+        RuntimeCallTarget::EvalQuietPropertyFetch { enter } => {
+            lower_eval_quiet_property_fetch(ctx, enter)
+        }
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
         RuntimeCallTarget::Function(target) => super::runtime_functions::lower(ctx, inst, target),
         RuntimeCallTarget::ProfiledFunction { target, .. } => {
             super::runtime_functions::lower(ctx, inst, target)
         }
     }
+}
+
+/// Enters or leaves PHP's quiet property fetch around a compiled `isset`/`empty`/`??` operand.
+///
+/// A bare bridge call with no arguments and no result: the depth it moves is thread-local and
+/// shared with the interpreter's, which is the point -- the operand is lowered by the compiler
+/// while the property it reaches may be owned by an eval context, and both sides have to agree
+/// that the fetch is quiet.
+fn lower_eval_quiet_property_fetch(ctx: &mut FunctionContext<'_>, enter: bool) -> Result<()> {
+    let symbol = ctx.emitter.target.extern_symbol(if enter {
+        "__elephc_eval_quiet_property_fetch_push"
+    } else {
+        "__elephc_eval_quiet_property_fetch_pop"
+    });
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
 }
 
 /// Clones a stored Mixed cell before a nested mutation publishes a new payload.

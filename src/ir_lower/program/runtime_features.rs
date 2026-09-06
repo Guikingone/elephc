@@ -53,6 +53,7 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                         inst.immediate,
                         Some(Immediate::RuntimeCall(
                             crate::ir::RuntimeCallTarget::DynamicInclude { .. }
+                                | crate::ir::RuntimeCallTarget::EvalQuietPropertyFetch { .. }
                         ))
                     );
                     if let Some(target) = typed_builtin_target(inst) {

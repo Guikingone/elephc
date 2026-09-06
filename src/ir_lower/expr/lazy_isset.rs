@@ -10,6 +10,71 @@
 use super::*;
 
 /// Lowers `isset()` as a lazy language construct instead of an eager builtin call.
+/// Reports whether an operand is a pure property/dim WALK, with no call anywhere inside it.
+///
+/// PHP fixes the quiet fetch at COMPILE time: the mode propagates down property and dim fetch
+/// nodes and is never applied to a call, so `f($o) ?? 'D'` and `$o->getT() ?? 'D'` raise where
+/// `$o->t ?? 'D'` answers. Deciding it on the shape of the operand is therefore not an
+/// approximation of PHP's rule, it IS the rule -- and it means the compiled side needs no
+/// barrier at call sites, because an operand containing a call is simply never wrapped.
+///
+/// Deliberately conservative: an index expression is walked too, so `isset($o->a[f()])` is left
+/// alone rather than run with the mode held across `f()`. Refusing to go quiet is always safe;
+/// going quiet where PHP would not is what silently swallows a real error.
+pub(super) fn expr_is_quiet_fetch_chain(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::This => true,
+        ExprKind::PropertyAccess { object, .. } => expr_is_quiet_fetch_chain(object),
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, index } => {
+            expr_is_quiet_fetch_chain(array) && expr_is_quiet_fetch_chain(index)
+        }
+        ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_) => true,
+        _ => false,
+    }
+}
+
+/// Emits one side of the compiled quiet-fetch scope.
+fn emit_quiet_property_fetch(ctx: &mut LoweringContext<'_, '_>, enter: bool, span: Span) {
+    ctx.emit_void(
+        Op::RuntimeCall,
+        Vec::new(),
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::EvalQuietPropertyFetch { enter },
+        )),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+}
+
+/// Lowers one `isset`/`empty`/`??` operand inside PHP's quiet property fetch.
+///
+/// Compiled code reaching an EVAL-OWNED object's property goes through the bridge, which raises
+/// for an uninitialized typed property unless the mode is on; the interpreter sets the mode
+/// around its own operands and this is the same door for the compiled side, sharing one
+/// thread-local depth so a chain that crosses between them sees one mode. Without it,
+/// `empty($this->p[$k])` compiled over an eval-declared class raised where the identical source
+/// interpreted answered -- the Symfony stop, `CheckCircularReferencesPass::$checkedLazyNodes`.
+///
+/// Only a pure property/dim walk is wrapped, which is what keeps "the mode does not cross a
+/// call" true without a barrier at every compiled call site.
+pub(super) fn lower_operand_in_quiet_property_fetch<F>(
+    ctx: &mut LoweringContext<'_, '_>,
+    operand: &Expr,
+    lower_operand: F,
+) -> LoweredValue
+where
+    F: FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
+{
+    if !expr_is_quiet_fetch_chain(operand) {
+        return lower_operand(ctx);
+    }
+    emit_quiet_property_fetch(ctx, true, operand.span);
+    let value = lower_operand(ctx);
+    emit_quiet_property_fetch(ctx, false, operand.span);
+    value
+}
+
 pub(super) fn lower_lazy_isset(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -30,7 +95,8 @@ pub(super) fn lower_lazy_isset(
     let false_block = ctx.builder.create_named_block("isset.lazy_false", Vec::new());
     let merge = ctx.builder.create_named_block("isset.lazy_merge", Vec::new());
     for (idx, arg) in args.iter().enumerate() {
-        let checked = lower_lazy_isset_operand(ctx, arg).unwrap_or_else(|| {
+        let checked = lower_operand_in_quiet_property_fetch(ctx, arg, |ctx| {
+        lower_lazy_isset_operand(ctx, arg).unwrap_or_else(|| {
             // `isset()` never emits undefined-offset warnings, so eager array
             // operands must be lowered with the silent read variants.
             let value = if let ExprKind::ArrayAccess { array, index } = &arg.kind {
@@ -39,6 +105,7 @@ pub(super) fn lower_lazy_isset(
                 lower_expr(ctx, arg)
             };
             emit_builtin_call_value(ctx, name, vec![value.value], PhpType::Int, arg.span, None)
+        })
         });
         let then_target = if idx + 1 == args.len() {
             ctx.builder.create_named_block("isset.lazy_true", Vec::new())
@@ -194,7 +261,12 @@ pub(super) fn lower_lazy_empty(
         return None;
     }
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
-        let value = lower_array_access_with_missing_warning(ctx, array, index, &args[0], false);
+        // `empty($this->p[$k])` is the Symfony stop's exact shape, and its property read is one
+        // level BELOW the operand root, so the mode has to wrap the whole walk rather than the
+        // outermost node.
+        let value = lower_operand_in_quiet_property_fetch(ctx, &args[0], |ctx| {
+            lower_array_access_with_missing_warning(ctx, array, index, &args[0], false)
+        });
         return Some(emit_builtin_call_value(
             ctx,
             name,

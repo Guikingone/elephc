@@ -372,6 +372,37 @@ pub unsafe extern "C" fn __elephc_eval_context_set_global_scope(
 /// # Safety
 /// `ctx` must be a valid eval context handle. Class name pointers must be
 /// readable UTF-8 slices for their declared byte lengths.
+/// Enters one `isset`/`empty`/`??` operand scope for COMPILED code.
+///
+/// The quiet fetch is what makes an uninitialized typed property answer instead of raising, and
+/// the interpreter pushes it around its own operands. Compiled code needs the same door: an AOT
+/// method reading an EVAL-OWNED object's property reaches
+/// `__elephc_eval_property_get` through the bridge, and nothing on that route had entered the
+/// mode, so `empty($this->p[$k])` raised from compiled code while the identical source raised
+/// nothing when interpreted. That is the Symfony stop --
+/// `CheckCircularReferencesPass::$checkedLazyNodes`.
+///
+/// The depth is thread-local and shared with the interpreter's, so a chain that crosses between
+/// the two -- which is the normal case here, compiled caller and interpreted property owner --
+/// sees one mode rather than two. It takes no context for that reason.
+///
+/// PHP decides the quiet fetch at COMPILE time, propagating it down property and dim fetch nodes
+/// and never into a call, so the compiled side only pushes this around operands whose whole
+/// chain is a property/dim walk. A call inside the operand means no push at all, which keeps the
+/// "does not cross a call" rule without needing a barrier at every compiled call site.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_quiet_property_fetch_push() {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_quiet_property_fetch_push");
+    crate::context::push_thread_quiet_property_fetch();
+}
+
+/// Leaves one compiled-side quiet-fetch operand scope.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_quiet_property_fetch_pop() {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_quiet_property_fetch_pop");
+    crate::context::pop_thread_quiet_property_fetch();
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_push_class_scope(
     ctx: *mut ElephcEvalContext,
