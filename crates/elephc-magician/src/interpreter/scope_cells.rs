@@ -16,6 +16,18 @@ pub(in crate::interpreter) fn scope_entry(
     scope: &ElephcEvalScope,
     name: &str,
 ) -> Option<ScopeEntry> {
+    // A `static` reads from its slot every time, not from a copy taken when the activation
+    // started: php keeps ONE slot per function, so a frame must see what a deeper frame wrote.
+    if let Some(slot) = scope.static_alias_slot(name) {
+        let slot = slot.to_string();
+        // BORROWED, whatever the slot's own flags say. The slot OWNS the cell and keeps it after
+        // the activation ends; the activation only borrows it. Handing the slot's entry back
+        // verbatim reported `Owned`, so the activation's cleanup released a cell the slot still
+        // held -- which the counting fixture catches as `reached count -1`.
+        return unsafe { context.static_scope_ptr().as_ref() }
+            .and_then(|statics| statics.visible_cell(&slot))
+            .map(|cell| ScopeEntry::present(cell, ScopeCellOwnership::Borrowed, 0));
+    }
     let Some(global_name) = scope.global_alias_target(name) else {
         return scope.entry(name);
     };
@@ -53,6 +65,15 @@ pub(in crate::interpreter) fn set_scope_cell(
     ownership: ScopeCellOwnership,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let name = name.into();
+    // A write to a `static` lands in the slot, so the next read -- in this frame, in a recursive
+    // one, or in a later call -- sees it. The displaced cell is handed back for release exactly
+    // as the scope would have done.
+    if let Some(slot) = scope.static_alias_slot(&name).map(str::to_string) {
+        let Some(statics) = (unsafe { context.static_scope_ptr().as_mut() }) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        return Ok(statics.set_respecting_references(slot, cell, ownership));
+    }
     if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
         let Some(global_scope) = context.global_scope_ptr() else {
             return Err(EvalStatus::RuntimeFatal);
@@ -106,6 +127,9 @@ pub(in crate::interpreter) fn unset_scope_cell(
     if scope.is_global_alias(&name) {
         scope.clear_global_alias(&name);
     }
+    // `unset($x)` on a static breaks the local binding, exactly as it does for a global; the slot
+    // itself keeps its value for the next call, which is what php does.
+    scope.clear_static_alias(&name);
     scope.unset_respecting_references(name)
 }
 

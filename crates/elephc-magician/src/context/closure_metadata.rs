@@ -81,9 +81,26 @@ pub struct EvalClosure {
     pub(super) function: EvalFunction,
     pub(super) captures: Vec<EvalClosureCaptureBinding>,
     pub(super) is_static: bool,
+    /// The unique name `define_closure` minted for THIS closure, used to key its `static` slots.
+    ///
+    /// php gives each closure OBJECT its own static storage: two closures produced by calling the
+    /// same factory twice count separately. `EvalFunction::name()` is the parser's name for the
+    /// closure LITERAL and is shared by every object made from it, so keying statics on it made
+    /// the two share one slot.
+    pub(super) slot_key: String,
 }
 
 impl EvalClosure {
+    /// Returns the per-object key this closure's `static` slots hang from.
+    pub fn slot_key(&self) -> &str {
+        &self.slot_key
+    }
+
+    /// Records the unique name this closure was defined under.
+    pub fn set_slot_key(&mut self, slot_key: impl Into<String>) {
+        self.slot_key = slot_key.into();
+    }
+
     /// Creates one closure instance from its function body and captured values.
     pub fn new(
         function: EvalFunction,
@@ -91,6 +108,7 @@ impl EvalClosure {
         is_static: bool,
     ) -> Self {
         Self {
+            slot_key: String::new(),
             function,
             captures,
             is_static,

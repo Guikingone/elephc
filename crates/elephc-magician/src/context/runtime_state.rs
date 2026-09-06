@@ -42,22 +42,66 @@ impl ElephcEvalContext {
     }
 
     /// Returns a stored static local cell for an eval-declared function.
+    ///
+    /// Reads the one scope every `static` slot lives in, so a caller that asks between calls --
+    /// `ReflectionFunction::getStaticVariables()` does -- sees what the last activation left, and
+    /// an activation still on the stack sees what a deeper one wrote.
     pub fn static_local(&self, function_name: &str, name: &str) -> Option<RuntimeCellHandle> {
-        self.static_locals
-            .get(&(function_name.to_string(), name.to_string()))
-            .copied()
+        self.static_scope
+            .visible_cell(&Self::static_slot_name(function_name, name))
+    }
+
+    /// Returns the scope holding every `static` slot, for alias reads and writes.
+    ///
+    /// Handed out as a raw pointer for the same reason `global_scope_ptr` is: a write to a static
+    /// reaches this through a shared context, and the alternative -- interior mutability -- is not
+    /// `RefUnwindSafe` and would poison every `catch_unwind` in the FFI.
+    pub fn static_scope_ptr(&self) -> *mut ElephcEvalScope {
+        std::ptr::from_ref::<ElephcEvalScope>(&*self.static_scope).cast_mut()
+    }
+
+    /// Pushes the key this activation's `static` slots hang from.
+    pub fn push_static_slot_key(&mut self, key: impl Into<String>) {
+        self.static_slot_keys.push(key.into());
+    }
+
+    /// Pops the innermost static slot key override.
+    pub fn pop_static_slot_key(&mut self) {
+        self.static_slot_keys.pop();
+    }
+
+    /// Returns the key the running activation's `static` slots hang from.
+    ///
+    /// The override when one is in force, otherwise the function name -- which is right for a
+    /// plain function, and right for a method, where php shares one slot across instances and
+    /// with inheriting classes.
+    pub fn current_static_slot_key(&self) -> Option<String> {
+        self.static_slot_keys
+            .last()
+            .cloned()
+            .or_else(|| self.current_function().map(str::to_string))
+    }
+
+    /// Names one `static` slot uniquely across every function that declares one.
+    ///
+    /// The separator is a NUL so it cannot collide with a slot key built from a PHP function name,
+    /// which never contains one.
+    pub fn static_slot_name(function_name: &str, name: &str) -> String {
+        format!("{function_name}\0{name}")
     }
 
     /// Stores one static local cell and returns any replaced distinct cell.
+    ///
     pub fn set_static_local(
         &mut self,
         function_name: impl Into<String>,
         name: impl Into<String>,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
+        let slot = Self::static_slot_name(&function_name.into(), &name.into());
         let previous = self
-            .static_locals
-            .insert((function_name.into(), name.into()), cell);
+            .static_scope
+            .set(slot, cell, crate::scope::ScopeCellOwnership::Owned);
         previous.filter(|previous| *previous != cell)
     }
 

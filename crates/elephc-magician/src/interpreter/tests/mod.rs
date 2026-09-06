@@ -85,6 +85,7 @@ mod parent_override_compatibility;
 mod reference_bind_expression;
 mod refusal_diagnostics;
 mod reflection_property_store;
+mod static_locals;
 mod static_members;
 mod strict_types;
 mod strict_types_scope;

@@ -142,6 +142,12 @@ impl ScopeEntry {
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     global_aliases: HashMap<String, String>,
+    /// Names bound to a per-function `static` slot, mapped to that slot's function key.
+    ///
+    /// The same indirection `global_aliases` provides, for the other storage php shares across
+    /// activations. Without it a `static` was COPIED into the activation and written back on
+    /// return, so a recursive call read the value the frame below it started with.
+    static_aliases: HashMap<String, String>,
     reference_targets: HashMap<String, EvalReferenceTarget>,
     generation: u64,
 }
@@ -152,6 +158,7 @@ impl ElephcEvalScope {
         Self {
             entries: HashMap::new(),
             global_aliases: HashMap::new(),
+            static_aliases: HashMap::new(),
             reference_targets: HashMap::new(),
             generation: 0,
         }
@@ -357,6 +364,21 @@ impl ElephcEvalScope {
     }
 
     /// Marks a variable name as an alias to the eval context's global scope.
+    /// Binds one name to a per-function `static` slot for later reads and writes.
+    pub fn mark_static_alias(&mut self, name: impl Into<String>, slot: impl Into<String>) {
+        self.static_aliases.insert(name.into(), slot.into());
+    }
+
+    /// Returns the static slot key a name is bound to.
+    pub fn static_alias_slot(&self, name: &str) -> Option<&str> {
+        self.static_aliases.get(name).map(String::as_str)
+    }
+
+    /// Removes one static binding, which `unset($x)` does to the local name only.
+    pub fn clear_static_alias(&mut self, name: &str) {
+        self.static_aliases.remove(name);
+    }
+
     pub fn mark_global_alias(&mut self, name: impl Into<String>) {
         let name = name.into();
         self.mark_global_alias_to(name.clone(), name);

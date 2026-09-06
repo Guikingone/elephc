@@ -248,7 +248,18 @@ pub(in crate::interpreter) fn execute_stmt(
             if context.returns_by_ref() {
                 return eval_by_ref_return(expr, context, scope, values);
             }
-            Ok(EvalControl::Return(eval_expr(expr, context, scope, values)?))
+            let value = eval_expr(expr, context, scope, values)?;
+            // Returning a `static` hands back a cell the SLOT owns, not one the activation does.
+            // Every other return transfers ownership by `release_activation_scope` skipping the
+            // returned cell, but a static has no entry in that scope to skip -- so without a
+            // retain here the caller's release takes the slot's only reference, and a discarded
+            // `f();` destroys the value the next call is supposed to read.
+            if let EvalExpr::LoadVar(name) = expr {
+                if scope.static_alias_slot(name).is_some() {
+                    return Ok(EvalControl::Return(values.retain(value)?));
+                }
+            }
+            Ok(EvalControl::Return(value))
         }
         EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
         EvalStmt::ReferenceAssign { target, source } => {

@@ -52,6 +52,10 @@ impl ElephcEvalContext {
     pub fn define_closure(&mut self, closure: EvalClosure) -> String {
         let name = format!("{{closure:eval:{}}}", self.next_closure_id);
         self.next_closure_id += 1;
+        // Stamped here because this is the one place that knows the object is new: every call
+        // mints a fresh name, which is exactly php's "one static slot per closure object".
+        let mut closure = closure;
+        closure.set_slot_key(name.clone());
         self.closures.insert(name.clone(), closure);
         name
     }

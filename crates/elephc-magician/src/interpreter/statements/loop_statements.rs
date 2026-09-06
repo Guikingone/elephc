@@ -17,7 +17,7 @@ pub(in crate::interpreter) fn execute_static_var_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let Some(function_name) = context.current_function().map(str::to_string) else {
+    let Some(function_name) = context.current_static_slot_key() else {
         let value = eval_expr(init, context, scope, values)?;
         if let Some(replaced) = scope.set(name.to_string(), value, ScopeCellOwnership::Owned) {
             values.release(replaced)?;
@@ -27,16 +27,23 @@ pub(in crate::interpreter) fn execute_static_var_stmt(
     if scope.contains_visible(name) {
         return Ok(());
     }
-    let value = if let Some(value) = context.static_local(&function_name, name) {
-        value
-    } else {
+    if context.static_local(&function_name, name).is_none() {
+        // Only the FIRST activation runs the initializer; every later one -- including a
+        // recursive one already on the stack -- finds the slot and leaves it alone.
         let value = eval_expr(init, context, scope, values)?;
-        let _ = context.set_static_local(function_name.clone(), name.to_string(), value);
-        value
-    };
-    if let Some(replaced) = scope.set(name.to_string(), value, ScopeCellOwnership::Borrowed) {
-        values.release(replaced)?;
+        // The slot outlives every activation, so it holds a reference of its own.
+        let value = values.retain(value)?;
+        if let Some(replaced) =
+            context.set_static_local(function_name.clone(), name.to_string(), value)
+        {
+            values.release(replaced)?;
+        }
     }
+    let slot = ElephcEvalContext::static_slot_name(&function_name, name);
+    // Bound by alias rather than copied in. The copy was the defect: it made every activation
+    // read the value the slot held when IT started, so `function f() { static $a = 1; echo $a;
+    // $a++; f(); }` printed 1 forever instead of counting.
+    scope.mark_static_alias(name.to_string(), slot);
     Ok(())
 }
 

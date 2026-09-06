@@ -411,6 +411,9 @@ fn eval_closure_with_optional_binding(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let function = closure.function();
     let static_names = static_var_names(function.body());
+    // The frame keeps the FUNCTION name, which php prints as `{closure}`; only the static slots
+    // move to the per-object key.
+    context.push_static_slot_key(closure.slot_key());
     let bound_class_pushed = binding.is_some();
     // Captured before `binding` is consumed below, because a generator closure keeps the scopes
     // it was created under rather than inheriting whoever resumes it.
@@ -445,6 +448,7 @@ fn eval_closure_with_optional_binding(
             }
             context.pop_call_frame();
             context.pop_function();
+            context.pop_static_slot_key();
             return Err(status);
         }
     };
@@ -479,6 +483,7 @@ fn eval_closure_with_optional_binding(
             context.pop_class_scope();
         }
         context.pop_function();
+        context.pop_static_slot_key();
         return match (generator, arg_cleanup) {
             (Err(status), _) | (_, Err(status)) => Err(status),
             (Ok(generator), Ok(())) => Ok(generator),
@@ -550,6 +555,7 @@ fn eval_closure_with_optional_binding(
     }
     context.pop_call_frame();
     context.pop_function();
+    context.pop_static_slot_key();
     merge_activation_result(return_result, cleanup_result)
 }
 
