@@ -9,6 +9,41 @@
 
 use super::*;
 
+/// Removes a codegen test's temporary directory even when the test panics.
+///
+/// The directory used to be deleted only on the way out of `compile_and_run`, so ANY panic before
+/// that -- a compile refusal, an assembler or linker failure, an assertion inside the harness --
+/// leaked the `.s`, the `.o` and the linked binary it held. Measured on one full `codegen::eval`
+/// run: 3092 leftover `elephc_test_*` directories in TMPDIR and free disk down from 20 GiB to 7.
+///
+/// That is a feedback loop, not just untidiness. Once the disk is short, compiles that would have
+/// passed start failing for want of space, and every one of THOSE leaks another directory. The
+/// same run's failure rate climbed from 3% to 49% as it went, which is what a contaminated census
+/// looks like -- and it is why a number from such a run cannot be trusted as a branch-tip
+/// measurement.
+///
+/// `ELEPHC_TEST_KEEP=1` keeps the directory and prints where it is, which is how to inspect the
+/// assembly of a case that is genuinely failing.
+struct TestDirGuard {
+    path: std::path::PathBuf,
+}
+
+impl TestDirGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl Drop for TestDirGuard {
+    fn drop(&mut self) {
+        if std::env::var_os("ELEPHC_TEST_KEEP").is_some() {
+            eprintln!("[elephc-test] kept {}", self.path.display());
+            return;
+        }
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 /// Returns true when codegen fixtures are compiling through the EIR backend.
 pub(crate) fn codegen_fixture_uses_ir_backend() -> bool {
     true
@@ -204,6 +239,7 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
     let (user_asm, _runtime_asm, _link_requirements) = try_compile_source_to_asm_with_defines_repr(
         source,
         &dir,
@@ -216,7 +252,6 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
         false,
         elephc::php_version::PhpVersion::default(),
     );
-    let _ = fs::remove_dir_all(&dir);
     match user_asm {
         Ok(_) => panic!("expected the EIR backend to reject this program, but it compiled"),
         Err(error) => error.to_string(),
@@ -461,6 +496,7 @@ pub(crate) fn compile_harness_expect_failure(
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
@@ -475,7 +511,6 @@ pub(crate) fn compile_harness_expect_failure(
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     stderr
 }
 
@@ -489,6 +524,7 @@ pub(crate) fn compile_harness_and_run(source: &str, heap_size: usize, harness: &
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
@@ -503,7 +539,6 @@ pub(crate) fn compile_harness_and_run(source: &str, heap_size: usize, harness: &
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     stdout
 }
 
@@ -520,6 +555,7 @@ pub(crate) fn compile_harness_and_run_with_heap_debug(
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
@@ -534,7 +570,6 @@ pub(crate) fn compile_harness_and_run_with_heap_debug(
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     stdout
 }
 
@@ -548,6 +583,7 @@ pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, true, false);
@@ -561,7 +597,6 @@ pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -575,6 +610,7 @@ pub(crate) fn compile_and_run_with_counters(source: &str) -> ProgramOutput {
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_counters(source, &dir, 8_388_608, false, true, false);
@@ -588,7 +624,6 @@ pub(crate) fn compile_and_run_with_counters(source: &str) -> ProgramOutput {
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -614,6 +649,7 @@ fn compile_and_run_capture_with_optional_regex(
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
@@ -629,7 +665,6 @@ fn compile_and_run_capture_with_optional_regex(
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -643,6 +678,7 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, true);
@@ -656,7 +692,6 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -703,6 +738,7 @@ fn compile_and_run_with_heap_size_and_optional_regex(
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
@@ -736,7 +772,6 @@ fn compile_and_run_with_heap_size_and_optional_regex(
         }
     }
 
-    let _ = fs::remove_dir_all(&dir);
     elephc_out
 }
 
@@ -762,6 +797,7 @@ pub(crate) fn compile_and_run_with_php_ini(source: &str, ini: &str) -> String {
         pid, tid, id
     ));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
     let ini_path = dir.join("php.ini");
     fs::write(&ini_path, ini).unwrap();
 
@@ -777,7 +813,6 @@ pub(crate) fn compile_and_run_with_php_ini(source: &str, ini: &str) -> String {
         &[],
         &[("PHPRC", ini_path.as_os_str())],
     );
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -794,6 +829,7 @@ pub(crate) fn compile_and_run_with_php_version(
         pid, tid, id
     ));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, requirements) =
         compile_source_to_asm_with_defines_repr_and_php_version(
@@ -815,7 +851,6 @@ pub(crate) fn compile_and_run_with_php_version(
         &default_link_paths(),
         &[],
     );
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -838,6 +873,7 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_tagged_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_defines_repr(
         source,
@@ -876,7 +912,6 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
         }
     }
 
-    let _ = fs::remove_dir_all(&dir);
     elephc_out
 }
 
