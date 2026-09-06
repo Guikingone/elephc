@@ -458,7 +458,7 @@ impl Parser {
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "yield")) {
             return self.parse_yield_expr();
         }
-        if let Some(target) = self.peek_scalar_cast_type() {
+        if let Some(target) = self.peek_cast_type() {
             self.advance();
             self.advance();
             self.advance();
@@ -535,7 +535,7 @@ impl Parser {
     }
 
     /// Returns the cast target represented by the current `(type)` token window.
-    pub(super) fn peek_scalar_cast_type(&self) -> Option<EvalCastType> {
+    pub(super) fn peek_cast_type(&self) -> Option<EvalCastType> {
         if !matches!(self.current(), TokenKind::LParen) {
             return None;
         }
@@ -555,6 +555,8 @@ impl Parser {
             Some(EvalCastType::Bool)
         } else if ident_eq(name, "array") {
             Some(EvalCastType::Array)
+        } else if ident_eq(name, "object") {
+            Some(EvalCastType::Object)
         } else {
             None
         }

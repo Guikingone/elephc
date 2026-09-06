@@ -370,6 +370,7 @@ pub enum EvalCastType {
     String,
     Bool,
     Array,
+    Object,
 }
 
 /// Unary operations supported by the initial EvalIR parser.

@@ -241,6 +241,36 @@ fn parse_fragment_accepts_array_cast_source() {
     ));
 }
 
+/// Verifies `(object)` casts lower through the dynamic cast expression node.
+///
+/// `object` was missing from the cast keyword list, so `(object) $value` was read as the
+/// parenthesised constant `object` and the parser then refused the operand that followed it.
+#[test]
+fn parse_fragment_accepts_object_cast_source() {
+    let program = parse_fragment(br#"return (object) $value;"#).expect("object cast should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Cast {
+            target: EvalCastType::Object,
+            expr,
+        }))] if matches!(expr.as_ref(), EvalExpr::LoadVar(name) if name == "value")
+    ));
+}
+
+/// Verifies an ARRAY LITERAL operand casts, which is the spelling that refused at the `=>`.
+#[test]
+fn parse_fragment_accepts_object_cast_of_an_array_literal() {
+    let program = parse_fragment(br#"return (object) ["mark" => 0];"#)
+        .expect("object cast of an array literal should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Cast {
+            target: EvalCastType::Object,
+            expr,
+        }))] if matches!(expr.as_ref(), EvalExpr::Array(elements) if elements.len() == 1)
+    ));
+}
+
 /// Verifies logical operators parse with `&&` binding tighter than `||`.
 #[test]
 fn parse_fragment_accepts_short_circuit_logical_source() {

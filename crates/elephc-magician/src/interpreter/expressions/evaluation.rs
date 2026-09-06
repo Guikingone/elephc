@@ -156,6 +156,49 @@ pub(super) fn eval_cast_expr(
         }
         EvalCastType::Bool => values.cast_bool(value),
         EvalCastType::Array => eval_array_cast_value(value, context, values),
+        EvalCastType::Object => eval_object_cast_value(value, context, values),
+    }
+}
+
+/// Casts one dynamic eval value to a `stdClass` object with PHP's `(object)` rules.
+///
+/// PHP does not build a new object for every operand. An object casts to ITSELF -- `(object) $p`
+/// is the same instance, `===` to `$p` -- so this retains rather than copies. An array becomes a
+/// `stdClass` whose property names are the array's keys, integer keys included (`(object) [10, 20]`
+/// has properties `"0"` and `"1"`). Null becomes an EMPTY `stdClass`, and every other scalar
+/// becomes a `stdClass` with the single property `scalar`, which is the name PHP itself picks.
+fn eval_object_cast_value(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match values.type_tag(value)? {
+        EVAL_TAG_OBJECT => values.retain(value),
+        EVAL_TAG_NULL => values.new_object("stdClass"),
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
+            let object = values.new_object("stdClass")?;
+            let len = values.array_len(value)?;
+            for position in 0..len {
+                // Both handles below are OWNED: `array_iter_key` allocates the key and
+                // `array_get` boxes the element. The property write retains what it keeps, so
+                // this frame still owes a release on each one.
+                let key = values.array_iter_key(value, position)?;
+                let name = values.string_bytes(key)?;
+                let element = values.array_get(value, key)?;
+                values.release(key)?;
+                let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
+                let stored =
+                    eval_property_set_result(object, &name, element, context, values);
+                values.release(element)?;
+                stored?;
+            }
+            Ok(object)
+        }
+        _ => {
+            let object = values.new_object("stdClass")?;
+            eval_property_set_result(object, "scalar", value, context, values)?;
+            Ok(object)
+        }
     }
 }
 

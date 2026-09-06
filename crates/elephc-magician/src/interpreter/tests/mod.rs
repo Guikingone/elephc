@@ -64,6 +64,7 @@ mod generators;
 mod include_reflection;
 mod method_arguments;
 mod native_scope;
+mod object_cast;
 mod reflection_property_store;
 mod static_members;
 mod support;
