@@ -109,7 +109,12 @@ pub(crate) fn register_spl_autoload_callback(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let _ = eval_callable(callback, context, values)?;
+    let normalized = eval_callable(callback, context, values)?;
+    // PHP validates the callback AT REGISTRATION and throws `TypeError` naming what is wrong with
+    // it, rather than waiting for the first autoload attempt. Deferring the check moves the
+    // failure to a line the program never wrote, and hides it completely for a program that
+    // happens never to autoload anything — which is most of them until the day it matters.
+    eval_validate_spl_autoload_register_callback(&normalized, context, values)?;
     register_spl_autoload_callback_unchecked(callback, prepend, context, values)
 }
 
@@ -120,7 +125,9 @@ pub(crate) fn register_spl_autoload_callback_unchecked(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if context.has_autoload_callback(callback) {
+    // PHP deduplicates by VALUE: registering the same loader twice reports success and still
+    // leaves one registration.
+    if eval_autoload_callback_position(callback, context, values)?.is_some() {
         return values.bool_value(true);
     }
     let first_callback = context.has_no_autoload_callbacks();
@@ -137,13 +144,43 @@ pub(crate) fn register_spl_autoload_callback_unchecked(
     values.bool_value(true)
 }
 
+/// Returns the position of a registered autoload callback equal BY VALUE to this one.
+///
+/// PHP matches an autoload callback by value: the same `'name'` written at registration and at
+/// unregistration is two different cells and one callback. Comparing cell identity made
+/// unregistration answer `false` for a callback that was plainly there, and let the same loader
+/// be registered twice — `php -n` 8.5.6 registers `'a_loader'` twice and still reports one.
+fn eval_autoload_callback_position(
+    callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<usize>, EvalStatus> {
+    for (index, registered) in context.autoload_callbacks().into_iter().enumerate() {
+        if registered.as_ptr() == callback.as_ptr() {
+            return Ok(Some(index));
+        }
+        let equal = values.compare(EvalBinOp::StrictEq, registered, callback)?;
+        if values.truthy(equal)? {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+
 /// Removes one retained callback and reports PHP's boolean unregister result.
 fn eval_spl_autoload_unregister_result(
     callback: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Some(callback) = context.unregister_autoload_callback(callback) else {
+    // PHP distinguishes "this is not a callback" from "this callback is not registered": the
+    // first is a TypeError, only the second is `false`.
+    let normalized = eval_callable(callback, context, values)?;
+    eval_validate_spl_autoload_unregister_callback(&normalized, context, values)?;
+    let Some(index) = eval_autoload_callback_position(callback, context, values)? else {
+        return values.bool_value(false);
+    };
+    let Some(callback) = context.remove_autoload_callback_at(index) else {
         return values.bool_value(false);
     };
     eval_release_value(context, values, callback)?;

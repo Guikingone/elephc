@@ -199,12 +199,6 @@ impl ElephcEvalContext {
     }
 
     /// Reports whether one exact retained callback cell is already registered.
-    pub(crate) fn has_autoload_callback(&self, callback: RuntimeCellHandle) -> bool {
-        self.autoload_callbacks
-            .iter()
-            .any(|registered| registered.as_ptr() == callback.as_ptr())
-    }
-
     /// Stores one already-retained SPL autoload callback at PHP's requested position.
     pub(crate) fn register_autoload_callback(
         &mut self,
@@ -223,16 +217,14 @@ impl ElephcEvalContext {
         self.autoload_callbacks.clone()
     }
 
-    /// Removes one callback by its retained runtime-cell identity.
-    pub(crate) fn unregister_autoload_callback(
-        &mut self,
-        callback: RuntimeCellHandle,
-    ) -> Option<RuntimeCellHandle> {
-        let index = self
-            .autoload_callbacks
-            .iter()
-            .position(|registered| registered.as_ptr() == callback.as_ptr())?;
-        Some(self.autoload_callbacks.remove(index))
+    /// Removes the callback stored at one position, which the caller matched BY VALUE.
+    ///
+    /// PHP matches an autoload callback by value, not by cell identity: `spl_autoload_register`
+    /// then `spl_autoload_unregister` with the same `'name'` written twice is two different cells
+    /// and one callback. Identity matching made unregistration answer `false` for a callback that
+    /// was plainly there, and let the same loader be registered twice.
+    pub(crate) fn remove_autoload_callback_at(&mut self, index: usize) -> Option<RuntimeCellHandle> {
+        (index < self.autoload_callbacks.len()).then(|| self.autoload_callbacks.remove(index))
     }
 
     /// Drains every retained callback when the surrounding PHP request ends.
