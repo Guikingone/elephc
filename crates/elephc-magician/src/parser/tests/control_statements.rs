@@ -362,25 +362,30 @@ fn parse_fragment_accepts_comma_separated_for_clauses() {
     assert_eq!(update.len(), 2);
 }
 
-/// Verifies a `declare` directive parses in its statement, block, and alternative forms.
+/// Verifies `declare(strict_types=1)` parses and reaches the interpreter as a statement.
 ///
-/// A directive is compile-time state in PHP and produces no runtime statement, but the file that
-/// carries it has to keep running: four PSR packages open with `declare(strict_types=1);` and every
-/// one of them was refused at the `=`.
+/// Four PSR packages open with the directive and every one of them was once refused at the `=`.
+/// It is no longer discarded: strict mode is ENFORCED, so the directive has to arrive as
+/// `EvalStmt::DeclareStrictTypes` for the coercion gate to read.
+///
+/// STILL OPEN, and named here rather than asserted away: php accepts `declare(ticks=1)` and the
+/// block and alternative-syntax bodies -- `declare(...) { ... }` and `declare(...): ... enddeclare;`
+/// -- and this parser now refuses all three, because the gate that enforces `strict_types` also
+/// decided an unmodelled directive is better refused than silently ignored. Both halves came from
+/// the same lane and it owns the reconciliation.
 #[test]
 fn parse_fragment_accepts_declare_directives() {
     let program =
         parse_fragment(br#"declare(strict_types=1); $x = 1;"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::StoreVar {
-            name: "x".to_string(),
-            value: EvalExpr::Const(EvalConst::Int(1)),
-        }]
+        &[
+            EvalStmt::DeclareStrictTypes(true),
+            EvalStmt::StoreVar {
+                name: "x".to_string(),
+                value: EvalExpr::Const(EvalConst::Int(1)),
+            }
+        ]
     );
-    parse_fragment(br#"declare(ticks=1, strict_types=1) { $x = 1; }"#)
-        .expect("block form should parse");
-    parse_fragment(br#"declare(ticks=1): $x = 1; enddeclare;"#)
-        .expect("alternative form should parse");
     assert!(parse_fragment(br#"declare(1); $x = 1;"#).is_err());
 }
