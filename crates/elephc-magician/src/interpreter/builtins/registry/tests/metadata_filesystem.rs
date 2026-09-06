@@ -82,15 +82,14 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
             eval_declared_builtin_param_names("file_put_contents"),
             Some(["filename", "data", "flags", "context"].as_slice())
         );
-        // KNOWN GAP, pinned as it stands: `php -n` 8.5.6 declares
-        // `readfile(string $filename, bool $use_include_path = false, $context = null)` and the
-        // shared contract carries only the first parameter. `scandir` above went the other way --
-        // the contract was completed and this expectation had gone stale -- so the two directions
-        // genuinely coexist in this file and each assertion has to be checked against php rather
-        // than assumed.
+        // The gap this used to pin is CLOSED: the contract now carries all three parameters
+        // `php -n` 8.5.6 declares. `scandir` above had gone the same way earlier, which is the
+        // reason for the standing rule in this file -- every one of these assertions records
+        // where elephc stands, not where php does, so each has to be re-measured against php
+        // rather than assumed to be the contract.
         assert_eq!(
             eval_declared_builtin_param_names("readfile"),
-            Some(["filename"].as_slice())
+            Some(["filename", "use_include_path", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("filemtime"),

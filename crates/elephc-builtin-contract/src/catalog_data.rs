@@ -12924,6 +12924,18 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: false,
             },
+            ParamSpec {
+                name: "use_include_path",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(false)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "context",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
         ],
         variadic: None,
         min_args: None,

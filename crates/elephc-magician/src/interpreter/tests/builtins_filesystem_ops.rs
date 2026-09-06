@@ -386,3 +386,61 @@ return true;"#
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies `readfile()` accepts all three parameters php declares.
+///
+/// `php -n` 8.5.6 prints `hello;5;hello;5;hello;5` for the one-, two- and three-argument calls:
+/// each streams the file and returns the byte count. The registry declared `$filename` alone, so
+/// `readfile($f, true)` -- ordinary php that php runs -- was a fatal here.
+///
+/// `$use_include_path` is accepted and behaves as `false`, and a non-null `$context` is refused
+/// rather than ignored. Both are `file_get_contents()`'s existing answers to the same arguments,
+/// and the refusal is asserted too: accepting a context and dropping it would report a successful
+/// read that never honoured the options it was handed.
+#[test]
+fn execute_program_dispatches_readfile_with_all_three_parameters() {
+    let pid = std::process::id();
+    let name = format!("elephc_magician_readfile_arity_{pid}.txt");
+    let source = format!(
+        r#"file_put_contents("{name}", "hello");
+$a = readfile("{name}"); echo ";", $a, ";";
+$b = readfile("{name}", true); echo ";", $b, ";";
+$c = readfile("{name}", false, null); echo ";", $c;"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+
+    // Removed here rather than by an `unlink()` at the end of the fragment: a fragment that
+    // fails part-way never reaches its last statement, and a sentinel run left exactly that file
+    // behind in the crate directory.
+    let _ = std::fs::remove_file(&name);
+    result.expect("execute eval ir");
+
+    assert_eq!(values.output, "hello;5;hello;5;hello;5");
+}
+
+/// Verifies a non-null `$context` is refused rather than silently dropped.
+///
+/// This is the deliberate divergence: php would honour the stream options, and eval has nowhere
+/// to put them, so it fails loudly instead of reporting a read that ignored them.
+#[test]
+fn execute_program_refuses_readfile_with_a_non_null_context() {
+    let pid = std::process::id();
+    let name = format!("elephc_magician_readfile_context_{pid}.txt");
+    let source = format!(
+        r#"file_put_contents("{name}", "hello");
+readfile("{name}", false, stream_context_create([]));"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let status = execute_program(&program, &mut scope, &mut values)
+        .expect_err("a non-null stream context should be refused");
+
+    let _ = std::fs::remove_file(&name);
+    assert_eq!(status, EvalStatus::RuntimeFatal);
+}

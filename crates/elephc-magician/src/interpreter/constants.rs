@@ -43,7 +43,14 @@ pub(super) const EVAL_PHP_URL_QUERY: i64 = 6;
 /// `parse_url()` component selector for the fragment.
 pub(super) const EVAL_PHP_URL_FRAGMENT: i64 = 7;
 
-/// Hash algorithm names supported by eval `hash_algos()`, matching native runtime order.
+/// Hash algorithm names supported by eval `hash_algos()`, in `php -n` 8.5.6's own order.
+///
+/// This is elephc's supported SUBSET of php's 60, kept in php's relative order: php reports
+/// `sha512/224, sha512/256, sha512` and `adler32, crc32, crc32b, crc32c`, both of which used to
+/// be transposed here. The same order is repeated in
+/// `src/codegen_support/runtime/strings/hash_algos.rs` and mirrored by the match arms of
+/// `crates/elephc-crypto/src/algos.rs`, and the three only ever move together -- changing one
+/// alone trades a php divergence for an eval/AOT one.
 pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
     "md2",
     "md4",
@@ -52,9 +59,9 @@ pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
     "sha224",
     "sha256",
     "sha384",
-    "sha512",
     "sha512/224",
     "sha512/256",
+    "sha512",
     "sha3-224",
     "sha3-256",
     "sha3-384",
@@ -64,10 +71,10 @@ pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
     "ripemd256",
     "ripemd320",
     "whirlpool",
+    "adler32",
     "crc32",
     "crc32b",
     "crc32c",
-    "adler32",
     "fnv132",
     "fnv1a32",
     "fnv164",
