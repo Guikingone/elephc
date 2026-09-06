@@ -328,12 +328,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
         let clone_identity = values.object_identity(clone)?;
         context.register_dynamic_object(clone_identity, &class_name);
         for (property, value) in context.dynamic_property_values_for_clone(identity) {
-            let value = values.retain(value)?;
-            if let Some(replaced) =
-                context.set_dynamic_property_value(clone_identity, &property, value)
-            {
-                values.release(replaced)?;
-            }
+            eval_store_dynamic_property_value(clone_identity, &property, value, context, values)?;
         }
         context.clone_dynamic_property_aliases(identity, clone_identity);
         if let Some((declaring_class, method)) = clone_method {
@@ -630,11 +625,13 @@ pub(super) fn eval_dynamic_class_allocate_object(
                 if property.visibility() == EvalVisibility::Public {
                     let _ = values.property_set(object, &storage_name, value);
                 }
-                if let Some(replaced) =
-                    context.set_dynamic_property_value(identity, &storage_name, value)
-                {
-                    values.release(replaced)?;
-                }
+                eval_store_dynamic_property_value(
+                    identity,
+                    &storage_name,
+                    value,
+                    context,
+                    values,
+                )?;
                 context.mark_dynamic_property_initialized(identity, &storage_name);
             }
         }

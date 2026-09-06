@@ -9,6 +9,37 @@
 
 use super::*;
 
+/// Stores one value in the dynamic-property overlay, which OWNS what it keeps.
+///
+/// This is the ONLY way the overlay is written, because the ownership rule is not optional and
+/// was not being applied consistently: three of the six former write points retained the value
+/// and three did not, while object destruction releases everything the overlay holds — the FFI
+/// destructor hands `forget_dynamic_object`'s values straight to `release`. A value stored
+/// without a reference was therefore given back twice, and the site that got it right looked
+/// exactly like the site that did not. Keeping the rule in one function is what stops the two
+/// drifting apart again.
+///
+/// Re-storing the cell the overlay already holds is a no-op rather than a retain, so a repeated
+/// write does not accumulate references.
+pub(in crate::interpreter) fn eval_store_dynamic_property_value(
+    identity: u64,
+    storage_property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if context.dynamic_property_value(identity, storage_property_name) == Some(value) {
+        return Ok(());
+    }
+    let stored = values.retain(value)?;
+    if let Some(replaced) =
+        context.set_dynamic_property_value(identity, storage_property_name, stored)
+    {
+        eval_release_value(context, values, replaced)?;
+    }
+    Ok(())
+}
+
 /// Reads one object property while enforcing eval-declared member visibility.
 pub(in crate::interpreter) fn eval_property_get_result(
     object: RuntimeCellHandle,
@@ -478,11 +509,13 @@ pub(in crate::interpreter) fn eval_property_set_result(
             values,
         )?;
         context.mark_dynamic_property_initialized(identity, &storage_property_name);
-        if let Some(replaced) =
-            context.set_dynamic_property_value(identity, &storage_property_name, value)
-        {
-            values.release(replaced)?;
-        }
+        eval_store_dynamic_property_value(
+            identity,
+            &storage_property_name,
+            value,
+            context,
+            values,
+        )?;
         return Ok(());
     }
     // Mirror the value into the object's own slot as well. The overlay is what reads consult,
@@ -508,13 +541,13 @@ pub(in crate::interpreter) fn eval_property_set_result(
     if !declared_property_found || declared_property_is_public {
         let _ = values.property_set(object, &storage_property_name, value);
     }
-    let stored = values.retain(value)?;
-    let replaced = context.set_dynamic_property_value(identity, &storage_property_name, stored);
+    let replaced = context.dynamic_property_value(identity, &storage_property_name);
+    eval_store_dynamic_property_value(identity, &storage_property_name, value, context, values)?;
     if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
         let call_site = context.call_site();
         eprintln!(
             "[elephc-eval-trace] phase=dynamic_property_set class={object_class_name:?} property={storage_property_name:?} value_tag={:?} replaced={} file={:?} line={}",
-            values.type_tag(stored),
+            values.type_tag(value),
             replaced.is_some(),
             call_site.0,
             call_site.2,
@@ -612,11 +645,7 @@ pub(super) fn eval_property_reference_bind_result(
     )?;
     let value = eval_reference_target_value(&target, context, values)?;
     context.bind_dynamic_property_alias(identity, &storage_property_name, target);
-    if let Some(replaced) =
-        context.set_dynamic_property_value(identity, &storage_property_name, value)
-    {
-        values.release(replaced)?;
-    }
+    eval_store_dynamic_property_value(identity, &storage_property_name, value, context, values)?;
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
 }

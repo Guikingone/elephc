@@ -102,21 +102,13 @@ pub(super) struct FakeOps {
     /// method's receiver outliving the call that built it, and any release of a cell the releaser
     /// never owned.
     pub(super) refcounts: HashMap<usize, i64>,
-    /// Whether a release that drives a count below zero fails the test instead of being recorded.
+    /// Whether a release that drives a count below zero is merely RECORDED instead of failing.
     ///
-    /// Off by default so the whole suite does not have to be corrected in one step. A test opts
-    /// in with `count_references()`, and the modules that are ABOUT ownership run counted.
-    ///
-    /// `ELEPHC_FAKE_COUNT_REFERENCES` turns it on for every fixture at once, which is how a module
-    /// is surveyed before its own tests opt in.
-    ///
-    /// One test still over-releases under that survey and is left uncounted deliberately rather
-    /// than silenced:
-    /// `classes::promoted_references::execute_program_aliases_by_reference_promoted_static_and_nested_properties`.
-    /// Its site is the dynamic-property OVERLAY, which stores a value without taking a reference
-    /// while object destruction releases everything the overlay holds — the same ownership rule
-    /// the static-local store needed, across six write points, and its own slice.
-    pub(super) counted_mode: bool,
+    /// Counting is enforced by DEFAULT, which is the whole point: every fixture, including one
+    /// written tomorrow, fails on a release of a cell nobody owned, so the rule cannot quietly
+    /// drift again. Only the fixture's own test for the recording behaviour turns this on,
+    /// because it has to over-release on purpose.
+    pub(super) allow_over_releases: bool,
     /// Releases that drove a count below zero, recorded whether or not counting is enforced.
     pub(super) over_releases: Vec<FakeOverRelease>,
     pub(super) output: String,
@@ -168,22 +160,18 @@ impl FakeOps {
         RuntimeCellHandle::from_raw(id as *mut RuntimeCell)
     }
 
-    /// Turns on reference counting for this fixture.
+    /// Lets this fixture record an over-release instead of failing on it.
     ///
-    /// A release that drives a count below zero then FAILS the test, naming the handle and the
-    /// value it held. That is the point: a path that gives back a cell it never owned is exactly
-    /// what silently destroyed live objects, and each one has to surface on its own.
-    pub(super) fn count_references(&mut self) {
-        self.counted_mode = true;
+    /// Only the fixture's own test for that recording uses it: everywhere else a release of a
+    /// cell nobody owned is exactly what silently destroys live objects, and it must fail loudly,
+    /// naming the handle, the value it held and the releasing site.
+    pub(super) fn allow_over_releases(&mut self) {
+        self.allow_over_releases = true;
     }
 
-    /// Returns whether this fixture enforces reference counting.
-    ///
-    /// `ELEPHC_FAKE_COUNT_REFERENCES` turns it on for every fixture, which is how a module is
-    /// SURVEYED before its own tests opt in: the failures name the releasing sites, and the
-    /// module is switched over once they are fixed.
+    /// Returns whether this fixture fails on a release of a cell nobody owned.
     pub(super) fn counting_enforced(&self) -> bool {
-        self.counted_mode || std::env::var_os("ELEPHC_FAKE_COUNT_REFERENCES").is_some()
+        !self.allow_over_releases
     }
 
     /// Returns one fake cell's live reference count.
@@ -357,7 +345,6 @@ impl FakeOps {
 #[test]
 fn a_second_reference_makes_a_release_not_final() {
     let mut values = FakeOps::default();
-    values.count_references();
     let object = values.alloc(FakeValue::Object(Vec::new()));
     values.object_classes.insert(object.as_ptr() as usize, "C".to_string());
     assert_eq!(values.refcount(object), 1);
@@ -385,15 +372,12 @@ fn a_second_reference_makes_a_release_not_final() {
 
 /// Verifies an over-release is recorded even when counting is not enforced.
 ///
-/// The record is what lets a whole module be surveyed before any of it is enforced.
+/// The record carries the handle and the value it held, which is what named each site while the
+/// suite was being corrected.
 #[test]
 fn an_over_release_is_recorded_without_being_enforced() {
-    // The survey switch enforces counting for every fixture, which is the opposite of what this
-    // test is about, so it has nothing to check while that switch is on.
-    if std::env::var_os("ELEPHC_FAKE_COUNT_REFERENCES").is_some() {
-        return;
-    }
     let mut values = FakeOps::default();
+    values.allow_over_releases();
     let cell = values.alloc(FakeValue::Int(7));
     values.release(cell).expect("give the only reference back");
     assert!(values.over_releases().is_empty());

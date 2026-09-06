@@ -40,7 +40,6 @@ fn run_include_fixture(tag: &str, files: &[(&str, &str)], fragment: &[u8]) -> St
     );
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("execute include reflection fragment");
     let _ = std::fs::remove_dir_all(&dir);

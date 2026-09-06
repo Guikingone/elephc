@@ -24,7 +24,6 @@ fn out(fragment: &[u8]) -> String {
     let program = parse_fragment(fragment).expect("parse foreach object fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     execute_program(&program, &mut scope, &mut values).expect("execute foreach object fragment");
     values.output.clone()
 }

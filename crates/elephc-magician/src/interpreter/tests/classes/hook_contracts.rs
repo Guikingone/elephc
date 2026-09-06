@@ -34,7 +34,6 @@ return true;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -66,7 +65,6 @@ return $box->shout();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -100,7 +98,6 @@ return $box->value;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -126,7 +123,6 @@ return $box->value;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -157,7 +153,6 @@ return true;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     let result = execute_program(&valid_program, &mut scope, &mut values).expect("execute eval ir");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 
@@ -172,7 +167,6 @@ abstract class EvalIfaceGetWideBad implements EvalIfaceGetInt {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     let err = execute_program(&bad_abstract_get, &mut scope, &mut values)
         .expect_err("wider abstract get property type should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -188,7 +182,6 @@ abstract class EvalIfaceSetNarrowBad implements EvalIfaceSetWide {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     let err = execute_program(&bad_abstract_set, &mut scope, &mut values)
         .expect_err("narrower abstract set property type should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -204,7 +197,6 @@ class EvalIfaceConcreteGetWideBad implements EvalIfaceConcreteGetInt {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     let err = execute_program(&bad_concrete_get, &mut scope, &mut values)
         .expect_err("wider concrete get property type should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -221,7 +213,6 @@ abstract class EvalIfaceInheritedPropertyChild extends EvalIfaceInheritedPropert
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     let err = execute_program(&bad_inherited_property, &mut scope, &mut values)
         .expect_err("inherited incompatible interface property should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
@@ -243,7 +234,6 @@ class EvalHookGetOnlyContractBox implements EvalHookSetContract {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("get-only hook should fail writable interface contract");
@@ -266,7 +256,6 @@ class EvalReadonlyHookContractBox implements EvalReadonlyHookContract {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("readonly property should fail writable interface contract");
@@ -295,7 +284,6 @@ return $box->value;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -321,7 +309,6 @@ return $box->value;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -341,7 +328,6 @@ class EvalMissingAbstractHookBox extends EvalMissingAbstractHookBase {}"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("missing abstract property should fail concrete subclass");
@@ -377,7 +363,6 @@ class EvalReadonlyAbstractHookBox extends EvalReadonlyAbstractHookBase {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("readonly property should fail abstract writable contract");
@@ -404,7 +389,6 @@ return $box->label();"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 

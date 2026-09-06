@@ -55,14 +55,29 @@ impl FakeOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus> {
         let id = object.as_ptr() as usize;
+        if !matches!(self.values.get(&id), Some(FakeValue::Object(_))) {
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
+        // An object's slot OWNS what it holds, which is what the real helper models by boxing the
+        // value through `__rt_mixed_from_value` and giving back the cell it displaces. Storing an
+        // unretained handle made a caller that correctly released its own reference look like the
+        // one at fault, and dropping the previous handle silently hid the release the slot owed.
+        let stored = self.runtime_retain(value)?;
         let Some(FakeValue::Object(properties)) = self.values.get_mut(&id) else {
             return Err(EvalStatus::UnsupportedConstruct);
         };
+        let mut replaced = None;
         if let Some((_, existing_value)) = properties.iter_mut().find(|(name, _)| name == property)
         {
-            *existing_value = value;
+            if *existing_value != stored {
+                replaced = Some(*existing_value);
+            }
+            *existing_value = stored;
         } else {
-            properties.push((property.to_string(), value));
+            properties.push((property.to_string(), stored));
+        }
+        if let Some(replaced) = replaced {
+            self.runtime_release(replaced)?;
         }
         Ok(())
     }

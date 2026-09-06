@@ -35,7 +35,6 @@ return $box->events;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -90,7 +89,6 @@ return $box->events;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -129,7 +127,6 @@ return $box->events;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -157,7 +154,6 @@ return $box->missing;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -205,7 +201,6 @@ return $box->events;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -245,7 +240,6 @@ return $box->accepts($box);"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -274,7 +268,6 @@ try {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -414,7 +407,6 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
         let program = parse_fragment(source).expect(label);
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
-    values.count_references();
 
         execute_program(&program, &mut scope, &mut values).expect_err(label);
     }
@@ -435,7 +427,6 @@ return class_exists("EvalGoodDebugInfoMagic") && class_exists("EvalGoodSetStateM
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 

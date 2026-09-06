@@ -60,12 +60,7 @@ fn eval_reflection_store_property_value(
 ) -> Result<(), EvalStatus> {
     values.property_set(object, storage_property_name, value)?;
     let identity = values.object_identity(object)?;
-    let stored = values.retain(value)?;
-    if let Some(replaced) =
-        context.set_dynamic_property_value(identity, storage_property_name, stored)
-    {
-        values.release(replaced)?;
-    }
+    eval_store_dynamic_property_value(identity, storage_property_name, value, context, values)?;
     context.mark_dynamic_property_initialized(identity, storage_property_name);
     Ok(())
 }

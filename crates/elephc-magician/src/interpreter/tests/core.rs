@@ -16,7 +16,6 @@ fn execute_program_stores_and_returns_scope_value() {
     let program = parse_fragment(b"$x = 3; return $x + 4;").expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
     let x = scope.visible_cell("x").expect("scope should contain x");
@@ -31,7 +30,6 @@ fn execute_program_reference_assignment_updates_source_variable() {
         .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
     let x = scope.visible_cell("x").expect("scope should contain x");
@@ -51,7 +49,6 @@ fn execute_program_propagates_throw_as_uncaught_outcome() {
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let outcome =
         execute_program_outcome_with_context(&mut context, &program, &mut scope, &mut values)
@@ -80,7 +77,6 @@ fn execute_program_catches_throw_expression_from_match() {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values)
         .expect("catch should handle the throw expression");
@@ -100,7 +96,6 @@ fn execute_program_catches_throwable_inside_eval() {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
     let caught = scope
@@ -123,7 +118,6 @@ fn execute_program_catches_throwable_without_variable_inside_eval() {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
     let released = values
@@ -149,7 +143,6 @@ fn execute_program_catches_specific_exception_inside_eval() {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
     let caught = scope
@@ -178,7 +171,6 @@ try {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
     let caught = scope
@@ -203,7 +195,6 @@ fn execute_program_skips_non_matching_specific_catch_inside_eval() {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -223,7 +214,6 @@ fn execute_program_catches_union_type_inside_eval() {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
     let caught = scope
@@ -246,7 +236,6 @@ fn execute_program_runs_finally_before_returning_try_value() {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -266,7 +255,6 @@ fn execute_program_finally_return_overrides_try_return() {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -286,7 +274,6 @@ fn execute_program_finally_return_overrides_uncaught_throw() {
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
     let released = values
@@ -312,7 +299,6 @@ fn execute_program_runs_finally_before_uncaught_throw_outcome() {
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let outcome =
         execute_program_outcome_with_context(&mut context, &program, &mut scope, &mut values)
@@ -344,7 +330,6 @@ fn execute_context_function_persists_static_local_inside_catch() {
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("declare dynamic function");
     let first_thrown = values
@@ -380,7 +365,6 @@ fn execute_context_function_persists_static_local_inside_finally() {
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("declare dynamic function");
 
@@ -400,7 +384,6 @@ fn execute_context_function_propagates_throw_as_uncaught_outcome() {
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("declare dynamic function");
     let thrown = values
@@ -427,7 +410,6 @@ fn execute_program_nested_eval_propagates_throw_as_uncaught_outcome() {
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     let thrown = values
         .new_object("Exception")
         .expect("allocate fake exception");
@@ -470,7 +452,6 @@ fn execute_program_include_uses_call_site_and_returns_file_result() {
     );
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
     let x = values.int(2).expect("allocate fake int");
     scope.set("x", x, ScopeCellOwnership::Owned);
 
@@ -519,7 +500,6 @@ fn execute_program_reflection_has_method_follows_runtime_include_parent() {
     );
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("execute inherited reflection include fragment");
@@ -546,7 +526,6 @@ fn execute_program_include_once_skips_regularly_included_file() {
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("execute include_once");
@@ -567,7 +546,6 @@ fn execute_program_missing_include_warns_and_returns_false() {
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("missing include returns false");
@@ -598,8 +576,6 @@ return true;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
-    values.count_references();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -620,7 +596,6 @@ fn execute_program_missing_require_is_runtime_fatal() {
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
-    values.count_references();
 
     let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect_err("missing require should fail");
