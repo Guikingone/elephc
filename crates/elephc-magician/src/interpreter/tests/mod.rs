@@ -75,6 +75,7 @@ mod include_reflection;
 mod method_arguments;
 mod native_scope;
 mod nested_increment;
+mod new_class_expressions;
 mod object_cast;
 mod reference_bind_expression;
 mod reflection_property_store;
