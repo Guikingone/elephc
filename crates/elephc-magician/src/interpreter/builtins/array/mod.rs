@@ -39,7 +39,7 @@ mod array_splice;
 mod array_sum;
 mod array_unique;
 mod array_unshift;
-mod array_values;
+pub(in crate::interpreter) mod array_values;
 mod array_walk;
 mod arsort;
 mod asort;

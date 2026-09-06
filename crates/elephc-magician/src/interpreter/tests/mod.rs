@@ -71,6 +71,7 @@ mod element_reference_bind;
 mod enums;
 mod expressions;
 mod foreach_object;
+mod func_args;
 mod functions_namespaces;
 mod generators;
 mod include_line_tracking;

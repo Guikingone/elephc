@@ -210,7 +210,23 @@ fn bind_dynamic_positional_method_arg(
         );
     }
     let param_index = *next_positional;
-    if param_index >= bound_args.len() || bound_args[param_index].is_some() {
+    if param_index >= bound_args.len() {
+        // A SURPLUS positional argument. php accepts it for a user function, method or closure --
+        // it binds to no parameter and is reachable only through `func_get_args()`, which is the
+        // entire reason that function exists. Refusing it here made every variadic-by-convention
+        // call a fatal, and made the argument-introspection trio unreachable even once it was
+        // implemented. A builtin is different: php raises ArgumentCountError there, and that path
+        // does not come through here.
+        *next_positional = param_index
+            .checked_add(1)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        if owned {
+            values.release(value)?;
+        }
+        return Ok(());
+    }
+    if bound_args[param_index].is_some() {
+        // Still a fatal: the same parameter filled twice, positionally and by name.
         return Err(EvalStatus::RuntimeFatal);
     }
     let ref_target = method_parameter_ref_target(

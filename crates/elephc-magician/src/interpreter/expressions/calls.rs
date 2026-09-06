@@ -170,6 +170,11 @@ pub(in crate::interpreter) fn eval_call(
         return eval_builtin_call(name, args, context, scope, values);
     }
 
+    // Answered before the lookup: these are not functions anywhere, in php or here. The compiler
+    // desugars them at compile time, so there is nothing to find in any table.
+    if eval_is_func_args_intrinsic(name) {
+        return eval_func_args_intrinsic(name, args, context, scope, values);
+    }
     if let Some(function) = context.function(name).cloned() {
         return eval_dynamic_function(&function, args, context, scope, values);
     }
