@@ -25,6 +25,7 @@ mod property_hook_analysis;
 mod traits;
 
 use super::cursor::*;
+use super::expressions::is_assignment_target;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
@@ -413,7 +414,14 @@ impl Parser {
     /// Returns true when the current tokens form `++Class::$property` or `--Class::$property`.
     pub(super) fn current_starts_prefixed_static_property_inc_dec(&self) -> bool {
         matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus)
-            && self.static_property_tokens_end(self.pos + 1).is_some()
+            && self
+                .static_property_tokens_end(self.pos + 1)
+                // `++self::$t["s"];` mutates an ELEMENT, not the property, and
+                // `EvalStmt::StaticPropertyIncDec` cannot say so. Declining here sends it to the
+                // general prefix path, which reads the whole lvalue and lowers a
+                // read-modify-write; taking it would consume `self::$t` and then demand a
+                // semicolon it cannot find.
+                .is_some_and(|end| !matches!(self.tokens.get(end), Some(TokenKind::LBracket)))
     }
 
     /// Returns true when the current tokens form `++$class::$property` or `--$class::$property`.
@@ -422,6 +430,8 @@ impl Parser {
             && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::DollarIdent(_)))
             && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::DoubleColon))
             && matches!(self.tokens.get(self.pos + 3), Some(TokenKind::DollarIdent(_)))
+            // Same reason as the literal-class form above: an indexed target is an element write.
+            && !matches!(self.tokens.get(self.pos + 4), Some(TokenKind::LBracket))
     }
 
     /// Returns true when the current tokens form `++$object->property` or `--$object->property`.

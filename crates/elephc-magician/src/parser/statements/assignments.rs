@@ -625,7 +625,39 @@ impl Parser {
         if require_semicolon {
             self.expect_semicolon()?;
         }
-        property_inc_dec_stmt(target, increment).map(|stmt| vec![stmt])
+        self.inc_dec_stmt_for_target(target, increment)
+    }
+
+    /// Lowers one parsed increment/decrement target to a statement.
+    ///
+    /// A PROPERTY target keeps its dedicated statement. Anything else -- `++$a["k"]["c"];` and
+    /// `++$this->m["k"];` write through an array ELEMENT, not through a property -- had no
+    /// statement at all and was refused. The semicolon had already been consumed by then, so the
+    /// diagnostic named the NEXT statement's first token, and because the parser records only
+    /// its FIRST failure position across backtracking the reported line could belong to another
+    /// statement entirely. An element target becomes the same read-modify-write expression
+    /// `parse_prefix_inc_dec_expr` builds, so the statement and expression spellings agree by
+    /// construction rather than by coincidence.
+    fn inc_dec_stmt_for_target(
+        &mut self,
+        target: EvalExpr,
+        increment: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        match property_inc_dec_stmt(target.clone(), increment) {
+            Ok(stmt) => Ok(vec![stmt]),
+            Err(_) if is_assignment_target(&target) => {
+                Ok(vec![EvalStmt::Expr(EvalExpr::CompoundAssign {
+                    target: Box::new(target),
+                    op: if increment {
+                        EvalBinOp::Add
+                    } else {
+                        EvalBinOp::Sub
+                    },
+                    value: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                })])
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Parses postfix `$name++` and `$name--` as simple statement effects.
@@ -654,7 +686,7 @@ impl Parser {
         if require_semicolon {
             self.expect_semicolon()?;
         }
-        property_inc_dec_stmt(target, increment).map(|stmt| vec![stmt])
+        self.inc_dec_stmt_for_target(target, increment)
     }
 
     /// Parses `$object->property` as either an expression statement or property write.
