@@ -280,6 +280,28 @@ pub(crate) fn sync_global_eval_aot_metadata(context: &mut ElephcEvalContext) -> 
     true
 }
 
+/// Imports the module's published AOT metadata into a context that has never received any.
+///
+/// A context allocated before the generated module published its snapshot keeps an empty callable
+/// table for the rest of the request, because the import happens once, at creation. An AOT
+/// `spl_autoload_register()` produces exactly that: the ABI always hands it a null handle, so it
+/// allocates the owner context on the spot, and the module's registration helper usually has not
+/// run yet at that point. The snapshot is a module constant, so a context still holding nothing of
+/// its own can take it later without overwriting anything.
+///
+/// Returns whether the metadata was imported by this call.
+#[cfg(not(test))]
+pub(crate) fn sync_global_eval_aot_metadata_when_empty(context: &mut ElephcEvalContext) -> bool {
+    if !context.native_functions.is_empty()
+        || !context.native_methods.is_empty()
+        || !context.native_static_methods.is_empty()
+        || !context.native_constructors.is_empty()
+    {
+        return false;
+    }
+    sync_global_eval_aot_metadata(context)
+}
+
 /// Returns the process-local eval class registry for generated-code eval contexts.
 #[cfg(not(test))]
 pub(super) fn global_eval_classes() -> &'static Mutex<GlobalEvalClassRegistry> {

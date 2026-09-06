@@ -269,6 +269,11 @@ unsafe fn eval_spl_autoload_class_in_owner(
     let Some(owner) = owner.as_mut() else {
         return Ok(false);
     };
+    // The owner of an AOT-registered callback is allocated by the registration ABI itself, before
+    // the module has published its AOT metadata, so it knows no native signature and cannot supply
+    // the default of a parameter the caller left out. This is the first moment that owner is used,
+    // and the published snapshot is a module constant, so it can be taken now.
+    crate::context::sync_global_eval_aot_metadata_when_empty(owner);
     let mut values = crate::runtime_hooks::ElephcRuntimeOps::with_context(owner as *const _);
     eval_spl_autoload_class_local(class_name, owner, &mut values)
 }
