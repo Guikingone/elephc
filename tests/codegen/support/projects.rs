@@ -817,7 +817,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
 // Routes through `compile_source_to_asm_with_options` so it shares the production
 // EIR backend (and the full frontend, including the preludes) with `compile_and_run`.
 /// Provides the Compile and run in dir helper used by the projects module.
-pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
+pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, TestDirGuard) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -836,5 +836,8 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
         &default_link_paths(),
         &[],
     );
-    (elephc_out, dir)
+    // The guard travels to the caller, which is why this helper cannot use the drop-at-return
+    // shape the other helpers do: the caller inspects the directory after the call. It now goes
+    // away when the CALLER's frame ends, including when an assertion panics first.
+    (elephc_out, TestDirGuard::new(dir))
 }
