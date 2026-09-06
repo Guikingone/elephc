@@ -31,8 +31,10 @@ pub(super) struct ClassBuildState {
     pub(super) prop_types: Vec<(String, PhpType)>,
     pub(super) property_offsets: HashMap<String, usize>,
     pub(super) property_declaring_classes: HashMap<String, String>,
+    pub(super) property_slot_declaring_classes: Vec<String>,
     pub(super) defaults: Vec<Option<Expr>>,
     pub(super) property_visibilities: HashMap<String, Visibility>,
+    pub(super) property_slot_visibilities: Vec<Visibility>,
     pub(super) property_set_visibilities: HashMap<String, Visibility>,
     pub(super) declared_properties: HashSet<String>,
     pub(super) property_declared_slots: Vec<bool>,
@@ -195,8 +197,10 @@ impl ClassBuildState {
             properties: self.prop_types,
             property_offsets: self.property_offsets,
             property_declaring_classes: self.property_declaring_classes,
+            property_slot_declaring_classes: self.property_slot_declaring_classes,
             defaults: self.defaults,
             property_visibilities: self.property_visibilities,
+            property_slot_visibilities: self.property_slot_visibilities,
             property_set_visibilities: self.property_set_visibilities,
             declared_properties: self.declared_properties,
             property_declared_slots: self.property_declared_slots,
@@ -436,6 +440,22 @@ impl ClassBuildState {
                     .get(index)
                     .copied()
                     .unwrap_or_else(|| parent.reference_properties.contains(name)),
+            );
+            self.property_slot_declaring_classes.push(
+                parent
+                    .property_slot_declaring_classes
+                    .get(index)
+                    .cloned()
+                    .or_else(|| parent.property_declaring_classes.get(name).cloned())
+                    .unwrap_or_default(),
+            );
+            self.property_slot_visibilities.push(
+                parent
+                    .property_slot_visibilities
+                    .get(index)
+                    .cloned()
+                    .or_else(|| parent.property_visibilities.get(name).cloned())
+                    .unwrap_or(Visibility::Public),
             );
             if let Some(visibility) = parent.property_visibilities.get(name) {
                 self.property_visibilities

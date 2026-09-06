@@ -174,6 +174,7 @@ pub(super) fn emit_eval_native_function_invoker_inline(
         label: &label,
         sig,
         captures: &captures,
+        date_serialize_finalize: false,
     };
     abi::emit_jump(ctx.emitter, &done_label);
     crate::codegen::runtime_callable_invoker::emit_runtime_callable_invoker_with_exception_boundary(

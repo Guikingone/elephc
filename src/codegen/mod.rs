@@ -346,11 +346,14 @@ fn finalize_user_asm(
     }
     let eval_callable_support_needed =
         eval_bridge && eval_callable_helpers::module_needs_eval_callable_descriptor_support(module);
+    let eval_dynamic_callable_support_needed = eval_bridge
+        && eval_callable_helpers::module_needs_eval_dynamic_callable_descriptor_support(module);
     let eval_callable_support = eval_callable_helpers::emit_eval_callable_descriptor_support(
         module,
         &mut emitter,
         &mut data,
         eval_callable_support_needed,
+        eval_dynamic_callable_support_needed,
     );
     if eval_bridge {
         eval_constructor_helpers::emit_eval_constructor_helpers(

@@ -147,7 +147,7 @@ fn refined_instruction_effects(
 ) -> Effects {
     match instruction.op {
         Op::Call => direct_call_effects(instruction, context).unwrap_or(instruction.effects),
-        Op::MethodCall | Op::NullsafeMethodCall => {
+        Op::MethodCall | Op::MethodCallExact | Op::NullsafeMethodCall => {
             instance_call_effects(function, instruction, context).unwrap_or(instruction.effects)
         }
         Op::PropGet | Op::NullsafePropGet => {

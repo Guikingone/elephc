@@ -57,6 +57,7 @@ pub(super) fn eval_release_value(
 ) -> Result<(), EvalStatus> {
     if let Some(identity) = values.final_object_identity_for_release(value)? {
         eval_dynamic_destructor_for_release(identity, value, context, values)?;
+        context.unregister_closure_object_target(identity);
     }
     values.release(value)
 }

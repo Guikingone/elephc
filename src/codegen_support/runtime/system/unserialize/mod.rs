@@ -59,7 +59,6 @@ pub(crate) fn emit_unserialize(emitter: &mut Emitter) {
     diagnostics::emit_unserialize_object_string_error_helper(emitter);
     diagnostics::emit_unserialize_object_to_string_helper(emitter);
     date_magic_restore::emit(emitter);
-
     match emitter.target.arch {
         Arch::AArch64 => {
             decoder_aarch64::emit_entry(emitter);

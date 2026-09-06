@@ -31,7 +31,7 @@ use std::thread::LocalKey;
 
 use crate::{
     abbreviations, format, timelib_ffi, timezone_identifier_valid, zone_location,
-    zone_transitions,
+    zone_transitions, zone_transitions_in_range,
 };
 
 /// Reads one borrowed UTF-8 string from elephc's pointer-and-length string ABI.
@@ -88,6 +88,11 @@ fn serialize_transitions(name: &str) -> String {
     let Some(rows) = zone_transitions(name) else {
         return String::new();
     };
+    serialize_transition_rows(&rows)
+}
+
+/// Serializes already windowed transition rows for the PHP AST marshaller.
+fn serialize_transition_rows(rows: &[crate::TzTransition]) -> String {
     let mut out = String::new();
     for (i, r) in rows.iter().enumerate() {
         if i > 0 {
@@ -105,6 +110,14 @@ fn serialize_transitions(name: &str) -> String {
         out.push_str(&r.time);
     }
     out
+}
+
+/// Serializes one PHP `getTransitions($begin, $end)` window, including POSIX-footer rows.
+fn serialize_transitions_in_range(name: &str, begin: i64, end: i64) -> String {
+    let Some(rows) = zone_transitions_in_range(name, begin, end) else {
+        return String::new();
+    };
+    serialize_transition_rows(&rows)
 }
 
 /// Serializes a zone's location as `cc\tlat\tlon\tcomments`, or the empty string
@@ -171,37 +184,41 @@ fn abbreviations_cell() -> &'static LocalKey<RefCell<CString>> {
     &CELL
 }
 
-/// Returns the process-wide buffer cell for raw timelib parse results.
-fn parse_cell() -> &'static Mutex<CString> {
-    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(CString::default()))
+/// Returns the calling thread's buffer cell for raw timelib parse results.
+///
+/// Parser exports return a borrowed C string through `stash()`, so this must use
+/// the same thread-local ownership contract as the other serialized ABI values.
+fn parse_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static CELL: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &CELL
 }
 
-/// Returns the process-wide byte buffer for formatted PHP date strings.
-fn format_cell() -> &'static Mutex<Vec<u8>> {
-    static CELL: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(Vec::new()))
+/// Returns the calling thread's byte buffer for formatted PHP date strings.
+fn format_cell() -> &'static LocalKey<RefCell<Vec<u8>>> {
+    thread_local! {
+        static CELL: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    }
+    &CELL
 }
 
 /// Replaces the date-format byte buffer and returns its non-null data pointer.
 fn stash_format(s: Vec<u8>) -> *const u8 {
-    let mut guard = format_cell()
-        .lock()
-        .expect("tz bridge format buffer mutex poisoned");
-    *guard = s;
-    if guard.is_empty() {
-        std::ptr::NonNull::<u8>::dangling().as_ptr()
-    } else {
-        guard.as_ptr()
-    }
+    format_cell().with(|slot| {
+        let mut slot = slot.borrow_mut();
+        *slot = s;
+        if slot.is_empty() {
+            std::ptr::NonNull::<u8>::dangling().as_ptr()
+        } else {
+            slot.as_ptr()
+        }
+    })
 }
 
 /// Returns the byte length of the most recently formatted date payload.
 fn format_length() -> i64 {
-    format_cell()
-        .lock()
-        .expect("tz bridge format buffer mutex poisoned")
-        .len() as i64
+    format_cell().with(|slot| slot.borrow().len() as i64)
 }
 
 /// C ABI: formats a signed Unix timestamp through vendored timelib.
@@ -330,6 +347,20 @@ pub extern "C" fn elephc_tz_gmmktime(
 pub unsafe extern "C" fn elephc_tz_transitions(name: *const c_char) -> *const c_char {
     let name = zone_name(name);
     stash(transitions_cell(), serialize_transitions(&name))
+}
+
+/// C ABI: returns one windowed `getTransitions()` result including POSIX-footer rows.
+///
+/// # Safety
+/// `name` must be a valid NUL-terminated C string, or null.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tz_transitions_range(
+    name: *const c_char,
+    begin: i64,
+    end: i64,
+) -> *const c_char {
+    let name = zone_name(name);
+    stash(transitions_cell(), serialize_transitions_in_range(&name, begin, end))
 }
 
 /// C ABI: returns a zone's `getLocation()` data serialized as
@@ -488,7 +519,7 @@ pub unsafe extern "C" fn elephc_tz_apply_interval(
         microsecond,
         &timezone,
         &payload,
-        subtract != 0,
+        subtract,
     )
     .unwrap_or_default();
     stash(parse_cell(), serialized)

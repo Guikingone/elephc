@@ -25,11 +25,14 @@ $__date = date("x-m-d H:i:s", $this->timestamp);
 $__us = str_pad((string)$this->microsecond, 6, "0", 1);
 $__date = $__date . "." . $__us;
 date_default_timezone_set($__saved);
-return [
-    "date" => $__date,
-    "timezone_type" => DateTime::__elephc_timezone_type($__tz),
-    "timezone" => $__tz,
-];
+$result = ["date" => $__date, "timezone_type" => null];
+if ($this->__elephc_is_localtime) {
+    $result["timezone_type"] = DateTime::__elephc_timezone_type($__tz);
+    $result["timezone"] = $__tz;
+} else {
+    unset($result["timezone_type"]);
+}
+return $result;
 "#;
 
 /// Synthetic-PHP helpers shared by serialization and php-src-compatible object debugging.
@@ -102,16 +105,19 @@ pub(super) fn datetime_debug_dump(class_name: &str) -> ClassMethod {
 $pad = str_repeat(" ", __elephc_var_dump_indent(0));
 $field_pad = $pad . "  ";
 $property_count = __elephc_var_dump_object_property_count($this);
-echo $pad . "object(" . get_class($this) . ")#" . spl_object_id($this) . " (" . ($property_count + 3) . ") {\n";
+$date_property_count = $property_count + 1 + ($this->__elephc_is_localtime ? 2 : 0);
+echo $pad . "object(" . get_class($this) . ")#" . spl_object_id($this) . " (" . $date_property_count . ") {\n";
 __elephc_var_dump_indent(2);
 __elephc_var_dump_object_properties($this);
 __elephc_var_dump_indent(-2);
 echo $field_pad . "[\"date\"]=>\n";
 echo $field_pad; var_dump($this->format("x-m-d H:i:s.u"));
-echo $field_pad . "[\"timezone_type\"]=>\n";
-echo $field_pad; var_dump(DateTime::__elephc_timezone_type($this->timezone_name));
-echo $field_pad . "[\"timezone\"]=>\n";
-echo $field_pad; var_dump($this->timezone_name);
+if ($this->__elephc_is_localtime) {
+    echo $field_pad . "[\"timezone_type\"]=>\n";
+    echo $field_pad; var_dump(DateTime::__elephc_timezone_type($this->timezone_name));
+    echo $field_pad . "[\"timezone\"]=>\n";
+    echo $field_pad; var_dump($this->timezone_name);
+}
 echo $pad . "}\n";
 "#
     .replace("__CLASS__", class_name);
@@ -145,8 +151,10 @@ pub(super) fn datetime_print_r_dump() -> ClassMethod {
 echo get_class($this) . " Object\n(\n";
 __elephc_print_r_object_properties($this);
 echo "    [date] => " . $this->format("x-m-d H:i:s.u") . "\n";
-echo "    [timezone_type] => " . DateTime::__elephc_timezone_type($this->timezone_name) . "\n";
-echo "    [timezone] => " . $this->timezone_name . "\n";
+if ($this->__elephc_is_localtime) {
+    echo "    [timezone_type] => " . DateTime::__elephc_timezone_type($this->timezone_name) . "\n";
+    echo "    [timezone] => " . $this->timezone_name . "\n";
+}
 echo ")\n";
 "#;
     let tokens =
@@ -402,7 +410,26 @@ if ($__timestamp === false) {
 }
 $this->timestamp = $__timestamp;
 $this->timezone_name = $__tz;
+$this->__elephc_is_localtime = true;
 $this->__elephc_initialized = true;
+$data = $this->__elephc_restore_date_properties($data);
+foreach ($data as $__property => $__value) {
+    if (is_string($__property)
+        && strlen($__property) > 3
+        && substr($__property, 0, 3) === "\0*\0"
+    ) {
+        $__property = substr($__property, 3);
+    }
+    if (!is_string($__property)
+        || (strlen($__property) > 0 && $__property[0] === "\0")
+        || in_array($__property, [
+            "date", "timezone_type", "timezone",
+        ], true)
+    ) {
+        continue;
+    }
+    $this->{$__property} = $__value;
+}
 "#;
 
 /// PHP source backing `DateTime::__set_state()` / `DateTimeImmutable::__set_state()`.
@@ -415,13 +442,11 @@ return $__d;
 
 /// PHP source backing `__wakeup()`.
 ///
-/// `__CLASS__` is replaced with the concrete class. Date/time classes except
-/// `DateInterval` reject a direct wakeup as invalid serialization data.
+/// `__CLASS__` is replaced with the concrete class. php-src restores the internal
+/// payload from the object properties populated by legacy serialization.
 pub(super) const DATETIME_WAKEUP_SRC: &str = r#"<?php
 __elephc_diag_warning("Deprecated: Method __CLASS__::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n", 0, E_DEPRECATED);
-if ("__CLASS__" !== "DateInterval") {
-    throw new Error("Invalid serialization data for __CLASS__ object");
-}
+$this->__unserialize(get_object_vars($this));
 "#;
 
 /// Builds `__serialize(): array` for the given date/time class.
@@ -515,7 +540,7 @@ pub(super) fn datetime_set_state(class_name: &str) -> ClassMethod {
     }
 }
 
-/// Builds `__wakeup(): void` for the given date/time class (no-op in elephc).
+/// Builds `__wakeup(): void` by restoring php-src's legacy object-property payload.
 pub(super) fn datetime_wakeup(class_name: &str) -> ClassMethod {
     let src = DATETIME_WAKEUP_SRC.replace("__CLASS__", class_name);
     let tokens = crate::lexer::tokenize(&src)
@@ -622,6 +647,24 @@ if ($__normalized === ""
 }
 $this->name = $__normalized;
 $this->__elephc_initialized = true;
+$data = $this->__elephc_restore_date_properties($data);
+foreach ($data as $__property => $__value) {
+    if (is_string($__property)
+        && strlen($__property) > 3
+        && substr($__property, 0, 3) === "\0*\0"
+    ) {
+        $__property = substr($__property, 3);
+    }
+    if (!is_string($__property)
+        || (strlen($__property) > 0 && $__property[0] === "\0")
+        || in_array($__property, [
+            "timezone_type", "timezone",
+        ], true)
+    ) {
+        continue;
+    }
+    $this->{$__property} = $__value;
+}
 "#;
     let tokens = crate::lexer::tokenize(src).expect("DateTimeZone::__unserialize body source must tokenize");
     let body = crate::parser::parse(&tokens).expect("DateTimeZone::__unserialize body source must parse");
@@ -2127,6 +2170,13 @@ pub(super) fn datetime_backing_properties() -> Vec<ClassProperty> {
             "timezone_name",
             TypeExpr::Str,
             Expr::new(ExprKind::StringLiteral("UTC".to_string()), dummy()),
+        ),
+        // php-src's `timelib_time::is_localtime`: timestamp factories create a GMT value
+        // whose `getTimezone()` returns false, unlike an explicit `+00:00` timezone.
+        private_property(
+            "__elephc_is_localtime",
+            TypeExpr::Bool,
+            Expr::new(ExprKind::BoolLiteral(true), dummy()),
         ),
         // Sub-second component (0..999999) preserved across operations; surfaced by getMicrosecond()
         // and the `u`/`v` format specifiers. elephc otherwise works at libc second resolution.

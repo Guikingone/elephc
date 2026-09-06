@@ -7,7 +7,10 @@
 //! Key details:
 //! - Synthetic callable metadata stays aligned with direct special lowering.
 
-use super::*;
+use super::{
+    array_type, empty_array, BinOp, ClassMethod, Expr, ExprKind, Name, Stmt, StmtKind, TypeExpr,
+    Visibility,
+};
 
 /// Builds a public `__construct` method for a reflection owner class using the
 /// provided parameter list: each tuple is (name, type_expr, default, by_ref).

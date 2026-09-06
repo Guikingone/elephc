@@ -1089,9 +1089,9 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.label_global("__rt_var_dump_value");
 
     emitter.instruction("cmp x0, #11");                                         // inline TaggedScalar property descriptor?
-    emitter.instruction("b.ne __rt_vd_value_input_ready");                     // ordinary tags already use canonical value words
-    emitter.instruction("mov x0, x2");                                         // dispatch using the slot's int/null runtime tag
-    emitter.instruction("mov x2, xzr");                                        // tagged scalar payloads have no third word
+    emitter.instruction("b.ne __rt_vd_value_input_ready");                      // ordinary tags already use canonical value words
+    emitter.instruction("mov x0, x2");                                          // dispatch using the slot's int/null runtime tag
+    emitter.instruction("mov x2, xzr");                                         // tagged scalar payloads have no third word
     emitter.label("__rt_vd_value_input_ready");
 
     // Frame (48 bytes): [0]lo [8]hi [32]x29 [40]x30.
@@ -1103,6 +1103,8 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
 
     emitter.instruction("cmp x0, #7");                                          // boxed Mixed cell?
     emitter.instruction("b.eq __rt_vd_val_mixed");                              // unbox then redispatch
+    emitter.instruction("cmp x0, #10");                                         // Closure descriptor?
+    emitter.instruction("b.eq __rt_vd_val_closure");                            // render the descriptor's Closure debug projection
     emitter.instruction("cmp x0, #0");                                          // tag 0 = int
     emitter.instruction("b.eq __rt_vd_val_int");                                // render the integer line
     emitter.instruction("cmp x0, #1");                                          // tag 1 = string
@@ -1210,6 +1212,11 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_var_dump_value");                              // redispatch the unboxed scalar/container
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
 
+    emitter.label("__rt_vd_val_closure");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Closure descriptor identity
+    emitter.instruction("bl __rt_var_dump_closure");                            // render php-src Closure debug information
+    emitter.instruction("b __rt_vd_val_done");                                  // value rendered
+
     emitter.label("__rt_vd_val_null");
     emitter.instruction("bl __rt_var_dump_emit_null_line");                     // emit `<indent>NULL\n`
 
@@ -1225,10 +1232,10 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: var_dump_value ---");
     emitter.label_global("__rt_var_dump_value");
 
-    emitter.instruction("cmp rdi, 11");                                        // inline TaggedScalar property descriptor?
-    emitter.instruction("jne __rt_vd_value_input_ready_x86");                  // ordinary tags already use canonical value words
-    emitter.instruction("mov rdi, rdx");                                       // dispatch using the slot's int/null runtime tag
-    emitter.instruction("xor edx, edx");                                       // tagged scalar payloads have no third word
+    emitter.instruction("cmp rdi, 11");                                         // inline TaggedScalar property descriptor?
+    emitter.instruction("jne __rt_vd_value_input_ready_x86");                   // ordinary tags already use canonical value words
+    emitter.instruction("mov rdi, rdx");                                        // dispatch using the slot's int/null runtime tag
+    emitter.instruction("xor edx, edx");                                        // tagged scalar payloads have no third word
     emitter.label("__rt_vd_value_input_ready_x86");
 
     // rbp-relative frame: [-8]lo [-16]hi.
@@ -1241,6 +1248,8 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("cmp rax, 7");                                          // boxed Mixed cell?
     emitter.instruction("je __rt_vd_val_mixed_x86");                            // unbox then redispatch
+    emitter.instruction("cmp rax, 10");                                         // Closure descriptor?
+    emitter.instruction("je __rt_vd_val_closure_x86");                          // render the descriptor's Closure debug projection
     emitter.instruction("cmp rax, 0");                                          // tag 0 = int
     emitter.instruction("je __rt_vd_val_int_x86");                              // render the integer line
     emitter.instruction("cmp rax, 1");                                          // tag 1 = string
@@ -1354,6 +1363,11 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rdi");                                        // unboxed lo → value low argument
     emitter.instruction("mov rdi, rax");                                        // unboxed tag → value tag argument
     emitter.instruction("call __rt_var_dump_value");                            // redispatch the unboxed scalar/container
+    emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
+
+    emitter.label("__rt_vd_val_closure_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the Closure descriptor identity
+    emitter.instruction("call __rt_var_dump_closure");                          // render php-src Closure debug information
     emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
 
     emitter.label("__rt_vd_val_null_x86");

@@ -36,7 +36,7 @@ fn decl_extern_elephc_tz_gmmktime() -> Stmt {
         .build()
 }
 
-/// `elephc_tz_format_civil` — returns a raw pointer to the exact byte payload.
+/// `elephc_tz_format_civil` — transcribed from the PHP form.
 fn decl_extern_elephc_tz_format_civil() -> Stmt {
     extern_fn("elephc_tz_format_civil", "elephc_tz")
         .param("timestamp", CType::Int)
@@ -49,7 +49,7 @@ fn decl_extern_elephc_tz_format_civil() -> Stmt {
         .build()
 }
 
-/// `elephc_tz_format_civil_length` — returns the last format payload's byte count.
+/// `elephc_tz_format_civil_length` — transcribed from the PHP form.
 fn decl_extern_elephc_tz_format_civil_length() -> Stmt {
     extern_fn("elephc_tz_format_civil_length", "elephc_tz")
         .returns(CType::Int)
@@ -448,12 +448,34 @@ fn decl_fn_elephc_timelib_period_parse() -> Stmt {
             s_if(
                 e_binop(e_index(e_var("parts"), e_int(0)), BinOp::StrictEq, e_str("P")),
                 vec![
-                    s_return(e_array_assoc(vec![(e_str("status"), e_str("P")), (e_str("has_start"), e_binop(e_call("intval", vec![e_index(e_var("parts"), e_int(1))]), BinOp::StrictNotEq, e_int(0))), (e_str("start"), e_call("intval", vec![e_index(e_var("parts"), e_int(2))])), (e_str("has_end"), e_binop(e_call("intval", vec![e_index(e_var("parts"), e_int(3))]), BinOp::StrictNotEq, e_int(0))), (e_str("end"), e_call("intval", vec![e_index(e_var("parts"), e_int(4))])), (e_str("has_interval"), e_binop(e_call("intval", vec![e_index(e_var("parts"), e_int(5))]), BinOp::StrictNotEq, e_int(0))), (e_str("recurrences"), e_call("intval", vec![e_index(e_var("parts"), e_int(6))])), (e_str("y"), e_call("intval", vec![e_index(e_var("parts"), e_int(7))])), (e_str("m"), e_call("intval", vec![e_index(e_var("parts"), e_int(8))])), (e_str("d"), e_call("intval", vec![e_index(e_var("parts"), e_int(9))])), (e_str("h"), e_call("intval", vec![e_index(e_var("parts"), e_int(10))])), (e_str("i"), e_call("intval", vec![e_index(e_var("parts"), e_int(11))])), (e_str("s"), e_call("intval", vec![e_index(e_var("parts"), e_int(12))])), (e_str("us"), e_call("intval", vec![e_index(e_var("parts"), e_int(13))]))])),
+                    s_return(e_array_assoc(vec![(e_str("status"), e_str("P")), (e_str("has_start"), e_binop(e_call("intval", vec![e_index(e_var("parts"), e_int(1))]), BinOp::StrictNotEq, e_int(0))), (e_str("start"), e_call("intval", vec![e_index(e_var("parts"), e_int(2))])), (e_str("start_localtime"), e_binop(e_call("intval", vec![e_index(e_var("parts"), e_int(3))]), BinOp::StrictNotEq, e_int(0))), (e_str("start_timezone"), e_index(e_var("parts"), e_int(4))), (e_str("has_end"), e_binop(e_call("intval", vec![e_index(e_var("parts"), e_int(5))]), BinOp::StrictNotEq, e_int(0))), (e_str("end"), e_call("intval", vec![e_index(e_var("parts"), e_int(6))])), (e_str("end_localtime"), e_binop(e_call("intval", vec![e_index(e_var("parts"), e_int(7))]), BinOp::StrictNotEq, e_int(0))), (e_str("end_timezone"), e_index(e_var("parts"), e_int(8))), (e_str("has_interval"), e_binop(e_call("intval", vec![e_index(e_var("parts"), e_int(9))]), BinOp::StrictNotEq, e_int(0))), (e_str("recurrences"), e_call("intval", vec![e_index(e_var("parts"), e_int(10))])), (e_str("y"), e_call("intval", vec![e_index(e_var("parts"), e_int(11))])), (e_str("m"), e_call("intval", vec![e_index(e_var("parts"), e_int(12))])), (e_str("d"), e_call("intval", vec![e_index(e_var("parts"), e_int(13))])), (e_str("h"), e_call("intval", vec![e_index(e_var("parts"), e_int(14))])), (e_str("i"), e_call("intval", vec![e_index(e_var("parts"), e_int(15))])), (e_str("s"), e_call("intval", vec![e_index(e_var("parts"), e_int(16))])), (e_str("us"), e_call("intval", vec![e_index(e_var("parts"), e_int(17))]))])),
                 ],
                 vec![],
                 None,
             ),
-            s_return(e_array_assoc(vec![(e_str("status"), e_index(e_var("parts"), e_int(0))), (e_str("has_start"), e_bool(false)), (e_str("start"), e_int(0)), (e_str("has_end"), e_bool(false)), (e_str("end"), e_int(0)), (e_str("has_interval"), e_bool(false)), (e_str("recurrences"), e_int(0)), (e_str("y"), e_int(0)), (e_str("m"), e_int(0)), (e_str("d"), e_int(0)), (e_str("h"), e_int(0)), (e_str("i"), e_int(0)), (e_str("s"), e_int(0)), (e_str("us"), e_int(0))])),
+            s_return(e_array_assoc(vec![(e_str("status"), e_index(e_var("parts"), e_int(0))), (e_str("has_start"), e_bool(false)), (e_str("start"), e_int(0)), (e_str("start_localtime"), e_bool(false)), (e_str("start_timezone"), e_str("")), (e_str("has_end"), e_bool(false)), (e_str("end"), e_int(0)), (e_str("end_localtime"), e_bool(false)), (e_str("end_timezone"), e_str("")), (e_str("has_interval"), e_bool(false)), (e_str("recurrences"), e_int(0)), (e_str("y"), e_int(0)), (e_str("m"), e_int(0)), (e_str("d"), e_int(0)), (e_str("h"), e_int(0)), (e_str("i"), e_int(0)), (e_str("s"), e_int(0)), (e_str("us"), e_int(0))])),
+        ])
+        .build()
+}
+
+/// `__elephc_timelib_period_datetime` — transcribed from the PHP form.
+fn decl_fn_elephc_timelib_period_datetime() -> Stmt {
+    function("__elephc_timelib_period_datetime")
+        .param("timestamp", TypeExpr::Int)
+        .param("localtime", TypeExpr::Bool)
+        .param("timezone", TypeExpr::Str)
+        .returns(t_class("DateTime"))
+        .body_exact(vec![
+            s_assign("result", e_new("DateTime", vec![e_binop(e_str("@"), BinOp::Concat, e_var("timestamp"))])),
+            s_if(
+                e_var("localtime"),
+                vec![
+                    s_expr(e_method_call(e_var("result"), "setTimezone", vec![e_new("DateTimeZone", vec![e_var("timezone")])])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_var("result")),
         ])
         .build()
 }
@@ -469,6 +491,20 @@ fn decl_fn_elephc_timelib_apply_interval() -> Stmt {
         .body_exact(vec![
             s_assign("parts", e_call("explode", vec![e_str("\t"), e_call("elephc_tz_apply_interval", vec![e_var("timestamp"), e_var("microsecond"), e_var("timezone"), e_call("strlen", vec![e_var("timezone")]), e_var("payload"), e_call("strlen", vec![e_var("payload")]), e_ternary(e_var("subtract"), e_int(1), e_int(0))])])),
             s_return(e_array_assoc(vec![(e_str("timestamp"), e_call("intval", vec![e_index(e_var("parts"), e_int(0))])), (e_str("microsecond"), e_call("intval", vec![e_index(e_var("parts"), e_int(1))])), (e_str("warning"), e_binop(e_call("intval", vec![e_index(e_var("parts"), e_int(2))]), BinOp::StrictNotEq, e_int(0)))])),
+        ])
+        .build()
+}
+
+/// `__elephc_timelib_period_advance` — advances DatePeriod through timelib's native civil path.
+fn decl_fn_elephc_timelib_period_advance() -> Stmt {
+    function("__elephc_timelib_period_advance")
+        .param("timestamp", TypeExpr::Int)
+        .param("microsecond", TypeExpr::Int)
+        .param("timezone", TypeExpr::Str)
+        .param("payload", TypeExpr::Str)
+        .body_exact(vec![
+            s_assign("parts", e_call("explode", vec![e_str("\t"), e_call("elephc_tz_apply_interval", vec![e_var("timestamp"), e_var("microsecond"), e_var("timezone"), e_call("strlen", vec![e_var("timezone")]), e_var("payload"), e_call("strlen", vec![e_var("payload")]), e_int(2)])])),
+            s_return(e_array(vec![e_call("intval", vec![e_index(e_var("parts"), e_int(0))]), e_call("intval", vec![e_index(e_var("parts"), e_int(1))])])),
         ])
         .build()
 }
@@ -681,7 +717,9 @@ pub(crate) fn timelib_declarations() -> Program {
             decl_fn_elephc_timelib_interval_parse(),
             decl_fn_elephc_timelib_interval_restore_parse(),
             decl_fn_elephc_timelib_period_parse(),
+            decl_fn_elephc_timelib_period_datetime(),
             decl_fn_elephc_timelib_apply_interval(),
+            decl_fn_elephc_timelib_period_advance(),
             decl_fn_elephc_timelib_modify(),
             decl_fn_elephc_timelib_set_civil(),
             decl_fn_elephc_timelib_set_iso_date(),

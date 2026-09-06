@@ -80,10 +80,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.comment("--- runtime: unser_at (recursive serialize() value parser) ---");
     emitter.label_global("__rt_unser_at");
     // [rbp-8]=base [16]=pos [24]=end [32]=container [40]=count [48]=index [56]=key_lo [64]=key_hi
-    // [rbp-72]=scratch/hook [80]=policy/data hash [88]=registry index [96]=object box
+    // [rbp-72]=scratch/hook [80]=policy/data hash [88]=registry index [96]=object box [104]=R: marker
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 96");                                         // recursive parser frame (with a reference-index slot)
+    emitter.instruction("sub rsp, 112");                                        // recursive parser frame with a date-reference marker slot
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the base pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the current position
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the end position
@@ -460,6 +460,12 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save key_lo
     emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save key_hi
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // advance past the key
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // base for the value-kind probe
+    emitter.instruction("add r10, rcx");                                        // first byte of the serialized value
+    emitter.instruction("xor r11d, r11d");                                      // default: this is not an R: PHP reference
+    emitter.instruction("cmp BYTE PTR [r10], 82");                              // ASCII 'R' denotes a PHP reference, unlike object alias r:
+    emitter.instruction("sete r11b");                                           // retain the wire provenance across recursive parsing
+    emitter.instruction("mov QWORD PTR [rbp - 104], r11");                      // park the R: marker for the date-handler gate
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // base
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // position after the key
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // end
@@ -467,11 +473,25 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // advance past the value
     emitter.instruction("test rax, rax");                                       // did the child decoder reject the value?
     emitter.instruction("jz __rt_unser_obj_data_fail_x");                       // fail without passing a null box to the hash
+    emitter.instruction("xor r8d, r8d");                                        // boxed Mixed entries normally have no high payload word
+    emitter.instruction("cmp QWORD PTR [rbp - 104], 0");                        // did this value originate from R:?
+    emitter.instruction("je __rt_unser_obj_data_store_x");                      // ordinary values enter the user __unserialize array unchanged
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // concrete receiver selects the DateTime-family gate
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // class id
+    crate::codegen_support::abi::emit_symbol_address(
+        emitter,
+        "r11",
+        "_class_date_unserialize_family_flags",
+    );
+    emitter.instruction("cmp QWORD PTR [r11 + r10*8], 0");                      // DateTime family, even when a child overrides magic?
+    emitter.instruction("je __rt_unser_obj_data_store_x");                      // non-date user hooks retain their ordinary wire representation
+    emitter.instruction("mov r8, 1");                                           // preserve R: provenance in the boxed-Mixed hash entry high word
+    emitter.label("__rt_unser_obj_data_store_x");
     emitter.instruction("mov rcx, rax");                                        // value_lo = parsed value box
     emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // $data hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // key_hi (-1 for int keys)
-    emitter.instruction("mov r8, 0");                                           // value_hi unused
+    // r8 carries the DateTime-only R: provenance marker, or zero for an ordinary box.
     emitter.instruction("mov r9, 7");                                           // value tag = boxed Mixed (transfer the box)
     emitter.instruction("call __rt_hash_set");                                  // insert the entry -> rax = (possibly new) hash
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save the updated $data hash pointer
@@ -564,9 +584,6 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_unser_dateinterval_dynamic_done");             // runtime-only callers may have no callback
     emitter.instruction("call r10");                                            // emit the dynamic-property deprecation at the call site
     emitter.label("__rt_unser_dateinterval_dynamic_done");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the concrete object receiver
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // reload the parsed magic data hash
-    emitter.instruction("call __rt_date_magic_restore_props");                  // restore user-declared date-subclass properties
     emitter.instruction("jmp __rt_unser_at_obj_box");                           // box the object (position is at the closing '}')
     emitter.label("__rt_unser_obj_default");
     emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // blocked objects own an opaque Mixed property hash

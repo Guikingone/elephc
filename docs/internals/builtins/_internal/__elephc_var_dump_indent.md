@@ -2,7 +2,7 @@
 title: "__elephc_var_dump_indent() — internals"
 description: "Compiler internals for __elephc_var_dump_indent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 565
+  order: 642
 ---
 
 ## `__elephc_var_dump_indent()` — internals

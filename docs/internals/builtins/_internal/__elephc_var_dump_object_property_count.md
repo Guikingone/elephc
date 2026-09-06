@@ -2,7 +2,7 @@
 title: "__elephc_var_dump_object_property_count() — internals"
 description: "Compiler internals for __elephc_var_dump_object_property_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 567
+  order: 644
 ---
 
 ## `__elephc_var_dump_object_property_count()` — internals

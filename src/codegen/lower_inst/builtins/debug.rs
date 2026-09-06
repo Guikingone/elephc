@@ -604,10 +604,10 @@ fn datetime_internal_method_implementation(
 ) -> Option<String> {
     let normalized = class_name.trim_start_matches('\\');
     let mut current = Some(normalized);
-    let mut is_date_family = false;
+    let mut date_base = None;
     while let Some(candidate) = current {
         if matches_datetime_debug_class(candidate) {
-            is_date_family = true;
+            date_base = Some(candidate.to_string());
             break;
         }
         current = module
@@ -615,9 +615,7 @@ fn datetime_internal_method_implementation(
             .get(candidate)
             .and_then(|class_info| class_info.parent.as_deref());
     }
-    if !is_date_family {
-        return None;
-    }
+    let date_base = date_base?;
     let class_info = module.class_infos.get(normalized)?;
     let method_key = php_symbol_key(method_name);
     let implementation = class_info
@@ -625,8 +623,10 @@ fn datetime_internal_method_implementation(
         .get(&method_key)
         .cloned()
         .unwrap_or_else(|| normalized.to_string());
-    module_has_datetime_internal_method(module, &implementation, method_name)
-        .then_some(implementation)
+    if module_has_datetime_internal_method(module, &implementation, method_name) {
+        return Some(implementation);
+    }
+    module_has_datetime_internal_method(module, &date_base, method_name).then_some(date_base)
 }
 
 /// Returns whether EIR lowering materialized one compiler-only date/time renderer.
@@ -717,6 +717,19 @@ fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Res
         }
         PhpType::Object(_) => {
             emit_print_r_object(ctx);
+            Ok(())
+        }
+        PhpType::Callable => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x1, #0");                    // top-level Closure print_r starts at base indent zero
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the callable descriptor in the Closure print_r helper's SysV argument register
+                    ctx.emitter.instruction("mov esi, 0");                    // top-level Closure print_r starts at base indent zero
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_print_r_closure");
             Ok(())
         }
         PhpType::Mixed | PhpType::Union(_) => {

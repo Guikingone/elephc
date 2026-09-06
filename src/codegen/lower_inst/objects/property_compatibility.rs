@@ -75,6 +75,9 @@ pub(super) fn ensure_property_value_supported(
     if can_coerce_mixed_to_scalar_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_unbox_mixed_to_array_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     if property_values::can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
         return Ok(());
     }
@@ -96,6 +99,16 @@ pub(super) fn can_store_object_for_object_property(
 ) -> bool {
     let value_ty = value_ty.codegen_repr();
     let slot_ty = slot_ty.codegen_repr();
+    if matches!(value_ty, PhpType::Callable)
+        && matches!(
+            &slot_ty,
+            PhpType::Object(name)
+                if name.trim_start_matches('\\').is_empty()
+                    || name.trim_start_matches('\\').eq_ignore_ascii_case("Closure")
+        )
+    {
+        return true;
+    }
     let (PhpType::Object(value_name), PhpType::Object(slot_name)) = (&value_ty, &slot_ty) else {
         return false;
     };
@@ -213,6 +226,12 @@ pub(super) fn can_coerce_mixed_to_scalar_property(value_ty: &PhpType, slot_ty: &
             slot_ty.codegen_repr(),
             PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
         )
+}
+
+/// Returns true when a boxed runtime value can supply a refcounted PHP array property slot.
+pub(super) fn can_unbox_mixed_to_array_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(slot_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
 /// Returns true when a value can materialize nullable-int tagged-scalar property storage.

@@ -74,6 +74,31 @@ _Static_assert(offsetof(timelib_tzinfo, location) == 128, "timelib_tzinfo.locati
 _Static_assert(offsetof(timelib_tzinfo, posix_string) == 160, "timelib_tzinfo.posix_string");
 _Static_assert(offsetof(timelib_tzinfo, posix_info) == 168, "timelib_tzinfo.posix_info");
 
+_Static_assert(_Alignof(timelib_posix_str) == 8, "timelib_posix_str alignment");
+_Static_assert(sizeof(timelib_posix_str) == 56, "timelib_posix_str size");
+_Static_assert(offsetof(timelib_posix_str, std) == 0, "timelib_posix_str.std");
+_Static_assert(offsetof(timelib_posix_str, std_offset) == 8, "timelib_posix_str.std_offset");
+_Static_assert(offsetof(timelib_posix_str, dst) == 16, "timelib_posix_str.dst");
+_Static_assert(offsetof(timelib_posix_str, dst_offset) == 24, "timelib_posix_str.dst_offset");
+_Static_assert(offsetof(timelib_posix_str, dst_begin) == 32, "timelib_posix_str.dst_begin");
+_Static_assert(offsetof(timelib_posix_str, dst_end) == 40, "timelib_posix_str.dst_end");
+_Static_assert(offsetof(timelib_posix_str, type_index_std_type) == 48, "timelib_posix_str.type_index_std_type");
+_Static_assert(offsetof(timelib_posix_str, type_index_dst_type) == 52, "timelib_posix_str.type_index_dst_type");
+
+_Static_assert(_Alignof(timelib_posix_transitions) == 8, "timelib_posix_transitions alignment");
+_Static_assert(sizeof(timelib_posix_transitions) == 104, "timelib_posix_transitions size");
+_Static_assert(offsetof(timelib_posix_transitions, count) == 0, "timelib_posix_transitions.count");
+_Static_assert(offsetof(timelib_posix_transitions, times) == 8, "timelib_posix_transitions.times");
+_Static_assert(offsetof(timelib_posix_transitions, types) == 56, "timelib_posix_transitions.types");
+
+_Static_assert(_Alignof(timelib_time_offset) == 8, "timelib_time_offset alignment");
+_Static_assert(sizeof(timelib_time_offset) == 32, "timelib_time_offset size");
+_Static_assert(offsetof(timelib_time_offset, offset) == 0, "timelib_time_offset.offset");
+_Static_assert(offsetof(timelib_time_offset, leap_secs) == 4, "timelib_time_offset.leap_secs");
+_Static_assert(offsetof(timelib_time_offset, is_dst) == 8, "timelib_time_offset.is_dst");
+_Static_assert(offsetof(timelib_time_offset, abbr) == 16, "timelib_time_offset.abbr");
+_Static_assert(offsetof(timelib_time_offset, transition_time) == 24, "timelib_time_offset.transition_time");
+
 _Static_assert(_Alignof(timelib_time) == 8, "timelib_time alignment");
 _Static_assert(sizeof(timelib_time) == 240, "timelib_time size");
 _Static_assert(offsetof(timelib_time, y) == 0, "timelib_time.y");

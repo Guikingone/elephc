@@ -29,7 +29,7 @@
 //!   construction and one that holds by luck. Use `internal_declarations` to get it.
 //! - Unused PARAMETERS are consumed by a synthesized `$_unused = …;` statement. The `$_`
 //!   prefix is what exempts a name from the unused-variable warning, and an unconditionally
-//!   injected prelude warns on EVERY compile — `<?php echo "hi";` included — for each
+//!   injected prelude warns on EVERY compile — even a trivial PHP `echo "hi"` program — for each
 //!   parameter no body reads. Which parameters those are is DERIVED by scanning the built
 //!   body rather than declared by hand, so the hazard is removed rather than transcribed.
 //!   Parameters are NOT renamed to `$_name`: PHP named arguments make a parameter's name part
@@ -1393,7 +1393,6 @@ fn consume_unread_params(
 // ---------------------------------------------------------------------------
 
 /// Shared parameter/return/body state for methods and free functions.
-#[derive(Default)]
 struct Signature {
     params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
     /// The variadic tail (`mixed ...$args`) — its name and its declared element type.
@@ -1407,6 +1406,13 @@ struct Signature {
     /// that left a parameter unread (`mysqli::store_result(int $mode = 0)`), which a
     /// parse-parity oracle then requires the built node to match statement for statement.
     keep_unread_params: bool,
+}
+
+impl Default for Signature {
+    /// Creates the empty callable shape used before a builder adds parameters or a body.
+    fn default() -> Self {
+        Self { params: Vec::new(), variadic: None, return_type: None, body: Vec::new() }
+    }
 }
 
 impl Signature {

@@ -303,6 +303,18 @@ impl EvalClassMethod {
         &self.parameter_is_variadic
     }
 
+    /// Returns PHP's last-required positional count for this method signature.
+    pub fn required_num_args(&self) -> usize {
+        let fixed_count = self
+            .parameter_is_variadic
+            .iter()
+            .position(|is_variadic| *is_variadic)
+            .unwrap_or(self.params.len());
+        (0..fixed_count)
+            .rfind(|index| !self.parameter_defaults.get(*index).is_some_and(Option::is_some))
+            .map_or(0, |index| index + 1)
+    }
+
     /// Returns retained return type metadata, if the method declared one.
     pub const fn return_type(&self) -> Option<&EvalParameterType> {
         self.return_type.as_ref()

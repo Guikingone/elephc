@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use crate::ir::{RuntimeCallTarget, RuntimeFnId};
 
 /// Lowers a static method call.
 pub(super) fn lower_static_method_call(
@@ -17,6 +18,16 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if static_syntax_uses_late_bound_instance_receiver(ctx, receiver, method) {
+        return super::method_calls::lower_method_call(
+            ctx,
+            &Expr::new(ExprKind::This, expr.span),
+            method,
+            args,
+            Op::MethodCall,
+            expr,
+        );
+    }
     // `Closure::bind($closure, $newThis [, $scope])` — static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
         if name.trim_start_matches('\\') == "Closure"
@@ -114,14 +125,40 @@ pub(super) fn lower_static_method_call(
         }
         _ => result_type,
     };
-    let call = ctx.emit_value(
+    // The ext/date magic bodies physically return a string-keyed hash even though PHP exposes
+    // `array`. Keep that concrete representation until the caller's declared return boundary
+    // performs the ownership-preserving Hash -> Array reinterpretation.
+    let native_date_serialize =
+        is_native_date_static_syntax_serialize_call(ctx, receiver, dispatch_method);
+    let result_type = if native_date_serialize {
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        }
+    } else {
+        result_type
+    };
+    let mut call = ctx.emit_value(
         Op::StaticMethodCall,
         operands.clone(),
         Some(Immediate::Data(data)),
-        result_type,
+        result_type.clone(),
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     );
+    if native_date_serialize {
+        let receiver = lower_expr(ctx, &Expr::new(ExprKind::This, expr.span));
+        call = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![call.value, receiver.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::DateMagicAppendPropertiesForced,
+            ))),
+            result_type.clone(),
+            RuntimeFnId::DateMagicAppendPropertiesForced.effects(),
+            Some(expr.span),
+        );
+    }
     let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
     release_owned_call_arg_temporaries_with_signature(
         ctx,
@@ -132,6 +169,37 @@ pub(super) fn lower_static_method_call(
         expr.span,
     );
     call
+}
+
+/// Returns whether compatible static syntax executes one ext/date `__serialize()` body.
+///
+/// A child override may deliberately delegate through `parent::`, `self::`, or a compatible
+/// named receiver. php-src still calls `add_common_properties()` for the concrete object even
+/// though the child's effective magic implementation is user code.
+fn is_native_date_static_syntax_serialize_call(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> bool {
+    if php_symbol_key(method) != "__serialize" {
+        return false;
+    }
+    let Some(target_class) = crate::types::static_syntax_instance_receiver_class(
+        &ctx.classes,
+        ctx.current_class.as_deref(),
+        receiver,
+    ) else {
+        return false;
+    };
+    ctx.classes
+        .get(&target_class)
+        .and_then(|info| info.method_impl_classes.get("__serialize"))
+        .is_some_and(|owner| {
+            matches!(
+                owner.trim_start_matches('\\'),
+                "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+            )
+        })
 }
 
 /// Returns whether name resolution rewrote the procedural DateInterval parser call.
@@ -455,18 +523,49 @@ pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
     }
 }
 
-/// Returns the instance-method signature used by `self::method()` or `parent::method()`.
+/// Returns the instance-method signature used by compatible static-call syntax.
 pub(super) fn lexical_instance_static_call_signature<'a>(
     ctx: &'a LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     method: &str,
 ) -> Option<&'a FunctionSig> {
-    if !matches!(receiver, StaticReceiver::Self_ | StaticReceiver::Parent) {
-        return None;
-    }
-    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let class_name = if crate::types::static_syntax_uses_late_bound_instance_receiver(
+        ctx.current_class.as_deref(),
+        receiver,
+    ) {
+        ctx.current_class.clone()?
+    } else {
+        crate::types::static_syntax_instance_receiver_class(
+            &ctx.classes,
+            ctx.current_class.as_deref(),
+            receiver,
+        )?
+    };
     let key = php_symbol_key(method);
     class_method_signature(ctx, &class_name, &key)
+}
+
+/// Returns whether `static::method()` must route through normal late-bound instance dispatch.
+fn static_syntax_uses_late_bound_instance_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> bool {
+    if !crate::types::static_syntax_uses_late_bound_instance_receiver(
+        ctx.current_class.as_deref(),
+        receiver,
+    ) {
+        return false;
+    }
+    let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
+        return false;
+    };
+    let method_key = php_symbol_key(method);
+    let Some(class_info) = ctx.classes.get(&class_name) else {
+        return false;
+    };
+    !class_info.static_methods.contains_key(&method_key)
+        && class_info.methods.contains_key(&method_key)
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.

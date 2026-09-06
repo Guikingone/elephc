@@ -996,6 +996,9 @@ fn inject_error_reporting_ini(
 }
 
 #[cfg(test)]
+mod datetime_ast_boundary;
+
+#[cfg(test)]
 mod tests {
     use super::{error_reporting_ini_value, float_precision_from_ini};
     use crate::php_version::PhpVersion;
@@ -1003,54 +1006,7 @@ mod tests {
     /// Verifies compiler-synthesized DateTime support stays direct-AST and never reparses PHP.
     #[test]
     fn datetime_production_ast_builders_do_not_parse_embedded_php() {
-        let sources = [
-            (
-                "pipeline.rs",
-                include_str!("pipeline.rs")
-                    .split("#[cfg(test)]")
-                    .next()
-                    .expect("pipeline production prefix"),
-            ),
-            (
-                "containers.rs",
-                include_str!("types/checker/builtin_spl_classes/containers.rs"),
-            ),
-            (
-                "reflection/owner_helpers.rs",
-                include_str!("types/checker/builtin_types/reflection/owner_helpers.rs"),
-            ),
-            (
-                "date_period.rs",
-                include_str!("types/checker/builtin_types/date_period.rs"),
-            ),
-        ];
-        for (name, source) in sources {
-            for forbidden in ["<?php", "lexer::tokenize", "parser::parse"] {
-                assert!(
-                    !source.contains(forbidden),
-                    "{name} embeds or parses PHP production source through `{forbidden}`"
-                );
-            }
-        }
-        let datetime_facade = include_str!("types/checker/builtin_types/datetime.rs");
-        assert!(
-            datetime_facade.contains(
-                "pub(crate) use generated_injection::{inject_builtin_date_period, inject_builtin_datetime};"
-            ),
-            "DatePeriod production injection must use generated direct AST"
-        );
-        let date_period_facade = include_str!("types/checker/builtin_types/date_period.rs");
-        for oracle in ["bodies", "compliance_core"] {
-            let gated_module = format!("#[cfg(test)]\nmod {oracle};");
-            assert!(
-                date_period_facade.contains(&gated_module),
-                "DatePeriod parser oracle `{oracle}` must remain test-only"
-            );
-        }
-        assert!(
-            date_period_facade.contains("#[cfg(test)]\npub(super) mod compliance_state;"),
-            "DatePeriod state oracle must remain test-only and visible to the generator"
-        );
+        super::datetime_ast_boundary::assert_direct_ast_production_boundary();
     }
 
     /// Verifies the last valid precision override controls ordinary float rendering.

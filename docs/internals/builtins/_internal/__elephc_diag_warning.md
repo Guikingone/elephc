@@ -2,7 +2,7 @@
 title: "__elephc_diag_warning() — internals"
 description: "Compiler internals for __elephc_diag_warning(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 525
+  order: 602
 ---
 
 ## `__elephc_diag_warning()` — internals

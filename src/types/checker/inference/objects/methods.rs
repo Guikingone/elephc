@@ -283,6 +283,9 @@ impl Checker {
             .get(interface_name)
             .and_then(|interface_info| interface_info.methods.get(&method_key))
             .cloned()
+            .or_else(|| crate::types::date_method_dispatch::concrete_date_interface_method(
+                &self.classes, interface_name, &method_key,
+            ))
             .ok_or_else(|| {
                 CompileError::new(
                     expr.span,
@@ -391,6 +394,7 @@ impl Checker {
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_access_pdo_prelude_internal_method(class_name, &method_key)
                         && !self.can_access_mysqli_prelude_internal_method(class_name, &method_key)
+                        && !self.can_access_generated_internal_method(&method_key, expr.span)
                     {
                         // PHP raises this as a catchable `Error` at runtime instead of a
                         // compile-time rejection. Record the throw site so EIR lowering
@@ -853,7 +857,21 @@ impl Checker {
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
         let parent_call = matches!(receiver, StaticReceiver::Parent);
-        let self_call = matches!(receiver, StaticReceiver::Self_);
+        let lexical_instance_receiver = (!self.current_method_is_static)
+            .then(|| {
+                crate::types::static_syntax_instance_receiver_class(
+                    &self.classes,
+                    self.current_class.as_deref(),
+                    receiver,
+                )
+            })
+            .flatten();
+        let late_bound_instance_call = !self.current_method_is_static
+            && crate::types::static_syntax_uses_late_bound_instance_receiver(
+                self.current_class.as_deref(),
+                receiver,
+            );
+        let lexical_instance_call = lexical_instance_receiver.is_some() || late_bound_instance_call;
         let resolved_class_name = match receiver {
             StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
             StaticReceiver::Self_ => self.current_class.as_ref().cloned().ok_or_else(|| {
@@ -920,7 +938,7 @@ impl Checker {
                 )
             })
             .transpose()?;
-        let late_static_instance_return_type = if parent_call || self_call {
+        let late_static_instance_return_type = if lexical_instance_call {
             self.instance_method_late_static_return(class_name, &method_key)
                 .map(|return_type| {
                     self.resolve_late_static_return_type_hint(
@@ -962,6 +980,7 @@ impl Checker {
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_access_pdo_exception_internal_factory(class_name, method)
                         && !self.can_access_mysqli_prelude_internal_factory(class_name, method)
+                        && !self.can_access_generated_internal_method(&method_key, expr.span)
                     {
                         return Err(CompileError::new(
                             expr.span,
@@ -1032,17 +1051,7 @@ impl Checker {
                     )
                     .map_err(&map_date_period_constructor_error)?;
                 }
-            } else if parent_call || self_call {
-                if self.current_method_is_static {
-                    return Err(CompileError::new(
-                        expr.span,
-                        if parent_call {
-                            "Cannot call parent instance method from a static method"
-                        } else {
-                            "Cannot call self instance method from a static method"
-                        },
-                    ));
-                }
+            } else if lexical_instance_call {
                 let sig = class_info.methods.get(&method_key).ok_or_else(|| {
                     CompileError::new(
                         expr.span,
@@ -1055,7 +1064,9 @@ impl Checker {
                         .get(&method_key)
                         .map(String::as_str)
                         .unwrap_or(class_name);
-                    if !self.can_access_member(declaring_class, visibility) {
+                    if !self.can_access_member(declaring_class, visibility)
+                        && !self.can_access_generated_internal_method(&method_key, expr.span)
+                    {
                         return Err(CompileError::new(
                             expr.span,
                             &format!(
@@ -1083,12 +1094,7 @@ impl Checker {
                     &effective_sig,
                     args,
                     expr.span,
-                    &format!(
-                        "{} method {}::{}",
-                        if parent_call { "Parent" } else { "Self" },
-                        class_name,
-                        method
-                    ),
+                    &format!("Instance method {}::{}", class_name, method),
                     env,
                 )?;
                 if allow_by_ref_spread {
@@ -1097,12 +1103,7 @@ impl Checker {
                         &normalized_args,
                         expr.span,
                         env,
-                        &format!(
-                            "{} method {}::{}",
-                            if parent_call { "Parent" } else { "Self" },
-                            class_name,
-                            method
-                        ),
+                        &format!("Instance method {}::{}", class_name, method),
                         class_name,
                     )?;
                 } else {
@@ -1111,12 +1112,7 @@ impl Checker {
                         &normalized_args,
                         expr.span,
                         env,
-                        &format!(
-                            "{} method {}::{}",
-                            if parent_call { "Parent" } else { "Self" },
-                            class_name,
-                            method
-                        ),
+                        &format!("Instance method {}::{}", class_name, method),
                         class_name,
                     )?;
                 }
@@ -1194,7 +1190,7 @@ impl Checker {
             arg_types.push(self.infer_type(arg, env)?);
         }
 
-        let direct_impl_class_name = if parent_call || self_call {
+        let direct_impl_class_name = if lexical_instance_call {
             self.classes
                 .get(class_name)
                 .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
@@ -1286,7 +1282,7 @@ impl Checker {
                     .unwrap_or_else(|| sig.return_type.clone()));
             }
         }
-        if parent_call || self_call {
+        if lexical_instance_call {
             let instance_declared_flags = self
                 .classes
                 .get(&direct_impl_class_name)
@@ -1313,8 +1309,8 @@ impl Checker {
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
                         // Sharpen a declared generic `array` parameter to the call-site array
-                        // shape on `parent::`/`self::` instance dispatch, matching free-function
-                        // specialization (issue #406).
+                        // shape on compatible static-syntax instance dispatch, matching
+                        // free-function specialization (issue #406).
                         sig.params[i].1 =
                             Self::specialize_generic_array_param_hint(&sig.params[i].1, arg_ty);
                     }
@@ -1436,6 +1432,21 @@ impl Checker {
                 .as_deref()
                 .is_some_and(|name| php_symbol_key(name) == "mysqli_stmt_bind_param");
         pending_probe || bind_values
+    }
+
+    /// Allows only compiler-generated declarations to call private implementation helpers.
+    ///
+    /// Synthetic DateTime declarations use these helpers across the five internal
+    /// classes, but user PHP must observe the helpers as non-public implementation
+    /// detail just like ext/date's native methods.
+    fn can_access_generated_internal_method(
+        &self,
+        method_key: &str,
+        span: crate::span::Span,
+    ) -> bool {
+        method_key.starts_with("__elephc_")
+            && (crate::strict_php::source_mode() == crate::source::SourceMode::Internal
+                || span == crate::span::Span::dummy())
     }
 }
 

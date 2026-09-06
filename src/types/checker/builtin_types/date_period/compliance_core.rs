@@ -12,6 +12,7 @@ use super::{
     BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, FlattenedClass,
     HashMap, Name, PropertyHooks, StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
 };
+use crate::synthetic_class::{e_call, e_instance_of, e_new, e_static_call, e_str, s_throw};
 
 pub(super) fn dummy() -> crate::span::Span {
     crate::span::Span::dummy()
@@ -188,6 +189,26 @@ pub(super) fn bool_property(name: &str) -> ClassProperty {
         by_ref: false,
         is_promoted: false,
         default: Some(Expr::new(ExprKind::BoolLiteral(false), dummy())),
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds a private string storage property with its supplied default value.
+pub(super) fn string_property(name: &str, default: &str) -> ClassProperty {
+    ClassProperty {
+        name: name.to_string(),
+        visibility: Visibility::Private,
+        set_visibility: None,
+        type_expr: Some(TypeExpr::Str),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: Some(Expr::new(ExprKind::StringLiteral(default.to_string()), dummy())),
         span: dummy(),
         attributes: Vec::new(),
     }
@@ -399,6 +420,7 @@ if ($__elephc_uses_recurrence_end) {
         ),
     );
     body.extend(vec![
+        assign_this("startClass", e_call("get_class", vec![var("start")])),
         assign_this(
             "startTs",
             mcall(
@@ -536,7 +558,7 @@ if ($__elephc_uses_recurrence_end) {
 pub(super) fn date_period_initialize_end_components() -> ClassMethod {
     date_period_factory_initializer(
         "__elephc_initialize_end_components",
-        TypeExpr::Int,
+        TypeExpr::Named(Name::unqualified("DateTimeInterface")),
         false,
     )
 }
@@ -572,7 +594,7 @@ fn date_period_factory_initializer(
     } else {
         int_lit(0)
     };
-    let mut setup = vec![
+    let setup = vec![
         Stmt::new(
             StmtKind::Assign {
                 name: "__elephc_uses_recurrence_end".to_string(),
@@ -588,30 +610,9 @@ fn date_period_factory_initializer(
             dummy(),
         ),
     ];
-    if !uses_recurrence_count {
-        setup.push(Stmt::new(
-            StmtKind::Assign {
-                name: "end".to_string(),
-                value: Expr::new(
-                    ExprKind::StaticMethodCall {
-                        receiver: StaticReceiver::Named(Name::unqualified(
-                            "DateTimeImmutable",
-                        )),
-                        method: "createFromTimestamp".to_string(),
-                        args: vec![var("endTimestamp")],
-                    },
-                    dummy(),
-                ),
-            },
-            dummy(),
-        ));
-    }
     result.body.splice(1..storage_start, setup);
     result.name = name.to_string();
     result.params[2].1 = Some(end_type);
-    if !uses_recurrence_count {
-        result.params[2].0 = "endTimestamp".to_string();
-    }
     result.is_final = true;
     result
 }
@@ -652,6 +653,7 @@ pub(super) fn date_period_clone_datetime_interface_storage() -> ClassMethod {
 if ($value instanceof DateTimeImmutable) {
     return $value->__elephc_clone_for_period_storage();
 }
+
 if ($value instanceof DateTime) {
     return $value->__elephc_clone_for_period_storage();
 }
@@ -674,6 +676,96 @@ throw new DateMalformedPeriodStringException("Invalid DatePeriod boundary");
     )
 }
 
+/// Exports the native DateTime-family state without invoking overridable PHP methods.
+pub(super) fn date_period_datetime_state() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(
+        r#"<?php
+if ($value instanceof DateTime) {
+    return DateTime::__elephc_export_state($value);
+}
+if ($value instanceof DateTimeImmutable) {
+    return DateTimeImmutable::__elephc_export_state($value);
+}
+throw new DateObjectError("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor");
+"#,
+    )
+    .expect("DatePeriod DateTime state export helper must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DatePeriod DateTime state export helper must parse");
+    method_vis(
+        "__elephc_datetime_state",
+        Visibility::Private,
+        vec![param(
+            "value",
+            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            None,
+        )],
+        Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        body,
+    )
+}
+
+/// Instantiates `class_name` and imports a stored DateTime state without magic dispatch.
+pub(super) fn date_period_rehydrate_datetime() -> ClassMethod {
+    method_vis(
+        "__elephc_rehydrate_datetime",
+        Visibility::Private,
+        vec![
+            param("className", Some(TypeExpr::Str), None),
+            param(
+                "source",
+                Some(TypeExpr::Named(Name::unqualified("mixed"))),
+                None,
+            ),
+            param(
+                "state",
+                Some(TypeExpr::Named(Name::unqualified("mixed"))),
+                None,
+            ),
+        ],
+        Some(TypeExpr::Named(Name::unqualified("DateTimeInterface"))),
+        vec![
+            Stmt::assign(
+                "result",
+                e_call(
+                    "__elephc_new_instance_without_constructor",
+                    vec![var("className")],
+                ),
+            ),
+            if_else(
+                e_instance_of(var("result"), "DateTime"),
+                vec![
+                    expr_stmt(e_static_call(
+                        "DateTime",
+                        "__elephc_import_state",
+                        vec![var("result"), var("state")],
+                    )),
+                    ret(var("result")),
+                ],
+                None,
+            ),
+            if_else(
+                e_instance_of(var("result"), "DateTimeImmutable"),
+                vec![
+                    expr_stmt(e_static_call(
+                        "DateTimeImmutable",
+                        "__elephc_import_state",
+                        vec![var("result"), var("state")],
+                    )),
+                    ret(var("result")),
+                ],
+                None,
+            ),
+            s_throw(e_new(
+                "DateObjectError",
+                vec![e_str(
+                    "Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor",
+                )],
+            )),
+        ],
+    )
+}
+
 /// Returns the two concrete implementation families allowed by DateTimeInterface.
 pub(super) fn date_period_datetime_implementation_type() -> TypeExpr {
     TypeExpr::Union(vec![
@@ -691,10 +783,12 @@ pub(super) fn date_period_clone_iterator_value() -> ClassMethod {
     let tokens = crate::lexer::tokenize(
         r#"<?php
 if ($value instanceof DateTimeImmutable) {
-    return DateTimeImmutable::createFromInterface($value);
+    $state = $this->__elephc_datetime_state($value);
+    return $this->__elephc_rehydrate_datetime("DateTimeImmutable", $value, $state);
 }
 if ($value instanceof DateTime) {
-    return DateTime::createFromInterface($value);
+    $state = $this->__elephc_datetime_state($value);
+    return $this->__elephc_rehydrate_datetime("DateTime", $value, $state);
 }
 throw new DateObjectError("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor");
 "#,
@@ -725,7 +819,7 @@ if ($value instanceof DateTimeImmutable) {
             "Object of type DateTimeInterface has not been correctly initialized by calling parent::__construct() in its constructor"
         );
     }
-    return $value->getTimestamp();
+    return DateTimeImmutable::__elephc_timestamp_of($value);
 }
 if ($value instanceof DateTime) {
     if (!$value->__elephc_is_initialized()) {
@@ -733,8 +827,9 @@ if ($value instanceof DateTime) {
             "Object of type DateTimeInterface has not been correctly initialized by calling parent::__construct() in its constructor"
         );
     }
-    return $value->getTimestamp();
+    return DateTime::__elephc_timestamp_of($value);
 }
+
 throw new TypeError(
     "DatePeriod::__construct() accepts (DateTimeInterface, DateInterval, int [, int]), or (DateTimeInterface, DateInterval, DateTime [, int]), or (string [, int]) as arguments"
 );
@@ -756,9 +851,42 @@ throw new TypeError(
     )
 }
 
-/// Builds the typed dispatch boundary used to advance mutable and immutable cursors.
-pub(super) fn date_period_add_interval() -> ClassMethod {
+/// Builds the non-overridable microsecond boundary used by DatePeriod validity checks.
+pub(super) fn date_period_datetime_interface_microsecond() -> ClassMethod {
     let tokens = crate::lexer::tokenize(
+        r#"<?php
+if ($value instanceof DateTimeImmutable) { return DateTimeImmutable::__elephc_microsecond_of($value); }
+if ($value instanceof DateTime) { return DateTime::__elephc_microsecond_of($value); }
+throw new DateObjectError("Object of type DateTimeInterface has not been correctly initialized by calling parent::__construct() in its constructor");
+"#,
+    )
+    .expect("DatePeriod DateTimeInterface microsecond helper must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DatePeriod DateTimeInterface microsecond helper must parse");
+    method_vis(
+        "__elephc_datetime_interface_microsecond",
+        Visibility::Private,
+        vec![param("value", Some(TypeExpr::Named(Name::unqualified("mixed"))), None)],
+        Some(TypeExpr::Int),
+        body,
+    )
+}
+
+/// Builds the typed dispatch boundary used to advance mutable and immutable cursors.
+pub(super) fn date_period_add_interval(uses_timelib: bool) -> ClassMethod {
+    let source = if uses_timelib {
+        r#"<?php
+if ($value instanceof DateTimeImmutable) {
+    $value->__elephc_period_advance($interval);
+    return $value;
+}
+if ($value instanceof DateTime) {
+    $value->__elephc_period_advance($interval);
+    return $value;
+}
+throw new DateObjectError("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor");
+"#
+    } else {
         r#"<?php
 if ($value instanceof DateTimeImmutable) {
     return $value->add($interval);
@@ -768,9 +896,10 @@ if ($value instanceof DateTime) {
     return $value;
 }
 throw new DateObjectError("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor");
-"#,
-    )
-    .expect("DatePeriod interval addition helper must tokenize");
+"#
+    };
+    let tokens = crate::lexer::tokenize(source)
+        .expect("DatePeriod interval addition helper must tokenize");
     let body = crate::parser::parse(&tokens)
         .expect("DatePeriod interval addition helper must parse");
     method_vis(
@@ -794,14 +923,23 @@ throw new DateObjectError("Object of type DatePeriod has not been correctly init
 }
 
 /// `DatePeriod::_advance(): void` — advances the typed cursor with PHP calendar semantics.
-pub(super) fn date_period_advance() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(
+pub(super) fn date_period_advance(uses_timelib: bool) -> ClassMethod {
+    let source = if uses_timelib {
+        r#"<?php
+$cursor = $this->_cursor;
+$interval = $this->getDateInterval();
+$this->__elephc_add_interval($cursor, $interval);
+$this->_current = $this->__elephc_clone_datetime_interface_storage($cursor);
+"#
+    } else {
         r#"<?php
 $cursor = $this->_cursor;
 $interval = $this->getDateInterval();
 $this->_cursor = $this->__elephc_add_interval($cursor, $interval);
-"#,
-    )
+$this->_current = $this->__elephc_clone_datetime_interface_storage($this->_cursor);
+"#
+    };
+    let tokens = crate::lexer::tokenize(source)
     .expect("DatePeriod advance body must tokenize");
     let body = crate::parser::parse(&tokens).expect("DatePeriod advance body must parse");
     method_vis("_advance", Visibility::Private, Vec::new(), Some(TypeExpr::Void), body)
@@ -816,6 +954,7 @@ $this->idx = 0;
 if ($this->excludeStart) {
     $this->_advance();
 }
+$this->_current = $this->__elephc_clone_datetime_interface_storage($this->_cursor);
 "#,
     )
     .expect("DatePeriod rewind body must tokenize");
@@ -833,7 +972,7 @@ pub(super) fn date_period_valid() -> ClassMethod {
         r#"<?php
 if ($this->useCount) {
     $includedEnd = $this->includeEnd !== 0 ? 1 : 0;
-    return $this->idx <= $this->_recurrence_count - $this->excludeStart + $includedEnd;
+    return $position <= $this->_recurrence_count - $this->excludeStart + $includedEnd;
 }
 $cursor = $this->_cursor;
 $end = $this->_end;
@@ -844,8 +983,8 @@ $cursorTimestamp = $this->__elephc_datetime_interface_timestamp($cursor);
 $endTimestamp = $this->__elephc_datetime_interface_timestamp($end);
 if ($cursorTimestamp < $endTimestamp) { return true; }
 if ($cursorTimestamp > $endTimestamp) { return false; }
-$cursorMicrosecond = $cursor->getMicrosecond();
-$endMicrosecond = $end->getMicrosecond();
+$cursorMicrosecond = $this->__elephc_datetime_interface_microsecond($cursor);
+$endMicrosecond = $this->__elephc_datetime_interface_microsecond($end);
 if ($cursorMicrosecond < $endMicrosecond) { return true; }
 if ($cursorMicrosecond > $endMicrosecond) { return false; }
 return $this->includeEnd !== 0;
@@ -853,7 +992,13 @@ return $this->includeEnd !== 0;
     )
     .expect("DatePeriod valid body must tokenize");
     let body = crate::parser::parse(&tokens).expect("DatePeriod valid body must parse");
-    method_vis("valid", Visibility::Private, Vec::new(), Some(TypeExpr::Bool), body)
+    method_vis(
+        "valid",
+        Visibility::Private,
+        vec![param("position", Some(TypeExpr::Int), None)],
+        Some(TypeExpr::Bool),
+        body,
+    )
 }
 
 pub(super) const CURRENT_SRC: &str = r#"<?php
@@ -903,30 +1048,38 @@ pub(super) fn date_period_next() -> ClassMethod {
     )
 }
 
-pub(super) const GET_START_DATE_SRC: &str = r#"<?php
-$start = $this->_start;
-if (!($start instanceof DateTimeInterface)) {
-    throw new DateObjectError("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor");
-}
-return $this->__elephc_clone_datetime_interface($start);
-"#;
-
-pub(super) const GET_END_DATE_SRC: &str = r#"<?php
-$end = $this->_end;
-if ($end === null) { return null; }
-return $this->__elephc_clone_datetime_interface($end);
-"#;
-
 /// `DatePeriod::getStartDate(): DateTimeInterface` — returns the start instant as the same
 /// concrete class that was passed to the constructor.
 pub(super) fn date_period_get_start_date() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(GET_START_DATE_SRC).expect("getStartDate body must tokenize");
-    let body = crate::parser::parse(&tokens).expect("getStartDate body must parse");
     method(
         "getStartDate",
         Vec::new(),
         Some(TypeExpr::Named(Name::unqualified("DateTimeInterface"))),
-        body,
+        vec![
+            Stmt::assign("start", this_prop("_start")),
+            if_else(
+                e_instance_of(var("start"), "DateTimeInterface"),
+                vec![ret(mcall(
+                    Expr::new(ExprKind::This, dummy()),
+                    "__elephc_rehydrate_datetime",
+                    vec![
+                        e_call("get_class", vec![var("start")]),
+                        var("start"),
+                        mcall(
+                            Expr::new(ExprKind::This, dummy()),
+                            "__elephc_datetime_state",
+                            vec![var("start")],
+                        ),
+                    ],
+                ))],
+                Some(vec![s_throw(e_new(
+                    "DateObjectError",
+                    vec![e_str(
+                        "Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor",
+                    )],
+                ))]),
+            ),
+        ],
     )
 }
 
@@ -934,15 +1087,32 @@ pub(super) fn date_period_get_start_date() -> ClassMethod {
 /// `null` when the period was constructed with a recurrence count (matching PHP's nullable interface
 /// return type).
 pub(super) fn date_period_get_end_date() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(GET_END_DATE_SRC).expect("getEndDate body must tokenize");
-    let body = crate::parser::parse(&tokens).expect("getEndDate body must parse");
     method(
         "getEndDate",
         Vec::new(),
         Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
             "DateTimeInterface",
         ))))),
-        body,
+        vec![
+            Stmt::assign("end", this_prop("_end")),
+            if_else(
+                bin(var("end"), BinOp::StrictEq, null_lit()),
+                vec![ret(null_lit())],
+                Some(vec![ret(mcall(
+                    Expr::new(ExprKind::This, dummy()),
+                    "__elephc_rehydrate_datetime",
+                    vec![
+                        this_prop("startClass"),
+                        var("end"),
+                        mcall(
+                            Expr::new(ExprKind::This, dummy()),
+                            "__elephc_datetime_state",
+                            vec![var("end")],
+                        ),
+                    ],
+                ))]),
+            ),
+        ],
     )
 }
 
@@ -950,11 +1120,29 @@ pub(super) fn date_period_get_end_date() -> ClassMethod {
 pub(super) fn date_period_get_interval() -> ClassMethod {
     let tokens = crate::lexer::tokenize(
         r#"<?php
-$interval = $this->_interval;
-if (!($interval instanceof DateInterval)) {
+$source = $this->_interval;
+if (!($source instanceof DateInterval)) {
     throw new DateObjectError("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor");
 }
-return $interval->__elephc_clone();
+$payload = $source->__elephc_payload();
+if (substr($payload, 0, 1) === "R") {
+    $tab = strpos($payload, "\t");
+    $length = intval(substr($payload, 1, $tab - 1));
+    $dateString = substr($payload, $tab + 1, $length);
+    $interval = DateInterval::createFromDateString($dateString);
+    return $interval->__elephc_clone_interval_for_period();
+}
+$interval = new DateInterval("P0D");
+$interval->y = $source->y;
+$interval->m = $source->m;
+$interval->d = $source->d;
+$interval->h = $source->h;
+$interval->i = $source->i;
+$interval->s = $source->s;
+$interval->f = $source->f;
+$interval->invert = $source->invert;
+$interval->days = $source->days;
+return $interval;
 "#,
     )
     .expect("DatePeriod getDateInterval body must tokenize");
@@ -985,33 +1173,27 @@ pub(super) fn date_period_get_recurrences() -> ClassMethod {
 
 /// PHP source backing `DatePeriod::getIterator()`.
 ///
-/// It snapshots fresh date values into an `InternalIterator`. The callback mirrors
-/// the iterator's live cursor onto `DatePeriod::$current`, matching php-src while
-/// keeping separate `getIterator()` calls independent.
+/// It creates one lazy cursor state per `InternalIterator`, so a `foreach` can break
+/// without eagerly materializing every recurrence and independent iterators do not share a cursor.
 pub(super) const DATEPERIOD_GET_ITERATOR_SRC: &str = r#"<?php
 if (!$this->__elephc_initialized) {
     throw new DateObjectError(
         "Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor"
     );
 }
-$items = [];
-$this->rewind();
-while ($this->valid()) {
-    $items[] = $this->current();
-    $this->next();
-}
-$onCurrent = function($value): mixed {
-    if ($value === null) {
-        $current = $this->current();
-        $result = $current;
-    } else {
-        $result = $this->__elephc_clone_datetime_interface($value);
-        $current = $this->__elephc_clone_datetime_interface_storage($value);
-    }
-    $this->_current = $current;
-    return $result;
+$onRewind = function(): void {
+    $this->rewind();
 };
-return new InternalIterator($items, $onCurrent);
+$onValid = function(int $position): bool {
+    return $this->valid($position);
+};
+$onCurrent = function(): mixed {
+    return $this->current();
+};
+$onNext = function(): void {
+    $this->next();
+};
+return new InternalIterator($this, $onCurrent, $onValid, $onNext, $onRewind);
 "#;
 
 /// `DatePeriod::getIterator(): Iterator` — returns an independent internal iterator
@@ -1067,11 +1249,13 @@ if (!$parsed["has_end"] && $parsed["recurrences"] === 0) {
         . $specification . "\" given"
     );
 }
-$start = DateTimeImmutable::createFromTimestamp($parsed["start"]);
-$endTimestamp = 0;
-if ($parsed["has_end"]) {
-    $endTimestamp = $parsed["end"];
-}
+$start = DateTimeImmutable::createFromInterface(
+    __elephc_timelib_period_datetime(
+        $parsed["start"],
+        $parsed["start_localtime"],
+        $parsed["start_timezone"]
+    )
+);
 $interval = new DateInterval("PT0S");
 $interval->y = $parsed["y"];
 $interval->m = $parsed["m"];
@@ -1084,7 +1268,11 @@ if ($parsed["has_end"]) {
     $typedResult->__elephc_initialize_end_components(
         $start,
         $interval,
-        $endTimestamp,
+        __elephc_timelib_period_datetime(
+            $parsed["end"],
+            $parsed["end_localtime"],
+            $parsed["end_timezone"]
+        ),
         $options
     );
 } else {
@@ -1095,8 +1283,8 @@ if ($parsed["has_end"]) {
         $options
     );
 }
-unset($interval);
 unset($start);
+unset($interval);
 unset($parsed);
 return $typedResult;
 "#;
@@ -1277,7 +1465,11 @@ if (!$parsed["has_end"] && $parsed["recurrences"] === 0) {
         . $start . "\" given"
     );
 }
-$periodStart = DateTimeImmutable::createFromTimestamp($parsed["start"]);
+$periodStart = __elephc_timelib_period_datetime(
+    $parsed["start"],
+    $parsed["start_localtime"],
+    $parsed["start_timezone"]
+);
 $periodInterval = new DateInterval("PT0S");
 $periodInterval->y = $parsed["y"];
 $periodInterval->m = $parsed["m"];
@@ -1287,7 +1479,11 @@ $periodInterval->i = $parsed["i"];
 $periodInterval->s = $parsed["s"];
 $periodInterval->f = $parsed["us"] / 1000000.0;
 if ($parsed["has_end"]) {
-    $periodEnd = DateTimeImmutable::createFromTimestamp($parsed["end"]);
+    $periodEnd = __elephc_timelib_period_datetime(
+        $parsed["end"],
+        $parsed["end_localtime"],
+        $parsed["end_timezone"]
+    );
     $this->__construct($periodStart, $periodInterval, $periodEnd, $__elephc_options);
 } else {
     $this->__construct(

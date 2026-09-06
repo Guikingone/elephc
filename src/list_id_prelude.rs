@@ -34,23 +34,13 @@ mod table;
 /// Shared suffix of the `ValueError` raised for an invalid `PER_COUNTRY` country code.
 const INVALID_PER_COUNTRY_SUFFIX: &str = "(): Argument #2 ($countryCode) must be a two-letter ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is DateTimeZone::PER_COUNTRY";
 
-/// Builds `__elephc_list_identifiers`, which filters the baked timezone table by group mask
-/// or by country.
+/// Builds the shared php-src group/country filter used by both public call surfaces.
 ///
-/// The parameters are UNTYPED, as in the PHP form: the internal `$countryCode` default is
-/// `""` rather than `null` because `=== null` on a null-defaulted parameter miscompiles, and
-/// the function is internal so no user observes the default.
-///
-/// The table used to be spliced into the source text through a `__ELEPHC_TZ_GROUPS_TABLE__`
-/// placeholder. It is now simply the string literal the body reads, so there is no
-/// placeholder to collide with table content and no escaping question.
-pub(crate) fn list_id_declarations() -> Program {
-    internal_declarations(|| {
-        vec![function("__elephc_list_identifiers")
-            .param_untyped_default("timezoneGroup", e_int(2047))
-            .param_untyped_default("countryCode", e_str(""))
-            .param_untyped_default("entryPoint", e_str("DateTimeZone::listIdentifiers"))
-            .body(vec![
+/// The caller supplies `timezoneGroup`, `countryCode`, and the PHP-visible `entryPoint`
+/// variable names. Keeping this as AST data makes reflection invocation of the synthetic
+/// method follow the same filtering and `ValueError` path as resolver-desugared direct calls.
+pub(crate) fn list_identifier_filter_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![
                 s_assign("table", e_str(table::TIMEZONE_GROUPS_TABLE)),
                 s_assign(
                     "rows",
@@ -60,9 +50,9 @@ pub(crate) fn list_id_declarations() -> Program {
                 s_assign(
                     "perCountry",
                     e_binop(
-                        e_binop(e_var("timezoneGroup"), BinOp::BitAnd, e_int(4096)),
-                        BinOp::NotEq,
-                        e_int(0),
+                        e_var("timezoneGroup"),
+                        BinOp::StrictEq,
+                        e_int(4096),
                     ),
                 ),
                 s_if(
@@ -116,24 +106,52 @@ pub(crate) fn list_id_declarations() -> Program {
                                 ),
                                 s_if(
                                     e_binop(
-                                        e_binop(
-                                            e_var("mask"),
-                                            BinOp::BitAnd,
-                                            e_var("timezoneGroup"),
-                                        ),
-                                        BinOp::NotEq,
-                                        e_int(0),
+                                        e_var("timezoneGroup"),
+                                        BinOp::StrictEq,
+                                        e_int(4095),
                                     ),
                                     vec![s_array_push("result", e_var("name"))],
                                     vec![],
-                                    None,
+                                    Some(vec![s_if(
+                                        e_binop(
+                                            e_binop(e_var("mask"), BinOp::StrictNotEq, e_int(2048)),
+                                            BinOp::And,
+                                            e_binop(
+                                                e_binop(
+                                                    e_var("mask"),
+                                                    BinOp::BitAnd,
+                                                    e_var("timezoneGroup"),
+                                                ),
+                                                BinOp::NotEq,
+                                                e_int(0),
+                                            ),
+                                        ),
+                                        vec![s_array_push("result", e_var("name"))],
+                                        vec![],
+                                        None,
+                                    )]),
                                 ),
                             ]),
                         ),
                     ],
                 ),
                 s_return(e_var("result")),
-            ])
+            ]
+}
+
+/// Builds `__elephc_list_identifiers`, which filters the baked timezone table by group mask
+/// or by country.
+///
+/// The parameters are UNTYPED, as in the PHP form: the internal `$countryCode` default is
+/// `""` rather than `null` because `=== null` on a null-defaulted parameter miscompiles, and
+/// the function is internal so no user observes the default.
+pub(crate) fn list_id_declarations() -> Program {
+    internal_declarations(|| {
+        vec![function("__elephc_list_identifiers")
+            .param_untyped_default("timezoneGroup", e_int(2047))
+            .param_untyped_default("countryCode", e_str(""))
+            .param_untyped_default("entryPoint", e_str("DateTimeZone::listIdentifiers"))
+            .body(list_identifier_filter_body())
             .build()]
     })
 }

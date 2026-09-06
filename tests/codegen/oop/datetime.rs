@@ -910,6 +910,44 @@ echo $p->getStartDate()->format("Y-m-d") . "|"
     assert_eq!(out, "2024-01-01|2024-04-01|1");
 }
 
+/// Verifies DatePeriod rehydrates getEndDate() with the start class required by php-src.
+#[test]
+fn test_date_period_get_end_date_preserves_immutable_concrete_class() {
+    let out = compile_and_run(
+        r#"<?php
+$period = new DatePeriod(
+    new DateTime("2024-01-01T00:00:00+00:00"),
+    new DateInterval("P1D"),
+    new DateTimeImmutable("2024-01-03T00:00:00+00:00"),
+);
+$end = $period->getEndDate();
+$modified = $end->modify("+1 day");
+echo get_class($end), ":", $end->format("Y-m-d"), ":", $modified->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "DateTime:2024-01-04:2024-01-04");
+}
+
+/// Calls concrete mutators through the date interface without changing its reflected surface.
+#[test]
+fn test_datetime_interface_concrete_mutators_and_callables() {
+    let out = compile_and_run(
+        r#"<?php
+function shiftDate(DateTimeInterface $date): void {
+    $next = $date->modify("+1 day");
+    $modify = $date->modify(...);
+    $last = $modify("+2 days");
+    echo get_class($date), ":", $date->format("Y-m-d"), ":",
+        $next->format("Y-m-d"), ":", $last->format("Y-m-d"), "\n";
+}
+shiftDate(new DateTime("2024-01-01"));
+shiftDate(new DateTimeImmutable("2024-01-01"));
+var_dump((new ReflectionClass(DateTimeInterface::class))->hasMethod("modify"));
+"#,
+    );
+    assert_eq!(out, "DateTime:2024-01-04:2024-01-04:2024-01-04\nDateTimeImmutable:2024-01-01:2024-01-02:2024-01-03\nbool(false)\n");
+}
+
 /// Verifies each yielded value is a distinct snapshot: collecting them and formatting after the
 /// loop preserves the per-step dates rather than all showing the final cursor.
 #[test]
@@ -1359,6 +1397,57 @@ echo get_class($period), ":", $period->recurrences, ":",
     assert_eq!(out, "ParsedPeriod:5:2012-07-01:7");
 }
 
+/// Date conversion and timezone temporaries must release their PHP object handles.
+#[test]
+fn test_datetime_factory_temporaries_release_object_handles() {
+    let out = compile_and_run(r#"<?php
+function availableDateHandle(): int {
+    $probe = new stdClass();
+    return spl_object_id($probe);
+}
+function constructDateOnly(): void {
+    $date = new DateTime("@0");
+}
+function assignDateTimezone(): void {
+    $date = new DateTime("@0");
+    $date->setTimezone(new DateTimeZone("UTC"));
+}
+function convertDateLocal(): void {
+    $date = new DateTime("@0");
+    $converted = DateTimeImmutable::createFromInterface($date);
+}
+function convertDateTemporary(): void {
+    $converted = DateTimeImmutable::createFromInterface(new DateTime("@0"));
+}
+constructDateOnly();
+echo availableDateHandle(), ":";
+assignDateTimezone();
+echo availableDateHandle(), ":";
+convertDateLocal();
+echo availableDateHandle(), ":";
+convertDateTemporary();
+echo availableDateHandle();
+"#);
+    assert_eq!(out, "1:1:2:1");
+}
+
+/// ISO factory scratch objects must preserve a pre-existing recycled handle order.
+#[test]
+fn test_dateperiod_iso_factory_preserves_recycled_handles() {
+    let out = compile_and_run(r#"<?php
+$held = new stdClass();
+$first = new stdClass();
+$second = new stdClass();
+unset($first, $second);
+$period = DatePeriod::createFromISO8601String("R4/2012-07-01T00:00:00Z/P7D");
+$start = $period->getStartDate();
+$interval = $period->getDateInterval();
+echo spl_object_id($held), ":", spl_object_id($period), ":",
+    spl_object_id($start), ":", spl_object_id($interval);
+"#);
+    assert_eq!(out, "1:3:2:4");
+}
+
 /// Verifies DatePeriod's private backing clones consume no PHP handles and remain GC-owned.
 #[test]
 fn test_dateperiod_iso_factory_handleless_storage_matches_php_identity() {
@@ -1378,6 +1467,12 @@ $left = new stdClass();
 $right = new stdClass();
 echo ":", (int) (spl_object_id($left) !== spl_object_id($right));
 unset($right, $left, $intervalTwo, $startTwo, $intervalOne, $startOne, $period);
+for ($iteration = 0; $iteration < 8; $iteration++) {
+    $period = ParsedHandlePeriod::createFromISO8601String("R4/2012-07-01T00:00:00Z/P7D");
+    $start = $period->getStartDate();
+    $interval = $period->getDateInterval();
+    unset($interval, $start, $period);
+}
 "#,
     );
     assert_eq!(output.stdout, "1,2,3,4,5:11:1");
@@ -1397,7 +1492,7 @@ unset($right, $left, $intervalTwo, $startTwo, $intervalOne, $startOne, $period);
             .unwrap_or_else(|| panic!("invalid heap-debug summary: {summary}"))
     };
     assert!(
-        live_blocks <= 16,
+        live_blocks == 0,
         "handleless DatePeriod backing retained {live_blocks} blocks after release: {}",
         output.stderr
     );
@@ -2449,6 +2544,60 @@ echo $p->current->format("Y-m-d");
     assert_eq!(
         out,
         "A-|null|independent|null|2024-01-01|2024-01-02|2024-01-04"
+    );
+}
+
+/// Verifies internal ext/date operations read native storage without invoking user overrides.
+#[test]
+fn test_datetime_internal_operations_do_not_dispatch_overridable_getters() {
+    let out = compile_and_run(
+        r#"<?php
+class OverrideDate extends DateTime {
+    public int $calls = 0;
+    public function getTimestamp(): int { $this->calls++; return 42; }
+    public function getMicrosecond(): int { $this->calls++; return 999999; }
+    public function format(string $format): string { $this->calls++; return "override"; }
+}
+
+class OverrideZone extends DateTimeZone {
+    public int $calls = 0;
+    public function getName(): string { $this->calls++; return "UTC"; }
+}
+$base = new DateTime("@0");
+$other = new OverrideDate("@1");
+$zone = new OverrideZone("Europe/Paris");
+$base->setTimezone($zone);
+$base->diff($other);
+$comparison = $base < $other;
+(new DateTimeZone("UTC"))->getOffset($other);
+echo $zone->calls, ":", $other->calls, ":", $comparison ? "lt" : "bad", ":";
+echo $other->getTimestamp(), ":", $other->calls;
+"#,
+    );
+    assert_eq!(out, "0:0:lt:42:1");
+}
+
+/// Verifies DatePeriod applies PT24H as php-src civil progression across both DST boundaries.
+#[test]
+fn test_dateperiod_pt24h_uses_native_civil_dst_progression() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["2024-03-30 12:00:00", "2024-10-26 12:00:00"] as $start) {
+    $period = new DatePeriod(
+        new DateTime($start, new DateTimeZone("Europe/Paris")),
+        new DateInterval("PT24H"),
+        2
+    );
+    foreach ($period as $date) {
+        echo $date->format("Y-m-d H:i P"), "|";
+    }
+    echo "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "2024-03-30 12:00 +01:00|2024-03-31 12:00 +02:00|2024-04-01 12:00 +02:00|\n2024-10-26 12:00 +02:00|2024-10-27 12:00 +01:00|2024-10-28 12:00 +01:00|\n"
     );
 }
 
@@ -4975,7 +5124,7 @@ echo "|", $period->current->format("Y-m-d H:i:s.u e");
     );
     assert_eq!(
         out,
-        "fresh|2024-03-30 12:34:56.123456 Europe/Paris|1|fresh|DateTimeImmutable|\
+        "fresh|2024-03-30 12:34:56.123456 Europe/Paris|1|fresh|DateTime|\
 2024-03-30 12:34:56.123456 +01:00,2024-03-31 12:34:56.123456 +02:00,\
 2024-04-01 12:34:56.123456 +02:00,|2024-04-02 12:34:56.123456 Europe/Paris"
     );
@@ -6025,6 +6174,409 @@ Invalid serialization data for DateTimeImmutable object|\
 Invalid serialization data for DateTimeZone object|\
 Invalid serialization data for DatePeriod object|interval-ok"
     );
+}
+
+/// Verifies DateTime magic serialization preserves a numeric-looking dynamic property name as
+/// a string key, matching php-src's `zend_hash_add()` merge of common object properties.
+#[test]
+fn test_datetime_magic_serialize_preserves_numeric_dynamic_property_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$date = new DateTime("2024-01-01T00:00:00+00:00");
+$date->{"1"} = "custom";
+$payload = serialize($date);
+echo str_contains($payload, 's:1:"1";s:6:"custom";') ? "string" : "wrong";
+"#,
+    );
+    assert_eq!(out, "string");
+}
+
+/// Verifies a DateTime subclass hash override survives an interface `array` return boundary.
+#[test]
+fn test_datetime_serialize_hash_override_through_interface_array_return() {
+    let out = compile_and_run(
+        r#"<?php
+class DateHashOverride extends DateTime {
+    public function __serialize(): array {
+        return ["custom" => 17];
+    }
+}
+function exported_state(DateTimeInterface $date): array {
+    return $date->__serialize();
+}
+$state = exported_state(new DateHashOverride("2024-01-01T00:00:00+00:00"));
+echo $state["custom"];
+"#,
+    );
+    assert_eq!(out, "17");
+}
+
+/// Verifies a stored DateTime serializer first-class callable preserves hash results on all call APIs.
+#[test]
+fn test_datetime_serialize_hash_override_stored_first_class_callable_paths() {
+    let out = compile_and_run(
+        r#"<?php
+class DateHashCallableOverride extends DateTime {
+    public function __serialize(): array {
+        return ["custom" => 29];
+    }
+}
+$date = new DateHashCallableOverride("2024-01-01T00:00:00+00:00");
+$serializer = $date->__serialize(...);
+$direct = $serializer();
+$viaCallUserFunc = call_user_func($serializer);
+$viaCallUserFuncArray = call_user_func_array($serializer, []);
+echo $direct["custom"], ":", $viaCallUserFunc["custom"], ":", $viaCallUserFuncArray["custom"];
+"#,
+    );
+    assert_eq!(out, "29:29:29");
+}
+
+/// Verifies ReflectionMethod invokes the reflected DateTime serializer rather than a child override.
+#[test]
+fn test_reflection_datetime_magic_serialize_uses_declaring_implementation() {
+    let out = compile_and_run(
+        r#"<?php
+class DateReflectionOverride extends DateTime {
+    public function __serialize(): array {
+        return ["override" => true];
+    }
+}
+$method = new ReflectionMethod(DateTime::class, "__serialize");
+$state = $method->invoke(new DateReflectionOverride("2024-01-01T00:00:00+00:00"));
+echo isset($state["date"]) ? "base" : "override";
+"#,
+    );
+    assert_eq!(out, "base");
+}
+
+/// Verifies local and static hash owners cross DateTime `array` return boundaries safely.
+#[test]
+fn test_datetime_serialize_hash_override_local_and_static_storage_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class DateLocalHashOverride extends DateTime {
+    public function __serialize(): array {
+        $local = ["local" => 31];
+        return $local;
+    }
+}
+class DateStaticHashOverride extends DateTime {
+    private static $payload = ["static" => 37];
+    public function __serialize(): array {
+        return self::$payload;
+    }
+}
+$local = (new DateLocalHashOverride("2024-01-01T00:00:00+00:00"))->__serialize();
+$static = (new DateStaticHashOverride("2024-01-01T00:00:00+00:00"))->__serialize();
+echo $local["local"], ":", $static["static"];
+"#,
+    );
+    assert_eq!(out, "31:37");
+}
+
+/// Verifies DateTime serializer callable arrays preserve hash results for direct and helper calls.
+#[test]
+fn test_datetime_serialize_hash_override_callable_array_paths() {
+    let out = compile_and_run(
+        r#"<?php
+class DateArrayCallableOverride extends DateTime {
+    public function __serialize(): array {
+        return ["array" => 41];
+    }
+}
+$date = new DateArrayCallableOverride("2024-01-01T00:00:00+00:00");
+$callback = [$date, "__serialize"];
+$direct = $callback();
+$viaCallUserFunc = call_user_func($callback);
+$viaCallUserFuncArray = call_user_func_array($callback, []);
+echo $direct["array"], ":", $viaCallUserFunc["array"], ":", $viaCallUserFuncArray["array"];
+"#,
+    );
+    assert_eq!(out, "41:41:41");
+}
+
+/// Verifies reflected DateTime serializer null, incompatible, and boxed-Mixed receiver branches.
+#[test]
+fn test_reflection_datetime_magic_serialize_receiver_validation_branches() {
+    let out = compile_and_run(
+r#"<?php
+try {
+    (new ReflectionMethod(DateTime::class, "__serialize"))->invoke(null);
+} catch (ReflectionException $error) {
+    echo "null:", $error->getMessage(), "|";
+}
+try {
+    (new ReflectionMethod(DateTime::class, "__serialize"))->invoke(new stdClass());
+} catch (Throwable $error) {
+    echo "invalid:", $error::class, ":", $error->getMessage(), "|";
+}
+$values = [new DateTime("2024-01-01T00:00:00+00:00")];
+$mixed = $values[0];
+$state = (new ReflectionMethod(DateTime::class, "__serialize"))->invoke($mixed);
+echo isset($state["date"]) ? "mixed:base" : "mixed:wrong";
+"#,
+    );
+    assert_eq!(
+        out,
+        "null:Trying to invoke non static method DateTime::__serialize() without an object|\
+invalid:ReflectionException:Given object is not an instance of the class this method was declared in|mixed:base"
+    );
+}
+
+/// Verifies parent, self, and named static DateTime serializer syntax retain hash storage.
+#[test]
+fn test_datetime_static_serialize_syntax_preserves_hash_layout() {
+    let out = compile_and_run(
+        r#"<?php
+class DateStaticSerializeSyntax extends DateTime {
+    public function __serialize(): array {
+        return parent::__serialize();
+    }
+    public function throughSelf(): array {
+        return self::__serialize();
+    }
+    public function throughNamedBase(): array {
+        return DateTime::__serialize();
+    }
+}
+$date = new DateStaticSerializeSyntax("2024-01-01T00:00:00+00:00");
+$date->marker = "present";
+$parent = $date->__serialize();
+$self = $date->throughSelf();
+$named = $date->throughNamedBase();
+echo $parent["marker"], ":", $self["marker"], ":", $named["marker"];
+"#,
+    );
+    assert_eq!(out, "present:present:present");
+}
+
+/// Verifies a nullsafe DateTimeInterface serializer finalizes its non-null hash before merging null.
+#[test]
+fn test_datetime_nullsafe_interface_serialize_finalizes_hash_result() {
+    let out = compile_and_run(
+        r#"<?php
+class DateNullsafeSerialize extends DateTime {
+    public function __serialize(): array {
+        return ["nullsafe" => 47];
+    }
+}
+function nullable_state(?DateTimeInterface $date): ?array {
+    return $date?->__serialize();
+}
+$state = nullable_state(new DateNullsafeSerialize("2024-01-01T00:00:00+00:00"));
+$none = nullable_state(null);
+echo $state["nullsafe"], ":", ($none === null ? "null" : "wrong");
+"#,
+    );
+    assert_eq!(out, "47:null");
+}
+
+/// Verifies a nullsafe inherited DateTime serializer still projects user properties into its hash.
+#[test]
+fn test_datetime_nullsafe_inherited_serialize_appends_dynamic_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class DateNullsafeInheritedSerialize extends DateTime {}
+function nullable_inherited(?DateTime $date): ?array {
+    return $date?->__serialize();
+}
+$date = new DateNullsafeInheritedSerialize("2024-01-01T00:00:00+00:00");
+$date->marker = "present";
+$state = nullable_inherited($date);
+echo $state["marker"];
+"#,
+    );
+    assert_eq!(out, "present");
+}
+
+/// Verifies createFromTimestamp() subclasses retain the canonical +00:00 timezone name.
+#[test]
+fn test_datetime_create_from_timestamp_subclass_uses_plus_zero_timezone_name() {
+    let out = compile_and_run(
+        r#"<?php
+class TimestampTimezoneSubclass extends DateTime {}
+echo TimestampTimezoneSubclass::createFromTimestamp(0)->getTimezone()->getName();
+"#,
+    );
+    assert_eq!(out, "+00:00");
+}
+
+/// Verifies DateTime serializer FCCs dispatch and finalize through interface, union, and Mixed receivers.
+#[test]
+fn test_datetime_serialize_first_class_callable_dynamic_receiver_types() {
+    let out = compile_and_run(
+        r#"<?php
+interface DateSerializerCarrier extends DateTimeInterface {}
+class DynamicDateSerializer extends DateTime implements DateSerializerCarrier {
+    public function __serialize(): array {
+        return ["dynamic" => 53];
+    }
+}
+function throughDateInterface(DateTimeInterface $date) {
+    $serializer = $date->__serialize(...);
+    return $serializer();
+}
+function throughCarrier(DateSerializerCarrier $date) {
+    $serializer = $date->__serialize(...);
+    return call_user_func($serializer);
+}
+function throughUnion(DateTime|DateTimeImmutable $date) {
+    $serializer = $date->__serialize(...);
+    return call_user_func_array($serializer, []);
+}
+function throughMixed(mixed $date) {
+    $serializer = $date->__serialize(...);
+    return $serializer();
+}
+$date = new DynamicDateSerializer("2024-01-01T00:00:00+00:00");
+$interface = throughDateInterface($date);
+$carrier = throughCarrier($date);
+$union = throughUnion($date);
+$mixed = throughMixed($date);
+echo $interface["dynamic"], ":", $carrier["dynamic"], ":", $union["dynamic"], ":", $mixed["dynamic"];
+"#,
+    );
+    assert_eq!(out, "53:53:53:53");
+}
+
+/// Verifies inherited ReflectionMethod targets stay bound to their captured implementation for invoke and invokeArgs.
+#[test]
+fn test_reflection_datetime_inherited_serialize_uses_effective_implementation() {
+    let out = compile_and_run(
+        r#"<?php
+class DateReflectionInherited extends DateTime {}
+class DateReflectionLateOverride extends DateReflectionInherited {
+    public function __serialize(): array {
+        return ["override" => true];
+    }
+}
+$date = new DateReflectionLateOverride("2024-01-01T00:00:00+00:00");
+$method = new ReflectionMethod(DateReflectionInherited::class, "__serialize");
+$invoke = $method->invoke($date);
+$invokeArgs = $method->invokeArgs($date, []);
+echo (isset($invoke["date"]) ? "base" : "override"), ":",
+     (isset($invokeArgs["date"]) ? "base" : "override");
+"#,
+    );
+    assert_eq!(out, "base:base");
+}
+
+/// Verifies invalid Mixed serializer returns release their temporary owner before each catchable TypeError.
+#[test]
+fn test_datetime_serialize_invalid_mixed_return_releases_under_heap_pressure() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+function as_mixed(mixed $value): mixed {
+    return $value;
+}
+class DateInvalidMixedSerialize extends DateTime {
+    public function __serialize(): array {
+        return as_mixed(new stdClass());
+    }
+}
+$date = new DateInvalidMixedSerialize("2024-01-01T00:00:00+00:00");
+$caught = 0;
+for ($i = 0; $i < 15000; $i++) {
+    try {
+        $date->__serialize();
+    } catch (TypeError $error) {
+        if ($i === 0) {
+            echo $error->getMessage(), "|";
+        }
+        $caught++;
+    }
+}
+echo $caught;
+"#,
+        4_194_304,
+    );
+    assert_eq!(
+        out,
+        "DateInvalidMixedSerialize::__serialize(): Return value must be of type array, stdClass returned|15000"
+    );
+}
+
+/// Verifies DateTime serializer return TypeErrors preserve PHP's distinct true and false names.
+#[test]
+fn test_datetime_serialize_invalid_mixed_boolean_return_type_errors() {
+    let out = compile_and_run(
+        r#"<?php
+function bool_as_mixed(mixed $value): mixed {
+    return $value;
+}
+class DateInvalidTrueSerialize extends DateTime {
+    public function __serialize(): array {
+        return bool_as_mixed(true);
+    }
+}
+class DateInvalidFalseSerialize extends DateTime {
+    public function __serialize(): array {
+        return bool_as_mixed(false);
+    }
+}
+try {
+    (new DateInvalidTrueSerialize("2024-01-01T00:00:00+00:00"))->__serialize();
+} catch (TypeError $error) {
+    echo $error->getMessage(), "|";
+}
+try {
+    (new DateInvalidFalseSerialize("2024-01-01T00:00:00+00:00"))->__serialize();
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "DateInvalidTrueSerialize::__serialize(): Return value must be of type array, true returned|\
+DateInvalidFalseSerialize::__serialize(): Return value must be of type array, false returned"
+    );
+}
+
+/// Verifies ordinary declared array returns share the consuming Mixed boundary and PHP wording.
+#[test]
+fn test_declared_array_return_invalid_mixed_value_reports_function_and_type() {
+    let out = compile_and_run(
+        r#"<?php
+function typed_array_return(mixed $value): array {
+    return $value;
+}
+try {
+    typed_array_return("invalid");
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "typed_array_return(): Return value must be of type array, string returned"
+    );
+}
+
+/// Verifies a Throwable raised while serializing a Closure inside a DateTime magic result preserves cleanup.
+#[test]
+fn test_datetime_serialize_magic_result_closure_throw_releases_hash_owner() {
+    let out = compile_and_run(
+        r#"<?php
+class DateClosureSerialize extends DateTime {
+    public function __serialize(): array {
+        return ["callback" => function () { return 1; }];
+    }
+}
+$date = new DateClosureSerialize("2024-01-01T00:00:00+00:00");
+try {
+    serialize($date);
+    echo "unexpected|";
+} catch (Throwable $error) {
+    echo "caught|";
+}
+$state = $date->__serialize();
+echo isset($state["callback"]) ? "alive" : "broken";
+"#,
+    );
+    assert_eq!(out, "caught|alive");
 }
 
 /// Verifies `DateInterval`'s debug-only state keys behave like undefined properties, including
@@ -7264,5 +7816,148 @@ timezone_offset_get(): Argument #1 ($object) must be of type DateTimeZone, null 
 timezone_offset_get(): Argument #2 ($datetime) must be of type DateTimeInterface, stdClass given\n\
 timezone_offset_get(): Argument #2 ($datetime) must be of type DateTimeInterface, int given\n\
 timezone_offset_get(): Argument #2 ($datetime) must be of type DateTimeInterface, null given\n"
+    );
+}
+
+/// Verifies fake Closure debug output uses the effective declaration name and never projects
+/// true-Closure name/file/line fields for case-insensitive DateTime method callables.
+#[test]
+fn test_datetime_first_class_callable_debug_uses_effective_canonical_method_name() {
+    let output = compile_and_run_capture(
+        r#"<?php
+class CallableDisplayParent {
+    public function doThing(): string { return "user"; }
+}
+class CallableDisplayChild extends CallableDisplayParent {}
+function dump_date_formatter(DateTimeInterface $date): void {
+    $formatter = $date->FORMAT(...);
+    var_dump($formatter);
+}
+$user = (new CallableDisplayChild())->DOTHING(...);
+$static = DateTime::CREATEFROMTIMESTAMP(...);
+var_dump($user);
+var_dump($static);
+dump_date_formatter(new DateTime("2024-01-01T00:00:00+00:00"));
+"#,
+    );
+    assert!(
+        output.success,
+        "first-class callable debug fixture failed: {}",
+        output.stderr
+    );
+    assert!(
+        output.stdout.contains("CallableDisplayParent::doThing"),
+        "user method callable did not expose its effective canonical declaration: {}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("DateTime::format"),
+        "DateTimeInterface callable did not expose php-src's canonical method spelling: {}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("DateTime::createFromTimestamp"),
+        "static callable did not expose php-src's canonical method spelling: {}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("[\"function\"]")
+            && !output.stdout.contains("[\"name\"]")
+            && !output.stdout.contains("[\"file\"]")
+            && !output.stdout.contains("[\"line\"]"),
+        "fake Closure projected true-Closure debug fields: {}",
+        output.stdout
+    );
+}
+
+/// Verifies a late-static DateTime factory callable exposes the runtime override's scope,
+/// canonical name, and parameter metadata while retaining late-static invocation semantics.
+#[test]
+fn test_datetime_late_static_factory_callable_debug_uses_effective_override_metadata() {
+    let output = compile_and_run_capture(
+        r#"<?php
+class LateStaticDateFactory extends DateTime {
+    public static function factory() {
+        return static::createFromTimestamp(...);
+    }
+}
+class LateStaticDateFactoryOverride extends LateStaticDateFactory {
+    public static function createFromTimestamp(int|float $value): static {
+        return parent::createFromTimestamp($value);
+    }
+}
+$factory = LateStaticDateFactoryOverride::factory();
+var_dump($factory);
+echo get_class($factory(0));
+"#,
+    );
+    assert!(
+        output.success,
+        "late-static DateTime callable debug fixture failed: {}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stdout
+            .contains("LateStaticDateFactoryOverride::createFromTimestamp"),
+        "late-static callable kept the lexical implementation name: {}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("[\"$value\"]")
+            && !output.stdout.contains("[\"$timestamp\"]"),
+        "late-static callable kept the lexical parameter metadata: {}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.ends_with("LateStaticDateFactoryOverride"),
+        "late-static callable invocation did not reach the override: {}",
+        output.stdout
+    );
+}
+
+/// Verifies a DateTime serializer reports the concrete incomplete-class name after unserialize.
+#[test]
+fn test_datetime_serializer_incomplete_object_return_type_error_uses_php_src_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+class IncompleteDateSerializer extends DateTime {
+    public function __serialize(): array {
+        return unserialize('O:7:"Missing":0:{}', ["allowed_classes" => false]);
+    }
+}
+try {
+    (new IncompleteDateSerializer("2024-01-01T00:00:00+00:00"))->__serialize();
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "IncompleteDateSerializer::__serialize(): Return value must be of type array, \
+__PHP_Incomplete_Class returned"
+    );
+}
+/// Verifies DateTime subclasses expose inline nullable scalar properties through object readers.
+#[test]
+fn test_datetime_subclass_nullable_scalar_property_readers() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableDate extends DateTime { public ?int $n = 123; }
+$date = new NullableDate("@0");
+$json = json_decode(json_encode($date), true);
+var_dump($json["n"]);
+var_export(get_object_vars($date));
+echo "\n";
+$date->n = null;
+$json = json_decode(json_encode($date), true);
+var_dump($json["n"]);
+var_export(get_object_vars($date));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(123)\narray (\n  'n' => 123,\n)\nNULL\narray (\n  'n' => NULL,\n)"
     );
 }

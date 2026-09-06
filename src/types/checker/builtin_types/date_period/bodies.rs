@@ -84,16 +84,7 @@ pub(super) fn create_from_iso8601() -> Vec<Stmt> {
             vec![],
             None,
         ),
-        s_assign("start", e_static_call("DateTimeImmutable", "createFromTimestamp", vec![e_index(e_var("parsed"), e_str("start"))])),
-        s_assign("endTimestamp", e_int(0)),
-        s_if(
-            e_index(e_var("parsed"), e_str("has_end")),
-            vec![
-                s_assign("endTimestamp", e_index(e_var("parsed"), e_str("end"))),
-            ],
-            vec![],
-            None,
-        ),
+        s_assign("start", e_static_call("DateTimeImmutable", "createFromInterface", vec![e_call("__elephc_timelib_period_datetime", vec![e_index(e_var("parsed"), e_str("start")), e_index(e_var("parsed"), e_str("start_localtime")), e_index(e_var("parsed"), e_str("start_timezone"))])])),
         s_assign("interval", e_new("DateInterval", vec![e_str("PT0S")])),
         s_prop_assign(e_var("interval"), "y", e_index(e_var("parsed"), e_str("y"))),
         s_prop_assign(e_var("interval"), "m", e_index(e_var("parsed"), e_str("m"))),
@@ -105,15 +96,15 @@ pub(super) fn create_from_iso8601() -> Vec<Stmt> {
         s_if(
             e_index(e_var("parsed"), e_str("has_end")),
             vec![
-                s_expr(e_method_call(e_var("typedResult"), "__elephc_initialize_end_components", vec![e_var("start"), e_var("interval"), e_var("endTimestamp"), e_var("options")])),
+                s_expr(e_method_call(e_var("typedResult"), "__elephc_initialize_end_components", vec![e_var("start"), e_var("interval"), e_call("__elephc_timelib_period_datetime", vec![e_index(e_var("parsed"), e_str("end")), e_index(e_var("parsed"), e_str("end_localtime")), e_index(e_var("parsed"), e_str("end_timezone"))]), e_var("options")])),
             ],
             vec![],
             Some(vec![
                 s_expr(e_method_call(e_var("typedResult"), "__elephc_initialize_recurrence_components", vec![e_var("start"), e_var("interval"), e_index(e_var("parsed"), e_str("recurrences")), e_var("options")])),
             ]),
         ),
-        s_expr(e_call("unset", vec![e_var("interval")])),
         s_expr(e_call("unset", vec![e_var("start")])),
+        s_expr(e_call("unset", vec![e_var("interval")])),
         s_expr(e_call("unset", vec![e_var("parsed")])),
         s_return(e_var("typedResult")),
     ]

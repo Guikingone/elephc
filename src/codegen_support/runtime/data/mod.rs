@@ -15,7 +15,9 @@ mod fixed;
 pub(crate) mod instanceof;
 mod user;
 
-pub(crate) use fixed::emit_runtime_data_fixed;
+pub(crate) use fixed::{
+    emit_runtime_data_fixed, SERIALIZE_CLOSURE_ERROR, SERIALIZE_MAGIC_RETURN_TYPE_ERROR,
+};
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
 pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_method};

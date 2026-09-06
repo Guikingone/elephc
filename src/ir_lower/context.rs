@@ -1214,8 +1214,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.local_type(name)
         };
         let slot = self.declare_local(name, php_type.clone());
-        let ir_type = value_ir_type(&php_type);
-        let ownership = Ownership::for_php_type(&php_type);
         let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal;
         let op = match (is_ref_bound, uses_global, kind) {
             (true, _, _) => Op::LoadRefCell,
@@ -1228,6 +1226,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             Some(Immediate::LocalSlot(slot))
         };
+        // A concrete frame value read as Mixed allocates an independent box.
+        // Model that allocation here rather than hiding it inside LoadLocal's
+        // backend coercion, so every expression consumer sees its release duty.
+        let storage_type = self.builder.local_php_type(slot).clone();
+        let boxed_result_type = (matches!(op, Op::LoadLocal | Op::LoadStaticLocal)
+            && matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            && !matches!(storage_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
+            .then(|| php_type.clone());
+        let php_type = if boxed_result_type.is_some() { storage_type } else { php_type };
+        let ir_type = value_ir_type(&php_type);
+        let ownership = Ownership::for_php_type(&php_type);
         let value = self
             .builder
             .emit_with_effects(
@@ -1241,7 +1250,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 span,
             )
             .expect("load_local produces a value");
-        LoweredValue { value, ir_type }
+        let loaded = LoweredValue { value, ir_type };
+        if let Some(result_type) = boxed_result_type {
+            self.box_value_as_mixed(loaded, result_type, span)
+        } else {
+            loaded
+        }
     }
 
     /// Returns true when a variable read should be sourced from the eval scope handle.
@@ -2437,6 +2451,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // must not turn that borrow into a release obligation at the builtin call boundary.
             return false;
         }
+        if matches!(
+            self.builder.value_defining_instruction(value.value)
+                .and_then(|inst| inst.immediate.as_ref()),
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::DateSerializeFinalize,
+            ))
+        ) {
+            // The typed finalizer returns a newly allocated Mixed cell that exclusively owns the
+            // finalized DateTime array/hash payload. A following declared array boundary retains
+            // that payload, then must release this cell exactly once.
+            return true;
+        }
         if self.value_is_owning_builtin_temporary(value.value) {
             return true;
         }
@@ -2488,6 +2514,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::BoolToStr
                     | Op::ResourceToStr
                     | Op::MixedBox
+                    | Op::ReturnBoundaryMixedToObject
                     | Op::ArrayToMixed
                     | Op::HashToMixed
                     | Op::InvokerRefArg
@@ -2521,6 +2548,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ClosureNew
                     | Op::FirstClassCallableNew
                     | Op::CallableArrayNew
+                    | Op::NormalizeCallable
                     | Op::BufferNew
                     | Op::GeneratorNew
                     | Op::CatchBind
@@ -2539,6 +2567,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::RuntimeCall
                     | Op::ExternCall
                     | Op::MethodCall
+                    | Op::MethodCallExact
                     | Op::NullsafeMethodCall
                     | Op::StaticMethodCall
                     | Op::ClosureCall
@@ -2849,7 +2878,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
             )) => matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)),
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => {
-                matches!(
+                crate::ir::Ownership::php_type_needs_lifetime_tracking(&inst.result_php_type)
+                    && matches!(
                     target.result_ownership(),
                     crate::builtins::semantics::BuiltinResultOwnership::Fresh
                 )
@@ -2862,10 +2892,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
             Some(Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
-            )) => matches!(
-                target.result_ownership(),
-                crate::builtins::semantics::BuiltinResultOwnership::Fresh
-            ),
+            )) => crate::ir::Ownership::php_type_needs_lifetime_tracking(&inst.result_php_type)
+                && matches!(
+                    target.result_ownership(),
+                    crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                ),
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::UnaryString(_))) => true,
             Some(Immediate::Data(name_id)) if inst.op == Op::LanguageConstructCall => self
                 .data

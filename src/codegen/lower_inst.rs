@@ -138,7 +138,8 @@ pub(super) use direct_calls::{
 pub(super) use instruction_helpers::instruction_strict_php_profile;
 pub(super) use local_loads::coerce_loaded_local_to_result_type;
 pub(super) use runtime_wrappers::{
-    emit_runtime_builtin_wrapper_inline, emit_runtime_extern_wrapper_inline,
+    emit_runtime_builtin_wrapper_inline, emit_runtime_date_serialize_invoker_inline,
+    emit_runtime_extern_wrapper_inline,
     runtime_builtin_wrapper_sig,
 };
 
@@ -244,6 +245,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
         Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
+        Op::HashToArrayReturn => array_access_runtime::lower_hash_to_array_return(ctx, &inst),
+        Op::DateSerializeHashReturn => {
+            array_access_runtime::lower_date_serialize_hash_return(ctx, &inst)
+        }
         Op::StrConcat => strings::lower_str_concat(ctx, &inst),
         Op::StrLen => strings::lower_str_len(ctx, &inst),
         Op::StrCharAt => strings::lower_str_char_at(ctx, &inst),
@@ -353,6 +358,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, &inst),
         Op::PipeCall => callables::lower_pipe_call(ctx, &inst),
         Op::MethodCall => lower_method_call(ctx, &inst),
+        Op::MethodCallExact => lower_exact_method_call(ctx, &inst),
         Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
         Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, &inst),

@@ -16,7 +16,14 @@ use crate::parser::ast::{
 };
 use crate::types::traits::FlattenedClass;
 
-use super::common::*;
+use super::common::{
+    array_access, array_push_stmt, array_type, assign_stmt, binary_expr, bool_expr, class_const,
+    class_method, count_expr, expr, expr_stmt, foreach_stmt, function_call, if_stmt,
+    increment_stmt, int_expr, method, method_call, method_with_body, mixed_type, named_type,
+    new_object_expr, not_expr, null_expr, param, param_default, property_access,
+    property_assign_stmt, return_body, return_stmt, storage_property, storage_property_default,
+    string_expr, this_expr, var_expr, while_stmt,
+};
 
 /// Inserts classes into the supplied builtin metadata registry.
 pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
@@ -141,6 +148,21 @@ fn spl_internal_iterator_methods() -> Vec<ClassMethod> {
                 TypeExpr::Nullable(Box::new(named_type("Closure"))),
                 null_expr(),
             ),
+            param_default(
+                "onValid",
+                TypeExpr::Nullable(Box::new(named_type("Closure"))),
+                null_expr(),
+            ),
+            param_default(
+                "onNext",
+                TypeExpr::Nullable(Box::new(named_type("Closure"))),
+                null_expr(),
+            ),
+            param_default(
+                "onRewind",
+                TypeExpr::Nullable(Box::new(named_type("Closure"))),
+                null_expr(),
+            ),
         ],
         Some(TypeExpr::Void),
         internal_iterator_construct_body(),
@@ -150,7 +172,7 @@ fn spl_internal_iterator_methods() -> Vec<ClassMethod> {
     vec![
         construct,
         method_with_body("current", Vec::new(), Some(mixed_type()), internal_iterator_current_body()),
-        method_with_body("key", Vec::new(), Some(mixed_type()), return_body(internal_iterator_position_expr())),
+        method_with_body("key", Vec::new(), Some(mixed_type()), internal_iterator_key_body()),
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), internal_iterator_next_body()),
         method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), internal_iterator_rewind_body()),
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), internal_iterator_valid_body()),
@@ -162,8 +184,24 @@ fn internal_iterator_properties() -> Vec<ClassProperty> {
     vec![
         storage_property("owner", mixed_type()),
         storage_property("position", TypeExpr::Int),
+        storage_property_default("rewindCalled", TypeExpr::Bool, bool_expr(false)),
         storage_property_default(
             "onCurrent",
+            TypeExpr::Nullable(Box::new(named_type("Closure"))),
+            null_expr(),
+        ),
+        storage_property_default(
+            "onValid",
+            TypeExpr::Nullable(Box::new(named_type("Closure"))),
+            null_expr(),
+        ),
+        storage_property_default(
+            "onNext",
+            TypeExpr::Nullable(Box::new(named_type("Closure"))),
+            null_expr(),
+        ),
+        storage_property_default(
+            "onRewind",
             TypeExpr::Nullable(Box::new(named_type("Closure"))),
             null_expr(),
         ),
@@ -337,13 +375,59 @@ fn internal_iterator_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "owner", var_expr("owner")),
         property_assign_stmt(this_expr(), "position", int_expr(0)),
+        property_assign_stmt(this_expr(), "rewindCalled", bool_expr(false)),
         property_assign_stmt(this_expr(), "onCurrent", var_expr("onCurrent")),
+        property_assign_stmt(this_expr(), "onValid", var_expr("onValid")),
+        property_assign_stmt(this_expr(), "onNext", var_expr("onNext")),
+        property_assign_stmt(this_expr(), "onRewind", var_expr("onRewind")),
+    ]
+}
+
+/// Builds the lazy rewind guard shared by every observable iterator operation.
+fn internal_iterator_ensure_rewound_body() -> Vec<Stmt> {
+    vec![if_stmt(
+        binary_expr(
+            property_access(this_expr(), "rewindCalled"),
+            BinOp::StrictEq,
+            bool_expr(false),
+        ),
+        vec![expr_stmt(method_call(this_expr(), "rewind", Vec::new()))],
+        None,
+    )]
+}
+
+/// Builds the inline lazy-rewind statement used by observable iterator methods.
+fn internal_iterator_ensure_rewound_stmt() -> Stmt {
+    internal_iterator_ensure_rewound_body()
+        .into_iter()
+        .next()
+        .expect("lazy rewind body always contains one guard")
+}
+
+/// Builds the synthetic method body for the internal iterator key.
+fn internal_iterator_key_body() -> Vec<Stmt> {
+    vec![
+        internal_iterator_ensure_rewound_stmt(),
+        return_stmt(internal_iterator_position_expr()),
     ]
 }
 
 /// Builds the synthetic method body for internal iterator current.
 fn internal_iterator_current_body() -> Vec<Stmt> {
     vec![
+        internal_iterator_ensure_rewound_stmt(),
+        if_stmt(
+            binary_expr(
+                property_access(this_expr(), "onValid"),
+                BinOp::StrictNotEq,
+                null_expr(),
+            ),
+            vec![return_stmt(expr(ExprKind::ExprCall {
+                callee: Box::new(property_access(this_expr(), "onCurrent")),
+                args: Vec::new(),
+            }))],
+            None,
+        ),
         if_stmt(
             binary_expr(
                 property_access(this_expr(), "onCurrent"),
@@ -376,6 +460,7 @@ fn internal_iterator_current_body() -> Vec<Stmt> {
 /// Builds the synthetic method body for internal iterator next.
 fn internal_iterator_next_body() -> Vec<Stmt> {
     vec![
+        internal_iterator_ensure_rewound_stmt(),
         property_assign_stmt(
             this_expr(),
             "position",
@@ -385,6 +470,17 @@ fn internal_iterator_next_body() -> Vec<Stmt> {
                 int_expr(1),
             ),
         ),
+        if_stmt(
+            binary_expr(
+                property_access(this_expr(), "onValid"),
+                BinOp::StrictNotEq,
+                null_expr(),
+            ),
+            vec![expr_stmt(expr(ExprKind::ExprCall {
+                callee: Box::new(property_access(this_expr(), "onNext")),
+                args: Vec::new(),
+            }))],
+            Some(vec![
         if_stmt(
             binary_expr(
                 property_access(this_expr(), "onCurrent"),
@@ -405,6 +501,8 @@ fn internal_iterator_next_body() -> Vec<Stmt> {
             )],
             None,
         ),
+            ]),
+        ),
     ]
 }
 
@@ -412,6 +510,18 @@ fn internal_iterator_next_body() -> Vec<Stmt> {
 fn internal_iterator_rewind_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "position", int_expr(0)),
+        property_assign_stmt(this_expr(), "rewindCalled", bool_expr(true)),
+        if_stmt(
+            binary_expr(
+                property_access(this_expr(), "onRewind"),
+                BinOp::StrictNotEq,
+                null_expr(),
+            ),
+            vec![expr_stmt(expr(ExprKind::ExprCall {
+                callee: Box::new(property_access(this_expr(), "onRewind")),
+                args: Vec::new(),
+            }))],
+            Some(vec![
         if_stmt(
             binary_expr(
                 binary_expr(
@@ -429,17 +539,35 @@ fn internal_iterator_rewind_body() -> Vec<Stmt> {
             vec![expr_stmt(method_call(this_expr(), "current", Vec::new()))],
             None,
         ),
+            ]),
+        ),
     ]
 }
 
 /// Builds the synthetic method body for internal iterator valid.
 fn internal_iterator_valid_body() -> Vec<Stmt> {
-    return_body(binary_expr(
-        internal_iterator_position_expr(),
-        BinOp::Lt,
-        function_call("count", vec![internal_iterator_owner_expr()]),
-    ))
+    vec![
+        internal_iterator_ensure_rewound_stmt(),
+        if_stmt(
+            binary_expr(
+                property_access(this_expr(), "onValid"),
+                BinOp::StrictNotEq,
+                null_expr(),
+            ),
+            vec![return_stmt(expr(ExprKind::ExprCall {
+                callee: Box::new(property_access(this_expr(), "onValid")),
+                args: vec![internal_iterator_position_expr()],
+            }))],
+            None,
+        ),
+        return_stmt(binary_expr(
+            internal_iterator_position_expr(),
+            BinOp::Lt,
+            function_call("count", vec![internal_iterator_owner_expr()]),
+        )),
+    ]
 }
+
 
 /// Builds the synthetic method body for fixed array get iterator.
 fn fixed_array_get_iterator_body() -> Vec<Stmt> {

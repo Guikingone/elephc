@@ -85,6 +85,19 @@ struct TimelibLocationInfo {
     comments: *mut c_char,
 }
 
+/// Mirrors the POSIX footer, whose DST rules are absent for fixed-offset zones.
+#[repr(C)]
+struct TimelibPosixInfo {
+    standard: *mut c_char,
+    standard_offset: i64,
+    daylight: *mut c_char,
+    daylight_offset: i64,
+    dst_begin: *mut c_void,
+    dst_end: *mut c_void,
+    standard_type: c_int,
+    daylight_type: c_int,
+}
+
 #[repr(C)]
 #[allow(dead_code)]
 struct TimelibTimezoneInfo {
@@ -99,7 +112,36 @@ struct TimelibTimezoneInfo {
     bc: u8,
     location: TimelibLocationInfo,
     posix_string: *mut c_char,
-    posix_info: *mut c_void,
+    posix_info: *mut TimelibPosixInfo,
+}
+
+#[repr(C)]
+struct TimelibPosixTransitions {
+    count: usize,
+    times: [i64; 6],
+    types: [i64; 6],
+}
+
+#[repr(C)]
+struct TimelibTimeOffset {
+    offset: i32,
+    leap_seconds: c_uint,
+    is_dst: c_uint,
+    abbreviation: *mut c_char,
+    transition_time: i64,
+}
+
+/// One timelib-derived future transition ready for the public bridge marshaller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PosixTransition {
+    /// UTC timestamp when the new offset takes effect.
+    pub(super) timestamp: i64,
+    /// Offset in seconds east of UTC.
+    pub(super) offset: i64,
+    /// Whether the resulting offset is daylight-saving time.
+    pub(super) is_dst: bool,
+    /// Timelib's exact active abbreviation.
+    pub(super) abbreviation: String,
 }
 
 #[repr(C)]
@@ -193,6 +235,22 @@ unsafe extern "C" {
         tzdb: *const TimelibTimezoneDb,
         error_code: *mut c_int,
     ) -> *mut TimelibTimezoneInfo;
+
+    /// Synthesizes the POSIX footer's transitions for one Gregorian year.
+    fn timelib_get_transitions_for_year(
+        timezone: *mut TimelibTimezoneInfo,
+        year: i64,
+        transitions: *mut TimelibPosixTransitions,
+    );
+
+    /// Resolves the active offset, DST flag, and abbreviation at one UTC timestamp.
+    fn timelib_get_time_zone_info(
+        timestamp: i64,
+        timezone: *mut TimelibTimezoneInfo,
+    ) -> *mut TimelibTimeOffset;
+
+    /// Releases the offset record allocated by `timelib_get_time_zone_info`.
+    fn timelib_time_offset_dtor(offset: *mut TimelibTimeOffset);
 
     /// Releases one raw parse result.
     fn timelib_time_dtor(time: *mut TimelibTime);
@@ -308,6 +366,97 @@ unsafe extern "C" fn cached_timezone_getter(
     pointer
 }
 
+/// Resolves a named zone through the cached timelib database without transferring ownership.
+unsafe fn cached_timezone(name: &str) -> Option<*mut TimelibTimezoneInfo> {
+    let name = CString::new(name).ok()?;
+    let mut error = 0;
+    let timezone = cached_timezone_getter(name.as_ptr(), timelib_builtin_db(), &mut error);
+    (!timezone.is_null() && error == 0).then_some(timezone)
+}
+
+/// Returns POSIX-footer transitions with PHP's inclusive footer range bounds.
+pub(super) fn posix_transitions_between(
+    name: &str,
+    first_year: i64,
+    last_year: i64,
+    after: i64,
+    begin: i64,
+    end: i64,
+) -> Option<Vec<PosixTransition>> {
+    if first_year > last_year || begin > end {
+        return Some(Vec::new());
+    }
+    unsafe {
+        let timezone = cached_timezone(name)?;
+        let posix = (*timezone).posix_info;
+        if posix.is_null() || (*posix).dst_begin.is_null() || (*posix).dst_end.is_null() {
+            return Some(Vec::new());
+        }
+        let mut rows = Vec::new();
+        let mut year = first_year;
+        loop {
+            let mut transitions = std::mem::zeroed::<TimelibPosixTransitions>();
+            timelib_get_transitions_for_year(timezone, year, &mut transitions);
+            for timestamp in transitions.times[..transitions.count.min(6)].iter().copied() {
+                if timestamp <= after || timestamp < begin {
+                    continue;
+                }
+                if timestamp > end {
+                    return Some(rows);
+                }
+                let offset = timelib_get_time_zone_info(timestamp, timezone);
+                if offset.is_null() {
+                    continue;
+                }
+                let abbreviation = if (*offset).abbreviation.is_null() {
+                    "GMT".to_string()
+                } else {
+                    CStr::from_ptr((*offset).abbreviation)
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                rows.push(PosixTransition {
+                    timestamp,
+                    offset: i64::from((*offset).offset),
+                    is_dst: (*offset).is_dst != 0,
+                    abbreviation,
+                });
+                timelib_time_offset_dtor(offset);
+            }
+            if year == last_year {
+                return Some(rows);
+            }
+            year = year.checked_add(1)?;
+        }
+    }
+}
+
+/// Resolves the POSIX-aware active offset at one timestamp beyond a stored transition table.
+pub(super) fn timezone_offset_at(name: &str, timestamp: i64) -> Option<PosixTransition> {
+    unsafe {
+        let timezone = cached_timezone(name)?;
+        let offset = timelib_get_time_zone_info(timestamp, timezone);
+        if offset.is_null() {
+            return None;
+        }
+        let abbreviation = if (*offset).abbreviation.is_null() {
+            "GMT".to_string()
+        } else {
+            CStr::from_ptr((*offset).abbreviation)
+                .to_string_lossy()
+                .into_owned()
+        };
+        let row = PosixTransition {
+            timestamp,
+            offset: i64::from((*offset).offset),
+            is_dst: (*offset).is_dst != 0,
+            abbreviation,
+        };
+        timelib_time_offset_dtor(offset);
+        Some(row)
+    }
+}
+
 const _: () = {
     assert!(std::mem::align_of::<TimelibRelativeSpecial>() == 8);
     assert!(std::mem::size_of::<TimelibRelativeSpecial>() == 16);
@@ -371,6 +520,31 @@ const _: () = {
     assert!(std::mem::offset_of!(TimelibTimezoneInfo, location) == 128);
     assert!(std::mem::offset_of!(TimelibTimezoneInfo, posix_string) == 160);
     assert!(std::mem::offset_of!(TimelibTimezoneInfo, posix_info) == 168);
+
+    assert!(std::mem::align_of::<TimelibPosixInfo>() == 8);
+    assert!(std::mem::size_of::<TimelibPosixInfo>() == 56);
+    assert!(std::mem::offset_of!(TimelibPosixInfo, standard) == 0);
+    assert!(std::mem::offset_of!(TimelibPosixInfo, standard_offset) == 8);
+    assert!(std::mem::offset_of!(TimelibPosixInfo, daylight) == 16);
+    assert!(std::mem::offset_of!(TimelibPosixInfo, daylight_offset) == 24);
+    assert!(std::mem::offset_of!(TimelibPosixInfo, dst_begin) == 32);
+    assert!(std::mem::offset_of!(TimelibPosixInfo, dst_end) == 40);
+    assert!(std::mem::offset_of!(TimelibPosixInfo, standard_type) == 48);
+    assert!(std::mem::offset_of!(TimelibPosixInfo, daylight_type) == 52);
+
+    assert!(std::mem::align_of::<TimelibPosixTransitions>() == 8);
+    assert!(std::mem::size_of::<TimelibPosixTransitions>() == 104);
+    assert!(std::mem::offset_of!(TimelibPosixTransitions, count) == 0);
+    assert!(std::mem::offset_of!(TimelibPosixTransitions, times) == 8);
+    assert!(std::mem::offset_of!(TimelibPosixTransitions, types) == 56);
+
+    assert!(std::mem::align_of::<TimelibTimeOffset>() == 8);
+    assert!(std::mem::size_of::<TimelibTimeOffset>() == 32);
+    assert!(std::mem::offset_of!(TimelibTimeOffset, offset) == 0);
+    assert!(std::mem::offset_of!(TimelibTimeOffset, leap_seconds) == 4);
+    assert!(std::mem::offset_of!(TimelibTimeOffset, is_dst) == 8);
+    assert!(std::mem::offset_of!(TimelibTimeOffset, abbreviation) == 16);
+    assert!(std::mem::offset_of!(TimelibTimeOffset, transition_time) == 24);
 
     assert!(std::mem::align_of::<TimelibTime>() == 8);
     assert!(std::mem::size_of::<TimelibTime>() == 240);
@@ -1154,8 +1328,44 @@ pub fn interval_restore_parse_serialized(input: &str) -> String {
     relative_interval_parse_serialized(input, false)
 }
 
+/// Formats a fixed east-of-UTC offset in the spelling accepted by `DateTimeZone`.
+fn format_fixed_offset(offset: i64) -> String {
+    let sign = if offset < 0 { '-' } else { '+' };
+    let total = offset.unsigned_abs();
+    let hours = total / 3_600;
+    let minutes = (total % 3_600) / 60;
+    let seconds = total % 60;
+    if seconds == 0 {
+        format!("{sign}{hours:02}:{minutes:02}")
+    } else {
+        format!("{sign}{hours:02}:{minutes:02}:{seconds:02}")
+    }
+}
+
+/// Serializes the local-time state of one DatePeriod endpoint for the PHP decoder.
+///
+/// `timelib_strtointerval()` returns raw `timelib_time` values, not merely Unix
+/// timestamps.  The period model must retain whether the value is GMT plus the
+/// original zone representation, otherwise `DateTime::getTimezone()` and civil
+/// iteration drift after ISO construction.
+unsafe fn period_endpoint_timezone(time: *const TimelibTime) -> (u8, String) {
+    if time.is_null() || (*time).is_localtime == 0 {
+        return (0, String::new());
+    }
+    let zone = match (*time).zone_type {
+        TIMELIB_ZONETYPE_OFFSET => format_fixed_offset((*time).z as i64),
+        TIMELIB_ZONETYPE_ABBR => owned_c_string((*time).tz_abbr),
+        TIMELIB_ZONETYPE_ID if !(*time).tz_info.is_null() => {
+            owned_c_string((*(*time).tz_info).name)
+        }
+        _ => String::new(),
+    };
+    ((*time).is_localtime as u8, zone)
+}
+
 /// Parses the exact DatePeriod ISO grammar and serializes the optional start,
-/// end, interval, and recurrence fields without imposing PHP's later validation.
+/// end, interval, recurrence, and endpoint timezone state without imposing PHP's
+/// later validation.
 pub fn period_parse_serialized(input: &str) -> String {
     let Ok(input_c) = CString::new(input) else {
         return "E".to_string();
@@ -1205,12 +1415,18 @@ pub fn period_parse_serialized(input: &str) -> String {
             } else {
                 *period
             };
+            let (start_localtime, start_timezone) = period_endpoint_timezone(begin);
+            let (end_localtime, end_timezone) = period_endpoint_timezone(end);
             format!(
-                "P\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "P\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 (!begin.is_null()) as u8,
                 if begin.is_null() { 0 } else { (*begin).sse },
+                start_localtime,
+                start_timezone,
                 (!end.is_null()) as u8,
                 if end.is_null() { 0 } else { (*end).sse },
+                end_localtime,
+                end_timezone,
                 (!period.is_null()) as u8,
                 recurrences,
                 relative.y,
@@ -1218,7 +1434,9 @@ pub fn period_parse_serialized(input: &str) -> String {
                 relative.d,
                 relative.h,
                 relative.i,
-            ) + &format!("\t{}\t{}", relative.s, relative.us)
+                relative.s,
+                relative.us,
+            )
         };
         if !begin.is_null() {
             timelib_time_dtor(begin);
@@ -1318,11 +1536,13 @@ pub fn apply_interval_serialized(
     microsecond: i64,
     timezone_name: &str,
     payload: &str,
-    subtract: bool,
+    mode: i64,
 ) -> Option<String> {
     let timezone_name = CString::new(timezone_name).ok()?;
     unsafe {
         let (mut relative, wall) = relative_from_payload(payload)?;
+        let subtract = mode == 1;
+        let period_advance = mode == 2;
         if subtract
             && (relative.have_weekday_relative != 0
                 || relative.have_special_relative != 0)
@@ -1336,6 +1556,16 @@ pub fn apply_interval_serialized(
         attach_timezone(base, &timezone_name);
         timelib_unixtime2local(base, timestamp);
         (*base).us = microsecond;
+        if period_advance {
+            (*base).relative = relative;
+            (*base).have_relative = 1;
+            (*base).sse_uptodate = 0;
+            timelib_update_ts(base, (*base).tz_info);
+            timelib_update_from_sse(base);
+            let serialized = format!("{}\t{}\t0", (*base).sse, (*base).us);
+            timelib_time_dtor(base);
+            return Some(serialized);
+        }
         let result = match (subtract, wall) {
             (false, false) => timelib_add(base, &mut relative),
             (false, true) => timelib_add_wall(base, &mut relative),
@@ -1606,16 +1836,13 @@ mod tests {
         assert!(value.ends_with("\t3"));
     }
 
-    /// DatePeriod parsing accepts both endpoints and a period.
+    /// DatePeriod parsing rejects the endpoint/interval/end form without the required recurrence prefix.
     #[test]
-    fn parses_dateperiod_endpoint_interval_form() {
+    fn rejects_dateperiod_endpoint_interval_form_without_recurrence_prefix() {
         let value = period_parse_serialized(
-            "2024-01-01T00:00:00Z/P2D/2024-01-07T00:00:00Z",
+            "2024-01-01T00:00:00+02:00/P2D/2024-01-07T00:00:00+02:00",
         );
-        assert_eq!(
-            value,
-            "P\t1\t1704067200\t1\t1704585600\t1\t0\t0\t0\t2\t0\t0\t0\t0"
-        );
+        assert_eq!(value, "E");
     }
 
     /// POSIX runtime timezone names invert the sign while retaining optional

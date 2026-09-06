@@ -124,7 +124,7 @@ fn eval_print_r_append_value(
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
             eval_print_r_append_array(value, context, values, depth, arrays_seen, objects_seen, output)
         }
-        EVAL_TAG_OBJECT => {
+        EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
             eval_print_r_append_object(value, context, values, depth, arrays_seen, objects_seen, output)
         }
         _ => {
@@ -261,6 +261,9 @@ pub(in crate::interpreter) fn eval_debug_object_class_name(
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     if let Some(identity) = identity {
+        if context.closure_object_target(identity).is_some() {
+            return Ok("Closure".to_string());
+        }
         if let Some(class) = context.dynamic_object_class(identity) {
             return Ok(class.name().trim_start_matches('\\').to_string());
         }
@@ -281,11 +284,158 @@ pub(in crate::interpreter) fn eval_debug_object_properties(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
     if let Some(identity) = identity {
+        if let Some(target) = context.closure_object_target(identity).cloned() {
+            return eval_debug_closure_properties(&target, context, values);
+        }
         if context.dynamic_object_class(identity).is_some() {
             return eval_debug_dynamic_object_properties(object, identity, class_name, context, values);
         }
     }
     eval_debug_public_object_properties(object, values)
+}
+
+/// Builds php-src-style debug properties for one eval first-class callable object.
+fn eval_debug_closure_properties(
+    target: &EvalClosureObjectTarget,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
+    match target {
+        EvalClosureObjectTarget::Named(name)
+        | EvalClosureObjectTarget::BoundNamed { name, .. } => {
+            let function = context
+                .closure(name)
+                .map(|closure| closure.function())
+                .or_else(|| context.function(name));
+            let display_name = function.map_or(name.as_str(), EvalFunction::display_name);
+            let value = values.string_bytes_value(display_name.as_bytes())?;
+            let mut properties = vec![eval_debug_public_property("function", value)];
+            if let Some(function) = function.filter(|function| !function.params().is_empty()) {
+                let parameters = eval_debug_function_parameter_array(function, values)?;
+                properties.push(eval_debug_public_property("parameter", parameters));
+            }
+            Ok(properties)
+        }
+        EvalClosureObjectTarget::InvokableObject { object } => {
+            eval_debug_method_closure_properties(*object, "__invoke", context, values)
+        }
+        EvalClosureObjectTarget::ObjectMethod { object, method, .. } => {
+            eval_debug_method_closure_properties(*object, method, context, values)
+        }
+        EvalClosureObjectTarget::StaticMethod {
+            class_name, method, ..
+        } => eval_debug_named_method_closure_properties(class_name, method, context, values),
+    }
+}
+
+/// Builds debug properties for an object-bound eval method Closure.
+fn eval_debug_method_closure_properties(
+    object: RuntimeCellHandle,
+    method: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
+    let identity = eval_debug_object_identity(object, values);
+    let class_name = eval_debug_object_class_name(object, identity, context, values)?;
+    eval_debug_named_method_closure_properties(&class_name, method, context, values)
+}
+
+/// Builds debug properties for one class-method Closure target.
+fn eval_debug_named_method_closure_properties(
+    class_name: &str,
+    method: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
+    let (declaring_class, effective_method) = context
+        .class_method(class_name, method)
+        .map(|(owner, method)| (owner, Some(method)))
+        .unwrap_or_else(|| (class_name.to_string(), None));
+    let canonical_method = effective_method
+        .as_ref()
+        .map_or(method, EvalClassMethod::name);
+    let function = values
+        .string_bytes_value(format!("{declaring_class}::{canonical_method}").as_bytes())?;
+    let mut properties = vec![eval_debug_public_property("function", function)];
+    if let Some(method) = effective_method.as_ref().filter(|method| !method.params().is_empty()) {
+        let parameters = eval_debug_closure_parameter_array(method, values)?;
+        properties.push(eval_debug_public_property("parameter", parameters));
+    }
+    Ok(properties)
+}
+
+/// Creates the associative parameter projection used by fake Closure debug output.
+fn eval_debug_closure_parameter_array(
+    method: &EvalClassMethod,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut parameters = values.assoc_new(method.params().len())?;
+    for (index, name) in method.params().iter().enumerate() {
+        let mut rendered = String::new();
+        if method
+            .parameter_is_by_ref()
+            .get(index)
+            .copied()
+            .unwrap_or(false)
+        {
+            rendered.push('&');
+        }
+        rendered.push('$');
+        rendered.push_str(name);
+        let optional = index >= method.required_num_args();
+        let key = values.string_bytes_value(rendered.as_bytes())?;
+        let value = values.string_bytes_value(if optional {
+            b"<optional>"
+        } else {
+            b"<required>"
+        })?;
+        parameters = values.array_set(parameters, key, value)?;
+    }
+    Ok(parameters)
+}
+
+/// Creates the associative parameter projection used by eval function Closures.
+fn eval_debug_function_parameter_array(
+    function: &EvalFunction,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut parameters = values.assoc_new(function.params().len())?;
+    for (index, name) in function.params().iter().enumerate() {
+        let mut rendered = String::new();
+        if function
+            .parameter_is_by_ref()
+            .get(index)
+            .copied()
+            .unwrap_or(false)
+        {
+            rendered.push('&');
+        }
+        rendered.push('$');
+        rendered.push_str(name);
+        let key = values.string_bytes_value(rendered.as_bytes())?;
+        let value = values.string_bytes_value(if index >= function.required_num_args() {
+            b"<optional>"
+        } else {
+            b"<required>"
+        })?;
+        parameters = values.array_set(parameters, key, value)?;
+    }
+    Ok(parameters)
+}
+
+/// Wraps one public debug property with the shared object-renderer metadata.
+fn eval_debug_public_property(
+    name: &str,
+    value: RuntimeCellHandle,
+) -> EvalDebugObjectProperty {
+    EvalDebugObjectProperty {
+        name: name.to_string(),
+        visibility: EvalDebugPropertyVisibility {
+            kind: EvalDebugPropertyVisibilityKind::Public,
+        },
+        value,
+        is_reference: false,
+    }
 }
 
 /// Collects eval-declared object properties plus public dynamic properties.

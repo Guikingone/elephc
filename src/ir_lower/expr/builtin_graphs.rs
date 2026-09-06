@@ -78,14 +78,27 @@ pub(super) fn lower_date_serialize_hash_from_object(
         value: Box::new(PhpType::Mixed),
     };
     let method = ctx.intern_string("__serialize");
-    ctx.emit_value(
+    let serialized = ctx.emit_value(
         Op::MethodCall,
         vec![object],
         Some(Immediate::Data(method)),
-        hash_type,
+        hash_type.clone(),
         Op::MethodCall.default_effects(),
         Some(span),
-    )
+    );
+    if super::method_calls::date_magic_uses_builtin_handler(ctx, object, "__serialize") {
+        return ctx.emit_value(
+            Op::RuntimeCall,
+            vec![serialized.value, object],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::DateMagicAppendProperties,
+            ))),
+            hash_type,
+            RuntimeFnId::DateMagicAppendProperties.effects(),
+            Some(span),
+        );
+    }
+    serialized
 }
 
 /// Builds a visible property hash, optionally replacing nested date objects with JSON hashes.

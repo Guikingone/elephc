@@ -97,7 +97,7 @@ fn eval_var_dump_append_value(
             objects_seen,
             output,
         ),
-        EVAL_TAG_OBJECT => eval_var_dump_append_object(
+        EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => eval_var_dump_append_object(
             value,
             context,
             values,

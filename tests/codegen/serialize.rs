@@ -101,6 +101,27 @@ try {
     );
 }
 
+/// Verifies that serializing a Closure links and throws php-src's base Exception with the
+/// canonical message, code, and null previous value.
+#[test]
+fn test_serialize_closure_throws_linked_exception() {
+    let out = compile_and_run(
+        r#"<?php
+$closure = function (): void {};
+try {
+    serialize($closure);
+} catch (Exception $exception) {
+    echo get_class($exception), "|", $exception->getMessage(), "|";
+    echo $exception->getCode(), "|", $exception->getPrevious() === null ? "null" : "value";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Exception|Serialization of 'Closure' is not allowed|0|null"
+    );
+}
+
 /// Verifies `serialize()` formats each scalar type exactly like PHP's wire format.
 #[test]
 fn test_serialize_scalars_match_php_wire_format() {

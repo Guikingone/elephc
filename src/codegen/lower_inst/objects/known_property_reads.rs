@@ -93,7 +93,7 @@ pub(super) fn lower_prop_get_nonnull(
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
-    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    materialize_loaded_property_result(ctx, inst, &slot.storage_type)?;
     store_if_result(ctx, inst)
 }
 

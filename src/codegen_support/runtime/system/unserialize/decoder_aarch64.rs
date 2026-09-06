@@ -81,7 +81,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.comment("--- runtime: unser_at (recursive serialize() value parser) ---");
     emitter.label_global("__rt_unser_at");
     // [sp+0]=base [8]=pos [16]=end [24]=container [32]=count [40]=index [48]=key_lo [56]=key_hi
-    // [sp+64]=scratch [72]=hook/name length [80]=policy/data hash [88]=registry index [96]=object box
+    // [sp+64]=scratch [72]=hook/name length [80]=policy/data hash [88]=registry index [96]=object box [104]=R: marker
     emitter.instruction("sub sp, sp, #128");                                    // recursive parser frame
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish the new frame pointer
@@ -476,17 +476,36 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #48]");                                   // save key_lo
     emitter.instruction("str x1, [sp, #56]");                                   // save key_hi
     emitter.instruction("str x2, [sp, #8]");                                    // advance past the key
+    emitter.instruction("ldr x9, [sp, #0]");                                    // base for the value-kind probe
+    emitter.instruction("ldrb w10, [x9, x2]");                                 // first byte of the serialized value
+    emitter.instruction("cmp w10, #82");                                       // ASCII 'R' denotes a PHP reference, unlike object alias r:
+    emitter.instruction("cset x9, eq");                                        // retain the wire provenance across recursive parsing
+    emitter.instruction("str x9, [sp, #104]");                                 // park the R: marker for the date-handler gate
     emitter.instruction("ldr x0, [sp, #0]");                                    // base
     emitter.instruction("ldr x1, [sp, #8]");                                    // position after the key
     emitter.instruction("ldr x2, [sp, #16]");                                   // end
     emitter.instruction("bl __rt_unser_at");                                    // recursively parse the value -> x0=box, x1=newpos
     emitter.instruction("str x1, [sp, #8]");                                    // advance past the value
     emitter.instruction("cbz x0, __rt_unser_obj_data_fail");                    // propagate semantic child-decoder failures safely
+    emitter.instruction("mov x4, xzr");                                        // boxed Mixed entries normally have no high payload word
+    emitter.instruction("ldr x9, [sp, #104]");                                 // did this value originate from R:?
+    emitter.instruction("cbz x9, __rt_unser_obj_data_store");                   // ordinary values enter the user __unserialize array unchanged
+    emitter.instruction("ldr x9, [sp, #24]");                                  // concrete receiver selects the DateTime-family gate
+    emitter.instruction("ldr x9, [x9]");                                       // class id
+    crate::codegen_support::abi::emit_symbol_address(
+        emitter,
+        "x10",
+        "_class_date_unserialize_family_flags",
+    );
+    emitter.instruction("ldr x10, [x10, x9, lsl #3]");                         // DateTime family, even when a child overrides magic?
+    emitter.instruction("cbz x10, __rt_unser_obj_data_store");                  // non-date user hooks retain their ordinary wire representation
+    emitter.instruction("mov x4, #1");                                         // preserve R: provenance in the boxed-Mixed hash entry high word
+    emitter.label("__rt_unser_obj_data_store");
     emitter.instruction("mov x3, x0");                                          // value_lo = parsed value box
     emitter.instruction("ldr x0, [sp, #80]");                                   // $data hash pointer
     emitter.instruction("ldr x1, [sp, #48]");                                   // key_lo
     emitter.instruction("ldr x2, [sp, #56]");                                   // key_hi (-1 for int keys)
-    emitter.instruction("mov x4, #0");                                          // value_hi unused
+    // x4 carries the DateTime-only R: provenance marker, or zero for an ordinary box.
     emitter.instruction("mov x5, #7");                                          // value tag = boxed Mixed (transfer the box)
     emitter.instruction("bl __rt_hash_set");                                    // insert the entry -> x0 = (possibly new) hash
     emitter.instruction("str x0, [sp, #80]");                                   // save the updated $data hash pointer
@@ -575,9 +594,6 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("cbz x10, __rt_unser_dateinterval_dynamic_done");       // runtime-only callers may have no callback
     emitter.instruction("blr x10");                                             // emit the dynamic-property deprecation at the call site
     emitter.label("__rt_unser_dateinterval_dynamic_done");
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the concrete object receiver
-    emitter.instruction("ldr x1, [sp, #80]");                                   // reload the parsed magic data hash
-    emitter.instruction("bl __rt_date_magic_restore_props");                    // restore user-declared date-subclass properties
     emitter.instruction("b __rt_unser_at_obj_box");                             // box the object (position is at the closing '}')
     emitter.label("__rt_unser_obj_default");
     emitter.instruction("ldr x9, [sp, #80]");                                   // blocked objects own an opaque Mixed property hash

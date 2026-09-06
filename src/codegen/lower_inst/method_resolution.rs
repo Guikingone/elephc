@@ -97,20 +97,74 @@ pub(super) fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, s
     abi::emit_symbol_address(ctx.emitter, dispatch_reg, "_class_vtable_ptrs");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!(
+            let load = format!(
                 "ldr {}, [{}, {}, lsl #3]",
                 dispatch_reg, dispatch_reg, class_id_reg
-            ));                                                                 // load the class-specific instance-vtable pointer
+            );
+            ctx.emitter.instruction(&load);                                     // load the class-specific instance-vtable pointer
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            let load = format!(
                 "mov {}, QWORD PTR [{} + {} * 8]",
                 dispatch_reg, dispatch_reg, class_id_reg
-            ));                                                                 // load the class-specific instance-vtable pointer
+            );
+            ctx.emitter.instruction(&load);                                     // load the class-specific instance-vtable pointer
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_reg, dispatch_reg, slot * 8);
     abi::emit_call_reg(ctx.emitter, dispatch_reg);
+}
+
+/// Dispatches a shared concrete date method using the receiver's runtime class.
+pub(super) fn emit_concrete_date_interface_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    method_key: &str,
+    signature: FunctionSig,
+    external_done: Option<&str>,
+) -> Result<PhpType> {
+    let mut candidates: Vec<_> = ctx.module.class_infos.iter().filter_map(|(name, info)| {
+        let mut ancestor = name.as_str();
+        loop {
+            if matches!(ancestor, "DateTime" | "DateTimeImmutable") {
+                return Some((info.class_id, name.clone()));
+            }
+            ancestor = ctx.module.class_infos.get(ancestor)?.parent.as_deref()?;
+        }
+    }).collect();
+    candidates.sort_by_key(|(class_id, _)| *class_id);
+    let done = external_done.map(str::to_owned)
+        .unwrap_or_else(|| ctx.next_label("date_interface_dispatch_done"));
+    for (class_id, class_name) in candidates {
+        let next = ctx.next_label("date_interface_dispatch_next");
+        let target = resolve_method_call_target(ctx, &class_name, method_key, signature.params.len() + 1)?;
+        let class_reg = abi::temp_int_reg(ctx.emitter.target);
+        let scratch = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_load_from_address(ctx.emitter, class_reg, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+        abi::emit_load_int_immediate(ctx.emitter, scratch, class_id as i64);
+        let compare = format!("cmp {class_reg}, {scratch}");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&compare);                              // compare the concrete receiver against this date-family candidate
+                ctx.emitter.instruction(&format!("b.ne {next}"));               // try the next concrete implementation on mismatch
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&compare);                              // compare the concrete receiver against this date-family candidate
+                ctx.emitter.instruction(&format!("jne {next}"));                // try the next concrete implementation on mismatch
+            }
+        }
+        if let Some(slot) = target.dynamic_slot {
+            emit_dynamic_instance_method_call(ctx, slot);
+        } else {
+            abi::emit_call_label(ctx.emitter, &crate::names::method_symbol(&target.impl_class, method_key));
+        }
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&next);
+    }
+    exceptions::emit_error(ctx, "Invalid DateTimeInterface receiver");
+    if external_done.is_none() {
+        ctx.emitter.label(&done);
+    }
+    Ok(signature.return_type)
 }
 
 /// Returns true when the current EIR module includes the target class method body.

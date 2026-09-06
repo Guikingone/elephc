@@ -452,53 +452,53 @@ fn lower_datetime_family_compare(
 ) -> LoweredValue {
     let lhs = unbox_datetime_comparison_operand(ctx, lhs, expr.span);
     let rhs = unbox_datetime_comparison_operand(ctx, rhs, expr.span);
-    let guard = ctx.intern_string("__elephc_assert_comparable");
+    let guard = ctx.intern_string("DateTime::__elephc_assert_comparable");
     ctx.emit_void(
-        Op::MethodCall,
+        Op::MethodCallExact,
         vec![lhs.value],
         Some(Immediate::Data(guard)),
-        Op::MethodCall.default_effects(),
+        Op::MethodCallExact.default_effects(),
         Some(expr.span),
     );
     ctx.emit_void(
-        Op::MethodCall,
+        Op::MethodCallExact,
         vec![rhs.value],
         Some(Immediate::Data(guard)),
-        Op::MethodCall.default_effects(),
+        Op::MethodCallExact.default_effects(),
         Some(expr.span),
     );
-    let timestamp_method = ctx.intern_string("getTimestamp");
-    let microsecond_method = ctx.intern_string("getMicrosecond");
+    let timestamp_method = ctx.intern_string("DateTime::__elephc_timestamp_internal");
+    let microsecond_method = ctx.intern_string("DateTime::__elephc_microsecond_internal");
     let left_timestamp = ctx.emit_value(
-        Op::MethodCall,
+        Op::MethodCallExact,
         vec![lhs.value],
         Some(Immediate::Data(timestamp_method)),
         PhpType::Int,
-        Op::MethodCall.default_effects(),
+        Op::MethodCallExact.default_effects(),
         Some(expr.span),
     );
     let right_timestamp = ctx.emit_value(
-        Op::MethodCall,
+        Op::MethodCallExact,
         vec![rhs.value],
         Some(Immediate::Data(timestamp_method)),
         PhpType::Int,
-        Op::MethodCall.default_effects(),
+        Op::MethodCallExact.default_effects(),
         Some(expr.span),
     );
     let left_microsecond = ctx.emit_value(
-        Op::MethodCall,
+        Op::MethodCallExact,
         vec![lhs.value],
         Some(Immediate::Data(microsecond_method)),
         PhpType::Int,
-        Op::MethodCall.default_effects(),
+        Op::MethodCallExact.default_effects(),
         Some(expr.span),
     );
     let right_microsecond = ctx.emit_value(
-        Op::MethodCall,
+        Op::MethodCallExact,
         vec![rhs.value],
         Some(Immediate::Data(microsecond_method)),
         PhpType::Int,
-        Op::MethodCall.default_effects(),
+        Op::MethodCallExact.default_effects(),
         Some(expr.span),
     );
     let seconds_equal = emit_datetime_field_compare(

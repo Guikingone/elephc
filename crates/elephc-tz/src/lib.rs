@@ -37,7 +37,6 @@ const ABBREVIATIONS: &str = include_str!("../data/abbreviations.data");
 /// by `data/generate.php` as `timezone_version_get()`. Trimmed of the trailing newline
 /// so callers see exactly e.g. `2026.3`.
 const VERSION: &str = include_str!("../data/version.data");
-
 /// Reports the timelib/IANA release the embedded introspection tables were baked
 /// from, matching what PHP's `timezone_version_get()` returned during generation.
 /// Re-running `data/generate.php` re-pins this in lockstep with the data files.
@@ -156,6 +155,38 @@ pub fn timezone_identifier_valid(name: &str) -> bool {
     transitions_index().contains_key(name)
 }
 
+/// Formats one timestamp with the same timelib-backed token engine used by generated AOT code.
+pub fn format_timestamp_php(
+    timestamp: i64,
+    timezone_name: &str,
+    format: &[u8],
+    localtime: bool,
+) -> Option<Vec<u8>> {
+    format::format_timestamp(timestamp, 0, timezone_name, format, localtime)
+}
+
+/// Parses one PHP free-form datetime through the shared vendored timelib implementation.
+pub fn strtotime_timestamp_php(
+    input: &str,
+    base_timestamp: Option<i64>,
+    timezone_name: &str,
+) -> Option<i64> {
+    timelib_ffi::strtotime_timestamp(input, base_timestamp, timezone_name)
+}
+
+/// Builds one timestamp from PHP civil components through the shared timelib implementation.
+pub fn mktime_timestamp_php(
+    hour: i64,
+    minute: i64,
+    second: i64,
+    month: i64,
+    day: i64,
+    year: i64,
+    timezone_name: &str,
+) -> Option<i64> {
+    timelib_ffi::mktime_timestamp(hour, minute, second, month, day, year, timezone_name)
+}
+
 /// Memoized index over the embedded locations table.
 fn locations_index() -> &'static HashMap<&'static str, &'static str> {
     static IDX: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
@@ -196,6 +227,94 @@ pub fn zone_transitions(name: &str) -> Option<Vec<TzTransition>> {
         return None;
     }
     Some(field.split(';').filter_map(parse_transition).collect())
+}
+
+/// Returns PHP's `getTransitions($begin, $end)` rows, extending TZif tables through POSIX rules.
+pub fn zone_transitions_in_range(
+    name: &str,
+    timestamp_begin: i64,
+    timestamp_end: i64,
+) -> Option<Vec<TzTransition>> {
+    let stored = zone_transitions(name)?;
+    let first = stored.first()?;
+    let last = stored.last()?;
+    let mut result = Vec::new();
+
+    if timestamp_begin == i64::MIN {
+        result.push(first.clone());
+    } else if timestamp_begin < first.ts {
+        if let Some(active) = timelib_ffi::timezone_offset_at(name, timestamp_begin) {
+            result.push(TzTransition {
+                ts: timestamp_begin,
+                time: format_utc_iso(timestamp_begin),
+                offset: active.offset,
+                isdst: active.is_dst,
+                abbr: active.abbreviation,
+            });
+        } else {
+            result.push(first.clone());
+        }
+    } else if let Some(next_index) = stored.iter().position(|row| row.ts > timestamp_begin) {
+        let active = &stored[next_index - 1];
+        result.push(TzTransition {
+            ts: timestamp_begin,
+            time: format_utc_iso(timestamp_begin),
+            offset: active.offset,
+            isdst: active.isdst,
+            abbr: active.abbr.clone(),
+        });
+    } else if let Some(active) = timelib_ffi::timezone_offset_at(name, timestamp_begin) {
+        result.push(TzTransition {
+            ts: timestamp_begin,
+            time: format_utc_iso(timestamp_begin),
+            offset: active.offset,
+            isdst: active.is_dst,
+            abbr: active.abbreviation,
+        });
+    } else {
+        result.push(TzTransition {
+            ts: timestamp_begin,
+            time: format_utc_iso(timestamp_begin),
+            offset: last.offset,
+            isdst: last.isdst,
+            abbr: last.abbr.clone(),
+        });
+    }
+
+    if timestamp_begin > timestamp_end {
+        return Some(result);
+    }
+
+    result.extend(
+        stored
+            .iter()
+            .skip(1)
+            .filter(|row| row.ts > timestamp_begin && row.ts < timestamp_end)
+            .cloned(),
+    );
+
+    if timestamp_end < last.ts {
+        return Some(result);
+    }
+
+    let first_year = civil_from_days(last.ts.div_euclid(86_400)).0;
+    let last_year = civil_from_days(timestamp_end.div_euclid(86_400)).0;
+    let future = timelib_ffi::posix_transitions_between(
+        name,
+        first_year,
+        last_year,
+        last.ts,
+        timestamp_begin,
+        timestamp_end,
+    )?;
+    result.extend(future.into_iter().map(|row| TzTransition {
+        ts: row.timestamp,
+        time: format_utc_iso(row.timestamp),
+        offset: row.offset,
+        isdst: row.is_dst,
+        abbr: row.abbreviation,
+    }));
+    Some(result)
 }
 
 /// Returns a zone's `getLocation()` data, or `None` when the zone has no location
@@ -294,6 +413,111 @@ mod tests {
         assert_eq!(rows[184].ts, 2_140_045_200);
         assert_eq!(rows[184].abbr, "CET");
         assert_eq!(rows[184].time, "2037-10-25T01:00:00+00:00");
+    }
+
+    /// Fixed-offset POSIX footers have no DST rules, even for unbounded queries.
+    #[test]
+    fn fixed_offset_posix_transition_windows_have_one_row() {
+        for (name, offset) in [("UTC", 0), ("Etc/GMT+5", -18_000), ("Etc/GMT-9", 32_400)] {
+            for begin in [i64::MIN, 0, 7_258_118_400] {
+                let rows = zone_transitions_in_range(name, begin, i64::MAX)
+                    .expect("fixed-offset zone must exist");
+                assert_eq!(rows.len(), 1, "{name} at {begin}");
+                assert_eq!(rows[0].ts, begin);
+                assert_eq!(rows[0].offset, offset);
+                assert!(!rows[0].isdst);
+            }
+        }
+    }
+
+    /// Extends Europe/Paris through its TZif POSIX footer beyond the baked 2037 table horizon.
+    #[test]
+    fn paris_posix_transitions_extend_beyond_baked_horizon() {
+        let rows = zone_transitions_in_range("Europe/Paris", 7_258_118_400, 7_289_654_400)
+            .expect("Europe/Paris is a known zone");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].ts, 7_258_118_400);
+        assert_eq!(rows[0].offset, 3_600);
+        assert!(!rows[0].isdst);
+        assert_eq!(rows[0].abbr, "CET");
+        assert_eq!(rows[1].ts, 7_265_725_200);
+        assert_eq!(rows[1].offset, 7_200);
+        assert!(rows[1].isdst);
+        assert_eq!(rows[1].abbr, "CEST");
+        assert_eq!(rows[2].ts, 7_283_869_200);
+        assert_eq!(rows[2].offset, 3_600);
+        assert!(!rows[2].isdst);
+        assert_eq!(rows[2].abbr, "CET");
+    }
+
+    /// Includes the POSIX transition after the synthetic post-transition state when bounds match.
+    #[test]
+    fn paris_posix_footer_includes_lower_boundary_when_bounds_match() {
+        let boundary = 7_265_725_200;
+        let rows = zone_transitions_in_range("Europe/Paris", boundary, boundary)
+            .expect("Europe/Paris is a known zone");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].ts, boundary);
+        assert_eq!(rows[0].offset, 7_200);
+        assert!(rows[0].isdst);
+        assert_eq!(rows[0].abbr, "CEST");
+        assert_eq!(rows[1].ts, boundary);
+        assert_eq!(rows[1].offset, 7_200);
+        assert!(rows[1].isdst);
+        assert_eq!(rows[1].abbr, "CEST");
+    }
+
+    /// Includes a POSIX-footer transition exactly at getTransitions()'s upper range bound.
+    #[test]
+    fn paris_posix_footer_includes_transition_at_upper_range_boundary() {
+        let boundary = 7_265_725_200;
+        let rows = zone_transitions_in_range("Europe/Paris", boundary - 86_400, boundary)
+            .expect("Europe/Paris is a known zone");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].ts, boundary - 86_400);
+        assert_eq!(rows[0].offset, 3_600);
+        assert!(!rows[0].isdst);
+        assert_eq!(rows[0].abbr, "CET");
+        assert_eq!(rows[1].ts, boundary);
+        assert_eq!(rows[1].offset, 7_200);
+        assert!(rows[1].isdst);
+        assert_eq!(rows[1].abbr, "CEST");
+    }
+
+    /// Excludes the final baked TZif transition when it exactly matches the upper range bound.
+    #[test]
+    fn paris_stored_transition_excludes_upper_range_boundary() {
+        let stored = zone_transitions("Europe/Paris").expect("Europe/Paris is a known zone");
+        let last = stored.last().expect("Paris has a final baked transition");
+        let rows = zone_transitions_in_range("Europe/Paris", last.ts - 86_400, last.ts)
+            .expect("Europe/Paris is a known zone");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ts, last.ts - 86_400);
+    }
+
+    /// Uses the post-transition synthetic state once when both bounds match a baked transition.
+    #[test]
+    fn paris_stored_transition_uses_post_transition_state_when_bounds_match() {
+        let stored = zone_transitions("Europe/Paris").expect("Europe/Paris is a known zone");
+        let last = stored.last().expect("Paris has a final baked transition");
+        let rows = zone_transitions_in_range("Europe/Paris", last.ts, last.ts)
+            .expect("Europe/Paris is a known zone");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], *last);
+    }
+
+    /// Preserves explicit finite transition windows beyond the four-digit civil-year boundary.
+    #[test]
+    fn paris_posix_explicit_end_extends_beyond_year_9999() {
+        let begin = 253_402_300_800;
+        let end = 253_433_923_200;
+        let rows = zone_transitions_in_range("Europe/Paris", begin, end)
+            .expect("Europe/Paris is a known zone");
+        assert_eq!(rows.first().map(|row| row.ts), Some(begin));
+        assert!(
+            rows.iter().skip(1).any(|row| row.ts > begin),
+            "the explicit year-10000 window must retain synthesized POSIX transitions"
+        );
     }
 
     /// An alias zone resolves to its canonical zone's rows (identical to it).

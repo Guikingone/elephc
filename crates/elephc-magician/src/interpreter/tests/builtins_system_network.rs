@@ -372,7 +372,7 @@ $full = strtotime("2024-06-15 12:30:45");
 echo ":" . date("Y-m-d H:i:s", $full);
 $short = strtotime("2024-06-15T12:30");
 echo ":" . date("Y-m-d H:i:s", $short);
-echo ":" . (strtotime("2024/06/15") === -1 ? "bad" : "wrong");
+echo ":" . (strtotime("not a date") === false ? "bad" : "wrong");
 $call = call_user_func("strtotime", "2024-01-02 03:04:05");
 echo ":" . date("Y-m-d H:i:s", $call);
 $spread = call_user_func_array("strtotime", ["datetime" => "2024-01-02"]);
@@ -394,14 +394,14 @@ return function_exists("strtotime");"#,
         );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval `microtime()` returns a plausible float timestamp by all call paths.
+/// Verifies eval `microtime()` preserves PHP's string/float result-mode contract.
 #[test]
 fn execute_program_dispatches_microtime_builtin() {
     let program = parse_fragment(
-        br#"echo microtime() > 1000000000 ? "now" : "bad"; echo ":";
-echo microtime(as_float: false) > 1000000000 ? "named" : "bad"; echo ":";
-echo call_user_func("microtime", true) > 1000000000 ? "call" : "bad"; echo ":";
-echo call_user_func_array("microtime", ["as_float" => true]) > 1000000000 ? "array" : "bad";
+        br#"echo is_string(microtime()) ? "now" : "bad"; echo ":";
+echo is_string(microtime(as_float: false)) ? "named" : "bad"; echo ":";
+echo is_float(call_user_func("microtime", true)) ? "call" : "bad"; echo ":";
+echo is_float(call_user_func_array("microtime", ["as_float" => true])) ? "array" : "bad";
 echo ":";
 return function_exists("microtime");"#,
     )

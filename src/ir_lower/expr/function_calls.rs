@@ -322,6 +322,15 @@ pub(super) fn emit_builtin_call_value(
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
             };
+            if matches!(
+                def.spec.semantics.result_ownership,
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh
+            ) && crate::ir::Ownership::php_type_needs_lifetime_tracking(
+                &ctx.builder.value_php_type(call.value),
+            ) {
+                ctx.builder
+                    .set_value_ownership(call.value, crate::ir::Ownership::Owned);
+            }
             let return_alias = match def.spec.semantics.result_ownership {
                 crate::builtins::semantics::BuiltinResultOwnership::NonHeap
                 | crate::builtins::semantics::BuiltinResultOwnership::Fresh

@@ -36,7 +36,7 @@ pub(super) fn lower_union_object_prop_get(
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
-    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    materialize_loaded_property_result(ctx, inst, &slot.storage_type)?;
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -100,7 +100,7 @@ pub(super) fn lower_declared_mixed_prop_get(
                 emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
             }
             emit_property_load(ctx, &candidate.slot, base_reg)?;
-            box_mixed_property_candidate_result(ctx, &candidate.slot.php_type);
+            box_mixed_property_candidate_result(ctx, &candidate.slot.storage_type);
         }
         abi::emit_jump(ctx.emitter, &done_label);
     }
@@ -328,7 +328,7 @@ pub(super) fn lower_nullable_prop_get_with_warning(
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
-    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    materialize_loaded_property_result(ctx, inst, &slot.storage_type)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);

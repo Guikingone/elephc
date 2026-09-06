@@ -2,7 +2,7 @@
 title: "__elephc_object_clone_internal() — internals"
 description: "Compiler internals for __elephc_object_clone_internal(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 536
+  order: 613
 ---
 
 ## `__elephc_object_clone_internal()` — internals

@@ -361,14 +361,16 @@ fn eval_closure_display_name(function: &EvalFunction, context: &ElephcEvalContex
     let line = function
         .source_location()
         .map_or(call_line, |location| location.start_line());
-    let closure = format!("{{closure:{file}:{line}}}");
-    context.current_class_scope().map_or(closure.clone(), |class_name| {
-        format!("{}::{closure}", class_name.trim_start_matches('\\'))
-    })
+    let lexical_owner = match context.current_function() {
+        Some(parent) if parent.starts_with("{closure:") => parent.to_string(),
+        Some(parent) => format!("{}()", parent.trim_start_matches('\\')),
+        None => file.to_string(),
+    };
+    format!("{{closure:{lexical_owner}:{line}}}")
 }
 
 /// Materializes one PHP-visible `Closure` object for an eval callable target.
-pub(super) fn eval_closure_object_expr(
+pub(in crate::interpreter) fn eval_closure_object_expr(
     target: EvalClosureObjectTarget,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

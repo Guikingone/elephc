@@ -8,6 +8,7 @@
 //! - Eval-aware and runtime metadata paths keep their existing precedence.
 
 use super::*;
+use crate::codegen::lower_inst::predicates;
 
 /// Lowers named `instanceof` using runtime class/interface metadata.
 pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -23,7 +24,7 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     }
     if !matches!(
         value_ty,
-        PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        PhpType::Object(_) | PhpType::Callable | PhpType::Mixed | PhpType::Union(_)
     ) {
         emit_false(ctx);
         return store_if_result(ctx, inst);

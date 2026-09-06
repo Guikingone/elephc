@@ -33,6 +33,9 @@ pub(super) fn reflection_class_method_member(
     method_name: &str,
 ) -> Result<Option<ReflectionListedMember>> {
     let method_key = php_symbol_key(method_name);
+    if reflection_method_is_hidden_datetime_helper(info, &method_key) {
+        return Ok(None);
+    }
     if crate::types::php_src_date_method_visible(class_name, &method_key) == Some(false) {
         return Ok(None);
     }

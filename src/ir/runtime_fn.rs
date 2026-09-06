@@ -403,6 +403,14 @@ pub enum RuntimeFnId {
     ElephcObjectPropCount,
     ElephcObjectPropName,
     ElephcObjectPropValue,
+    /// Merges declared DateTime-subclass properties into an internal magic serialization hash.
+    DateMagicAppendProperties,
+    /// Merges properties after an explicit lexical call to an ext/date parent `__serialize()`.
+    DateMagicAppendPropertiesForced,
+    /// Runs typed DateTime-subclass property hydrators selected by the concrete runtime class.
+    DateMagicRestoreProperties,
+    /// Removes serialized-reference cells before ext/date hydrates native fields.
+    DateMagicFilterReferences,
     ElephcPtrIsNull,
     ElephcPtrReadString,
     ElephcPtrWriteString,
@@ -726,6 +734,12 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
+            RuntimeFnId::DateMagicAppendProperties
+            | RuntimeFnId::DateMagicAppendPropertiesForced
+            | RuntimeFnId::DateMagicRestoreProperties
+            | RuntimeFnId::DateMagicFilterReferences => {
+                Some((2, Some(2)))
+            }
             _ => None,
         }
     }
@@ -1172,6 +1186,31 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            RuntimeFnId::DateMagicAppendProperties => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits(),
+            ),
+            RuntimeFnId::DateMagicAppendPropertiesForced => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits(),
+            ),
+            RuntimeFnId::DateMagicRestoreProperties => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            RuntimeFnId::DateMagicFilterReferences => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits(),
+            ),
             // Re-boxing a property slot allocates the Mixed cell it hands back.
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
@@ -2376,6 +2415,10 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",
             RuntimeFnId::ElephcObjectPropValue => "__elephc_object_prop_value",
+            RuntimeFnId::DateMagicAppendProperties => "date_magic_append_properties",
+            RuntimeFnId::DateMagicAppendPropertiesForced => "date_magic_append_properties_forced",
+            RuntimeFnId::DateMagicRestoreProperties => "date_magic_restore_properties",
+            RuntimeFnId::DateMagicFilterReferences => "date_magic_filter_references",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",

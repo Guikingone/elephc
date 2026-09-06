@@ -499,10 +499,11 @@ mod tests {
     fn aarch64_cond_br_uses_local_long_range_veneer() {
         let asm = generate_cond_branch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
 
+        let skip = find_numbered_label(&asm, "__elephc_branch_if_nonzero_skip");
         let veneer = find_numbered_label(&asm, "_eir_main_cond_then_veneer");
         let then_edge = find_numbered_label(&asm, "_eir_main_cond_then_args");
         assert!(
-            asm.contains(&format!("cbz x0, 1f\n    b {veneer}\n1:")),
+            asm.contains(&format!("cbz x0, {skip}\n    b {veneer}\n{skip}:")),
             "{asm}"
         );
         assert!(

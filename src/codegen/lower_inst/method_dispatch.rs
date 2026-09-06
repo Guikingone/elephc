@@ -125,6 +125,60 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
+/// Lowers a reflected declaring-class instance method without virtual override dispatch.
+///
+/// `ReflectionMethod` is bound to its declaring implementation, so its call must use that method
+/// symbol even when the runtime receiver is a descendant that overrides the same PHP name. The
+/// immediate is `DeclaringClass::method`; ordinary source calls must continue through
+/// `lower_method_call()` and its dynamic-slot dispatch.
+pub(super) fn lower_exact_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let target_name = method_name_data(ctx, inst)?.to_string();
+    let Some((declaring_class, method_name)) = target_name.rsplit_once("::") else {
+        return Err(CodegenIrError::invalid_module(format!(
+            "exact method call target '{}' must contain a declaring class",
+            target_name
+        )));
+    };
+    let object_ty = ctx.value_php_type(object)?.codegen_repr();
+    if !matches!(object_ty, PhpType::Object(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "exact method call receiver for PHP type {:?}",
+            object_ty
+        )));
+    }
+    let method_key = php_symbol_key(method_name);
+    let target = resolve_method_call_target(ctx, declaring_class, &method_key, inst.operands.len())?;
+    let mut param_types = Vec::with_capacity(target.params.len() + 1);
+    param_types.push(PhpType::Object(declaring_class.to_string()));
+    param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
+    let mut ref_params = Vec::with_capacity(target.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(target.ref_params.iter().copied());
+    let call_args = materialize_direct_call_args_with_refs_and_options(
+        ctx,
+        &inst.operands,
+        &param_types,
+        &ref_params,
+        true,
+        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_call_label(
+        ctx.emitter,
+        &method_symbol(&target.impl_class, &target.method_key),
+    );
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    store_method_call_result(ctx, inst, &target)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    emit_ref_arg_writebacks(ctx, &call_args)
+}
+
 /// Publishes the user-visible foreach location for DatePeriod's iterator initialization guard.
 fn emit_dateperiod_foreach_trace_begin(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);

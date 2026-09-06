@@ -43,6 +43,12 @@ use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
 use crate::codegen_support::platform::Target;
+
+/// PHP's non-serializable Closure exception message shared with the serializer runtime.
+pub(crate) const SERIALIZE_CLOSURE_ERROR: &str = "Serialization of 'Closure' is not allowed";
+/// PHP's return-contract message for a `__serialize()` result that is not an array.
+pub(crate) const SERIALIZE_MAGIC_RETURN_TYPE_ERROR: &str =
+    "__serialize(): Return value must be of type array";
 use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
 };
@@ -123,7 +129,29 @@ pub(crate) fn emit_runtime_data_fixed(
         ));
     }
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    out.push_str(&format!(
+        ".globl _serialize_closure_error\n_serialize_closure_error:\n    .ascii {SERIALIZE_CLOSURE_ERROR:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _serialize_magic_return_type_error\n_serialize_magic_return_type_error:\n    .ascii {SERIALIZE_MAGIC_RETURN_TYPE_ERROR:?}\n"
+    ));
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
+    out.push_str(".globl _closure_debug_key_name\n_closure_debug_key_name:\n    .ascii \"[\\\"name\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_file\n_closure_debug_key_file:\n    .ascii \"[\\\"file\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_line\n_closure_debug_key_line:\n    .ascii \"[\\\"line\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_parameter\n_closure_debug_key_parameter:\n    .ascii \"[\\\"parameter\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_static\n_closure_debug_key_static:\n    .ascii \"[\\\"static\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_this\n_closure_debug_key_this:\n    .ascii \"[\\\"this\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_function\n_closure_debug_key_function:\n    .ascii \"[\\\"function\\\"]\"\n");
+    out.push_str(".globl _closure_debug_required\n_closure_debug_required:\n    .ascii \"<required>\"\n");
+    out.push_str(".globl _closure_debug_optional\n_closure_debug_optional:\n    .ascii \"<optional>\"\n");
+    out.push_str(".globl _closure_print_r_key_name\n_closure_print_r_key_name:\n    .ascii \"[name] => \"\n");
+    out.push_str(".globl _closure_print_r_key_file\n_closure_print_r_key_file:\n    .ascii \"[file] => \"\n");
+    out.push_str(".globl _closure_print_r_key_line\n_closure_print_r_key_line:\n    .ascii \"[line] => \"\n");
+    out.push_str(".globl _closure_print_r_key_static\n_closure_print_r_key_static:\n    .ascii \"[static] => \"\n");
+    out.push_str(".globl _closure_print_r_key_this\n_closure_print_r_key_this:\n    .ascii \"[this] => \"\n");
+    out.push_str(".globl _closure_print_r_key_parameter\n_closure_print_r_key_parameter:\n    .ascii \"[parameter] => \"\n");
+    out.push_str(".globl _closure_print_r_key_function\n_closure_print_r_key_function:\n    .ascii \"[function] => \"\n");
     out.push_str(&format!(
         ".globl _diag_sprintf_array_to_string\n_diag_sprintf_array_to_string:\n    .ascii {SPRINTF_ARRAY_TO_STRING_WARNING:?}\n"
     ));

@@ -22,10 +22,13 @@ pub(super) fn date_period_methods(uses_timelib: bool) -> Vec<ClassMethod> {
         date_period_weak_string_argument(),
         date_period_clone_datetime_interface(),
         date_period_clone_datetime_interface_storage(),
+        date_period_datetime_state(),
+        date_period_rehydrate_datetime(),
         date_period_clone_iterator_value(),
         date_period_datetime_interface_timestamp(),
-        date_period_add_interval(),
-        date_period_advance(),
+        date_period_datetime_interface_microsecond(),
+        date_period_add_interval(uses_timelib),
+        date_period_advance(uses_timelib),
         date_period_rewind(),
         date_period_valid(),
         date_period_current(),
@@ -97,11 +100,11 @@ $result->__unserialize($array);
 return $result;
 "#;
 
-/// Builds `DatePeriod::__wakeup(): void` (no-op, reusing the datetime wakeup builder).
+/// Builds `DatePeriod::__wakeup(): void` from php-src's legacy property payload.
 pub(super) fn date_period_wakeup() -> ClassMethod {
     let tokens = crate::lexer::tokenize(r#"<?php
 __elephc_diag_warning("Deprecated: Method DatePeriod::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n", 0, E_DEPRECATED);
-throw new Error("Invalid serialization data for DatePeriod object");
+$this->__unserialize(get_object_vars($this));
 "#)
         .expect("DatePeriod::__wakeup body source must tokenize");
     let body = crate::parser::parse(&tokens)
@@ -180,6 +183,7 @@ if ($serializedStart !== null) {
     $this->_start = $startSnapshot;
     $this->startTs = $this->__elephc_datetime_interface_timestamp($startSnapshot);
     $this->startIsImmutable = $startSnapshot instanceof DateTimeImmutable;
+    $this->startClass = get_class($startSnapshot);
     $this->curTs = $this->startTs;
     $this->idx = 0;
 }
@@ -285,6 +289,25 @@ $this->_recurrence_count = $this->_recurrences
 $this->useCount = $this->_end === null ? 1 : 0;
 $this->_cursor = null;
 $this->__elephc_initialized = true;
+$data = $this->__elephc_restore_date_properties($data);
+foreach ($data as $__property => $__value) {
+    if (is_string($__property)
+        && strlen($__property) > 3
+        && substr($__property, 0, 3) === "\0*\0"
+    ) {
+        $__property = substr($__property, 3);
+    }
+    if (!is_string($__property)
+        || (strlen($__property) > 0 && $__property[0] === "\0")
+        || in_array($__property, [
+            "start", "current", "end", "interval", "recurrences",
+            "include_start_date", "include_end_date",
+        ], true)
+    ) {
+        continue;
+    }
+    $this->{$__property} = $__value;
+}
 "#;
     let tokens = crate::lexer::tokenize(src).expect("DatePeriod::__unserialize body source must tokenize");
     let body = crate::parser::parse(&tokens).expect("DatePeriod::__unserialize body source must parse");
@@ -438,9 +461,8 @@ return $this->__elephc_clone_datetime_interface($value);
 pub(super) fn virtual_interval_property_getter() -> ClassMethod {
     let tokens = crate::lexer::tokenize(
         r#"<?php
-$value = $this->_interval;
-if ($value === null) { return null; }
-return $value->__elephc_clone();
+if ($this->_interval === null) { return null; }
+return $this->getDateInterval();
 "#,
     )
     .expect("DatePeriod interval virtual getter must tokenize");
@@ -483,6 +505,7 @@ pub(super) fn date_period_properties() -> Vec<ClassProperty> {
         int_property("startTs"),
         int_property("endTs"),
         bool_property("startIsImmutable"),
+        string_property("startClass", "DateTime"),
         date_period_initialized_property(),
     ];
     props.push(mixed_property("__elephc_arguments"));

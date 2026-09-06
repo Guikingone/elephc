@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::time` direct and by-value dispatch.
 //!
 //! Key details:
-//! - The timezone identifier is stored on the eval context.
+//! - Valid identifiers update the shared AOT request timezone when the runtime bridge is present.
 
 use super::super::super::*;
 
@@ -30,14 +30,28 @@ pub(in crate::interpreter) fn eval_builtin_date_default_timezone_set(
     eval_date_default_timezone_set_result(timezone, context, values)
 }
 
-/// Stores one eval-local default timezone identifier and reports success.
+/// Validates and stores one eval-local default timezone identifier.
 pub(in crate::interpreter) fn eval_date_default_timezone_set_result(
     timezone: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let timezone = values.string_bytes(timezone)?;
+    let timezone_handle = timezone;
+    let timezone = values.string_bytes(timezone_handle)?;
     let timezone = String::from_utf8_lossy(&timezone).into_owned();
+    if !elephc_tz::timezone_identifier_valid(&timezone) {
+        values.warning(&format!(
+            "date_default_timezone_set(): Timezone ID '{timezone}' is invalid"
+        ))?;
+        return values.bool_value(false);
+    }
+    if let Some(result) = values.runtime_builtin_call(
+        elephc_builtin_contract::RuntimeBuiltinId::DateDefaultTimezoneSet,
+        &[timezone_handle],
+    )? {
+        context.set_default_timezone(timezone);
+        return Ok(result);
+    }
     context.set_default_timezone(timezone);
     values.bool_value(true)
 }

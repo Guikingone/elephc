@@ -69,24 +69,6 @@ method("__unserialize")
     .returns(TypeExpr::Void)
 }
 
-/// `DateTimeInterface::__elephc_debug_dump` — transcribed method builder.
-fn decl_stmt_bootstrap_1_method_9_elephc_debug_dump() -> MethodBuilder {
-method("__elephc_debug_dump")
-    .returns(TypeExpr::Void)
-}
-
-/// `DateTimeInterface::__elephc_print_r_dump` — transcribed method builder.
-fn decl_stmt_bootstrap_1_method_10_elephc_print_r_dump() -> MethodBuilder {
-method("__elephc_print_r_dump")
-    .returns(TypeExpr::Void)
-}
-
-/// `DateTimeInterface::__elephc_assert_comparable` — transcribed method builder.
-fn decl_stmt_bootstrap_1_method_11_elephc_assert_comparable() -> MethodBuilder {
-method("__elephc_assert_comparable")
-    .returns(TypeExpr::Void)
-}
-
 /// `bootstrap 1` — transcribed from the PHP form.
 fn decl_stmt_bootstrap_1() -> Stmt {
     interface("DateTimeInterface")
@@ -113,9 +95,6 @@ fn decl_stmt_bootstrap_1() -> Stmt {
         .method(decl_stmt_bootstrap_1_method_6_wakeup())
         .method(decl_stmt_bootstrap_1_method_7_serialize())
         .method(decl_stmt_bootstrap_1_method_8_unserialize())
-        .method(decl_stmt_bootstrap_1_method_9_elephc_debug_dump())
-        .method(decl_stmt_bootstrap_1_method_10_elephc_print_r_dump())
-        .method(decl_stmt_bootstrap_1_method_11_elephc_assert_comparable())
         .build()
 }
 
@@ -425,6 +404,7 @@ method("createFromDateString")
 /// `DateInterval::__elephc_create_from_date_string` — transcribed method builder.
 fn decl_class_dateinterval_method_3_elephc_create_from_date_string() -> MethodBuilder {
 method("__elephc_create_from_date_string")
+    .private()
     .static_()
     .param("datetime", TypeExpr::Str)
     .param("sourceLine", TypeExpr::Int)
@@ -444,6 +424,7 @@ method("__elephc_create_from_date_string")
 /// `DateInterval::__elephc_payload` — transcribed method builder.
 fn decl_class_dateinterval_method_4_elephc_payload() -> MethodBuilder {
 method("__elephc_payload")
+    .private()
     .returns(TypeExpr::Str)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -466,6 +447,7 @@ method("__elephc_payload")
 /// `DateInterval::__elephc_mark_civil` — transcribed method builder.
 fn decl_class_dateinterval_method_5_elephc_mark_civil() -> MethodBuilder {
 method("__elephc_mark_civil")
+    .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -476,6 +458,7 @@ method("__elephc_mark_civil")
 /// `DateInterval::__elephc_clone` — transcribed method builder.
 fn decl_class_dateinterval_method_6_elephc_clone() -> MethodBuilder {
 method("__elephc_clone")
+    .private()
     .returns(t_class("DateInterval"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -486,6 +469,7 @@ method("__elephc_clone")
 /// `DateInterval::__elephc_clone_storage` — transcribed method builder.
 fn decl_class_dateinterval_method_7_elephc_clone_storage() -> MethodBuilder {
 method("__elephc_clone_storage")
+    .private()
     .returns(t_class("DateInterval"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -496,6 +480,7 @@ method("__elephc_clone_storage")
 /// `DateInterval::__elephc_clone_interval_for_period` — transcribed method builder.
 fn decl_class_dateinterval_method_8_elephc_clone_interval_for_period() -> MethodBuilder {
 method("__elephc_clone_interval_for_period")
+    .private()
     .returns(t_class("DateInterval"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -518,6 +503,7 @@ method("__elephc_clone_interval_for_period")
 /// `DateInterval::__elephc_clone_interval_for_period_storage` — transcribed method builder.
 fn decl_class_dateinterval_method_9_elephc_clone_interval_for_period_storage() -> MethodBuilder {
 method("__elephc_clone_interval_for_period_storage")
+    .private()
     .returns(t_class("DateInterval"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -556,14 +542,7 @@ method("__wakeup")
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_call("__elephc_diag_warning", vec![e_str("Deprecated: Method DateInterval::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n"), e_int(0), e_const("E_DEPRECATED")])),
-        s_if(
-            e_binop(e_str("DateInterval"), BinOp::StrictNotEq, e_str("DateInterval")),
-            vec![
-                s_throw(e_new("Error", vec![e_str("Invalid serialization data for DateInterval object")])),
-            ],
-            vec![],
-            None,
-        ),
+        s_expr(e_method_call(e_this(), "__unserialize", vec![e_call("get_object_vars", vec![e_this()])])),
     ])
 }
 
@@ -618,6 +597,14 @@ method("__unserialize")
                 s_prop_assign(e_this(), "_period_date_string", e_str("")),
                 s_prop_assign(e_this(), "_wall", e_bool(false)),
                 s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
+                s_if(
+                    e_binop(e_call("count", vec![e_var("data")]), BinOp::Gt, e_int(0)),
+                    vec![
+                        s_expr(e_method_call(e_this(), "__elephc_restore_custom_properties", vec![e_var("data")])),
+                    ],
+                    vec![],
+                    None,
+                ),
                 s_return_void(),
             ],
             vec![],
@@ -661,11 +648,51 @@ method("__unserialize")
         s_prop_assign(e_this(), "_period_date_string", e_str("")),
         s_prop_assign(e_this(), "_wall", e_bool(true)),
         s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
+        s_if(
+            e_binop(e_call("count", vec![e_var("data")]), BinOp::Gt, e_int(0)),
+            vec![
+                s_expr(e_method_call(e_this(), "__elephc_restore_custom_properties", vec![e_var("data")])),
+            ],
+            vec![],
+            None,
+        ),
+    ])
+}
+
+/// `DateInterval::__elephc_restore_custom_properties` — transcribed method builder.
+fn decl_class_dateinterval_method_14_elephc_restore_custom_properties() -> MethodBuilder {
+method("__elephc_restore_custom_properties")
+    .private()
+    .final_()
+    .param("data", t_array())
+    .returns(TypeExpr::Void)
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_assign("data", e_method_call(e_this(), "__elephc_restore_date_properties", vec![e_var("data")])),
+        s_foreach(e_var("data"), Some("__property"), "__value", vec![
+            s_if(
+                e_binop(e_binop(e_call("is_string", vec![e_var("__property")]), BinOp::And, e_binop(e_call("strlen", vec![e_var("__property")]), BinOp::Gt, e_int(3))), BinOp::And, e_binop(e_call("substr", vec![e_var("__property"), e_int(0), e_int(3)]), BinOp::StrictEq, e_str("\0*\0"))),
+                vec![
+                    s_assign("__property", e_call("substr", vec![e_var("__property"), e_int(3)])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_binop(e_not(e_call("is_string", vec![e_var("__property")])), BinOp::Or, e_binop(e_binop(e_call("strlen", vec![e_var("__property")]), BinOp::Gt, e_int(0)), BinOp::And, e_binop(e_index(e_var("__property"), e_int(0)), BinOp::StrictEq, e_str("\0")))), BinOp::Or, e_call("in_array", vec![e_var("__property"), e_array(vec![e_str("from_string"), e_str("date_string"), e_str("y"), e_str("m"), e_str("d"), e_str("h"), e_str("i"), e_str("s"), e_str("f"), e_str("invert"), e_str("days")]), e_bool(true)])),
+                vec![
+                    s_continue(1),
+                ],
+                vec![],
+                None,
+            ),
+            s_expr(e_assign(e_dyn_prop(e_this(), e_var("__property")), e_var("__value"))),
+        ]),
     ])
 }
 
 /// `DateInterval::__set_state` — transcribed method builder.
-fn decl_class_dateinterval_method_14_set_state() -> MethodBuilder {
+fn decl_class_dateinterval_method_15_set_state() -> MethodBuilder {
 method("__set_state")
     .static_()
     .param("array", t_array())
@@ -678,8 +705,9 @@ method("__set_state")
 }
 
 /// `DateInterval::__elephc_debug_dump` — transcribed method builder.
-fn decl_class_dateinterval_method_15_elephc_debug_dump() -> MethodBuilder {
+fn decl_class_dateinterval_method_16_elephc_debug_dump() -> MethodBuilder {
 method("__elephc_debug_dump")
+    .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -744,8 +772,9 @@ method("__elephc_debug_dump")
 }
 
 /// `DateInterval::__elephc_print_r_dump` — transcribed method builder.
-fn decl_class_dateinterval_method_16_elephc_print_r_dump() -> MethodBuilder {
+fn decl_class_dateinterval_method_17_elephc_print_r_dump() -> MethodBuilder {
 method("__elephc_print_r_dump")
+    .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -777,7 +806,7 @@ method("__elephc_print_r_dump")
 }
 
 /// `DateInterval::__elephc_begin_argument_array` — transcribed method builder.
-fn decl_class_dateinterval_method_17_elephc_begin_argument_array() -> MethodBuilder {
+fn decl_class_dateinterval_method_18_elephc_begin_argument_array() -> MethodBuilder {
 method("__elephc_begin_argument_array")
     .private()
     .returns(TypeExpr::Void)
@@ -788,7 +817,7 @@ method("__elephc_begin_argument_array")
 }
 
 /// `DateInterval::__elephc_append_one_argument` — transcribed method builder.
-fn decl_class_dateinterval_method_18_elephc_append_one_argument() -> MethodBuilder {
+fn decl_class_dateinterval_method_19_elephc_append_one_argument() -> MethodBuilder {
 method("__elephc_append_one_argument")
     .private()
     .param("key", t_mixed())
@@ -873,7 +902,7 @@ method("__elephc_append_one_argument")
 }
 
 /// `DateInterval::__elephc_append_argument_chunk` — transcribed method builder.
-fn decl_class_dateinterval_method_19_elephc_append_argument_chunk() -> MethodBuilder {
+fn decl_class_dateinterval_method_20_elephc_append_argument_chunk() -> MethodBuilder {
 method("__elephc_append_argument_chunk")
     .private()
     .param("kind", TypeExpr::Int)
@@ -914,7 +943,7 @@ method("__elephc_append_argument_chunk")
 }
 
 /// `DateInterval::__elephc_finish_argument_array` — transcribed method builder.
-fn decl_class_dateinterval_method_20_elephc_finish_argument_array() -> MethodBuilder {
+fn decl_class_dateinterval_method_21_elephc_finish_argument_array() -> MethodBuilder {
 method("__elephc_finish_argument_array")
     .private()
     .returns(TypeExpr::Void)
@@ -969,8 +998,9 @@ method("__elephc_finish_argument_array")
 }
 
 /// `DateInterval::__elephc_is_initialized` — transcribed method builder.
-fn decl_class_dateinterval_method_21_elephc_is_initialized() -> MethodBuilder {
+fn decl_class_dateinterval_method_22_elephc_is_initialized() -> MethodBuilder {
 method("__elephc_is_initialized")
+    .private()
     .final_()
     .returns(TypeExpr::Bool)
     .body_exact(vec![
@@ -979,8 +1009,9 @@ method("__elephc_is_initialized")
 }
 
 /// `DateInterval::__elephc_assert_initialized` — transcribed method builder.
-fn decl_class_dateinterval_method_22_elephc_assert_initialized() -> MethodBuilder {
+fn decl_class_dateinterval_method_23_elephc_assert_initialized() -> MethodBuilder {
 method("__elephc_assert_initialized")
+    .private()
     .final_()
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -1031,15 +1062,16 @@ fn decl_class_dateinterval() -> Stmt {
         .method(decl_class_dateinterval_method_11_wakeup())
         .method(decl_class_dateinterval_method_12_serialize())
         .method(decl_class_dateinterval_method_13_unserialize())
-        .method(decl_class_dateinterval_method_14_set_state())
-        .method(decl_class_dateinterval_method_15_elephc_debug_dump())
-        .method(decl_class_dateinterval_method_16_elephc_print_r_dump())
-        .method(decl_class_dateinterval_method_17_elephc_begin_argument_array())
-        .method(decl_class_dateinterval_method_18_elephc_append_one_argument())
-        .method(decl_class_dateinterval_method_19_elephc_append_argument_chunk())
-        .method(decl_class_dateinterval_method_20_elephc_finish_argument_array())
-        .method(decl_class_dateinterval_method_21_elephc_is_initialized())
-        .method(decl_class_dateinterval_method_22_elephc_assert_initialized())
+        .method(decl_class_dateinterval_method_14_elephc_restore_custom_properties())
+        .method(decl_class_dateinterval_method_15_set_state())
+        .method(decl_class_dateinterval_method_16_elephc_debug_dump())
+        .method(decl_class_dateinterval_method_17_elephc_print_r_dump())
+        .method(decl_class_dateinterval_method_18_elephc_begin_argument_array())
+        .method(decl_class_dateinterval_method_19_elephc_append_one_argument())
+        .method(decl_class_dateinterval_method_20_elephc_append_argument_chunk())
+        .method(decl_class_dateinterval_method_21_elephc_finish_argument_array())
+        .method(decl_class_dateinterval_method_22_elephc_is_initialized())
+        .method(decl_class_dateinterval_method_23_elephc_assert_initialized())
         .build()
 }
 
@@ -1097,6 +1129,7 @@ method("__construct")
             vec![],
             None,
         ),
+        s_prop_assign(e_this(), "startClass", e_call("get_class", vec![e_var("start")])),
         s_prop_assign(e_this(), "startTs", e_method_call(e_this(), "__elephc_datetime_interface_timestamp", vec![e_var("start")])),
         s_prop_assign(e_this(), "startIsImmutable", e_instance_of(e_var("start"), "DateTimeImmutable")),
         s_prop_assign(e_this(), "iv_y", e_prop(e_var("interval"), "y")),
@@ -1145,16 +1178,16 @@ method("__construct")
 /// `DatePeriod::__elephc_initialize_end_components` — transcribed method builder.
 fn decl_class_dateperiod_method_1_elephc_initialize_end_components() -> MethodBuilder {
 method("__elephc_initialize_end_components")
+    .private()
     .final_()
     .param("start", t_class("DateTimeInterface"))
     .param("interval", t_class("DateInterval"))
-    .param("endTimestamp", TypeExpr::Int)
+    .param("end", t_class("DateTimeInterface"))
     .param_default("options", TypeExpr::Int, e_int(0))
     .body_exact(vec![
         s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
         s_assign("__elephc_uses_recurrence_end", e_bool(false)),
         s_assign("__elephc_recurrence_end", e_int(0)),
-        s_assign("end", e_static_call("DateTimeImmutable", "createFromTimestamp", vec![e_var("endTimestamp")])),
         s_prop_assign(e_this(), "startTs", e_method_call(e_this(), "__elephc_datetime_interface_timestamp", vec![e_var("start")])),
         s_prop_assign(e_this(), "startIsImmutable", e_instance_of(e_var("start"), "DateTimeImmutable")),
         s_prop_assign(e_this(), "iv_y", e_prop(e_var("interval"), "y")),
@@ -1203,6 +1236,7 @@ method("__elephc_initialize_end_components")
 /// `DatePeriod::__elephc_initialize_recurrence_components` — transcribed method builder.
 fn decl_class_dateperiod_method_2_elephc_initialize_recurrence_components() -> MethodBuilder {
 method("__elephc_initialize_recurrence_components")
+    .private()
     .final_()
     .param("start", t_class("DateTimeInterface"))
     .param("interval", t_class("DateInterval"))
@@ -1341,8 +1375,67 @@ method("__elephc_clone_datetime_interface_storage")
     ])
 }
 
+/// `DatePeriod::__elephc_datetime_state` — transcribed method builder.
+fn decl_class_dateperiod_method_6_elephc_datetime_state() -> MethodBuilder {
+method("__elephc_datetime_state")
+    .private()
+    .param("value", t_mixed())
+    .returns(t_mixed())
+    .body_exact(vec![
+        s_if(
+            e_instance_of(e_var("value"), "DateTime"),
+            vec![
+                s_return(e_static_call("DateTime", "__elephc_export_state", vec![e_var("value")])),
+            ],
+            vec![],
+            None,
+        ),
+        s_if(
+            e_instance_of(e_var("value"), "DateTimeImmutable"),
+            vec![
+                s_return(e_static_call("DateTimeImmutable", "__elephc_export_state", vec![e_var("value")])),
+            ],
+            vec![],
+            None,
+        ),
+        s_throw(e_new("DateObjectError", vec![e_str("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor")])),
+    ])
+}
+
+/// `DatePeriod::__elephc_rehydrate_datetime` — transcribed method builder.
+fn decl_class_dateperiod_method_7_elephc_rehydrate_datetime() -> MethodBuilder {
+method("__elephc_rehydrate_datetime")
+    .private()
+    .param("className", TypeExpr::Str)
+    .param("source", t_mixed())
+    .param("state", t_mixed())
+    .returns(t_class("DateTimeInterface"))
+    .body_exact(vec![
+        s_assign("result", e_call("__elephc_new_instance_without_constructor", vec![e_var("className")])),
+        s_if(
+            e_instance_of(e_var("result"), "DateTime"),
+            vec![
+                s_expr(e_static_call("DateTime", "__elephc_import_state", vec![e_var("result"), e_var("state")])),
+                s_return(e_var("result")),
+            ],
+            vec![],
+            None,
+        ),
+        s_if(
+            e_instance_of(e_var("result"), "DateTimeImmutable"),
+            vec![
+                s_expr(e_static_call("DateTimeImmutable", "__elephc_import_state", vec![e_var("result"), e_var("state")])),
+                s_return(e_var("result")),
+            ],
+            vec![],
+            None,
+        ),
+        s_throw(e_new("DateObjectError", vec![e_str("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor")])),
+    ])
+}
+
 /// `DatePeriod::__elephc_clone_iterator_value` — transcribed method builder.
-fn decl_class_dateperiod_method_6_elephc_clone_iterator_value() -> MethodBuilder {
+fn decl_class_dateperiod_method_8_elephc_clone_iterator_value() -> MethodBuilder {
 method("__elephc_clone_iterator_value")
     .private()
     .param("value", t_mixed())
@@ -1351,7 +1444,8 @@ method("__elephc_clone_iterator_value")
         s_if(
             e_instance_of(e_var("value"), "DateTimeImmutable"),
             vec![
-                s_return(e_static_call("DateTimeImmutable", "createFromInterface", vec![e_var("value")])),
+                s_assign("state", e_method_call(e_this(), "__elephc_datetime_state", vec![e_var("value")])),
+                s_return(e_method_call(e_this(), "__elephc_rehydrate_datetime", vec![e_str("DateTimeImmutable"), e_var("value"), e_var("state")])),
             ],
             vec![],
             None,
@@ -1359,7 +1453,8 @@ method("__elephc_clone_iterator_value")
         s_if(
             e_instance_of(e_var("value"), "DateTime"),
             vec![
-                s_return(e_static_call("DateTime", "createFromInterface", vec![e_var("value")])),
+                s_assign("state", e_method_call(e_this(), "__elephc_datetime_state", vec![e_var("value")])),
+                s_return(e_method_call(e_this(), "__elephc_rehydrate_datetime", vec![e_str("DateTime"), e_var("value"), e_var("state")])),
             ],
             vec![],
             None,
@@ -1369,7 +1464,7 @@ method("__elephc_clone_iterator_value")
 }
 
 /// `DatePeriod::__elephc_datetime_interface_timestamp` — transcribed method builder.
-fn decl_class_dateperiod_method_7_elephc_datetime_interface_timestamp() -> MethodBuilder {
+fn decl_class_dateperiod_method_9_elephc_datetime_interface_timestamp() -> MethodBuilder {
 method("__elephc_datetime_interface_timestamp")
     .private()
     .param("value", t_mixed())
@@ -1386,7 +1481,7 @@ method("__elephc_datetime_interface_timestamp")
                     vec![],
                     None,
                 ),
-                s_return(e_method_call(e_var("value"), "getTimestamp", vec![])),
+                s_return(e_static_call("DateTimeImmutable", "__elephc_timestamp_of", vec![e_var("value")])),
             ],
             vec![],
             None,
@@ -1402,7 +1497,7 @@ method("__elephc_datetime_interface_timestamp")
                     vec![],
                     None,
                 ),
-                s_return(e_method_call(e_var("value"), "getTimestamp", vec![])),
+                s_return(e_static_call("DateTime", "__elephc_timestamp_of", vec![e_var("value")])),
             ],
             vec![],
             None,
@@ -1411,8 +1506,35 @@ method("__elephc_datetime_interface_timestamp")
     ])
 }
 
+/// `DatePeriod::__elephc_datetime_interface_microsecond` — transcribed method builder.
+fn decl_class_dateperiod_method_10_elephc_datetime_interface_microsecond() -> MethodBuilder {
+method("__elephc_datetime_interface_microsecond")
+    .private()
+    .param("value", t_mixed())
+    .returns(TypeExpr::Int)
+    .body_exact(vec![
+        s_if(
+            e_instance_of(e_var("value"), "DateTimeImmutable"),
+            vec![
+                s_return(e_static_call("DateTimeImmutable", "__elephc_microsecond_of", vec![e_var("value")])),
+            ],
+            vec![],
+            None,
+        ),
+        s_if(
+            e_instance_of(e_var("value"), "DateTime"),
+            vec![
+                s_return(e_static_call("DateTime", "__elephc_microsecond_of", vec![e_var("value")])),
+            ],
+            vec![],
+            None,
+        ),
+        s_throw(e_new("DateObjectError", vec![e_str("Object of type DateTimeInterface has not been correctly initialized by calling parent::__construct() in its constructor")])),
+    ])
+}
+
 /// `DatePeriod::__elephc_add_interval` — transcribed method builder.
-fn decl_class_dateperiod_method_8_elephc_add_interval() -> MethodBuilder {
+fn decl_class_dateperiod_method_11_elephc_add_interval() -> MethodBuilder {
 method("__elephc_add_interval")
     .private()
     .param("value", t_mixed())
@@ -1422,7 +1544,8 @@ method("__elephc_add_interval")
         s_if(
             e_instance_of(e_var("value"), "DateTimeImmutable"),
             vec![
-                s_return(e_method_call(e_var("value"), "add", vec![e_var("interval")])),
+                s_expr(e_method_call(e_var("value"), "__elephc_period_advance", vec![e_var("interval")])),
+                s_return(e_var("value")),
             ],
             vec![],
             None,
@@ -1430,7 +1553,7 @@ method("__elephc_add_interval")
         s_if(
             e_instance_of(e_var("value"), "DateTime"),
             vec![
-                s_expr(e_method_call(e_var("value"), "add", vec![e_var("interval")])),
+                s_expr(e_method_call(e_var("value"), "__elephc_period_advance", vec![e_var("interval")])),
                 s_return(e_var("value")),
             ],
             vec![],
@@ -1441,19 +1564,20 @@ method("__elephc_add_interval")
 }
 
 /// `DatePeriod::_advance` — transcribed method builder.
-fn decl_class_dateperiod_method_9_advance() -> MethodBuilder {
+fn decl_class_dateperiod_method_12_advance() -> MethodBuilder {
 method("_advance")
     .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_assign("cursor", e_this_prop("_cursor")),
         s_assign("interval", e_method_call(e_this(), "getDateInterval", vec![])),
-        s_prop_assign(e_this(), "_cursor", e_method_call(e_this(), "__elephc_add_interval", vec![e_var("cursor"), e_var("interval")])),
+        s_expr(e_method_call(e_this(), "__elephc_add_interval", vec![e_var("cursor"), e_var("interval")])),
+        s_prop_assign(e_this(), "_current", e_method_call(e_this(), "__elephc_clone_datetime_interface_storage", vec![e_var("cursor")])),
     ])
 }
 
 /// `DatePeriod::rewind` — transcribed method builder.
-fn decl_class_dateperiod_method_10_rewind() -> MethodBuilder {
+fn decl_class_dateperiod_method_13_rewind() -> MethodBuilder {
 method("rewind")
     .private()
     .returns(TypeExpr::Void)
@@ -1468,20 +1592,22 @@ method("rewind")
             vec![],
             None,
         ),
+        s_prop_assign(e_this(), "_current", e_method_call(e_this(), "__elephc_clone_datetime_interface_storage", vec![e_this_prop("_cursor")])),
     ])
 }
 
 /// `DatePeriod::valid` — transcribed method builder.
-fn decl_class_dateperiod_method_11_valid() -> MethodBuilder {
+fn decl_class_dateperiod_method_14_valid() -> MethodBuilder {
 method("valid")
     .private()
+    .param("position", TypeExpr::Int)
     .returns(TypeExpr::Bool)
     .body_exact(vec![
         s_if(
             e_this_prop("useCount"),
             vec![
                 s_assign("includedEnd", e_ternary(e_binop(e_this_prop("includeEnd"), BinOp::StrictNotEq, e_int(0)), e_int(1), e_int(0))),
-                s_return(e_binop(e_this_prop("idx"), BinOp::LtEq, e_binop(e_binop(e_this_prop("_recurrence_count"), BinOp::Sub, e_this_prop("excludeStart")), BinOp::Add, e_var("includedEnd")))),
+                s_return(e_binop(e_var("position"), BinOp::LtEq, e_binop(e_binop(e_this_prop("_recurrence_count"), BinOp::Sub, e_this_prop("excludeStart")), BinOp::Add, e_var("includedEnd")))),
             ],
             vec![],
             None,
@@ -1514,8 +1640,8 @@ method("valid")
             vec![],
             None,
         ),
-        s_assign("cursorMicrosecond", e_method_call(e_var("cursor"), "getMicrosecond", vec![])),
-        s_assign("endMicrosecond", e_method_call(e_var("end"), "getMicrosecond", vec![])),
+        s_assign("cursorMicrosecond", e_method_call(e_this(), "__elephc_datetime_interface_microsecond", vec![e_var("cursor")])),
+        s_assign("endMicrosecond", e_method_call(e_this(), "__elephc_datetime_interface_microsecond", vec![e_var("end")])),
         s_if(
             e_binop(e_var("cursorMicrosecond"), BinOp::Lt, e_var("endMicrosecond")),
             vec![
@@ -1537,7 +1663,7 @@ method("valid")
 }
 
 /// `DatePeriod::current` — transcribed method builder.
-fn decl_class_dateperiod_method_12_current() -> MethodBuilder {
+fn decl_class_dateperiod_method_15_current() -> MethodBuilder {
 method("current")
     .private()
     .returns(t_class("DateTimeInterface"))
@@ -1556,7 +1682,7 @@ method("current")
 }
 
 /// `DatePeriod::key` — transcribed method builder.
-fn decl_class_dateperiod_method_13_key() -> MethodBuilder {
+fn decl_class_dateperiod_method_16_key() -> MethodBuilder {
 method("key")
     .private()
     .returns(TypeExpr::Int)
@@ -1566,7 +1692,7 @@ method("key")
 }
 
 /// `DatePeriod::next` — transcribed method builder.
-fn decl_class_dateperiod_method_14_next() -> MethodBuilder {
+fn decl_class_dateperiod_method_17_next() -> MethodBuilder {
 method("next")
     .private()
     .returns(TypeExpr::Void)
@@ -1577,26 +1703,27 @@ method("next")
 }
 
 /// `DatePeriod::getStartDate` — transcribed method builder.
-fn decl_class_dateperiod_method_15_getstartdate() -> MethodBuilder {
+fn decl_class_dateperiod_method_18_getstartdate() -> MethodBuilder {
 method("getStartDate")
     .returns(t_class("DateTimeInterface"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
         s_assign("start", e_this_prop("_start")),
         s_if(
-            e_not(e_instance_of(e_var("start"), "DateTimeInterface")),
+            e_instance_of(e_var("start"), "DateTimeInterface"),
             vec![
-                s_throw(e_new("DateObjectError", vec![e_str("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor")])),
+                s_return(e_method_call(e_this(), "__elephc_rehydrate_datetime", vec![e_call("get_class", vec![e_var("start")]), e_var("start"), e_method_call(e_this(), "__elephc_datetime_state", vec![e_var("start")])])),
             ],
             vec![],
-            None,
+            Some(vec![
+            s_throw(e_new("DateObjectError", vec![e_str("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor")])),
+        ]),
         ),
-        s_return(e_method_call(e_this(), "__elephc_clone_datetime_interface", vec![e_var("start")])),
     ])
 }
 
 /// `DatePeriod::getEndDate` — transcribed method builder.
-fn decl_class_dateperiod_method_16_getenddate() -> MethodBuilder {
+fn decl_class_dateperiod_method_19_getenddate() -> MethodBuilder {
 method("getEndDate")
     .returns(t_nullable(t_class("DateTimeInterface")))
     .body_exact(vec![
@@ -1607,33 +1734,57 @@ method("getEndDate")
                 s_return(e_null()),
             ],
             vec![],
-            None,
+            Some(vec![
+            s_return(e_method_call(e_this(), "__elephc_rehydrate_datetime", vec![e_this_prop("startClass"), e_var("end"), e_method_call(e_this(), "__elephc_datetime_state", vec![e_var("end")])])),
+        ]),
         ),
-        s_return(e_method_call(e_this(), "__elephc_clone_datetime_interface", vec![e_var("end")])),
     ])
 }
 
 /// `DatePeriod::getDateInterval` — transcribed method builder.
-fn decl_class_dateperiod_method_17_getdateinterval() -> MethodBuilder {
+fn decl_class_dateperiod_method_20_getdateinterval() -> MethodBuilder {
 method("getDateInterval")
     .returns(t_class("DateInterval"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
-        s_assign("interval", e_this_prop("_interval")),
+        s_assign("source", e_this_prop("_interval")),
         s_if(
-            e_not(e_instance_of(e_var("interval"), "DateInterval")),
+            e_not(e_instance_of(e_var("source"), "DateInterval")),
             vec![
                 s_throw(e_new("DateObjectError", vec![e_str("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor")])),
             ],
             vec![],
             None,
         ),
-        s_return(e_method_call(e_var("interval"), "__elephc_clone", vec![])),
+        s_assign("payload", e_method_call(e_var("source"), "__elephc_payload", vec![])),
+        s_if(
+            e_binop(e_call("substr", vec![e_var("payload"), e_int(0), e_int(1)]), BinOp::StrictEq, e_str("R")),
+            vec![
+                s_assign("tab", e_call("strpos", vec![e_var("payload"), e_str("\t")])),
+                s_assign("length", e_call("intval", vec![e_call("substr", vec![e_var("payload"), e_int(1), e_binop(e_var("tab"), BinOp::Sub, e_int(1))])])),
+                s_assign("dateString", e_call("substr", vec![e_var("payload"), e_binop(e_var("tab"), BinOp::Add, e_int(1)), e_var("length")])),
+                s_assign("interval", e_static_call("DateInterval", "createFromDateString", vec![e_var("dateString")])),
+                s_return(e_method_call(e_var("interval"), "__elephc_clone_interval_for_period", vec![])),
+            ],
+            vec![],
+            None,
+        ),
+        s_assign("interval", e_new("DateInterval", vec![e_str("P0D")])),
+        s_prop_assign(e_var("interval"), "y", e_prop(e_var("source"), "y")),
+        s_prop_assign(e_var("interval"), "m", e_prop(e_var("source"), "m")),
+        s_prop_assign(e_var("interval"), "d", e_prop(e_var("source"), "d")),
+        s_prop_assign(e_var("interval"), "h", e_prop(e_var("source"), "h")),
+        s_prop_assign(e_var("interval"), "i", e_prop(e_var("source"), "i")),
+        s_prop_assign(e_var("interval"), "s", e_prop(e_var("source"), "s")),
+        s_prop_assign(e_var("interval"), "f", e_prop(e_var("source"), "f")),
+        s_prop_assign(e_var("interval"), "invert", e_prop(e_var("source"), "invert")),
+        s_prop_assign(e_var("interval"), "days", e_prop(e_var("source"), "days")),
+        s_return(e_var("interval")),
     ])
 }
 
 /// `DatePeriod::getRecurrences` — transcribed method builder.
-fn decl_class_dateperiod_method_18_getrecurrences() -> MethodBuilder {
+fn decl_class_dateperiod_method_21_getrecurrences() -> MethodBuilder {
 method("getRecurrences")
     .returns(t_nullable(TypeExpr::Int))
     .body_exact(vec![
@@ -1651,7 +1802,7 @@ method("getRecurrences")
 }
 
 /// `DatePeriod::getIterator` — transcribed method builder.
-fn decl_class_dateperiod_method_19_getiterator() -> MethodBuilder {
+fn decl_class_dateperiod_method_22_getiterator() -> MethodBuilder {
 method("getIterator")
     .returns(t_class("Iterator"))
     .body_exact(vec![
@@ -1663,38 +1814,37 @@ method("getIterator")
             vec![],
             None,
         ),
-        s_assign("items", e_array(vec![])),
-        s_expr(e_method_call(e_this(), "rewind", vec![])),
-        s_while(e_method_call(e_this(), "valid", vec![]), vec![
-            s_array_push("items", e_method_call(e_this(), "current", vec![])),
-            s_expr(e_method_call(e_this(), "next", vec![])),
-        ]),
-        s_assign("onCurrent", closure()
-            .param_untyped("value")
-            .returns(t_mixed())
+        s_assign("onRewind", closure()
+            .returns(TypeExpr::Void)
             .body(vec![
-                s_if(
-                    e_binop(e_var("value"), BinOp::StrictEq, e_null()),
-                    vec![
-                        s_assign("current", e_method_call(e_this(), "current", vec![])),
-                        s_assign("result", e_var("current")),
-                    ],
-                    vec![],
-                    Some(vec![
-                    s_assign("result", e_method_call(e_this(), "__elephc_clone_datetime_interface", vec![e_var("value")])),
-                    s_assign("current", e_method_call(e_this(), "__elephc_clone_datetime_interface_storage", vec![e_var("value")])),
-                ]),
-                ),
-                s_prop_assign(e_this(), "_current", e_var("current")),
-                s_return(e_var("result")),
+                s_expr(e_method_call(e_this(), "rewind", vec![])),
             ])
             .build()),
-        s_return(e_new("InternalIterator", vec![e_var("items"), e_var("onCurrent")])),
+        s_assign("onValid", closure()
+            .param("position", TypeExpr::Int)
+            .returns(TypeExpr::Bool)
+            .body(vec![
+                s_return(e_method_call(e_this(), "valid", vec![e_var("position")])),
+            ])
+            .build()),
+        s_assign("onCurrent", closure()
+            .returns(t_mixed())
+            .body(vec![
+                s_return(e_method_call(e_this(), "current", vec![])),
+            ])
+            .build()),
+        s_assign("onNext", closure()
+            .returns(TypeExpr::Void)
+            .body(vec![
+                s_expr(e_method_call(e_this(), "next", vec![])),
+            ])
+            .build()),
+        s_return(e_new("InternalIterator", vec![e_this(), e_var("onCurrent"), e_var("onValid"), e_var("onNext"), e_var("onRewind")])),
     ])
 }
 
 /// `DatePeriod::createFromISO8601String` — transcribed method builder.
-fn decl_class_dateperiod_method_20_createfromiso8601string() -> MethodBuilder {
+fn decl_class_dateperiod_method_23_createfromiso8601string() -> MethodBuilder {
 method("createFromISO8601String")
     .static_()
     .param("specification", TypeExpr::Str)
@@ -1747,16 +1897,7 @@ method("createFromISO8601String")
             vec![],
             None,
         ),
-        s_assign("start", e_static_call("DateTimeImmutable", "createFromTimestamp", vec![e_index(e_var("parsed"), e_str("start"))])),
-        s_assign("endTimestamp", e_int(0)),
-        s_if(
-            e_index(e_var("parsed"), e_str("has_end")),
-            vec![
-                s_assign("endTimestamp", e_index(e_var("parsed"), e_str("end"))),
-            ],
-            vec![],
-            None,
-        ),
+        s_assign("start", e_static_call("DateTimeImmutable", "createFromInterface", vec![e_call("__elephc_timelib_period_datetime", vec![e_index(e_var("parsed"), e_str("start")), e_index(e_var("parsed"), e_str("start_localtime")), e_index(e_var("parsed"), e_str("start_timezone"))])])),
         s_assign("interval", e_new("DateInterval", vec![e_str("PT0S")])),
         s_prop_assign(e_var("interval"), "y", e_index(e_var("parsed"), e_str("y"))),
         s_prop_assign(e_var("interval"), "m", e_index(e_var("parsed"), e_str("m"))),
@@ -1768,23 +1909,24 @@ method("createFromISO8601String")
         s_if(
             e_index(e_var("parsed"), e_str("has_end")),
             vec![
-                s_expr(e_method_call(e_var("typedResult"), "__elephc_initialize_end_components", vec![e_var("start"), e_var("interval"), e_var("endTimestamp"), e_var("options")])),
+                s_expr(e_method_call(e_var("typedResult"), "__elephc_initialize_end_components", vec![e_var("start"), e_var("interval"), e_call("__elephc_timelib_period_datetime", vec![e_index(e_var("parsed"), e_str("end")), e_index(e_var("parsed"), e_str("end_localtime")), e_index(e_var("parsed"), e_str("end_timezone"))]), e_var("options")])),
             ],
             vec![],
             Some(vec![
             s_expr(e_method_call(e_var("typedResult"), "__elephc_initialize_recurrence_components", vec![e_var("start"), e_var("interval"), e_index(e_var("parsed"), e_str("recurrences")), e_var("options")])),
         ]),
         ),
-        s_expr(e_call("unset", vec![e_var("interval")])),
         s_expr(e_call("unset", vec![e_var("start")])),
+        s_expr(e_call("unset", vec![e_var("interval")])),
         s_expr(e_call("unset", vec![e_var("parsed")])),
         s_return(e_var("typedResult")),
     ])
 }
 
 /// `DatePeriod::__elephc_deprecated_string_constructor` — transcribed method builder.
-fn decl_class_dateperiod_method_21_elephc_deprecated_string_constructor() -> MethodBuilder {
+fn decl_class_dateperiod_method_24_elephc_deprecated_string_constructor() -> MethodBuilder {
 method("__elephc_deprecated_string_constructor")
+    .private()
     .static_()
     .param("specification", TypeExpr::Str)
     .param_default("options", TypeExpr::Int, e_int(0))
@@ -1797,7 +1939,7 @@ method("__elephc_deprecated_string_constructor")
 }
 
 /// `DatePeriod::__elephc_initialize_from_iso8601_string` — transcribed method builder.
-fn decl_class_dateperiod_method_22_elephc_initialize_from_iso8601_string() -> MethodBuilder {
+fn decl_class_dateperiod_method_25_elephc_initialize_from_iso8601_string() -> MethodBuilder {
 method("__elephc_initialize_from_iso8601_string")
     .private()
     .param("start", TypeExpr::Str)
@@ -1840,7 +1982,7 @@ method("__elephc_initialize_from_iso8601_string")
             vec![],
             None,
         ),
-        s_assign("periodStart", e_static_call("DateTimeImmutable", "createFromTimestamp", vec![e_index(e_var("parsed"), e_str("start"))])),
+        s_assign("periodStart", e_call("__elephc_timelib_period_datetime", vec![e_index(e_var("parsed"), e_str("start")), e_index(e_var("parsed"), e_str("start_localtime")), e_index(e_var("parsed"), e_str("start_timezone"))])),
         s_assign("periodInterval", e_new("DateInterval", vec![e_str("PT0S")])),
         s_prop_assign(e_var("periodInterval"), "y", e_index(e_var("parsed"), e_str("y"))),
         s_prop_assign(e_var("periodInterval"), "m", e_index(e_var("parsed"), e_str("m"))),
@@ -1852,7 +1994,7 @@ method("__elephc_initialize_from_iso8601_string")
         s_if(
             e_index(e_var("parsed"), e_str("has_end")),
             vec![
-                s_assign("periodEnd", e_static_call("DateTimeImmutable", "createFromTimestamp", vec![e_index(e_var("parsed"), e_str("end"))])),
+                s_assign("periodEnd", e_call("__elephc_timelib_period_datetime", vec![e_index(e_var("parsed"), e_str("end")), e_index(e_var("parsed"), e_str("end_localtime")), e_index(e_var("parsed"), e_str("end_timezone"))])),
                 s_expr(e_method_call(e_this(), "__construct", vec![e_var("periodStart"), e_var("periodInterval"), e_var("periodEnd"), e_var("__elephc_options")])),
             ],
             vec![],
@@ -1864,7 +2006,7 @@ method("__elephc_initialize_from_iso8601_string")
 }
 
 /// `DatePeriod::__elephc_initialize_from_argument_array` — transcribed method builder.
-fn decl_class_dateperiod_method_23_elephc_initialize_from_argument_array() -> MethodBuilder {
+fn decl_class_dateperiod_method_26_elephc_initialize_from_argument_array() -> MethodBuilder {
 method("__elephc_initialize_from_argument_array")
     .private()
     .param("arguments", t_mixed())
@@ -2086,7 +2228,7 @@ method("__elephc_initialize_from_argument_array")
 }
 
 /// `DatePeriod::__elephc_begin_argument_array` — transcribed method builder.
-fn decl_class_dateperiod_method_24_elephc_begin_argument_array() -> MethodBuilder {
+fn decl_class_dateperiod_method_27_elephc_begin_argument_array() -> MethodBuilder {
 method("__elephc_begin_argument_array")
     .private()
     .returns(TypeExpr::Void)
@@ -2097,7 +2239,7 @@ method("__elephc_begin_argument_array")
 }
 
 /// `DatePeriod::__elephc_append_one_argument` — transcribed method builder.
-fn decl_class_dateperiod_method_25_elephc_append_one_argument() -> MethodBuilder {
+fn decl_class_dateperiod_method_28_elephc_append_one_argument() -> MethodBuilder {
 method("__elephc_append_one_argument")
     .private()
     .param("key", t_mixed())
@@ -2191,7 +2333,7 @@ method("__elephc_append_one_argument")
 }
 
 /// `DatePeriod::__elephc_append_argument_chunk` — transcribed method builder.
-fn decl_class_dateperiod_method_26_elephc_append_argument_chunk() -> MethodBuilder {
+fn decl_class_dateperiod_method_29_elephc_append_argument_chunk() -> MethodBuilder {
 method("__elephc_append_argument_chunk")
     .private()
     .param("kind", TypeExpr::Int)
@@ -2232,7 +2374,7 @@ method("__elephc_append_argument_chunk")
 }
 
 /// `DatePeriod::__elephc_finish_argument_array` — transcribed method builder.
-fn decl_class_dateperiod_method_27_elephc_finish_argument_array() -> MethodBuilder {
+fn decl_class_dateperiod_method_30_elephc_finish_argument_array() -> MethodBuilder {
 method("__elephc_finish_argument_array")
     .private()
     .param("line", TypeExpr::Int)
@@ -2245,8 +2387,9 @@ method("__elephc_finish_argument_array")
 }
 
 /// `DatePeriod::__elephc_factory_result` — transcribed method builder.
-fn decl_class_dateperiod_method_28_elephc_factory_result() -> MethodBuilder {
+fn decl_class_dateperiod_method_31_elephc_factory_result() -> MethodBuilder {
 method("__elephc_factory_result")
+    .private()
     .final_()
     .returns(t_class("DatePeriod"))
     .body_exact(vec![
@@ -2255,7 +2398,7 @@ method("__elephc_factory_result")
 }
 
 /// `DatePeriod::__elephc_weak_options` — transcribed method builder.
-fn decl_class_dateperiod_method_29_elephc_weak_options() -> MethodBuilder {
+fn decl_class_dateperiod_method_32_elephc_weak_options() -> MethodBuilder {
 method("__elephc_weak_options")
     .private()
     .static_()
@@ -2275,8 +2418,9 @@ method("__elephc_weak_options")
 }
 
 /// `DatePeriod::__elephc_debug_dump` — transcribed method builder.
-fn decl_class_dateperiod_method_30_elephc_debug_dump() -> MethodBuilder {
+fn decl_class_dateperiod_method_33_elephc_debug_dump() -> MethodBuilder {
 method("__elephc_debug_dump")
+    .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -2341,8 +2485,9 @@ method("__elephc_debug_dump")
 }
 
 /// `DatePeriod::__elephc_assert_initialized` — transcribed method builder.
-fn decl_class_dateperiod_method_31_elephc_assert_initialized() -> MethodBuilder {
+fn decl_class_dateperiod_method_34_elephc_assert_initialized() -> MethodBuilder {
 method("__elephc_assert_initialized")
+    .private()
     .final_()
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -2360,8 +2505,9 @@ method("__elephc_assert_initialized")
 }
 
 /// `DatePeriod::__elephc_assert_iterable_initialized` — transcribed method builder.
-fn decl_class_dateperiod_method_32_elephc_assert_iterable_initialized() -> MethodBuilder {
+fn decl_class_dateperiod_method_35_elephc_assert_iterable_initialized() -> MethodBuilder {
 method("__elephc_assert_iterable_initialized")
+    .private()
     .final_()
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -2377,8 +2523,9 @@ method("__elephc_assert_iterable_initialized")
 }
 
 /// `DatePeriod::__elephc_assert_foreach_by_reference` — transcribed method builder.
-fn decl_class_dateperiod_method_33_elephc_assert_foreach_by_reference() -> MethodBuilder {
+fn decl_class_dateperiod_method_36_elephc_assert_foreach_by_reference() -> MethodBuilder {
 method("__elephc_assert_foreach_by_reference")
+    .private()
     .final_()
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -2387,7 +2534,7 @@ method("__elephc_assert_foreach_by_reference")
 }
 
 /// `DatePeriod::__propget_start` — transcribed method builder.
-fn decl_class_dateperiod_method_34_propget_start() -> MethodBuilder {
+fn decl_class_dateperiod_method_37_propget_start() -> MethodBuilder {
 method("__propget_start")
     .returns(t_nullable(t_union(vec![t_class("DateTime"), t_class("DateTimeImmutable")])))
     .body_exact(vec![
@@ -2406,7 +2553,7 @@ method("__propget_start")
 }
 
 /// `DatePeriod::__propget_current` — transcribed method builder.
-fn decl_class_dateperiod_method_35_propget_current() -> MethodBuilder {
+fn decl_class_dateperiod_method_38_propget_current() -> MethodBuilder {
 method("__propget_current")
     .returns(t_nullable(t_union(vec![t_class("DateTime"), t_class("DateTimeImmutable")])))
     .body_exact(vec![
@@ -2425,7 +2572,7 @@ method("__propget_current")
 }
 
 /// `DatePeriod::__propget_end` — transcribed method builder.
-fn decl_class_dateperiod_method_36_propget_end() -> MethodBuilder {
+fn decl_class_dateperiod_method_39_propget_end() -> MethodBuilder {
 method("__propget_end")
     .returns(t_nullable(t_union(vec![t_class("DateTime"), t_class("DateTimeImmutable")])))
     .body_exact(vec![
@@ -2443,26 +2590,25 @@ method("__propget_end")
 }
 
 /// `DatePeriod::__propget_interval` — transcribed method builder.
-fn decl_class_dateperiod_method_37_propget_interval() -> MethodBuilder {
+fn decl_class_dateperiod_method_40_propget_interval() -> MethodBuilder {
 method("__propget_interval")
     .returns(t_nullable(t_class("DateInterval")))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
-        s_assign("value", e_this_prop("_interval")),
         s_if(
-            e_binop(e_var("value"), BinOp::StrictEq, e_null()),
+            e_binop(e_this_prop("_interval"), BinOp::StrictEq, e_null()),
             vec![
                 s_return(e_null()),
             ],
             vec![],
             None,
         ),
-        s_return(e_method_call(e_var("value"), "__elephc_clone", vec![])),
+        s_return(e_method_call(e_this(), "getDateInterval", vec![])),
     ])
 }
 
 /// `DatePeriod::__propget_recurrences` — transcribed method builder.
-fn decl_class_dateperiod_method_38_propget_recurrences() -> MethodBuilder {
+fn decl_class_dateperiod_method_41_propget_recurrences() -> MethodBuilder {
 method("__propget_recurrences")
     .returns(TypeExpr::Int)
     .body_exact(vec![
@@ -2471,7 +2617,7 @@ method("__propget_recurrences")
 }
 
 /// `DatePeriod::__propget_include_start_date` — transcribed method builder.
-fn decl_class_dateperiod_method_39_propget_include_start_date() -> MethodBuilder {
+fn decl_class_dateperiod_method_42_propget_include_start_date() -> MethodBuilder {
 method("__propget_include_start_date")
     .returns(TypeExpr::Bool)
     .body_exact(vec![
@@ -2480,7 +2626,7 @@ method("__propget_include_start_date")
 }
 
 /// `DatePeriod::__propget_include_end_date` — transcribed method builder.
-fn decl_class_dateperiod_method_40_propget_include_end_date() -> MethodBuilder {
+fn decl_class_dateperiod_method_43_propget_include_end_date() -> MethodBuilder {
 method("__propget_include_end_date")
     .returns(TypeExpr::Bool)
     .body_exact(vec![
@@ -2489,18 +2635,18 @@ method("__propget_include_end_date")
 }
 
 /// `DatePeriod::__wakeup` — transcribed method builder.
-fn decl_class_dateperiod_method_41_wakeup() -> MethodBuilder {
+fn decl_class_dateperiod_method_44_wakeup() -> MethodBuilder {
 method("__wakeup")
     .attr("\\Deprecated", vec![e_named_arg("since", e_str("8.5")), e_named_arg("message", e_str("this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()"))])
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_call("__elephc_diag_warning", vec![e_str("Deprecated: Method DatePeriod::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n"), e_int(0), e_const("E_DEPRECATED")])),
-        s_throw(e_new("Error", vec![e_str("Invalid serialization data for DatePeriod object")])),
+        s_expr(e_method_call(e_this(), "__unserialize", vec![e_call("get_object_vars", vec![e_this()])])),
     ])
 }
 
 /// `DatePeriod::__serialize` — transcribed method builder.
-fn decl_class_dateperiod_method_42_serialize() -> MethodBuilder {
+fn decl_class_dateperiod_method_45_serialize() -> MethodBuilder {
 method("__serialize")
     .returns(t_array())
     .body_exact(vec![
@@ -2510,7 +2656,7 @@ method("__serialize")
 }
 
 /// `DatePeriod::__unserialize` — transcribed method builder.
-fn decl_class_dateperiod_method_43_unserialize() -> MethodBuilder {
+fn decl_class_dateperiod_method_46_unserialize() -> MethodBuilder {
 method("__unserialize")
     .param("data", t_array())
     .returns(TypeExpr::Void)
@@ -2565,6 +2711,7 @@ method("__unserialize")
                 s_prop_assign(e_this(), "_start", e_var("startSnapshot")),
                 s_prop_assign(e_this(), "startTs", e_method_call(e_this(), "__elephc_datetime_interface_timestamp", vec![e_var("startSnapshot")])),
                 s_prop_assign(e_this(), "startIsImmutable", e_instance_of(e_var("startSnapshot"), "DateTimeImmutable")),
+                s_prop_assign(e_this(), "startClass", e_call("get_class", vec![e_var("startSnapshot")])),
                 s_prop_assign(e_this(), "curTs", e_this_prop("startTs")),
                 s_prop_assign(e_this(), "idx", e_int(0)),
             ],
@@ -2753,11 +2900,31 @@ method("__unserialize")
         s_prop_assign(e_this(), "useCount", e_ternary(e_binop(e_this_prop("_end"), BinOp::StrictEq, e_null()), e_int(1), e_int(0))),
         s_prop_assign(e_this(), "_cursor", e_null()),
         s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
+        s_assign("data", e_method_call(e_this(), "__elephc_restore_date_properties", vec![e_var("data")])),
+        s_foreach(e_var("data"), Some("__property"), "__value", vec![
+            s_if(
+                e_binop(e_binop(e_call("is_string", vec![e_var("__property")]), BinOp::And, e_binop(e_call("strlen", vec![e_var("__property")]), BinOp::Gt, e_int(3))), BinOp::And, e_binop(e_call("substr", vec![e_var("__property"), e_int(0), e_int(3)]), BinOp::StrictEq, e_str("\0*\0"))),
+                vec![
+                    s_assign("__property", e_call("substr", vec![e_var("__property"), e_int(3)])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_binop(e_not(e_call("is_string", vec![e_var("__property")])), BinOp::Or, e_binop(e_binop(e_call("strlen", vec![e_var("__property")]), BinOp::Gt, e_int(0)), BinOp::And, e_binop(e_index(e_var("__property"), e_int(0)), BinOp::StrictEq, e_str("\0")))), BinOp::Or, e_call("in_array", vec![e_var("__property"), e_array(vec![e_str("start"), e_str("current"), e_str("end"), e_str("interval"), e_str("recurrences"), e_str("include_start_date"), e_str("include_end_date")]), e_bool(true)])),
+                vec![
+                    s_continue(1),
+                ],
+                vec![],
+                None,
+            ),
+            s_expr(e_assign(e_dyn_prop(e_this(), e_var("__property")), e_var("__value"))),
+        ]),
     ])
 }
 
 /// `DatePeriod::__set_state` — transcribed method builder.
-fn decl_class_dateperiod_method_44_set_state() -> MethodBuilder {
+fn decl_class_dateperiod_method_47_set_state() -> MethodBuilder {
 method("__set_state")
     .static_()
     .param("array", t_array())
@@ -2797,6 +2964,7 @@ fn decl_class_dateperiod() -> Stmt {
         .private_prop("startTs", TypeExpr::Int, Some(e_int(0)))
         .private_prop("endTs", TypeExpr::Int, Some(e_int(0)))
         .private_prop("startIsImmutable", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("startClass", TypeExpr::Str, Some(e_str("DateTime")))
         .private_prop("__elephc_initialized", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("__elephc_arguments", t_mixed(), Some(e_null()))
         .private_prop("__elephc_seen_named_argument", TypeExpr::Bool, Some(e_bool(false)))
@@ -2834,45 +3002,48 @@ fn decl_class_dateperiod() -> Stmt {
         .method(decl_class_dateperiod_method_3_elephc_weak_string_argument())
         .method(decl_class_dateperiod_method_4_elephc_clone_datetime_interface())
         .method(decl_class_dateperiod_method_5_elephc_clone_datetime_interface_storage())
-        .method(decl_class_dateperiod_method_6_elephc_clone_iterator_value())
-        .method(decl_class_dateperiod_method_7_elephc_datetime_interface_timestamp())
-        .method(decl_class_dateperiod_method_8_elephc_add_interval())
-        .method(decl_class_dateperiod_method_9_advance())
-        .method(decl_class_dateperiod_method_10_rewind())
-        .method(decl_class_dateperiod_method_11_valid())
-        .method(decl_class_dateperiod_method_12_current())
-        .method(decl_class_dateperiod_method_13_key())
-        .method(decl_class_dateperiod_method_14_next())
-        .method(decl_class_dateperiod_method_15_getstartdate())
-        .method(decl_class_dateperiod_method_16_getenddate())
-        .method(decl_class_dateperiod_method_17_getdateinterval())
-        .method(decl_class_dateperiod_method_18_getrecurrences())
-        .method(decl_class_dateperiod_method_19_getiterator())
-        .method(decl_class_dateperiod_method_20_createfromiso8601string())
-        .method(decl_class_dateperiod_method_21_elephc_deprecated_string_constructor())
-        .method(decl_class_dateperiod_method_22_elephc_initialize_from_iso8601_string())
-        .method(decl_class_dateperiod_method_23_elephc_initialize_from_argument_array())
-        .method(decl_class_dateperiod_method_24_elephc_begin_argument_array())
-        .method(decl_class_dateperiod_method_25_elephc_append_one_argument())
-        .method(decl_class_dateperiod_method_26_elephc_append_argument_chunk())
-        .method(decl_class_dateperiod_method_27_elephc_finish_argument_array())
-        .method(decl_class_dateperiod_method_28_elephc_factory_result())
-        .method(decl_class_dateperiod_method_29_elephc_weak_options())
-        .method(decl_class_dateperiod_method_30_elephc_debug_dump())
-        .method(decl_class_dateperiod_method_31_elephc_assert_initialized())
-        .method(decl_class_dateperiod_method_32_elephc_assert_iterable_initialized())
-        .method(decl_class_dateperiod_method_33_elephc_assert_foreach_by_reference())
-        .method(decl_class_dateperiod_method_34_propget_start())
-        .method(decl_class_dateperiod_method_35_propget_current())
-        .method(decl_class_dateperiod_method_36_propget_end())
-        .method(decl_class_dateperiod_method_37_propget_interval())
-        .method(decl_class_dateperiod_method_38_propget_recurrences())
-        .method(decl_class_dateperiod_method_39_propget_include_start_date())
-        .method(decl_class_dateperiod_method_40_propget_include_end_date())
-        .method(decl_class_dateperiod_method_41_wakeup())
-        .method(decl_class_dateperiod_method_42_serialize())
-        .method(decl_class_dateperiod_method_43_unserialize())
-        .method(decl_class_dateperiod_method_44_set_state())
+        .method(decl_class_dateperiod_method_6_elephc_datetime_state())
+        .method(decl_class_dateperiod_method_7_elephc_rehydrate_datetime())
+        .method(decl_class_dateperiod_method_8_elephc_clone_iterator_value())
+        .method(decl_class_dateperiod_method_9_elephc_datetime_interface_timestamp())
+        .method(decl_class_dateperiod_method_10_elephc_datetime_interface_microsecond())
+        .method(decl_class_dateperiod_method_11_elephc_add_interval())
+        .method(decl_class_dateperiod_method_12_advance())
+        .method(decl_class_dateperiod_method_13_rewind())
+        .method(decl_class_dateperiod_method_14_valid())
+        .method(decl_class_dateperiod_method_15_current())
+        .method(decl_class_dateperiod_method_16_key())
+        .method(decl_class_dateperiod_method_17_next())
+        .method(decl_class_dateperiod_method_18_getstartdate())
+        .method(decl_class_dateperiod_method_19_getenddate())
+        .method(decl_class_dateperiod_method_20_getdateinterval())
+        .method(decl_class_dateperiod_method_21_getrecurrences())
+        .method(decl_class_dateperiod_method_22_getiterator())
+        .method(decl_class_dateperiod_method_23_createfromiso8601string())
+        .method(decl_class_dateperiod_method_24_elephc_deprecated_string_constructor())
+        .method(decl_class_dateperiod_method_25_elephc_initialize_from_iso8601_string())
+        .method(decl_class_dateperiod_method_26_elephc_initialize_from_argument_array())
+        .method(decl_class_dateperiod_method_27_elephc_begin_argument_array())
+        .method(decl_class_dateperiod_method_28_elephc_append_one_argument())
+        .method(decl_class_dateperiod_method_29_elephc_append_argument_chunk())
+        .method(decl_class_dateperiod_method_30_elephc_finish_argument_array())
+        .method(decl_class_dateperiod_method_31_elephc_factory_result())
+        .method(decl_class_dateperiod_method_32_elephc_weak_options())
+        .method(decl_class_dateperiod_method_33_elephc_debug_dump())
+        .method(decl_class_dateperiod_method_34_elephc_assert_initialized())
+        .method(decl_class_dateperiod_method_35_elephc_assert_iterable_initialized())
+        .method(decl_class_dateperiod_method_36_elephc_assert_foreach_by_reference())
+        .method(decl_class_dateperiod_method_37_propget_start())
+        .method(decl_class_dateperiod_method_38_propget_current())
+        .method(decl_class_dateperiod_method_39_propget_end())
+        .method(decl_class_dateperiod_method_40_propget_interval())
+        .method(decl_class_dateperiod_method_41_propget_recurrences())
+        .method(decl_class_dateperiod_method_42_propget_include_start_date())
+        .method(decl_class_dateperiod_method_43_propget_include_end_date())
+        .method(decl_class_dateperiod_method_44_wakeup())
+        .method(decl_class_dateperiod_method_45_serialize())
+        .method(decl_class_dateperiod_method_46_unserialize())
+        .method(decl_class_dateperiod_method_47_set_state())
         .build()
 }
 
@@ -2927,6 +3098,7 @@ method("__construct")
                 ),
                 s_prop_assign(e_this(), "timestamp", e_var("__ts")),
                 s_prop_assign(e_this(), "timezone_name", e_str("+00:00")),
+                s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
                 s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
                 s_return_void(),
             ],
@@ -3007,7 +3179,7 @@ method("__construct")
                 ],
                 vec![],
                 Some(vec![
-                s_assign("tzname", e_method_call(e_var("timezone"), "getName", vec![])),
+                s_assign("tzname", e_static_call("DateTimeZone", "__elephc_export_name", vec![e_var("timezone")])),
                 s_if(
                     e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
                     vec![
@@ -3065,6 +3237,7 @@ method("getMicrosecond")
 /// `DateTime::__elephc_set_microsecond_raw` — transcribed method builder.
 fn decl_class_datetime_method_3_elephc_set_microsecond_raw() -> MethodBuilder {
 method("__elephc_set_microsecond_raw")
+    .private()
     .param("microsecond", TypeExpr::Int)
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -3076,9 +3249,17 @@ method("__elephc_set_microsecond_raw")
 /// `DateTime::getTimezone` — transcribed method builder.
 fn decl_class_datetime_method_4_gettimezone() -> MethodBuilder {
 method("getTimezone")
-    .returns(t_class("DateTimeZone"))
+    .returns(t_union(vec![t_class("DateTimeZone"), TypeExpr::False]))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_if(
+            e_not(e_this_prop("__elephc_is_localtime")),
+            vec![
+                s_return(e_bool(false)),
+            ],
+            vec![],
+            None,
+        ),
         s_return(e_new("DateTimeZone", vec![e_this_prop("timezone_name")])),
     ])
 }
@@ -3261,7 +3442,7 @@ method("diff")
         s_assign("leftTimezone", e_this_prop("timezone_name")),
         s_assign("rightTimestamp", e_method_call(e_var("targetObject"), "getTimestamp", vec![])),
         s_assign("rightMicrosecond", e_method_call(e_var("targetObject"), "getMicrosecond", vec![])),
-        s_assign("rightTimezone", e_method_call(e_var("targetObject"), "format", vec![e_str("e")])),
+        s_assign("rightTimezone", e_method_call(e_method_call(e_var("targetObject"), "getTimezone", vec![]), "getName", vec![])),
         s_assign("parsed", e_call("__elephc_timelib_diff", vec![e_var("leftTimestamp"), e_var("leftMicrosecond"), e_var("leftTimezone"), e_var("rightTimestamp"), e_var("rightMicrosecond"), e_var("rightTimezone")])),
         s_assign("interval", e_new("DateInterval", vec![e_str("PT0S")])),
         s_prop_assign(e_var("interval"), "y", e_index(e_var("parsed"), e_str("y"))),
@@ -3295,6 +3476,7 @@ method("setTimestamp")
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
         s_prop_assign(e_this(), "microsecond", e_int(0)),
         s_prop_assign(e_this(), "timestamp", e_var("timestamp")),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_this(), "__elephc_civil_override", e_bool(false)),
         s_return(e_this()),
     ])
@@ -3334,6 +3516,7 @@ method("setTime")
         s_assign("__parsed", e_call("__elephc_timelib_set_civil", vec![e_this_prop("timestamp"), e_this_prop("microsecond"), e_this_prop("timezone_name"), e_var("__payload")])),
         s_prop_assign(e_this(), "microsecond", e_index(e_var("__parsed"), e_str("microsecond"))),
         s_prop_assign(e_this(), "timestamp", e_index(e_var("__parsed"), e_str("timestamp"))),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_this(), "__elephc_civil_override", e_bool(false)),
         s_return(e_this()),
     ])
@@ -3352,6 +3535,7 @@ method("setDate")
         s_assign("__parsed", e_call("__elephc_timelib_set_civil", vec![e_this_prop("timestamp"), e_this_prop("microsecond"), e_this_prop("timezone_name"), e_var("__payload")])),
         s_prop_assign(e_this(), "microsecond", e_index(e_var("__parsed"), e_str("microsecond"))),
         s_prop_assign(e_this(), "timestamp", e_index(e_var("__parsed"), e_str("timestamp"))),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_this(), "__elephc_civil_override", e_bool(false)),
         s_return(e_this()),
     ])
@@ -3364,7 +3548,8 @@ method("setTimezone")
     .returns(t_class("DateTime"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
-        s_prop_assign(e_this(), "timezone_name", e_method_call(e_var("timezone"), "getName", vec![])),
+        s_prop_assign(e_this(), "timezone_name", e_static_call("DateTimeZone", "__elephc_export_name", vec![e_var("timezone")])),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
         s_return(e_this()),
     ])
 }
@@ -3440,6 +3625,7 @@ method("add")
         ),
         s_prop_assign(e_this(), "microsecond", e_index(e_var("__interval_result"), e_str("microsecond"))),
         s_prop_assign(e_this(), "timestamp", e_index(e_var("__interval_result"), e_str("timestamp"))),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_this(), "__elephc_civil_override", e_bool(false)),
         s_return(e_this()),
     ])
@@ -3516,6 +3702,7 @@ method("sub")
         ),
         s_prop_assign(e_this(), "microsecond", e_index(e_var("__interval_result"), e_str("microsecond"))),
         s_prop_assign(e_this(), "timestamp", e_index(e_var("__interval_result"), e_str("timestamp"))),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_this(), "__elephc_civil_override", e_bool(false)),
         s_return(e_this()),
     ])
@@ -3551,6 +3738,7 @@ method("modify")
         s_assign("__timezone", e_ternary(e_index(e_var("__modified"), e_str("reset_to_utc")), e_str("+00:00"), e_this_prop("timezone_name"))),
         s_prop_assign(e_this(), "microsecond", e_var("__micro")),
         s_prop_assign(e_this(), "timestamp", e_var("__ts")),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_this(), "__elephc_civil_override", e_bool(false)),
         s_prop_assign(e_this(), "timezone_name", e_var("__timezone")),
         s_return(e_this()),
@@ -3586,7 +3774,7 @@ method("createFromFormat")
         s_if(
             e_binop(e_var("timezone"), BinOp::StrictNotEq, e_null()),
             vec![
-                s_assign("timezoneName", e_method_call(e_var("timezone"), "getName", vec![])),
+                s_assign("timezoneName", e_static_call("DateTimeZone", "__elephc_export_name", vec![e_var("timezone")])),
             ],
             vec![],
             None,
@@ -3742,13 +3930,14 @@ method("createFromTimestamp")
             vec![
                 s_assign("baseResult", e_new("DateTime", vec![e_binop(e_str("@"), BinOp::Concat, e_var("secs"))])),
                 s_prop_assign(e_var("baseResult"), "microsecond", e_var("microseconds")),
+                s_prop_assign(e_var("baseResult"), "__elephc_is_localtime", e_bool(true)),
                 s_return(e_var("baseResult")),
             ],
             vec![],
             None,
         ),
         s_assign("subclassResult", e_call("__elephc_new_instance_without_constructor", vec![e_static_class()])),
-        s_expr(e_method_call(e_var("subclassResult"), "__unserialize", vec![e_array_assoc(vec![(e_str("date"), e_binop(e_binop(e_call("gmdate", vec![e_str("x-m-d H:i:s"), e_var("secs")]), BinOp::Concat, e_str(".")), BinOp::Concat, e_call("sprintf", vec![e_str("%06d"), e_var("microseconds")]))), (e_str("timezone_type"), e_int(1)), (e_str("timezone"), e_str("+00:00"))])])),
+        s_expr(e_static_call("DateTime", "__elephc_import_state", vec![e_var("subclassResult"), e_array_assoc(vec![(e_str("timestamp"), e_var("secs")), (e_str("timezone_name"), e_str("+00:00")), (e_str("is_localtime"), e_bool(true)), (e_str("microsecond"), e_var("microseconds")), (e_str("civil_override"), e_bool(false)), (e_str("civil_year"), e_int(1970)), (e_str("civil_month"), e_int(1)), (e_str("civil_day"), e_int(1))])])),
         s_return(e_var("subclassResult")),
     ])
 }
@@ -3760,21 +3949,33 @@ method("createFromInterface")
     .param("object", t_class("DateTimeInterface"))
     .returns(t_class("DateTime"))
     .body_exact(vec![
+        s_if(
+            e_instance_of(e_var("object"), "DateTime"),
+            vec![
+                s_assign("state", e_static_call("DateTime", "__elephc_export_state", vec![e_var("object")])),
+            ],
+            vec![
+            (e_instance_of(e_var("object"), "DateTimeImmutable"), vec![
+                s_assign("state", e_static_call("DateTimeImmutable", "__elephc_export_state", vec![e_var("object")])),
+            ]),
+        ],
+            Some(vec![
+            s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("DateTime::createFromInterface(): Argument #1 ("), BinOp::Concat, e_var("object")), BinOp::Concat, e_str(") must be of type DateTimeInterface"))])),
+        ]),
+        ),
         s_assign("className", e_static_class()),
-        s_assign("timezone", e_method_call(e_var("object"), "format", vec![e_str("e")])),
-        s_assign("data", e_array_assoc(vec![(e_str("date"), e_method_call(e_var("object"), "format", vec![e_str("x-m-d H:i:s.u")])), (e_str("timezone_type"), e_static_call("DateTime", "__elephc_timezone_type", vec![e_var("timezone")])), (e_str("timezone"), e_var("timezone"))])),
         s_if(
             e_binop(e_var("className"), BinOp::StrictEq, e_named_class("DateTime")),
             vec![
                 s_assign("baseResult", e_new("DateTime", vec![])),
-                s_expr(e_method_call(e_var("baseResult"), "__unserialize", vec![e_var("data")])),
+                s_expr(e_static_call("DateTime", "__elephc_import_state", vec![e_var("baseResult"), e_var("state")])),
                 s_return(e_var("baseResult")),
             ],
             vec![],
             None,
         ),
         s_assign("subclassResult", e_call("__elephc_new_instance_without_constructor", vec![e_var("className")])),
-        s_expr(e_method_call(e_var("subclassResult"), "__unserialize", vec![e_var("data")])),
+        s_expr(e_static_call("DateTime", "__elephc_import_state", vec![e_var("subclassResult"), e_var("state")])),
         s_return(e_var("subclassResult")),
     ])
 }
@@ -3795,27 +3996,188 @@ method("createFromImmutable")
             vec![],
             None,
         ),
+        s_if(
+            e_instance_of(e_var("object"), "DateTime"),
+            vec![
+                s_assign("state", e_static_call("DateTime", "__elephc_export_state", vec![e_var("object")])),
+            ],
+            vec![
+            (e_instance_of(e_var("object"), "DateTimeImmutable"), vec![
+                s_assign("state", e_static_call("DateTimeImmutable", "__elephc_export_state", vec![e_var("object")])),
+            ]),
+        ],
+            Some(vec![
+            s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("DateTime::createFromImmutable(): Argument #1 ("), BinOp::Concat, e_var("object")), BinOp::Concat, e_str(") must be of type DateTimeImmutable"))])),
+        ]),
+        ),
         s_assign("className", e_static_class()),
-        s_assign("timezone", e_method_call(e_var("object"), "format", vec![e_str("e")])),
-        s_assign("data", e_array_assoc(vec![(e_str("date"), e_method_call(e_var("object"), "format", vec![e_str("x-m-d H:i:s.u")])), (e_str("timezone_type"), e_static_call("DateTime", "__elephc_timezone_type", vec![e_var("timezone")])), (e_str("timezone"), e_var("timezone"))])),
         s_if(
             e_binop(e_var("className"), BinOp::StrictEq, e_named_class("DateTime")),
             vec![
                 s_assign("baseResult", e_new("DateTime", vec![])),
-                s_expr(e_method_call(e_var("baseResult"), "__unserialize", vec![e_var("data")])),
+                s_expr(e_static_call("DateTime", "__elephc_import_state", vec![e_var("baseResult"), e_var("state")])),
                 s_return(e_var("baseResult")),
             ],
             vec![],
             None,
         ),
         s_assign("subclassResult", e_call("__elephc_new_instance_without_constructor", vec![e_var("className")])),
-        s_expr(e_method_call(e_var("subclassResult"), "__unserialize", vec![e_var("data")])),
+        s_expr(e_static_call("DateTime", "__elephc_import_state", vec![e_var("subclassResult"), e_var("state")])),
         s_return(e_var("subclassResult")),
     ])
 }
 
+/// `DateTime::__elephc_export_state_instance` — transcribed method builder.
+fn decl_class_datetime_method_21_elephc_export_state_instance() -> MethodBuilder {
+method("__elephc_export_state_instance")
+    .private()
+    .final_()
+    .returns(t_array())
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_return(e_array_assoc(vec![(e_str("timestamp"), e_this_prop("timestamp")), (e_str("timezone_name"), e_this_prop("timezone_name")), (e_str("is_localtime"), e_this_prop("__elephc_is_localtime")), (e_str("microsecond"), e_this_prop("microsecond")), (e_str("civil_override"), e_this_prop("__elephc_civil_override")), (e_str("civil_year"), e_this_prop("__elephc_civil_year")), (e_str("civil_month"), e_this_prop("__elephc_civil_month")), (e_str("civil_day"), e_this_prop("__elephc_civil_day"))])),
+    ])
+}
+
+/// `DateTime::__elephc_export_state` — transcribed method builder.
+fn decl_class_datetime_method_22_elephc_export_state() -> MethodBuilder {
+method("__elephc_export_state")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTime"))
+    .returns(t_array())
+    .body_exact(vec![
+        s_return(e_method_call(e_var("value"), "__elephc_export_state_instance", vec![])),
+    ])
+}
+
+/// `DateTime::__elephc_import_state_instance` — transcribed method builder.
+fn decl_class_datetime_method_23_elephc_import_state_instance() -> MethodBuilder {
+method("__elephc_import_state_instance")
+    .private()
+    .final_()
+    .param("state", t_array())
+    .returns(TypeExpr::Void)
+    .body_exact(vec![
+        s_prop_assign(e_this(), "timestamp", e_index(e_var("state"), e_str("timestamp"))),
+        s_prop_assign(e_this(), "timezone_name", e_index(e_var("state"), e_str("timezone_name"))),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_index(e_var("state"), e_str("is_localtime"))),
+        s_prop_assign(e_this(), "microsecond", e_index(e_var("state"), e_str("microsecond"))),
+        s_prop_assign(e_this(), "__elephc_civil_override", e_index(e_var("state"), e_str("civil_override"))),
+        s_prop_assign(e_this(), "__elephc_civil_year", e_index(e_var("state"), e_str("civil_year"))),
+        s_prop_assign(e_this(), "__elephc_civil_month", e_index(e_var("state"), e_str("civil_month"))),
+        s_prop_assign(e_this(), "__elephc_civil_day", e_index(e_var("state"), e_str("civil_day"))),
+        s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
+    ])
+}
+
+/// `DateTime::__elephc_import_state` — transcribed method builder.
+fn decl_class_datetime_method_24_elephc_import_state() -> MethodBuilder {
+method("__elephc_import_state")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTime"))
+    .param("state", t_array())
+    .returns(TypeExpr::Void)
+    .body_exact(vec![
+        s_return(e_method_call(e_var("value"), "__elephc_import_state_instance", vec![e_var("state")])),
+    ])
+}
+
+/// `DateTime::__elephc_timestamp_internal` — transcribed method builder.
+fn decl_class_datetime_method_25_elephc_timestamp_internal() -> MethodBuilder {
+method("__elephc_timestamp_internal")
+    .private()
+    .final_()
+    .returns(TypeExpr::Int)
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_return(e_this_prop("timestamp")),
+    ])
+}
+
+/// `DateTime::__elephc_microsecond_internal` — transcribed method builder.
+fn decl_class_datetime_method_26_elephc_microsecond_internal() -> MethodBuilder {
+method("__elephc_microsecond_internal")
+    .private()
+    .final_()
+    .returns(TypeExpr::Int)
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_return(e_this_prop("microsecond")),
+    ])
+}
+
+/// `DateTime::__elephc_timezone_name_internal` — transcribed method builder.
+fn decl_class_datetime_method_27_elephc_timezone_name_internal() -> MethodBuilder {
+method("__elephc_timezone_name_internal")
+    .private()
+    .final_()
+    .returns(TypeExpr::Str)
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_return(e_this_prop("timezone_name")),
+    ])
+}
+
+/// `DateTime::__elephc_timestamp_of` — transcribed method builder.
+fn decl_class_datetime_method_28_elephc_timestamp_of() -> MethodBuilder {
+method("__elephc_timestamp_of")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTime"))
+    .returns(TypeExpr::Int)
+    .body_exact(vec![
+        s_return(e_prop(e_var("value"), "timestamp")),
+    ])
+}
+
+/// `DateTime::__elephc_microsecond_of` — transcribed method builder.
+fn decl_class_datetime_method_29_elephc_microsecond_of() -> MethodBuilder {
+method("__elephc_microsecond_of")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTime"))
+    .returns(TypeExpr::Int)
+    .body_exact(vec![
+        s_return(e_prop(e_var("value"), "microsecond")),
+    ])
+}
+
+/// `DateTime::__elephc_timezone_name_of` — transcribed method builder.
+fn decl_class_datetime_method_30_elephc_timezone_name_of() -> MethodBuilder {
+method("__elephc_timezone_name_of")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTime"))
+    .returns(TypeExpr::Str)
+    .body_exact(vec![
+        s_return(e_prop(e_var("value"), "timezone_name")),
+    ])
+}
+
+/// `DateTime::__elephc_period_advance` — transcribed method builder.
+fn decl_class_datetime_method_31_elephc_period_advance() -> MethodBuilder {
+method("__elephc_period_advance")
+    .private()
+    .final_()
+    .param("interval", t_class("DateInterval"))
+    .returns(TypeExpr::Void)
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_assign("advanced", e_call("__elephc_timelib_period_advance", vec![e_this_prop("timestamp"), e_this_prop("microsecond"), e_this_prop("timezone_name"), e_method_call(e_var("interval"), "__elephc_payload", vec![])])),
+        s_prop_assign(e_this(), "timestamp", e_index(e_var("advanced"), e_int(0))),
+        s_prop_assign(e_this(), "microsecond", e_index(e_var("advanced"), e_int(1))),
+    ])
+}
+
 /// `DateTime::setISODate` — transcribed method builder.
-fn decl_class_datetime_method_21_setisodate() -> MethodBuilder {
+fn decl_class_datetime_method_32_setisodate() -> MethodBuilder {
 method("setISODate")
     .param("year", TypeExpr::Int)
     .param("week", TypeExpr::Int)
@@ -3840,8 +4202,9 @@ method("setISODate")
 }
 
 /// `DateTime::__elephc_date_parse_from_format` — transcribed method builder.
-fn decl_class_datetime_method_22_elephc_date_parse_from_format() -> MethodBuilder {
+fn decl_class_datetime_method_33_elephc_date_parse_from_format() -> MethodBuilder {
 method("__elephc_date_parse_from_format")
+    .private()
     .static_()
     .param("format", TypeExpr::Str)
     .param("datetime", TypeExpr::Str)
@@ -3868,8 +4231,9 @@ method("__elephc_date_parse_from_format")
 }
 
 /// `DateTime::__elephc_date_parse` — transcribed method builder.
-fn decl_class_datetime_method_23_elephc_date_parse() -> MethodBuilder {
+fn decl_class_datetime_method_34_elephc_date_parse() -> MethodBuilder {
 method("__elephc_date_parse")
+    .private()
     .static_()
     .param("datetime", TypeExpr::Str)
     .returns(t_mixed())
@@ -3879,8 +4243,9 @@ method("__elephc_date_parse")
 }
 
 /// `DateTime::__elephc_gettimeofday` — transcribed method builder.
-fn decl_class_datetime_method_24_elephc_gettimeofday() -> MethodBuilder {
+fn decl_class_datetime_method_35_elephc_gettimeofday() -> MethodBuilder {
 method("__elephc_gettimeofday")
+    .private()
     .static_()
     .param_default("as_float", TypeExpr::Bool, e_bool(false))
     .returns(t_mixed())
@@ -3904,8 +4269,9 @@ method("__elephc_gettimeofday")
 }
 
 /// `DateTime::__elephc_idate` — transcribed method builder.
-fn decl_class_datetime_method_25_elephc_idate() -> MethodBuilder {
+fn decl_class_datetime_method_36_elephc_idate() -> MethodBuilder {
 method("__elephc_idate")
+    .private()
     .static_()
     .param("format", TypeExpr::Str)
     .param_default("timestamp", t_nullable(TypeExpr::Int), e_null())
@@ -3944,8 +4310,9 @@ method("__elephc_idate")
 }
 
 /// `DateTime::__elephc_timezone_type` — transcribed method builder.
-fn decl_class_datetime_method_26_elephc_timezone_type() -> MethodBuilder {
+fn decl_class_datetime_method_37_elephc_timezone_type() -> MethodBuilder {
 method("__elephc_timezone_type")
+    .private()
     .static_()
     .param("timezone", TypeExpr::Str)
     .returns(TypeExpr::Int)
@@ -3980,8 +4347,9 @@ method("__elephc_timezone_type")
 }
 
 /// `DateTime::__elephc_runtime_timezone_name` — transcribed method builder.
-fn decl_class_datetime_method_27_elephc_runtime_timezone_name() -> MethodBuilder {
+fn decl_class_datetime_method_38_elephc_runtime_timezone_name() -> MethodBuilder {
 method("__elephc_runtime_timezone_name")
+    .private()
     .static_()
     .param("zone", TypeExpr::Str)
     .returns(TypeExpr::Str)
@@ -4126,8 +4494,9 @@ method("__elephc_runtime_timezone_name")
 }
 
 /// `DateTime::__elephc_date_create` — transcribed method builder.
-fn decl_class_datetime_method_28_elephc_date_create() -> MethodBuilder {
+fn decl_class_datetime_method_39_elephc_date_create() -> MethodBuilder {
 method("__elephc_date_create")
+    .private()
     .static_()
     .param_default("datetime", TypeExpr::Str, e_str("now"))
     .param_default("timezone", t_nullable(t_class("DateTimeZone")), e_null())
@@ -4159,25 +4528,18 @@ method("__elephc_date_create")
 }
 
 /// `DateTime::__wakeup` — transcribed method builder.
-fn decl_class_datetime_method_29_wakeup() -> MethodBuilder {
+fn decl_class_datetime_method_40_wakeup() -> MethodBuilder {
 method("__wakeup")
     .attr("\\Deprecated", vec![e_named_arg("since", e_str("8.5")), e_named_arg("message", e_str("this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()"))])
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_call("__elephc_diag_warning", vec![e_str("Deprecated: Method DateTime::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n"), e_int(0), e_const("E_DEPRECATED")])),
-        s_if(
-            e_binop(e_str("DateTime"), BinOp::StrictNotEq, e_str("DateInterval")),
-            vec![
-                s_throw(e_new("Error", vec![e_str("Invalid serialization data for DateTime object")])),
-            ],
-            vec![],
-            None,
-        ),
+        s_expr(e_method_call(e_this(), "__unserialize", vec![e_call("get_object_vars", vec![e_this()])])),
     ])
 }
 
 /// `DateTime::__serialize` — transcribed method builder.
-fn decl_class_datetime_method_30_serialize() -> MethodBuilder {
+fn decl_class_datetime_method_41_serialize() -> MethodBuilder {
 method("__serialize")
     .returns(t_array())
     .body_exact(vec![
@@ -4189,12 +4551,24 @@ method("__serialize")
         s_assign("__us", e_call("str_pad", vec![e_cast(CastType::String, e_this_prop("microsecond")), e_int(6), e_str("0"), e_int(1)])),
         s_assign("__date", e_binop(e_binop(e_var("__date"), BinOp::Concat, e_str(".")), BinOp::Concat, e_var("__us"))),
         s_expr(e_call("date_default_timezone_set", vec![e_var("__saved")])),
-        s_return(e_array_assoc(vec![(e_str("date"), e_var("__date")), (e_str("timezone_type"), e_static_call("DateTime", "__elephc_timezone_type", vec![e_var("__tz")])), (e_str("timezone"), e_var("__tz"))])),
+        s_assign("result", e_array_assoc(vec![(e_str("date"), e_var("__date")), (e_str("timezone_type"), e_null())])),
+        s_if(
+            e_this_prop("__elephc_is_localtime"),
+            vec![
+                s_array_assign("result", e_str("timezone_type"), e_static_call("DateTime", "__elephc_timezone_type", vec![e_var("__tz")])),
+                s_array_assign("result", e_str("timezone"), e_var("__tz")),
+            ],
+            vec![],
+            Some(vec![
+            s_expr(e_call("unset", vec![e_index(e_var("result"), e_str("timezone_type"))])),
+        ]),
+        ),
+        s_return(e_var("result")),
     ])
 }
 
 /// `DateTime::__unserialize` — transcribed method builder.
-fn decl_class_datetime_method_31_unserialize() -> MethodBuilder {
+fn decl_class_datetime_method_42_unserialize() -> MethodBuilder {
 method("__unserialize")
     .param("data", t_array())
     .returns(TypeExpr::Void)
@@ -4279,12 +4653,33 @@ method("__unserialize")
         ),
         s_prop_assign(e_this(), "timestamp", e_var("__timestamp")),
         s_prop_assign(e_this(), "timezone_name", e_var("__tz")),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
+        s_assign("data", e_method_call(e_this(), "__elephc_restore_date_properties", vec![e_var("data")])),
+        s_foreach(e_var("data"), Some("__property"), "__value", vec![
+            s_if(
+                e_binop(e_binop(e_call("is_string", vec![e_var("__property")]), BinOp::And, e_binop(e_call("strlen", vec![e_var("__property")]), BinOp::Gt, e_int(3))), BinOp::And, e_binop(e_call("substr", vec![e_var("__property"), e_int(0), e_int(3)]), BinOp::StrictEq, e_str("\0*\0"))),
+                vec![
+                    s_assign("__property", e_call("substr", vec![e_var("__property"), e_int(3)])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_binop(e_not(e_call("is_string", vec![e_var("__property")])), BinOp::Or, e_binop(e_binop(e_call("strlen", vec![e_var("__property")]), BinOp::Gt, e_int(0)), BinOp::And, e_binop(e_index(e_var("__property"), e_int(0)), BinOp::StrictEq, e_str("\0")))), BinOp::Or, e_call("in_array", vec![e_var("__property"), e_array(vec![e_str("date"), e_str("timezone_type"), e_str("timezone")]), e_bool(true)])),
+                vec![
+                    s_continue(1),
+                ],
+                vec![],
+                None,
+            ),
+            s_expr(e_assign(e_dyn_prop(e_this(), e_var("__property")), e_var("__value"))),
+        ]),
     ])
 }
 
 /// `DateTime::__set_state` — transcribed method builder.
-fn decl_class_datetime_method_32_set_state() -> MethodBuilder {
+fn decl_class_datetime_method_43_set_state() -> MethodBuilder {
 method("__set_state")
     .static_()
     .param("array", t_array())
@@ -4297,49 +4692,67 @@ method("__set_state")
 }
 
 /// `DateTime::__elephc_debug_dump` — transcribed method builder.
-fn decl_class_datetime_method_33_elephc_debug_dump() -> MethodBuilder {
+fn decl_class_datetime_method_44_elephc_debug_dump() -> MethodBuilder {
 method("__elephc_debug_dump")
+    .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
         s_assign("pad", e_call("str_repeat", vec![e_str(" "), e_call("__elephc_var_dump_indent", vec![e_int(0)])])),
         s_assign("field_pad", e_binop(e_var("pad"), BinOp::Concat, e_str("  "))),
         s_assign("property_count", e_call("__elephc_var_dump_object_property_count", vec![e_this()])),
-        s_echo(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_var("pad"), BinOp::Concat, e_str("object(")), BinOp::Concat, e_call("get_class", vec![e_this()])), BinOp::Concat, e_str(")#")), BinOp::Concat, e_call("spl_object_id", vec![e_this()])), BinOp::Concat, e_str(" (")), BinOp::Concat, e_binop(e_var("property_count"), BinOp::Add, e_int(3))), BinOp::Concat, e_str(") {\n"))),
+        s_assign("date_property_count", e_binop(e_binop(e_var("property_count"), BinOp::Add, e_int(1)), BinOp::Add, e_ternary(e_this_prop("__elephc_is_localtime"), e_int(2), e_int(0)))),
+        s_echo(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_var("pad"), BinOp::Concat, e_str("object(")), BinOp::Concat, e_call("get_class", vec![e_this()])), BinOp::Concat, e_str(")#")), BinOp::Concat, e_call("spl_object_id", vec![e_this()])), BinOp::Concat, e_str(" (")), BinOp::Concat, e_var("date_property_count")), BinOp::Concat, e_str(") {\n"))),
         s_expr(e_call("__elephc_var_dump_indent", vec![e_int(2)])),
         s_expr(e_call("__elephc_var_dump_object_properties", vec![e_this()])),
         s_expr(e_call("__elephc_var_dump_indent", vec![e_neg(e_int(2))])),
         s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"date\"]=>\n"))),
         s_echo(e_var("field_pad")),
         s_expr(e_call("var_dump", vec![e_method_call(e_this(), "format", vec![e_str("x-m-d H:i:s.u")])])),
-        s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"timezone_type\"]=>\n"))),
-        s_echo(e_var("field_pad")),
-        s_expr(e_call("var_dump", vec![e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")])])),
-        s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"timezone\"]=>\n"))),
-        s_echo(e_var("field_pad")),
-        s_expr(e_call("var_dump", vec![e_this_prop("timezone_name")])),
+        s_if(
+            e_this_prop("__elephc_is_localtime"),
+            vec![
+                s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"timezone_type\"]=>\n"))),
+                s_echo(e_var("field_pad")),
+                s_expr(e_call("var_dump", vec![e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")])])),
+                s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"timezone\"]=>\n"))),
+                s_echo(e_var("field_pad")),
+                s_expr(e_call("var_dump", vec![e_this_prop("timezone_name")])),
+            ],
+            vec![],
+            None,
+        ),
         s_echo(e_binop(e_var("pad"), BinOp::Concat, e_str("}\n"))),
     ])
 }
 
 /// `DateTime::__elephc_print_r_dump` — transcribed method builder.
-fn decl_class_datetime_method_34_elephc_print_r_dump() -> MethodBuilder {
+fn decl_class_datetime_method_45_elephc_print_r_dump() -> MethodBuilder {
 method("__elephc_print_r_dump")
+    .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
         s_echo(e_binop(e_call("get_class", vec![e_this()]), BinOp::Concat, e_str(" Object\n(\n"))),
         s_expr(e_call("__elephc_print_r_object_properties", vec![e_this()])),
         s_echo(e_binop(e_binop(e_str("    [date] => "), BinOp::Concat, e_method_call(e_this(), "format", vec![e_str("x-m-d H:i:s.u")])), BinOp::Concat, e_str("\n"))),
-        s_echo(e_binop(e_binop(e_str("    [timezone_type] => "), BinOp::Concat, e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")])), BinOp::Concat, e_str("\n"))),
-        s_echo(e_binop(e_binop(e_str("    [timezone] => "), BinOp::Concat, e_this_prop("timezone_name")), BinOp::Concat, e_str("\n"))),
+        s_if(
+            e_this_prop("__elephc_is_localtime"),
+            vec![
+                s_echo(e_binop(e_binop(e_str("    [timezone_type] => "), BinOp::Concat, e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")])), BinOp::Concat, e_str("\n"))),
+                s_echo(e_binop(e_binop(e_str("    [timezone] => "), BinOp::Concat, e_this_prop("timezone_name")), BinOp::Concat, e_str("\n"))),
+            ],
+            vec![],
+            None,
+        ),
         s_echo(e_str(")\n")),
     ])
 }
 
 /// `DateTime::__elephc_clone_for_period` — transcribed method builder.
-fn decl_class_datetime_method_35_elephc_clone_for_period() -> MethodBuilder {
+fn decl_class_datetime_method_46_elephc_clone_for_period() -> MethodBuilder {
 method("__elephc_clone_for_period")
+    .private()
     .returns(t_class("DateTime"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -4348,8 +4761,9 @@ method("__elephc_clone_for_period")
 }
 
 /// `DateTime::__elephc_clone_for_period_storage` — transcribed method builder.
-fn decl_class_datetime_method_36_elephc_clone_for_period_storage() -> MethodBuilder {
+fn decl_class_datetime_method_47_elephc_clone_for_period_storage() -> MethodBuilder {
 method("__elephc_clone_for_period_storage")
+    .private()
     .returns(t_class("DateTime"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -4358,7 +4772,7 @@ method("__elephc_clone_for_period_storage")
 }
 
 /// `DateTime::__elephc_begin_argument_array` — transcribed method builder.
-fn decl_class_datetime_method_37_elephc_begin_argument_array() -> MethodBuilder {
+fn decl_class_datetime_method_48_elephc_begin_argument_array() -> MethodBuilder {
 method("__elephc_begin_argument_array")
     .private()
     .returns(TypeExpr::Void)
@@ -4369,7 +4783,7 @@ method("__elephc_begin_argument_array")
 }
 
 /// `DateTime::__elephc_append_one_argument` — transcribed method builder.
-fn decl_class_datetime_method_38_elephc_append_one_argument() -> MethodBuilder {
+fn decl_class_datetime_method_49_elephc_append_one_argument() -> MethodBuilder {
 method("__elephc_append_one_argument")
     .private()
     .param("key", t_mixed())
@@ -4458,7 +4872,7 @@ method("__elephc_append_one_argument")
 }
 
 /// `DateTime::__elephc_append_argument_chunk` — transcribed method builder.
-fn decl_class_datetime_method_39_elephc_append_argument_chunk() -> MethodBuilder {
+fn decl_class_datetime_method_50_elephc_append_argument_chunk() -> MethodBuilder {
 method("__elephc_append_argument_chunk")
     .private()
     .param("kind", TypeExpr::Int)
@@ -4499,7 +4913,7 @@ method("__elephc_append_argument_chunk")
 }
 
 /// `DateTime::__elephc_finish_argument_array` — transcribed method builder.
-fn decl_class_datetime_method_40_elephc_finish_argument_array() -> MethodBuilder {
+fn decl_class_datetime_method_51_elephc_finish_argument_array() -> MethodBuilder {
 method("__elephc_finish_argument_array")
     .private()
     .returns(TypeExpr::Void)
@@ -4576,8 +4990,9 @@ method("__elephc_finish_argument_array")
 }
 
 /// `DateTime::__elephc_date_modify` — transcribed method builder.
-fn decl_class_datetime_method_41_elephc_date_modify() -> MethodBuilder {
+fn decl_class_datetime_method_52_elephc_date_modify() -> MethodBuilder {
 method("__elephc_date_modify")
+    .private()
     .static_()
     .param("object", t_mixed())
     .param("modifier", TypeExpr::Str)
@@ -4596,8 +5011,9 @@ method("__elephc_date_modify")
 }
 
 /// `DateTime::__elephc_date_timestamp_set` — transcribed method builder.
-fn decl_class_datetime_method_42_elephc_date_timestamp_set() -> MethodBuilder {
+fn decl_class_datetime_method_53_elephc_date_timestamp_set() -> MethodBuilder {
 method("__elephc_date_timestamp_set")
+    .private()
     .static_()
     .param("object", t_mixed())
     .param("timestamp", t_mixed())
@@ -4618,8 +5034,9 @@ method("__elephc_date_timestamp_set")
 }
 
 /// `DateTime::__elephc_date_add` — transcribed method builder.
-fn decl_class_datetime_method_43_elephc_date_add() -> MethodBuilder {
+fn decl_class_datetime_method_54_elephc_date_add() -> MethodBuilder {
 method("__elephc_date_add")
+    .private()
     .static_()
     .param("object", t_class("DateTime"))
     .param("interval", t_mixed())
@@ -4684,8 +5101,9 @@ method("__elephc_date_add")
 }
 
 /// `DateTime::__elephc_date_sub` — transcribed method builder.
-fn decl_class_datetime_method_44_elephc_date_sub() -> MethodBuilder {
+fn decl_class_datetime_method_55_elephc_date_sub() -> MethodBuilder {
 method("__elephc_date_sub")
+    .private()
     .static_()
     .param("object", t_class("DateTime"))
     .param("interval", t_mixed())
@@ -4757,8 +5175,9 @@ method("__elephc_date_sub")
 }
 
 /// `DateTime::__elephc_strftime` — transcribed method builder.
-fn decl_class_datetime_method_45_elephc_strftime() -> MethodBuilder {
+fn decl_class_datetime_method_56_elephc_strftime() -> MethodBuilder {
 method("__elephc_strftime")
+    .private()
     .static_()
     .param("format", TypeExpr::Str)
     .param("timestamp", TypeExpr::Int)
@@ -5333,8 +5752,9 @@ method("__elephc_strftime")
 }
 
 /// `DateTime::__elephc_extract_micros` — transcribed method builder.
-fn decl_class_datetime_method_46_elephc_extract_micros() -> MethodBuilder {
+fn decl_class_datetime_method_57_elephc_extract_micros() -> MethodBuilder {
 method("__elephc_extract_micros")
+    .private()
     .static_()
     .param("s", TypeExpr::Str)
     .returns(TypeExpr::Int)
@@ -5401,8 +5821,9 @@ method("__elephc_extract_micros")
 }
 
 /// `DateTime::__elephc_strip_micros` — transcribed method builder.
-fn decl_class_datetime_method_47_elephc_strip_micros() -> MethodBuilder {
+fn decl_class_datetime_method_58_elephc_strip_micros() -> MethodBuilder {
 method("__elephc_strip_micros")
+    .private()
     .static_()
     .param("s", TypeExpr::Str)
     .returns(TypeExpr::Str)
@@ -5436,8 +5857,9 @@ method("__elephc_strip_micros")
 }
 
 /// `DateTime::__elephc_extract_constructor_zone` — transcribed method builder.
-fn decl_class_datetime_method_48_elephc_extract_constructor_zone() -> MethodBuilder {
+fn decl_class_datetime_method_59_elephc_extract_constructor_zone() -> MethodBuilder {
 method("__elephc_extract_constructor_zone")
+    .private()
     .static_()
     .param("datetime", TypeExpr::Str)
     .returns(TypeExpr::Str)
@@ -5561,8 +5983,9 @@ method("__elephc_extract_constructor_zone")
 }
 
 /// `DateTime::__elephc_extract_modify_micros` — transcribed method builder.
-fn decl_class_datetime_method_49_elephc_extract_modify_micros() -> MethodBuilder {
+fn decl_class_datetime_method_60_elephc_extract_modify_micros() -> MethodBuilder {
 method("__elephc_extract_modify_micros")
+    .private()
     .static_()
     .param("m", TypeExpr::Str)
     .returns(TypeExpr::Int)
@@ -5606,8 +6029,9 @@ method("__elephc_extract_modify_micros")
 }
 
 /// `DateTime::__elephc_strip_modify_micros` — transcribed method builder.
-fn decl_class_datetime_method_50_elephc_strip_modify_micros() -> MethodBuilder {
+fn decl_class_datetime_method_61_elephc_strip_modify_micros() -> MethodBuilder {
 method("__elephc_strip_modify_micros")
+    .private()
     .static_()
     .param("m", TypeExpr::Str)
     .returns(TypeExpr::Str)
@@ -5659,8 +6083,9 @@ method("__elephc_strip_modify_micros")
 }
 
 /// `DateTime::__elephc_malformed_time_message` — transcribed method builder.
-fn decl_class_datetime_method_51_elephc_malformed_time_message() -> MethodBuilder {
+fn decl_class_datetime_method_62_elephc_malformed_time_message() -> MethodBuilder {
 method("__elephc_malformed_time_message")
+    .private()
     .static_()
     .param("context", TypeExpr::Str)
     .param("input", TypeExpr::Str)
@@ -5693,8 +6118,9 @@ method("__elephc_malformed_time_message")
 }
 
 /// `DateTime::__elephc_sun_rs` — transcribed method builder.
-fn decl_class_datetime_method_52_elephc_sun_rs() -> MethodBuilder {
+fn decl_class_datetime_method_63_elephc_sun_rs() -> MethodBuilder {
 method("__elephc_sun_rs")
+    .private()
     .static_()
     .param("t_utc_sse", TypeExpr::Int)
     .param("lon", TypeExpr::Float)
@@ -5776,8 +6202,9 @@ method("__elephc_sun_rs")
 }
 
 /// `DateTime::__elephc_sun_val` — transcribed method builder.
-fn decl_class_datetime_method_53_elephc_sun_val() -> MethodBuilder {
+fn decl_class_datetime_method_64_elephc_sun_val() -> MethodBuilder {
 method("__elephc_sun_val")
+    .private()
     .static_()
     .param("rc", TypeExpr::Int)
     .param("tsval", TypeExpr::Int)
@@ -5804,8 +6231,9 @@ method("__elephc_sun_val")
 }
 
 /// `DateTime::__elephc_date_sun_info` — transcribed method builder.
-fn decl_class_datetime_method_54_elephc_date_sun_info() -> MethodBuilder {
+fn decl_class_datetime_method_65_elephc_date_sun_info() -> MethodBuilder {
 method("__elephc_date_sun_info")
+    .private()
     .static_()
     .param("timestamp", TypeExpr::Int)
     .param("latitude", TypeExpr::Float)
@@ -5850,8 +6278,9 @@ method("__elephc_date_sun_info")
 }
 
 /// `DateTime::__elephc_date_sunfunc` — transcribed method builder.
-fn decl_class_datetime_method_55_elephc_date_sunfunc() -> MethodBuilder {
+fn decl_class_datetime_method_66_elephc_date_sunfunc() -> MethodBuilder {
 method("__elephc_date_sunfunc")
+    .private()
     .static_()
     .param("which", TypeExpr::Int)
     .param_default("line", TypeExpr::Int, e_int(0))
@@ -5989,8 +6418,9 @@ method("__elephc_date_sunfunc")
 }
 
 /// `DateTime::__elephc_strptime` — transcribed method builder.
-fn decl_class_datetime_method_56_elephc_strptime() -> MethodBuilder {
+fn decl_class_datetime_method_67_elephc_strptime() -> MethodBuilder {
 method("__elephc_strptime")
+    .private()
     .static_()
     .param("timestamp", TypeExpr::Str)
     .param("format", TypeExpr::Str)
@@ -6508,8 +6938,9 @@ method("__elephc_strptime")
 }
 
 /// `DateTime::__elephc_timezone_name_from_abbr` — transcribed method builder.
-fn decl_class_datetime_method_57_elephc_timezone_name_from_abbr() -> MethodBuilder {
+fn decl_class_datetime_method_68_elephc_timezone_name_from_abbr() -> MethodBuilder {
 method("__elephc_timezone_name_from_abbr")
+    .private()
     .static_()
     .param("abbr", TypeExpr::Str)
     .param_default("utcOffset", TypeExpr::Int, e_int(-1))
@@ -6578,7 +7009,7 @@ method("__elephc_timezone_name_from_abbr")
 }
 
 /// `DateTime::__elephc_argument_type_error` — transcribed method builder.
-fn decl_class_datetime_method_58_elephc_argument_type_error() -> MethodBuilder {
+fn decl_class_datetime_method_69_elephc_argument_type_error() -> MethodBuilder {
 method("__elephc_argument_type_error")
     .private()
     .static_()
@@ -6623,7 +7054,7 @@ method("__elephc_argument_type_error")
 }
 
 /// `DateTime::__elephc_weak_string_argument` — transcribed method builder.
-fn decl_class_datetime_method_59_elephc_weak_string_argument() -> MethodBuilder {
+fn decl_class_datetime_method_70_elephc_weak_string_argument() -> MethodBuilder {
 method("__elephc_weak_string_argument")
     .private()
     .static_()
@@ -6653,7 +7084,7 @@ method("__elephc_weak_string_argument")
 }
 
 /// `DateTime::__elephc_deprecated_string_constant` — transcribed method builder.
-fn decl_class_datetime_method_60_elephc_deprecated_string_constant() -> MethodBuilder {
+fn decl_class_datetime_method_71_elephc_deprecated_string_constant() -> MethodBuilder {
 method("__elephc_deprecated_string_constant")
     .static_()
     .param("value", TypeExpr::Str)
@@ -6667,7 +7098,7 @@ method("__elephc_deprecated_string_constant")
 }
 
 /// `DateTime::__elephc_deprecated_int_constant` — transcribed method builder.
-fn decl_class_datetime_method_61_elephc_deprecated_int_constant() -> MethodBuilder {
+fn decl_class_datetime_method_72_elephc_deprecated_int_constant() -> MethodBuilder {
 method("__elephc_deprecated_int_constant")
     .static_()
     .param("value", TypeExpr::Int)
@@ -6681,8 +7112,9 @@ method("__elephc_deprecated_int_constant")
 }
 
 /// `DateTime::__elephc_greg_to_sdn` — transcribed method builder.
-fn decl_class_datetime_method_62_elephc_greg_to_sdn() -> MethodBuilder {
+fn decl_class_datetime_method_73_elephc_greg_to_sdn() -> MethodBuilder {
 method("__elephc_greg_to_sdn")
+    .private()
     .static_()
     .param("iy", TypeExpr::Int)
     .param("im", TypeExpr::Int)
@@ -6737,8 +7169,9 @@ method("__elephc_greg_to_sdn")
 }
 
 /// `DateTime::__elephc_sdn_to_greg` — transcribed method builder.
-fn decl_class_datetime_method_63_elephc_sdn_to_greg() -> MethodBuilder {
+fn decl_class_datetime_method_74_elephc_sdn_to_greg() -> MethodBuilder {
 method("__elephc_sdn_to_greg")
+    .private()
     .static_()
     .param("sdn", TypeExpr::Int)
     .returns(t_mixed())
@@ -6784,8 +7217,9 @@ method("__elephc_sdn_to_greg")
 }
 
 /// `DateTime::__elephc_jul_to_sdn` — transcribed method builder.
-fn decl_class_datetime_method_64_elephc_jul_to_sdn() -> MethodBuilder {
+fn decl_class_datetime_method_75_elephc_jul_to_sdn() -> MethodBuilder {
 method("__elephc_jul_to_sdn")
+    .private()
     .static_()
     .param("iy", TypeExpr::Int)
     .param("im", TypeExpr::Int)
@@ -6832,8 +7266,9 @@ method("__elephc_jul_to_sdn")
 }
 
 /// `DateTime::__elephc_sdn_to_jul` — transcribed method builder.
-fn decl_class_datetime_method_65_elephc_sdn_to_jul() -> MethodBuilder {
+fn decl_class_datetime_method_76_elephc_sdn_to_jul() -> MethodBuilder {
 method("__elephc_sdn_to_jul")
+    .private()
     .static_()
     .param("sdn", TypeExpr::Int)
     .returns(t_mixed())
@@ -6877,8 +7312,9 @@ method("__elephc_sdn_to_jul")
 }
 
 /// `DateTime::__elephc_fr_to_sdn` — transcribed method builder.
-fn decl_class_datetime_method_66_elephc_fr_to_sdn() -> MethodBuilder {
+fn decl_class_datetime_method_77_elephc_fr_to_sdn() -> MethodBuilder {
 method("__elephc_fr_to_sdn")
+    .private()
     .static_()
     .param("y", TypeExpr::Int)
     .param("m", TypeExpr::Int)
@@ -6898,8 +7334,9 @@ method("__elephc_fr_to_sdn")
 }
 
 /// `DateTime::__elephc_sdn_to_fr` — transcribed method builder.
-fn decl_class_datetime_method_67_elephc_sdn_to_fr() -> MethodBuilder {
+fn decl_class_datetime_method_78_elephc_sdn_to_fr() -> MethodBuilder {
 method("__elephc_sdn_to_fr")
+    .private()
     .static_()
     .param("sdn", TypeExpr::Int)
     .returns(t_mixed())
@@ -6922,8 +7359,9 @@ method("__elephc_sdn_to_fr")
 }
 
 /// `DateTime::__elephc_jew_tishri1` — transcribed method builder.
-fn decl_class_datetime_method_68_elephc_jew_tishri1() -> MethodBuilder {
+fn decl_class_datetime_method_79_elephc_jew_tishri1() -> MethodBuilder {
 method("__elephc_jew_tishri1")
+    .private()
     .static_()
     .param("my", TypeExpr::Int)
     .param("moladDay", TypeExpr::Int)
@@ -6964,8 +7402,9 @@ method("__elephc_jew_tishri1")
 }
 
 /// `DateTime::__elephc_jew_molad_cycle` — transcribed method builder.
-fn decl_class_datetime_method_69_elephc_jew_molad_cycle() -> MethodBuilder {
+fn decl_class_datetime_method_80_elephc_jew_molad_cycle() -> MethodBuilder {
 method("__elephc_jew_molad_cycle")
+    .private()
     .static_()
     .param("mc", TypeExpr::Int)
     .returns(t_mixed())
@@ -6976,8 +7415,9 @@ method("__elephc_jew_molad_cycle")
 }
 
 /// `DateTime::__elephc_jew_find_tishri_molad` — transcribed method builder.
-fn decl_class_datetime_method_70_elephc_jew_find_tishri_molad() -> MethodBuilder {
+fn decl_class_datetime_method_81_elephc_jew_find_tishri_molad() -> MethodBuilder {
 method("__elephc_jew_find_tishri_molad")
+    .private()
     .static_()
     .param("inputDay", TypeExpr::Int)
     .returns(t_mixed())
@@ -7013,8 +7453,9 @@ method("__elephc_jew_find_tishri_molad")
 }
 
 /// `DateTime::__elephc_jew_find_start_year` — transcribed method builder.
-fn decl_class_datetime_method_71_elephc_jew_find_start_year() -> MethodBuilder {
+fn decl_class_datetime_method_82_elephc_jew_find_start_year() -> MethodBuilder {
 method("__elephc_jew_find_start_year")
+    .private()
     .static_()
     .param("year", TypeExpr::Int)
     .returns(t_mixed())
@@ -7034,8 +7475,9 @@ method("__elephc_jew_find_start_year")
 }
 
 /// `DateTime::__elephc_jew_to_sdn` — transcribed method builder.
-fn decl_class_datetime_method_72_elephc_jew_to_sdn() -> MethodBuilder {
+fn decl_class_datetime_method_83_elephc_jew_to_sdn() -> MethodBuilder {
 method("__elephc_jew_to_sdn")
+    .private()
     .static_()
     .param("year", TypeExpr::Int)
     .param("month", TypeExpr::Int)
@@ -7182,8 +7624,9 @@ method("__elephc_jew_to_sdn")
 }
 
 /// `DateTime::__elephc_sdn_to_jew` — transcribed method builder.
-fn decl_class_datetime_method_73_elephc_sdn_to_jew() -> MethodBuilder {
+fn decl_class_datetime_method_84_elephc_sdn_to_jew() -> MethodBuilder {
 method("__elephc_sdn_to_jew")
+    .private()
     .static_()
     .param("sdn", TypeExpr::Int)
     .returns(t_mixed())
@@ -7386,8 +7829,9 @@ method("__elephc_sdn_to_jew")
 }
 
 /// `DateTime::__elephc_jew_month_name` — transcribed method builder.
-fn decl_class_datetime_method_74_elephc_jew_month_name() -> MethodBuilder {
+fn decl_class_datetime_method_85_elephc_jew_month_name() -> MethodBuilder {
 method("__elephc_jew_month_name")
+    .private()
     .static_()
     .param("year", TypeExpr::Int)
     .param("month", TypeExpr::Int)
@@ -7402,8 +7846,9 @@ method("__elephc_jew_month_name")
 }
 
 /// `DateTime::__elephc_easter_calc` — transcribed method builder.
-fn decl_class_datetime_method_75_elephc_easter_calc() -> MethodBuilder {
+fn decl_class_datetime_method_86_elephc_easter_calc() -> MethodBuilder {
 method("__elephc_easter_calc")
+    .private()
     .static_()
     .param("year", TypeExpr::Int)
     .param("method", TypeExpr::Int)
@@ -7500,8 +7945,9 @@ method("__elephc_easter_calc")
 }
 
 /// `DateTime::__elephc_cal_to_jd` — transcribed method builder.
-fn decl_class_datetime_method_76_elephc_cal_to_jd() -> MethodBuilder {
+fn decl_class_datetime_method_87_elephc_cal_to_jd() -> MethodBuilder {
 method("__elephc_cal_to_jd")
+    .private()
     .static_()
     .param("calendar", TypeExpr::Int)
     .param("month", TypeExpr::Int)
@@ -7546,8 +7992,9 @@ method("__elephc_cal_to_jd")
 }
 
 /// `DateTime::__elephc_gregoriantojd` — transcribed method builder.
-fn decl_class_datetime_method_77_elephc_gregoriantojd() -> MethodBuilder {
+fn decl_class_datetime_method_88_elephc_gregoriantojd() -> MethodBuilder {
 method("__elephc_gregoriantojd")
+    .private()
     .static_()
     .param("month", TypeExpr::Int)
     .param("day", TypeExpr::Int)
@@ -7559,8 +8006,9 @@ method("__elephc_gregoriantojd")
 }
 
 /// `DateTime::__elephc_jdtogregorian` — transcribed method builder.
-fn decl_class_datetime_method_78_elephc_jdtogregorian() -> MethodBuilder {
+fn decl_class_datetime_method_89_elephc_jdtogregorian() -> MethodBuilder {
 method("__elephc_jdtogregorian")
+    .private()
     .static_()
     .param("jd", TypeExpr::Int)
     .returns(TypeExpr::Str)
@@ -7571,8 +8019,9 @@ method("__elephc_jdtogregorian")
 }
 
 /// `DateTime::__elephc_juliantojd` — transcribed method builder.
-fn decl_class_datetime_method_79_elephc_juliantojd() -> MethodBuilder {
+fn decl_class_datetime_method_90_elephc_juliantojd() -> MethodBuilder {
 method("__elephc_juliantojd")
+    .private()
     .static_()
     .param("month", TypeExpr::Int)
     .param("day", TypeExpr::Int)
@@ -7584,8 +8033,9 @@ method("__elephc_juliantojd")
 }
 
 /// `DateTime::__elephc_jdtojulian` — transcribed method builder.
-fn decl_class_datetime_method_80_elephc_jdtojulian() -> MethodBuilder {
+fn decl_class_datetime_method_91_elephc_jdtojulian() -> MethodBuilder {
 method("__elephc_jdtojulian")
+    .private()
     .static_()
     .param("jd", TypeExpr::Int)
     .returns(TypeExpr::Str)
@@ -7596,8 +8046,9 @@ method("__elephc_jdtojulian")
 }
 
 /// `DateTime::__elephc_frenchtojd` — transcribed method builder.
-fn decl_class_datetime_method_81_elephc_frenchtojd() -> MethodBuilder {
+fn decl_class_datetime_method_92_elephc_frenchtojd() -> MethodBuilder {
 method("__elephc_frenchtojd")
+    .private()
     .static_()
     .param("month", TypeExpr::Int)
     .param("day", TypeExpr::Int)
@@ -7609,8 +8060,9 @@ method("__elephc_frenchtojd")
 }
 
 /// `DateTime::__elephc_jdtofrench` — transcribed method builder.
-fn decl_class_datetime_method_82_elephc_jdtofrench() -> MethodBuilder {
+fn decl_class_datetime_method_93_elephc_jdtofrench() -> MethodBuilder {
 method("__elephc_jdtofrench")
+    .private()
     .static_()
     .param("jd", TypeExpr::Int)
     .returns(TypeExpr::Str)
@@ -7621,8 +8073,9 @@ method("__elephc_jdtofrench")
 }
 
 /// `DateTime::__elephc_jewishtojd` — transcribed method builder.
-fn decl_class_datetime_method_83_elephc_jewishtojd() -> MethodBuilder {
+fn decl_class_datetime_method_94_elephc_jewishtojd() -> MethodBuilder {
 method("__elephc_jewishtojd")
+    .private()
     .static_()
     .param("month", TypeExpr::Int)
     .param("day", TypeExpr::Int)
@@ -7634,8 +8087,9 @@ method("__elephc_jewishtojd")
 }
 
 /// `DateTime::__elephc_jdtojewish` — transcribed method builder.
-fn decl_class_datetime_method_84_elephc_jdtojewish() -> MethodBuilder {
+fn decl_class_datetime_method_95_elephc_jdtojewish() -> MethodBuilder {
 method("__elephc_jdtojewish")
+    .private()
     .static_()
     .param("jd", TypeExpr::Int)
     .param_default("hebrew", TypeExpr::Bool, e_bool(false))
@@ -7648,8 +8102,9 @@ method("__elephc_jdtojewish")
 }
 
 /// `DateTime::__elephc_easter_days` — transcribed method builder.
-fn decl_class_datetime_method_85_elephc_easter_days() -> MethodBuilder {
+fn decl_class_datetime_method_96_elephc_easter_days() -> MethodBuilder {
 method("__elephc_easter_days")
+    .private()
     .static_()
     .param("year", TypeExpr::Int)
     .param_default("mode", TypeExpr::Int, e_int(0))
@@ -7660,8 +8115,9 @@ method("__elephc_easter_days")
 }
 
 /// `DateTime::__elephc_easter_date` — transcribed method builder.
-fn decl_class_datetime_method_86_elephc_easter_date() -> MethodBuilder {
+fn decl_class_datetime_method_97_elephc_easter_date() -> MethodBuilder {
 method("__elephc_easter_date")
+    .private()
     .static_()
     .param("year", TypeExpr::Int)
     .param_default("mode", TypeExpr::Int, e_int(0))
@@ -7672,8 +8128,9 @@ method("__elephc_easter_date")
 }
 
 /// `DateTime::__elephc_unixtojd` — transcribed method builder.
-fn decl_class_datetime_method_87_elephc_unixtojd() -> MethodBuilder {
+fn decl_class_datetime_method_98_elephc_unixtojd() -> MethodBuilder {
 method("__elephc_unixtojd")
+    .private()
     .static_()
     .param_default("timestamp", TypeExpr::Int, e_int(0))
     .returns(TypeExpr::Int)
@@ -7686,8 +8143,9 @@ method("__elephc_unixtojd")
 }
 
 /// `DateTime::__elephc_jdtounix` — transcribed method builder.
-fn decl_class_datetime_method_88_elephc_jdtounix() -> MethodBuilder {
+fn decl_class_datetime_method_99_elephc_jdtounix() -> MethodBuilder {
 method("__elephc_jdtounix")
+    .private()
     .static_()
     .param("jd", TypeExpr::Int)
     .returns(TypeExpr::Int)
@@ -7697,8 +8155,9 @@ method("__elephc_jdtounix")
 }
 
 /// `DateTime::__elephc_jddayofweek` — transcribed method builder.
-fn decl_class_datetime_method_89_elephc_jddayofweek() -> MethodBuilder {
+fn decl_class_datetime_method_100_elephc_jddayofweek() -> MethodBuilder {
 method("__elephc_jddayofweek")
+    .private()
     .static_()
     .param("jd", TypeExpr::Int)
     .param_default("mode", TypeExpr::Int, e_int(0))
@@ -7728,8 +8187,9 @@ method("__elephc_jddayofweek")
 }
 
 /// `DateTime::__elephc_jdmonthname` — transcribed method builder.
-fn decl_class_datetime_method_90_elephc_jdmonthname() -> MethodBuilder {
+fn decl_class_datetime_method_101_elephc_jdmonthname() -> MethodBuilder {
 method("__elephc_jdmonthname")
+    .private()
     .static_()
     .param("jd", TypeExpr::Int)
     .param("mode", TypeExpr::Int)
@@ -7789,8 +8249,9 @@ method("__elephc_jdmonthname")
 }
 
 /// `DateTime::__elephc_cal_days_in_month` — transcribed method builder.
-fn decl_class_datetime_method_91_elephc_cal_days_in_month() -> MethodBuilder {
+fn decl_class_datetime_method_102_elephc_cal_days_in_month() -> MethodBuilder {
 method("__elephc_cal_days_in_month")
+    .private()
     .static_()
     .param("calendar", TypeExpr::Int)
     .param("month", TypeExpr::Int)
@@ -7829,8 +8290,9 @@ method("__elephc_cal_days_in_month")
 }
 
 /// `DateTime::__elephc_cal_from_jd` — transcribed method builder.
-fn decl_class_datetime_method_92_elephc_cal_from_jd() -> MethodBuilder {
+fn decl_class_datetime_method_103_elephc_cal_from_jd() -> MethodBuilder {
 method("__elephc_cal_from_jd")
+    .private()
     .static_()
     .param("jd", TypeExpr::Int)
     .param("calendar", TypeExpr::Int)
@@ -7920,8 +8382,9 @@ method("__elephc_cal_from_jd")
 }
 
 /// `DateTime::__elephc_cal_info` — transcribed method builder.
-fn decl_class_datetime_method_93_elephc_cal_info() -> MethodBuilder {
+fn decl_class_datetime_method_104_elephc_cal_info() -> MethodBuilder {
 method("__elephc_cal_info")
+    .private()
     .static_()
     .param_default("calendar", TypeExpr::Int, e_int(-1))
     .returns(t_mixed())
@@ -7967,8 +8430,9 @@ method("__elephc_cal_info")
 }
 
 /// `DateTime::__elephc_is_initialized` — transcribed method builder.
-fn decl_class_datetime_method_94_elephc_is_initialized() -> MethodBuilder {
+fn decl_class_datetime_method_105_elephc_is_initialized() -> MethodBuilder {
 method("__elephc_is_initialized")
+    .private()
     .final_()
     .returns(TypeExpr::Bool)
     .body_exact(vec![
@@ -7977,8 +8441,9 @@ method("__elephc_is_initialized")
 }
 
 /// `DateTime::__elephc_assert_initialized` — transcribed method builder.
-fn decl_class_datetime_method_95_elephc_assert_initialized() -> MethodBuilder {
+fn decl_class_datetime_method_106_elephc_assert_initialized() -> MethodBuilder {
 method("__elephc_assert_initialized")
+    .private()
     .final_()
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -7996,8 +8461,9 @@ method("__elephc_assert_initialized")
 }
 
 /// `DateTime::__elephc_assert_comparable` — transcribed method builder.
-fn decl_class_datetime_method_96_elephc_assert_comparable() -> MethodBuilder {
+fn decl_class_datetime_method_107_elephc_assert_comparable() -> MethodBuilder {
 method("__elephc_assert_comparable")
+    .private()
     .final_()
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -8013,16 +8479,19 @@ method("__elephc_assert_comparable")
 }
 
 /// `DateTime::__elephc_compare` — transcribed method builder.
-fn decl_class_datetime_method_97_elephc_compare() -> MethodBuilder {
+fn decl_class_datetime_method_108_elephc_compare() -> MethodBuilder {
 method("__elephc_compare")
+    .private()
     .final_()
     .param("other", t_class("DateTimeInterface"))
     .returns(TypeExpr::Int)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_comparable", vec![])),
         s_expr(e_method_call(e_var("other"), "__elephc_assert_comparable", vec![])),
-        s_assign("leftTimestamp", e_method_call(e_this(), "getTimestamp", vec![])),
-        s_assign("rightTimestamp", e_method_call(e_var("other"), "getTimestamp", vec![])),
+        s_assign("leftTimestamp", e_this_prop("timestamp")),
+        s_assign("leftMicrosecond", e_this_prop("microsecond")),
+        s_assign("rightTimestamp", e_ternary(e_instance_of(e_var("other"), "DateTimeImmutable"), e_static_call("DateTimeImmutable", "__elephc_timestamp_of", vec![e_var("other")]), e_static_call("DateTime", "__elephc_timestamp_of", vec![e_var("other")]))),
+        s_assign("rightMicrosecond", e_ternary(e_instance_of(e_var("other"), "DateTimeImmutable"), e_static_call("DateTimeImmutable", "__elephc_microsecond_of", vec![e_var("other")]), e_static_call("DateTime", "__elephc_microsecond_of", vec![e_var("other")]))),
         s_if(
             e_binop(e_var("leftTimestamp"), BinOp::Lt, e_var("rightTimestamp")),
             vec![
@@ -8039,8 +8508,6 @@ method("__elephc_compare")
             vec![],
             None,
         ),
-        s_assign("leftMicrosecond", e_method_call(e_this(), "getMicrosecond", vec![])),
-        s_assign("rightMicrosecond", e_method_call(e_var("other"), "getMicrosecond", vec![])),
         s_if(
             e_binop(e_var("leftMicrosecond"), BinOp::Lt, e_var("rightMicrosecond")),
             vec![
@@ -8068,6 +8535,7 @@ fn decl_class_datetime() -> Stmt {
         .private_prop("__elephc_initialized", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("timestamp", TypeExpr::Int, Some(e_int(0)))
         .private_prop("timezone_name", TypeExpr::Str, Some(e_str("UTC")))
+        .private_prop("__elephc_is_localtime", TypeExpr::Bool, Some(e_bool(true)))
         .private_prop("microsecond", TypeExpr::Int, Some(e_int(0)))
         .private_prop("__elephc_civil_override", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("__elephc_civil_year", TypeExpr::Int, Some(e_int(1970)))
@@ -8103,83 +8571,94 @@ fn decl_class_datetime() -> Stmt {
         .method(decl_class_datetime_method_18_createfromtimestamp())
         .method(decl_class_datetime_method_19_createfrominterface())
         .method(decl_class_datetime_method_20_createfromimmutable())
-        .method(decl_class_datetime_method_21_setisodate())
-        .method(decl_class_datetime_method_22_elephc_date_parse_from_format())
-        .method(decl_class_datetime_method_23_elephc_date_parse())
-        .method(decl_class_datetime_method_24_elephc_gettimeofday())
-        .method(decl_class_datetime_method_25_elephc_idate())
-        .method(decl_class_datetime_method_26_elephc_timezone_type())
-        .method(decl_class_datetime_method_27_elephc_runtime_timezone_name())
-        .method(decl_class_datetime_method_28_elephc_date_create())
-        .method(decl_class_datetime_method_29_wakeup())
-        .method(decl_class_datetime_method_30_serialize())
-        .method(decl_class_datetime_method_31_unserialize())
-        .method(decl_class_datetime_method_32_set_state())
-        .method(decl_class_datetime_method_33_elephc_debug_dump())
-        .method(decl_class_datetime_method_34_elephc_print_r_dump())
-        .method(decl_class_datetime_method_35_elephc_clone_for_period())
-        .method(decl_class_datetime_method_36_elephc_clone_for_period_storage())
-        .method(decl_class_datetime_method_37_elephc_begin_argument_array())
-        .method(decl_class_datetime_method_38_elephc_append_one_argument())
-        .method(decl_class_datetime_method_39_elephc_append_argument_chunk())
-        .method(decl_class_datetime_method_40_elephc_finish_argument_array())
-        .method(decl_class_datetime_method_41_elephc_date_modify())
-        .method(decl_class_datetime_method_42_elephc_date_timestamp_set())
-        .method(decl_class_datetime_method_43_elephc_date_add())
-        .method(decl_class_datetime_method_44_elephc_date_sub())
-        .method(decl_class_datetime_method_45_elephc_strftime())
-        .method(decl_class_datetime_method_46_elephc_extract_micros())
-        .method(decl_class_datetime_method_47_elephc_strip_micros())
-        .method(decl_class_datetime_method_48_elephc_extract_constructor_zone())
-        .method(decl_class_datetime_method_49_elephc_extract_modify_micros())
-        .method(decl_class_datetime_method_50_elephc_strip_modify_micros())
-        .method(decl_class_datetime_method_51_elephc_malformed_time_message())
-        .method(decl_class_datetime_method_52_elephc_sun_rs())
-        .method(decl_class_datetime_method_53_elephc_sun_val())
-        .method(decl_class_datetime_method_54_elephc_date_sun_info())
-        .method(decl_class_datetime_method_55_elephc_date_sunfunc())
-        .method(decl_class_datetime_method_56_elephc_strptime())
-        .method(decl_class_datetime_method_57_elephc_timezone_name_from_abbr())
-        .method(decl_class_datetime_method_58_elephc_argument_type_error())
-        .method(decl_class_datetime_method_59_elephc_weak_string_argument())
-        .method(decl_class_datetime_method_60_elephc_deprecated_string_constant())
-        .method(decl_class_datetime_method_61_elephc_deprecated_int_constant())
-        .method(decl_class_datetime_method_62_elephc_greg_to_sdn())
-        .method(decl_class_datetime_method_63_elephc_sdn_to_greg())
-        .method(decl_class_datetime_method_64_elephc_jul_to_sdn())
-        .method(decl_class_datetime_method_65_elephc_sdn_to_jul())
-        .method(decl_class_datetime_method_66_elephc_fr_to_sdn())
-        .method(decl_class_datetime_method_67_elephc_sdn_to_fr())
-        .method(decl_class_datetime_method_68_elephc_jew_tishri1())
-        .method(decl_class_datetime_method_69_elephc_jew_molad_cycle())
-        .method(decl_class_datetime_method_70_elephc_jew_find_tishri_molad())
-        .method(decl_class_datetime_method_71_elephc_jew_find_start_year())
-        .method(decl_class_datetime_method_72_elephc_jew_to_sdn())
-        .method(decl_class_datetime_method_73_elephc_sdn_to_jew())
-        .method(decl_class_datetime_method_74_elephc_jew_month_name())
-        .method(decl_class_datetime_method_75_elephc_easter_calc())
-        .method(decl_class_datetime_method_76_elephc_cal_to_jd())
-        .method(decl_class_datetime_method_77_elephc_gregoriantojd())
-        .method(decl_class_datetime_method_78_elephc_jdtogregorian())
-        .method(decl_class_datetime_method_79_elephc_juliantojd())
-        .method(decl_class_datetime_method_80_elephc_jdtojulian())
-        .method(decl_class_datetime_method_81_elephc_frenchtojd())
-        .method(decl_class_datetime_method_82_elephc_jdtofrench())
-        .method(decl_class_datetime_method_83_elephc_jewishtojd())
-        .method(decl_class_datetime_method_84_elephc_jdtojewish())
-        .method(decl_class_datetime_method_85_elephc_easter_days())
-        .method(decl_class_datetime_method_86_elephc_easter_date())
-        .method(decl_class_datetime_method_87_elephc_unixtojd())
-        .method(decl_class_datetime_method_88_elephc_jdtounix())
-        .method(decl_class_datetime_method_89_elephc_jddayofweek())
-        .method(decl_class_datetime_method_90_elephc_jdmonthname())
-        .method(decl_class_datetime_method_91_elephc_cal_days_in_month())
-        .method(decl_class_datetime_method_92_elephc_cal_from_jd())
-        .method(decl_class_datetime_method_93_elephc_cal_info())
-        .method(decl_class_datetime_method_94_elephc_is_initialized())
-        .method(decl_class_datetime_method_95_elephc_assert_initialized())
-        .method(decl_class_datetime_method_96_elephc_assert_comparable())
-        .method(decl_class_datetime_method_97_elephc_compare())
+        .method(decl_class_datetime_method_21_elephc_export_state_instance())
+        .method(decl_class_datetime_method_22_elephc_export_state())
+        .method(decl_class_datetime_method_23_elephc_import_state_instance())
+        .method(decl_class_datetime_method_24_elephc_import_state())
+        .method(decl_class_datetime_method_25_elephc_timestamp_internal())
+        .method(decl_class_datetime_method_26_elephc_microsecond_internal())
+        .method(decl_class_datetime_method_27_elephc_timezone_name_internal())
+        .method(decl_class_datetime_method_28_elephc_timestamp_of())
+        .method(decl_class_datetime_method_29_elephc_microsecond_of())
+        .method(decl_class_datetime_method_30_elephc_timezone_name_of())
+        .method(decl_class_datetime_method_31_elephc_period_advance())
+        .method(decl_class_datetime_method_32_setisodate())
+        .method(decl_class_datetime_method_33_elephc_date_parse_from_format())
+        .method(decl_class_datetime_method_34_elephc_date_parse())
+        .method(decl_class_datetime_method_35_elephc_gettimeofday())
+        .method(decl_class_datetime_method_36_elephc_idate())
+        .method(decl_class_datetime_method_37_elephc_timezone_type())
+        .method(decl_class_datetime_method_38_elephc_runtime_timezone_name())
+        .method(decl_class_datetime_method_39_elephc_date_create())
+        .method(decl_class_datetime_method_40_wakeup())
+        .method(decl_class_datetime_method_41_serialize())
+        .method(decl_class_datetime_method_42_unserialize())
+        .method(decl_class_datetime_method_43_set_state())
+        .method(decl_class_datetime_method_44_elephc_debug_dump())
+        .method(decl_class_datetime_method_45_elephc_print_r_dump())
+        .method(decl_class_datetime_method_46_elephc_clone_for_period())
+        .method(decl_class_datetime_method_47_elephc_clone_for_period_storage())
+        .method(decl_class_datetime_method_48_elephc_begin_argument_array())
+        .method(decl_class_datetime_method_49_elephc_append_one_argument())
+        .method(decl_class_datetime_method_50_elephc_append_argument_chunk())
+        .method(decl_class_datetime_method_51_elephc_finish_argument_array())
+        .method(decl_class_datetime_method_52_elephc_date_modify())
+        .method(decl_class_datetime_method_53_elephc_date_timestamp_set())
+        .method(decl_class_datetime_method_54_elephc_date_add())
+        .method(decl_class_datetime_method_55_elephc_date_sub())
+        .method(decl_class_datetime_method_56_elephc_strftime())
+        .method(decl_class_datetime_method_57_elephc_extract_micros())
+        .method(decl_class_datetime_method_58_elephc_strip_micros())
+        .method(decl_class_datetime_method_59_elephc_extract_constructor_zone())
+        .method(decl_class_datetime_method_60_elephc_extract_modify_micros())
+        .method(decl_class_datetime_method_61_elephc_strip_modify_micros())
+        .method(decl_class_datetime_method_62_elephc_malformed_time_message())
+        .method(decl_class_datetime_method_63_elephc_sun_rs())
+        .method(decl_class_datetime_method_64_elephc_sun_val())
+        .method(decl_class_datetime_method_65_elephc_date_sun_info())
+        .method(decl_class_datetime_method_66_elephc_date_sunfunc())
+        .method(decl_class_datetime_method_67_elephc_strptime())
+        .method(decl_class_datetime_method_68_elephc_timezone_name_from_abbr())
+        .method(decl_class_datetime_method_69_elephc_argument_type_error())
+        .method(decl_class_datetime_method_70_elephc_weak_string_argument())
+        .method(decl_class_datetime_method_71_elephc_deprecated_string_constant())
+        .method(decl_class_datetime_method_72_elephc_deprecated_int_constant())
+        .method(decl_class_datetime_method_73_elephc_greg_to_sdn())
+        .method(decl_class_datetime_method_74_elephc_sdn_to_greg())
+        .method(decl_class_datetime_method_75_elephc_jul_to_sdn())
+        .method(decl_class_datetime_method_76_elephc_sdn_to_jul())
+        .method(decl_class_datetime_method_77_elephc_fr_to_sdn())
+        .method(decl_class_datetime_method_78_elephc_sdn_to_fr())
+        .method(decl_class_datetime_method_79_elephc_jew_tishri1())
+        .method(decl_class_datetime_method_80_elephc_jew_molad_cycle())
+        .method(decl_class_datetime_method_81_elephc_jew_find_tishri_molad())
+        .method(decl_class_datetime_method_82_elephc_jew_find_start_year())
+        .method(decl_class_datetime_method_83_elephc_jew_to_sdn())
+        .method(decl_class_datetime_method_84_elephc_sdn_to_jew())
+        .method(decl_class_datetime_method_85_elephc_jew_month_name())
+        .method(decl_class_datetime_method_86_elephc_easter_calc())
+        .method(decl_class_datetime_method_87_elephc_cal_to_jd())
+        .method(decl_class_datetime_method_88_elephc_gregoriantojd())
+        .method(decl_class_datetime_method_89_elephc_jdtogregorian())
+        .method(decl_class_datetime_method_90_elephc_juliantojd())
+        .method(decl_class_datetime_method_91_elephc_jdtojulian())
+        .method(decl_class_datetime_method_92_elephc_frenchtojd())
+        .method(decl_class_datetime_method_93_elephc_jdtofrench())
+        .method(decl_class_datetime_method_94_elephc_jewishtojd())
+        .method(decl_class_datetime_method_95_elephc_jdtojewish())
+        .method(decl_class_datetime_method_96_elephc_easter_days())
+        .method(decl_class_datetime_method_97_elephc_easter_date())
+        .method(decl_class_datetime_method_98_elephc_unixtojd())
+        .method(decl_class_datetime_method_99_elephc_jdtounix())
+        .method(decl_class_datetime_method_100_elephc_jddayofweek())
+        .method(decl_class_datetime_method_101_elephc_jdmonthname())
+        .method(decl_class_datetime_method_102_elephc_cal_days_in_month())
+        .method(decl_class_datetime_method_103_elephc_cal_from_jd())
+        .method(decl_class_datetime_method_104_elephc_cal_info())
+        .method(decl_class_datetime_method_105_elephc_is_initialized())
+        .method(decl_class_datetime_method_106_elephc_assert_initialized())
+        .method(decl_class_datetime_method_107_elephc_assert_comparable())
+        .method(decl_class_datetime_method_108_elephc_compare())
         .build()
 }
 
@@ -8234,6 +8713,7 @@ method("__construct")
                 ),
                 s_prop_assign(e_this(), "timestamp", e_var("__ts")),
                 s_prop_assign(e_this(), "timezone_name", e_str("+00:00")),
+                s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
                 s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
                 s_return_void(),
             ],
@@ -8314,7 +8794,7 @@ method("__construct")
                 ],
                 vec![],
                 Some(vec![
-                s_assign("tzname", e_method_call(e_var("timezone"), "getName", vec![])),
+                s_assign("tzname", e_static_call("DateTimeZone", "__elephc_export_name", vec![e_var("timezone")])),
                 s_if(
                     e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
                     vec![
@@ -8372,6 +8852,7 @@ method("getMicrosecond")
 /// `DateTimeImmutable::__elephc_set_microsecond_raw` — transcribed method builder.
 fn decl_class_datetimeimmutable_method_3_elephc_set_microsecond_raw() -> MethodBuilder {
 method("__elephc_set_microsecond_raw")
+    .private()
     .param("microsecond", TypeExpr::Int)
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -8383,9 +8864,17 @@ method("__elephc_set_microsecond_raw")
 /// `DateTimeImmutable::getTimezone` — transcribed method builder.
 fn decl_class_datetimeimmutable_method_4_gettimezone() -> MethodBuilder {
 method("getTimezone")
-    .returns(t_class("DateTimeZone"))
+    .returns(t_union(vec![t_class("DateTimeZone"), TypeExpr::False]))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_if(
+            e_not(e_this_prop("__elephc_is_localtime")),
+            vec![
+                s_return(e_bool(false)),
+            ],
+            vec![],
+            None,
+        ),
         s_return(e_new("DateTimeZone", vec![e_this_prop("timezone_name")])),
     ])
 }
@@ -8568,7 +9057,7 @@ method("diff")
         s_assign("leftTimezone", e_this_prop("timezone_name")),
         s_assign("rightTimestamp", e_method_call(e_var("targetObject"), "getTimestamp", vec![])),
         s_assign("rightMicrosecond", e_method_call(e_var("targetObject"), "getMicrosecond", vec![])),
-        s_assign("rightTimezone", e_method_call(e_var("targetObject"), "format", vec![e_str("e")])),
+        s_assign("rightTimezone", e_method_call(e_method_call(e_var("targetObject"), "getTimezone", vec![]), "getName", vec![])),
         s_assign("parsed", e_call("__elephc_timelib_diff", vec![e_var("leftTimestamp"), e_var("leftMicrosecond"), e_var("leftTimezone"), e_var("rightTimestamp"), e_var("rightMicrosecond"), e_var("rightTimezone")])),
         s_assign("interval", e_new("DateInterval", vec![e_str("PT0S")])),
         s_prop_assign(e_var("interval"), "y", e_index(e_var("parsed"), e_str("y"))),
@@ -8604,6 +9093,7 @@ method("setTimestamp")
         s_assign("__new", e_new("DateTimeImmutable", vec![])),
         s_prop_assign(e_var("__new"), "timestamp", e_var("timestamp")),
         s_prop_assign(e_var("__new"), "timezone_name", e_this_prop("timezone_name")),
+        s_prop_assign(e_var("__new"), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_var("__new"), "microsecond", e_int(0)),
         s_return(e_var("__new")),
     ])
@@ -8625,9 +9115,10 @@ method("setMicrosecond")
             vec![],
             None,
         ),
+        s_assign("__state", e_static_call("DateTimeImmutable", "__elephc_export_state", vec![e_this()])),
+        s_array_assign("__state", e_str("microsecond"), e_var("microsecond")),
         s_assign("__new", e_call("__elephc_new_instance_without_constructor", vec![e_static_class()])),
-        s_expr(e_method_call(e_var("__new"), "__unserialize", vec![e_method_call(e_this(), "__serialize", vec![])])),
-        s_expr(e_method_call(e_var("__new"), "__elephc_set_microsecond_raw", vec![e_var("microsecond")])),
+        s_expr(e_static_call("DateTimeImmutable", "__elephc_import_state", vec![e_var("__new"), e_var("__state")])),
         s_return(e_var("__new")),
     ])
 }
@@ -8648,6 +9139,7 @@ method("setTime")
         s_assign("__new", e_new("DateTimeImmutable", vec![])),
         s_prop_assign(e_var("__new"), "timestamp", e_index(e_var("__parsed"), e_str("timestamp"))),
         s_prop_assign(e_var("__new"), "timezone_name", e_this_prop("timezone_name")),
+        s_prop_assign(e_var("__new"), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_var("__new"), "microsecond", e_index(e_var("__parsed"), e_str("microsecond"))),
         s_return(e_var("__new")),
     ])
@@ -8668,6 +9160,7 @@ method("setDate")
         s_assign("__new", e_new("DateTimeImmutable", vec![])),
         s_prop_assign(e_var("__new"), "timestamp", e_index(e_var("__parsed"), e_str("timestamp"))),
         s_prop_assign(e_var("__new"), "timezone_name", e_this_prop("timezone_name")),
+        s_prop_assign(e_var("__new"), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_var("__new"), "microsecond", e_index(e_var("__parsed"), e_str("microsecond"))),
         s_return(e_var("__new")),
     ])
@@ -8683,7 +9176,8 @@ method("setTimezone")
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
         s_assign("__new", e_new("DateTimeImmutable", vec![])),
         s_prop_assign(e_var("__new"), "timestamp", e_this_prop("timestamp")),
-        s_prop_assign(e_var("__new"), "timezone_name", e_method_call(e_var("timezone"), "getName", vec![])),
+        s_prop_assign(e_var("__new"), "timezone_name", e_static_call("DateTimeZone", "__elephc_export_name", vec![e_var("timezone")])),
+        s_prop_assign(e_var("__new"), "__elephc_is_localtime", e_bool(true)),
         s_return(e_var("__new")),
     ])
 }
@@ -8761,6 +9255,7 @@ method("add")
         s_assign("__new", e_new("DateTimeImmutable", vec![])),
         s_prop_assign(e_var("__new"), "timestamp", e_index(e_var("__interval_result"), e_str("timestamp"))),
         s_prop_assign(e_var("__new"), "timezone_name", e_this_prop("timezone_name")),
+        s_prop_assign(e_var("__new"), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_var("__new"), "microsecond", e_index(e_var("__interval_result"), e_str("microsecond"))),
         s_return(e_var("__new")),
     ])
@@ -8839,6 +9334,7 @@ method("sub")
         s_assign("__new", e_new("DateTimeImmutable", vec![])),
         s_prop_assign(e_var("__new"), "timestamp", e_index(e_var("__interval_result"), e_str("timestamp"))),
         s_prop_assign(e_var("__new"), "timezone_name", e_this_prop("timezone_name")),
+        s_prop_assign(e_var("__new"), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_var("__new"), "microsecond", e_index(e_var("__interval_result"), e_str("microsecond"))),
         s_return(e_var("__new")),
     ])
@@ -8876,6 +9372,7 @@ method("modify")
         s_assign("__new", e_new("DateTimeImmutable", vec![])),
         s_prop_assign(e_var("__new"), "timestamp", e_var("__ts")),
         s_prop_assign(e_var("__new"), "timezone_name", e_var("__timezone")),
+        s_prop_assign(e_var("__new"), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_var("__new"), "microsecond", e_var("__micro")),
         s_return(e_var("__new")),
     ])
@@ -8910,7 +9407,7 @@ method("createFromFormat")
         s_if(
             e_binop(e_var("timezone"), BinOp::StrictNotEq, e_null()),
             vec![
-                s_assign("timezoneName", e_method_call(e_var("timezone"), "getName", vec![])),
+                s_assign("timezoneName", e_static_call("DateTimeZone", "__elephc_export_name", vec![e_var("timezone")])),
             ],
             vec![],
             None,
@@ -9066,13 +9563,14 @@ method("createFromTimestamp")
             vec![
                 s_assign("baseResult", e_new("DateTimeImmutable", vec![e_binop(e_str("@"), BinOp::Concat, e_var("secs"))])),
                 s_prop_assign(e_var("baseResult"), "microsecond", e_var("microseconds")),
+                s_prop_assign(e_var("baseResult"), "__elephc_is_localtime", e_bool(true)),
                 s_return(e_var("baseResult")),
             ],
             vec![],
             None,
         ),
         s_assign("subclassResult", e_call("__elephc_new_instance_without_constructor", vec![e_static_class()])),
-        s_expr(e_method_call(e_var("subclassResult"), "__unserialize", vec![e_array_assoc(vec![(e_str("date"), e_binop(e_binop(e_call("gmdate", vec![e_str("x-m-d H:i:s"), e_var("secs")]), BinOp::Concat, e_str(".")), BinOp::Concat, e_call("sprintf", vec![e_str("%06d"), e_var("microseconds")]))), (e_str("timezone_type"), e_int(1)), (e_str("timezone"), e_str("+00:00"))])])),
+        s_expr(e_static_call("DateTimeImmutable", "__elephc_import_state", vec![e_var("subclassResult"), e_array_assoc(vec![(e_str("timestamp"), e_var("secs")), (e_str("timezone_name"), e_str("+00:00")), (e_str("is_localtime"), e_bool(true)), (e_str("microsecond"), e_var("microseconds")), (e_str("civil_override"), e_bool(false)), (e_str("civil_year"), e_int(1970)), (e_str("civil_month"), e_int(1)), (e_str("civil_day"), e_int(1))])])),
         s_return(e_var("subclassResult")),
     ])
 }
@@ -9084,21 +9582,33 @@ method("createFromInterface")
     .param("object", t_class("DateTimeInterface"))
     .returns(t_class("DateTimeImmutable"))
     .body_exact(vec![
+        s_if(
+            e_instance_of(e_var("object"), "DateTime"),
+            vec![
+                s_assign("state", e_static_call("DateTime", "__elephc_export_state", vec![e_var("object")])),
+            ],
+            vec![
+            (e_instance_of(e_var("object"), "DateTimeImmutable"), vec![
+                s_assign("state", e_static_call("DateTimeImmutable", "__elephc_export_state", vec![e_var("object")])),
+            ]),
+        ],
+            Some(vec![
+            s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("DateTimeImmutable::createFromInterface(): Argument #1 ("), BinOp::Concat, e_var("object")), BinOp::Concat, e_str(") must be of type DateTimeInterface"))])),
+        ]),
+        ),
         s_assign("className", e_static_class()),
-        s_assign("timezone", e_method_call(e_var("object"), "format", vec![e_str("e")])),
-        s_assign("data", e_array_assoc(vec![(e_str("date"), e_method_call(e_var("object"), "format", vec![e_str("x-m-d H:i:s.u")])), (e_str("timezone_type"), e_static_call("DateTime", "__elephc_timezone_type", vec![e_var("timezone")])), (e_str("timezone"), e_var("timezone"))])),
         s_if(
             e_binop(e_var("className"), BinOp::StrictEq, e_named_class("DateTimeImmutable")),
             vec![
                 s_assign("baseResult", e_new("DateTimeImmutable", vec![])),
-                s_expr(e_method_call(e_var("baseResult"), "__unserialize", vec![e_var("data")])),
+                s_expr(e_static_call("DateTimeImmutable", "__elephc_import_state", vec![e_var("baseResult"), e_var("state")])),
                 s_return(e_var("baseResult")),
             ],
             vec![],
             None,
         ),
         s_assign("subclassResult", e_call("__elephc_new_instance_without_constructor", vec![e_var("className")])),
-        s_expr(e_method_call(e_var("subclassResult"), "__unserialize", vec![e_var("data")])),
+        s_expr(e_static_call("DateTimeImmutable", "__elephc_import_state", vec![e_var("subclassResult"), e_var("state")])),
         s_return(e_var("subclassResult")),
     ])
 }
@@ -9119,27 +9629,188 @@ method("createFromMutable")
             vec![],
             None,
         ),
+        s_if(
+            e_instance_of(e_var("object"), "DateTime"),
+            vec![
+                s_assign("state", e_static_call("DateTime", "__elephc_export_state", vec![e_var("object")])),
+            ],
+            vec![
+            (e_instance_of(e_var("object"), "DateTimeImmutable"), vec![
+                s_assign("state", e_static_call("DateTimeImmutable", "__elephc_export_state", vec![e_var("object")])),
+            ]),
+        ],
+            Some(vec![
+            s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("DateTimeImmutable::createFromMutable(): Argument #1 ("), BinOp::Concat, e_var("object")), BinOp::Concat, e_str(") must be of type DateTime"))])),
+        ]),
+        ),
         s_assign("className", e_static_class()),
-        s_assign("timezone", e_method_call(e_var("object"), "format", vec![e_str("e")])),
-        s_assign("data", e_array_assoc(vec![(e_str("date"), e_method_call(e_var("object"), "format", vec![e_str("x-m-d H:i:s.u")])), (e_str("timezone_type"), e_static_call("DateTime", "__elephc_timezone_type", vec![e_var("timezone")])), (e_str("timezone"), e_var("timezone"))])),
         s_if(
             e_binop(e_var("className"), BinOp::StrictEq, e_named_class("DateTimeImmutable")),
             vec![
                 s_assign("baseResult", e_new("DateTimeImmutable", vec![])),
-                s_expr(e_method_call(e_var("baseResult"), "__unserialize", vec![e_var("data")])),
+                s_expr(e_static_call("DateTimeImmutable", "__elephc_import_state", vec![e_var("baseResult"), e_var("state")])),
                 s_return(e_var("baseResult")),
             ],
             vec![],
             None,
         ),
         s_assign("subclassResult", e_call("__elephc_new_instance_without_constructor", vec![e_var("className")])),
-        s_expr(e_method_call(e_var("subclassResult"), "__unserialize", vec![e_var("data")])),
+        s_expr(e_static_call("DateTimeImmutable", "__elephc_import_state", vec![e_var("subclassResult"), e_var("state")])),
         s_return(e_var("subclassResult")),
     ])
 }
 
+/// `DateTimeImmutable::__elephc_export_state_instance` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_21_elephc_export_state_instance() -> MethodBuilder {
+method("__elephc_export_state_instance")
+    .private()
+    .final_()
+    .returns(t_array())
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_return(e_array_assoc(vec![(e_str("timestamp"), e_this_prop("timestamp")), (e_str("timezone_name"), e_this_prop("timezone_name")), (e_str("is_localtime"), e_this_prop("__elephc_is_localtime")), (e_str("microsecond"), e_this_prop("microsecond")), (e_str("civil_override"), e_this_prop("__elephc_civil_override")), (e_str("civil_year"), e_this_prop("__elephc_civil_year")), (e_str("civil_month"), e_this_prop("__elephc_civil_month")), (e_str("civil_day"), e_this_prop("__elephc_civil_day"))])),
+    ])
+}
+
+/// `DateTimeImmutable::__elephc_export_state` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_22_elephc_export_state() -> MethodBuilder {
+method("__elephc_export_state")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTimeImmutable"))
+    .returns(t_array())
+    .body_exact(vec![
+        s_return(e_method_call(e_var("value"), "__elephc_export_state_instance", vec![])),
+    ])
+}
+
+/// `DateTimeImmutable::__elephc_import_state_instance` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_23_elephc_import_state_instance() -> MethodBuilder {
+method("__elephc_import_state_instance")
+    .private()
+    .final_()
+    .param("state", t_array())
+    .returns(TypeExpr::Void)
+    .body_exact(vec![
+        s_prop_assign(e_this(), "timestamp", e_index(e_var("state"), e_str("timestamp"))),
+        s_prop_assign(e_this(), "timezone_name", e_index(e_var("state"), e_str("timezone_name"))),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_index(e_var("state"), e_str("is_localtime"))),
+        s_prop_assign(e_this(), "microsecond", e_index(e_var("state"), e_str("microsecond"))),
+        s_prop_assign(e_this(), "__elephc_civil_override", e_index(e_var("state"), e_str("civil_override"))),
+        s_prop_assign(e_this(), "__elephc_civil_year", e_index(e_var("state"), e_str("civil_year"))),
+        s_prop_assign(e_this(), "__elephc_civil_month", e_index(e_var("state"), e_str("civil_month"))),
+        s_prop_assign(e_this(), "__elephc_civil_day", e_index(e_var("state"), e_str("civil_day"))),
+        s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
+    ])
+}
+
+/// `DateTimeImmutable::__elephc_import_state` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_24_elephc_import_state() -> MethodBuilder {
+method("__elephc_import_state")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTimeImmutable"))
+    .param("state", t_array())
+    .returns(TypeExpr::Void)
+    .body_exact(vec![
+        s_return(e_method_call(e_var("value"), "__elephc_import_state_instance", vec![e_var("state")])),
+    ])
+}
+
+/// `DateTimeImmutable::__elephc_timestamp_internal` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_25_elephc_timestamp_internal() -> MethodBuilder {
+method("__elephc_timestamp_internal")
+    .private()
+    .final_()
+    .returns(TypeExpr::Int)
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_return(e_this_prop("timestamp")),
+    ])
+}
+
+/// `DateTimeImmutable::__elephc_microsecond_internal` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_26_elephc_microsecond_internal() -> MethodBuilder {
+method("__elephc_microsecond_internal")
+    .private()
+    .final_()
+    .returns(TypeExpr::Int)
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_return(e_this_prop("microsecond")),
+    ])
+}
+
+/// `DateTimeImmutable::__elephc_timezone_name_internal` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_27_elephc_timezone_name_internal() -> MethodBuilder {
+method("__elephc_timezone_name_internal")
+    .private()
+    .final_()
+    .returns(TypeExpr::Str)
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_return(e_this_prop("timezone_name")),
+    ])
+}
+
+/// `DateTimeImmutable::__elephc_timestamp_of` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_28_elephc_timestamp_of() -> MethodBuilder {
+method("__elephc_timestamp_of")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTimeImmutable"))
+    .returns(TypeExpr::Int)
+    .body_exact(vec![
+        s_return(e_prop(e_var("value"), "timestamp")),
+    ])
+}
+
+/// `DateTimeImmutable::__elephc_microsecond_of` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_29_elephc_microsecond_of() -> MethodBuilder {
+method("__elephc_microsecond_of")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTimeImmutable"))
+    .returns(TypeExpr::Int)
+    .body_exact(vec![
+        s_return(e_prop(e_var("value"), "microsecond")),
+    ])
+}
+
+/// `DateTimeImmutable::__elephc_timezone_name_of` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_30_elephc_timezone_name_of() -> MethodBuilder {
+method("__elephc_timezone_name_of")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTimeImmutable"))
+    .returns(TypeExpr::Str)
+    .body_exact(vec![
+        s_return(e_prop(e_var("value"), "timezone_name")),
+    ])
+}
+
+/// `DateTimeImmutable::__elephc_period_advance` — transcribed method builder.
+fn decl_class_datetimeimmutable_method_31_elephc_period_advance() -> MethodBuilder {
+method("__elephc_period_advance")
+    .private()
+    .final_()
+    .param("interval", t_class("DateInterval"))
+    .returns(TypeExpr::Void)
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_assign("advanced", e_call("__elephc_timelib_period_advance", vec![e_this_prop("timestamp"), e_this_prop("microsecond"), e_this_prop("timezone_name"), e_method_call(e_var("interval"), "__elephc_payload", vec![])])),
+        s_prop_assign(e_this(), "timestamp", e_index(e_var("advanced"), e_int(0))),
+        s_prop_assign(e_this(), "microsecond", e_index(e_var("advanced"), e_int(1))),
+    ])
+}
+
 /// `DateTimeImmutable::setISODate` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_21_setisodate() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_32_setisodate() -> MethodBuilder {
 method("setISODate")
     .attr("\\NoDiscard", vec![e_named_arg("message", e_str("as DateTimeImmutable::setISODate() does not modify the object itself"))])
     .param("year", TypeExpr::Int)
@@ -9158,6 +9829,7 @@ method("setISODate")
         s_prop_assign(e_var("result"), "timestamp", e_var("timestamp")),
         s_prop_assign(e_var("result"), "timezone_name", e_this_prop("timezone_name")),
         s_prop_assign(e_var("result"), "microsecond", e_var("microsecond")),
+        s_prop_assign(e_var("result"), "__elephc_is_localtime", e_this_prop("__elephc_is_localtime")),
         s_prop_assign(e_var("result"), "__elephc_civil_override", e_bool(true)),
         s_prop_assign(e_var("result"), "__elephc_civil_year", e_var("civilYear")),
         s_prop_assign(e_var("result"), "__elephc_civil_month", e_var("civilMonth")),
@@ -9167,8 +9839,9 @@ method("setISODate")
 }
 
 /// `DateTimeImmutable::__elephc_date_create` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_22_elephc_date_create() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_33_elephc_date_create() -> MethodBuilder {
 method("__elephc_date_create")
+    .private()
     .static_()
     .param_default("datetime", TypeExpr::Str, e_str("now"))
     .param_default("timezone", t_nullable(t_class("DateTimeZone")), e_null())
@@ -9200,25 +9873,18 @@ method("__elephc_date_create")
 }
 
 /// `DateTimeImmutable::__wakeup` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_23_wakeup() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_34_wakeup() -> MethodBuilder {
 method("__wakeup")
     .attr("\\Deprecated", vec![e_named_arg("since", e_str("8.5")), e_named_arg("message", e_str("this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()"))])
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_call("__elephc_diag_warning", vec![e_str("Deprecated: Method DateTimeImmutable::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n"), e_int(0), e_const("E_DEPRECATED")])),
-        s_if(
-            e_binop(e_str("DateTimeImmutable"), BinOp::StrictNotEq, e_str("DateInterval")),
-            vec![
-                s_throw(e_new("Error", vec![e_str("Invalid serialization data for DateTimeImmutable object")])),
-            ],
-            vec![],
-            None,
-        ),
+        s_expr(e_method_call(e_this(), "__unserialize", vec![e_call("get_object_vars", vec![e_this()])])),
     ])
 }
 
 /// `DateTimeImmutable::__serialize` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_24_serialize() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_35_serialize() -> MethodBuilder {
 method("__serialize")
     .returns(t_array())
     .body_exact(vec![
@@ -9230,12 +9896,24 @@ method("__serialize")
         s_assign("__us", e_call("str_pad", vec![e_cast(CastType::String, e_this_prop("microsecond")), e_int(6), e_str("0"), e_int(1)])),
         s_assign("__date", e_binop(e_binop(e_var("__date"), BinOp::Concat, e_str(".")), BinOp::Concat, e_var("__us"))),
         s_expr(e_call("date_default_timezone_set", vec![e_var("__saved")])),
-        s_return(e_array_assoc(vec![(e_str("date"), e_var("__date")), (e_str("timezone_type"), e_static_call("DateTime", "__elephc_timezone_type", vec![e_var("__tz")])), (e_str("timezone"), e_var("__tz"))])),
+        s_assign("result", e_array_assoc(vec![(e_str("date"), e_var("__date")), (e_str("timezone_type"), e_null())])),
+        s_if(
+            e_this_prop("__elephc_is_localtime"),
+            vec![
+                s_array_assign("result", e_str("timezone_type"), e_static_call("DateTime", "__elephc_timezone_type", vec![e_var("__tz")])),
+                s_array_assign("result", e_str("timezone"), e_var("__tz")),
+            ],
+            vec![],
+            Some(vec![
+            s_expr(e_call("unset", vec![e_index(e_var("result"), e_str("timezone_type"))])),
+        ]),
+        ),
+        s_return(e_var("result")),
     ])
 }
 
 /// `DateTimeImmutable::__unserialize` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_25_unserialize() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_36_unserialize() -> MethodBuilder {
 method("__unserialize")
     .param("data", t_array())
     .returns(TypeExpr::Void)
@@ -9320,12 +9998,33 @@ method("__unserialize")
         ),
         s_prop_assign(e_this(), "timestamp", e_var("__timestamp")),
         s_prop_assign(e_this(), "timezone_name", e_var("__tz")),
+        s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
         s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
+        s_assign("data", e_method_call(e_this(), "__elephc_restore_date_properties", vec![e_var("data")])),
+        s_foreach(e_var("data"), Some("__property"), "__value", vec![
+            s_if(
+                e_binop(e_binop(e_call("is_string", vec![e_var("__property")]), BinOp::And, e_binop(e_call("strlen", vec![e_var("__property")]), BinOp::Gt, e_int(3))), BinOp::And, e_binop(e_call("substr", vec![e_var("__property"), e_int(0), e_int(3)]), BinOp::StrictEq, e_str("\0*\0"))),
+                vec![
+                    s_assign("__property", e_call("substr", vec![e_var("__property"), e_int(3)])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_binop(e_not(e_call("is_string", vec![e_var("__property")])), BinOp::Or, e_binop(e_binop(e_call("strlen", vec![e_var("__property")]), BinOp::Gt, e_int(0)), BinOp::And, e_binop(e_index(e_var("__property"), e_int(0)), BinOp::StrictEq, e_str("\0")))), BinOp::Or, e_call("in_array", vec![e_var("__property"), e_array(vec![e_str("date"), e_str("timezone_type"), e_str("timezone")]), e_bool(true)])),
+                vec![
+                    s_continue(1),
+                ],
+                vec![],
+                None,
+            ),
+            s_expr(e_assign(e_dyn_prop(e_this(), e_var("__property")), e_var("__value"))),
+        ]),
     ])
 }
 
 /// `DateTimeImmutable::__set_state` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_26_set_state() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_37_set_state() -> MethodBuilder {
 method("__set_state")
     .static_()
     .param("array", t_array())
@@ -9338,49 +10037,67 @@ method("__set_state")
 }
 
 /// `DateTimeImmutable::__elephc_debug_dump` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_27_elephc_debug_dump() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_38_elephc_debug_dump() -> MethodBuilder {
 method("__elephc_debug_dump")
+    .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
         s_assign("pad", e_call("str_repeat", vec![e_str(" "), e_call("__elephc_var_dump_indent", vec![e_int(0)])])),
         s_assign("field_pad", e_binop(e_var("pad"), BinOp::Concat, e_str("  "))),
         s_assign("property_count", e_call("__elephc_var_dump_object_property_count", vec![e_this()])),
-        s_echo(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_var("pad"), BinOp::Concat, e_str("object(")), BinOp::Concat, e_call("get_class", vec![e_this()])), BinOp::Concat, e_str(")#")), BinOp::Concat, e_call("spl_object_id", vec![e_this()])), BinOp::Concat, e_str(" (")), BinOp::Concat, e_binop(e_var("property_count"), BinOp::Add, e_int(3))), BinOp::Concat, e_str(") {\n"))),
+        s_assign("date_property_count", e_binop(e_binop(e_var("property_count"), BinOp::Add, e_int(1)), BinOp::Add, e_ternary(e_this_prop("__elephc_is_localtime"), e_int(2), e_int(0)))),
+        s_echo(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_var("pad"), BinOp::Concat, e_str("object(")), BinOp::Concat, e_call("get_class", vec![e_this()])), BinOp::Concat, e_str(")#")), BinOp::Concat, e_call("spl_object_id", vec![e_this()])), BinOp::Concat, e_str(" (")), BinOp::Concat, e_var("date_property_count")), BinOp::Concat, e_str(") {\n"))),
         s_expr(e_call("__elephc_var_dump_indent", vec![e_int(2)])),
         s_expr(e_call("__elephc_var_dump_object_properties", vec![e_this()])),
         s_expr(e_call("__elephc_var_dump_indent", vec![e_neg(e_int(2))])),
         s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"date\"]=>\n"))),
         s_echo(e_var("field_pad")),
         s_expr(e_call("var_dump", vec![e_method_call(e_this(), "format", vec![e_str("x-m-d H:i:s.u")])])),
-        s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"timezone_type\"]=>\n"))),
-        s_echo(e_var("field_pad")),
-        s_expr(e_call("var_dump", vec![e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")])])),
-        s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"timezone\"]=>\n"))),
-        s_echo(e_var("field_pad")),
-        s_expr(e_call("var_dump", vec![e_this_prop("timezone_name")])),
+        s_if(
+            e_this_prop("__elephc_is_localtime"),
+            vec![
+                s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"timezone_type\"]=>\n"))),
+                s_echo(e_var("field_pad")),
+                s_expr(e_call("var_dump", vec![e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")])])),
+                s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"timezone\"]=>\n"))),
+                s_echo(e_var("field_pad")),
+                s_expr(e_call("var_dump", vec![e_this_prop("timezone_name")])),
+            ],
+            vec![],
+            None,
+        ),
         s_echo(e_binop(e_var("pad"), BinOp::Concat, e_str("}\n"))),
     ])
 }
 
 /// `DateTimeImmutable::__elephc_print_r_dump` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_28_elephc_print_r_dump() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_39_elephc_print_r_dump() -> MethodBuilder {
 method("__elephc_print_r_dump")
+    .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
         s_echo(e_binop(e_call("get_class", vec![e_this()]), BinOp::Concat, e_str(" Object\n(\n"))),
         s_expr(e_call("__elephc_print_r_object_properties", vec![e_this()])),
         s_echo(e_binop(e_binop(e_str("    [date] => "), BinOp::Concat, e_method_call(e_this(), "format", vec![e_str("x-m-d H:i:s.u")])), BinOp::Concat, e_str("\n"))),
-        s_echo(e_binop(e_binop(e_str("    [timezone_type] => "), BinOp::Concat, e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")])), BinOp::Concat, e_str("\n"))),
-        s_echo(e_binop(e_binop(e_str("    [timezone] => "), BinOp::Concat, e_this_prop("timezone_name")), BinOp::Concat, e_str("\n"))),
+        s_if(
+            e_this_prop("__elephc_is_localtime"),
+            vec![
+                s_echo(e_binop(e_binop(e_str("    [timezone_type] => "), BinOp::Concat, e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")])), BinOp::Concat, e_str("\n"))),
+                s_echo(e_binop(e_binop(e_str("    [timezone] => "), BinOp::Concat, e_this_prop("timezone_name")), BinOp::Concat, e_str("\n"))),
+            ],
+            vec![],
+            None,
+        ),
         s_echo(e_str(")\n")),
     ])
 }
 
 /// `DateTimeImmutable::__elephc_clone_for_period` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_29_elephc_clone_for_period() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_40_elephc_clone_for_period() -> MethodBuilder {
 method("__elephc_clone_for_period")
+    .private()
     .returns(t_class("DateTimeImmutable"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -9389,8 +10106,9 @@ method("__elephc_clone_for_period")
 }
 
 /// `DateTimeImmutable::__elephc_clone_for_period_storage` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_30_elephc_clone_for_period_storage() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_41_elephc_clone_for_period_storage() -> MethodBuilder {
 method("__elephc_clone_for_period_storage")
+    .private()
     .returns(t_class("DateTimeImmutable"))
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -9399,7 +10117,7 @@ method("__elephc_clone_for_period_storage")
 }
 
 /// `DateTimeImmutable::__elephc_begin_argument_array` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_31_elephc_begin_argument_array() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_42_elephc_begin_argument_array() -> MethodBuilder {
 method("__elephc_begin_argument_array")
     .private()
     .returns(TypeExpr::Void)
@@ -9410,7 +10128,7 @@ method("__elephc_begin_argument_array")
 }
 
 /// `DateTimeImmutable::__elephc_append_one_argument` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_32_elephc_append_one_argument() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_43_elephc_append_one_argument() -> MethodBuilder {
 method("__elephc_append_one_argument")
     .private()
     .param("key", t_mixed())
@@ -9499,7 +10217,7 @@ method("__elephc_append_one_argument")
 }
 
 /// `DateTimeImmutable::__elephc_append_argument_chunk` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_33_elephc_append_argument_chunk() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_44_elephc_append_argument_chunk() -> MethodBuilder {
 method("__elephc_append_argument_chunk")
     .private()
     .param("kind", TypeExpr::Int)
@@ -9540,7 +10258,7 @@ method("__elephc_append_argument_chunk")
 }
 
 /// `DateTimeImmutable::__elephc_finish_argument_array` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_34_elephc_finish_argument_array() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_45_elephc_finish_argument_array() -> MethodBuilder {
 method("__elephc_finish_argument_array")
     .private()
     .returns(TypeExpr::Void)
@@ -9617,8 +10335,9 @@ method("__elephc_finish_argument_array")
 }
 
 /// `DateTimeImmutable::__elephc_is_initialized` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_35_elephc_is_initialized() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_46_elephc_is_initialized() -> MethodBuilder {
 method("__elephc_is_initialized")
+    .private()
     .final_()
     .returns(TypeExpr::Bool)
     .body_exact(vec![
@@ -9627,8 +10346,9 @@ method("__elephc_is_initialized")
 }
 
 /// `DateTimeImmutable::__elephc_assert_initialized` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_36_elephc_assert_initialized() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_47_elephc_assert_initialized() -> MethodBuilder {
 method("__elephc_assert_initialized")
+    .private()
     .final_()
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -9646,8 +10366,9 @@ method("__elephc_assert_initialized")
 }
 
 /// `DateTimeImmutable::__elephc_assert_comparable` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_37_elephc_assert_comparable() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_48_elephc_assert_comparable() -> MethodBuilder {
 method("__elephc_assert_comparable")
+    .private()
     .final_()
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -9663,16 +10384,19 @@ method("__elephc_assert_comparable")
 }
 
 /// `DateTimeImmutable::__elephc_compare` — transcribed method builder.
-fn decl_class_datetimeimmutable_method_38_elephc_compare() -> MethodBuilder {
+fn decl_class_datetimeimmutable_method_49_elephc_compare() -> MethodBuilder {
 method("__elephc_compare")
+    .private()
     .final_()
     .param("other", t_class("DateTimeInterface"))
     .returns(TypeExpr::Int)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_comparable", vec![])),
         s_expr(e_method_call(e_var("other"), "__elephc_assert_comparable", vec![])),
-        s_assign("leftTimestamp", e_method_call(e_this(), "getTimestamp", vec![])),
-        s_assign("rightTimestamp", e_method_call(e_var("other"), "getTimestamp", vec![])),
+        s_assign("leftTimestamp", e_this_prop("timestamp")),
+        s_assign("leftMicrosecond", e_this_prop("microsecond")),
+        s_assign("rightTimestamp", e_ternary(e_instance_of(e_var("other"), "DateTimeImmutable"), e_static_call("DateTimeImmutable", "__elephc_timestamp_of", vec![e_var("other")]), e_static_call("DateTime", "__elephc_timestamp_of", vec![e_var("other")]))),
+        s_assign("rightMicrosecond", e_ternary(e_instance_of(e_var("other"), "DateTimeImmutable"), e_static_call("DateTimeImmutable", "__elephc_microsecond_of", vec![e_var("other")]), e_static_call("DateTime", "__elephc_microsecond_of", vec![e_var("other")]))),
         s_if(
             e_binop(e_var("leftTimestamp"), BinOp::Lt, e_var("rightTimestamp")),
             vec![
@@ -9689,8 +10413,6 @@ method("__elephc_compare")
             vec![],
             None,
         ),
-        s_assign("leftMicrosecond", e_method_call(e_this(), "getMicrosecond", vec![])),
-        s_assign("rightMicrosecond", e_method_call(e_var("other"), "getMicrosecond", vec![])),
         s_if(
             e_binop(e_var("leftMicrosecond"), BinOp::Lt, e_var("rightMicrosecond")),
             vec![
@@ -9718,6 +10440,7 @@ fn decl_class_datetimeimmutable() -> Stmt {
         .private_prop("__elephc_initialized", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("timestamp", TypeExpr::Int, Some(e_int(0)))
         .private_prop("timezone_name", TypeExpr::Str, Some(e_str("UTC")))
+        .private_prop("__elephc_is_localtime", TypeExpr::Bool, Some(e_bool(true)))
         .private_prop("microsecond", TypeExpr::Int, Some(e_int(0)))
         .private_prop("__elephc_civil_override", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("__elephc_civil_year", TypeExpr::Int, Some(e_int(1970)))
@@ -9753,30 +10476,42 @@ fn decl_class_datetimeimmutable() -> Stmt {
         .method(decl_class_datetimeimmutable_method_18_createfromtimestamp())
         .method(decl_class_datetimeimmutable_method_19_createfrominterface())
         .method(decl_class_datetimeimmutable_method_20_createfrommutable())
-        .method(decl_class_datetimeimmutable_method_21_setisodate())
-        .method(decl_class_datetimeimmutable_method_22_elephc_date_create())
-        .method(decl_class_datetimeimmutable_method_23_wakeup())
-        .method(decl_class_datetimeimmutable_method_24_serialize())
-        .method(decl_class_datetimeimmutable_method_25_unserialize())
-        .method(decl_class_datetimeimmutable_method_26_set_state())
-        .method(decl_class_datetimeimmutable_method_27_elephc_debug_dump())
-        .method(decl_class_datetimeimmutable_method_28_elephc_print_r_dump())
-        .method(decl_class_datetimeimmutable_method_29_elephc_clone_for_period())
-        .method(decl_class_datetimeimmutable_method_30_elephc_clone_for_period_storage())
-        .method(decl_class_datetimeimmutable_method_31_elephc_begin_argument_array())
-        .method(decl_class_datetimeimmutable_method_32_elephc_append_one_argument())
-        .method(decl_class_datetimeimmutable_method_33_elephc_append_argument_chunk())
-        .method(decl_class_datetimeimmutable_method_34_elephc_finish_argument_array())
-        .method(decl_class_datetimeimmutable_method_35_elephc_is_initialized())
-        .method(decl_class_datetimeimmutable_method_36_elephc_assert_initialized())
-        .method(decl_class_datetimeimmutable_method_37_elephc_assert_comparable())
-        .method(decl_class_datetimeimmutable_method_38_elephc_compare())
+        .method(decl_class_datetimeimmutable_method_21_elephc_export_state_instance())
+        .method(decl_class_datetimeimmutable_method_22_elephc_export_state())
+        .method(decl_class_datetimeimmutable_method_23_elephc_import_state_instance())
+        .method(decl_class_datetimeimmutable_method_24_elephc_import_state())
+        .method(decl_class_datetimeimmutable_method_25_elephc_timestamp_internal())
+        .method(decl_class_datetimeimmutable_method_26_elephc_microsecond_internal())
+        .method(decl_class_datetimeimmutable_method_27_elephc_timezone_name_internal())
+        .method(decl_class_datetimeimmutable_method_28_elephc_timestamp_of())
+        .method(decl_class_datetimeimmutable_method_29_elephc_microsecond_of())
+        .method(decl_class_datetimeimmutable_method_30_elephc_timezone_name_of())
+        .method(decl_class_datetimeimmutable_method_31_elephc_period_advance())
+        .method(decl_class_datetimeimmutable_method_32_setisodate())
+        .method(decl_class_datetimeimmutable_method_33_elephc_date_create())
+        .method(decl_class_datetimeimmutable_method_34_wakeup())
+        .method(decl_class_datetimeimmutable_method_35_serialize())
+        .method(decl_class_datetimeimmutable_method_36_unserialize())
+        .method(decl_class_datetimeimmutable_method_37_set_state())
+        .method(decl_class_datetimeimmutable_method_38_elephc_debug_dump())
+        .method(decl_class_datetimeimmutable_method_39_elephc_print_r_dump())
+        .method(decl_class_datetimeimmutable_method_40_elephc_clone_for_period())
+        .method(decl_class_datetimeimmutable_method_41_elephc_clone_for_period_storage())
+        .method(decl_class_datetimeimmutable_method_42_elephc_begin_argument_array())
+        .method(decl_class_datetimeimmutable_method_43_elephc_append_one_argument())
+        .method(decl_class_datetimeimmutable_method_44_elephc_append_argument_chunk())
+        .method(decl_class_datetimeimmutable_method_45_elephc_finish_argument_array())
+        .method(decl_class_datetimeimmutable_method_46_elephc_is_initialized())
+        .method(decl_class_datetimeimmutable_method_47_elephc_assert_initialized())
+        .method(decl_class_datetimeimmutable_method_48_elephc_assert_comparable())
+        .method(decl_class_datetimeimmutable_method_49_elephc_compare())
         .build()
 }
 
 /// `DateTimeZone::__elephc_normalize_timezone` — transcribed method builder.
 fn decl_class_datetimezone_method_0_elephc_normalize_timezone() -> MethodBuilder {
 method("__elephc_normalize_timezone")
+    .private()
     .static_()
     .param("timezone", TypeExpr::Str)
     .returns(TypeExpr::Str)
@@ -10019,6 +10754,7 @@ method("__construct")
 /// `DateTimeZone::__elephc_timezone_open` — transcribed method builder.
 fn decl_class_datetimezone_method_2_elephc_timezone_open() -> MethodBuilder {
 method("__elephc_timezone_open")
+    .private()
     .static_()
     .param("timezone", t_mixed())
     .param("sourceLine", TypeExpr::Int)
@@ -10054,8 +10790,33 @@ method("getName")
     ])
 }
 
+/// `DateTimeZone::__elephc_export_name_instance` — transcribed method builder.
+fn decl_class_datetimezone_method_4_elephc_export_name_instance() -> MethodBuilder {
+method("__elephc_export_name_instance")
+    .private()
+    .final_()
+    .returns(TypeExpr::Str)
+    .body_exact(vec![
+        s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
+        s_return(e_this_prop("name")),
+    ])
+}
+
+/// `DateTimeZone::__elephc_export_name` — transcribed method builder.
+fn decl_class_datetimezone_method_5_elephc_export_name() -> MethodBuilder {
+method("__elephc_export_name")
+    .private()
+    .static_()
+    .final_()
+    .param("value", t_class("DateTimeZone"))
+    .returns(TypeExpr::Str)
+    .body_exact(vec![
+        s_return(e_method_call(e_var("value"), "__elephc_export_name_instance", vec![])),
+    ])
+}
+
 /// `DateTimeZone::getOffset` — transcribed method builder.
-fn decl_class_datetimezone_method_4_getoffset() -> MethodBuilder {
+fn decl_class_datetimezone_method_6_getoffset() -> MethodBuilder {
 method("getOffset")
     .param("datetime", t_class("DateTimeInterface"))
     .returns(TypeExpr::Int)
@@ -10063,26 +10824,80 @@ method("getOffset")
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
         s_assign("__saved", e_call("date_default_timezone_get", vec![])),
         s_expr(e_call("date_default_timezone_set", vec![e_static_call("DateTime", "__elephc_runtime_timezone_name", vec![e_this_prop("name")])])),
-        s_assign("__off", e_call("intval", vec![e_call("date", vec![e_str("Z"), e_method_call(e_var("datetime"), "getTimestamp", vec![])])])),
+        s_assign("__timestamp", e_ternary(e_instance_of(e_var("datetime"), "DateTimeImmutable"), e_static_call("DateTimeImmutable", "__elephc_timestamp_of", vec![e_var("datetime")]), e_static_call("DateTime", "__elephc_timestamp_of", vec![e_var("datetime")]))),
+        s_assign("__off", e_call("intval", vec![e_call("date", vec![e_str("Z"), e_var("__timestamp")])])),
         s_expr(e_call("date_default_timezone_set", vec![e_var("__saved")])),
         s_return(e_var("__off")),
     ])
 }
 
 /// `DateTimeZone::listIdentifiers` — transcribed method builder.
-fn decl_class_datetimezone_method_5_listidentifiers() -> MethodBuilder {
+fn decl_class_datetimezone_method_7_listidentifiers() -> MethodBuilder {
 method("listIdentifiers")
     .static_()
     .param_default("timezoneGroup", TypeExpr::Int, e_int(2047))
     .param_default("countryCode", t_nullable(TypeExpr::Str), e_null())
+    .returns(t_array())
     .body_exact(vec![
-        s_return(e_array(vec![e_str("Africa/Abidjan"), e_str("Africa/Accra"), e_str("Africa/Addis_Ababa"), e_str("Africa/Algiers"), e_str("Africa/Asmara"), e_str("Africa/Bamako"), e_str("Africa/Bangui"), e_str("Africa/Banjul"), e_str("Africa/Bissau"), e_str("Africa/Blantyre"), e_str("Africa/Brazzaville"), e_str("Africa/Bujumbura"), e_str("Africa/Cairo"), e_str("Africa/Casablanca"), e_str("Africa/Ceuta"), e_str("Africa/Conakry"), e_str("Africa/Dakar"), e_str("Africa/Dar_es_Salaam"), e_str("Africa/Djibouti"), e_str("Africa/Douala"), e_str("Africa/El_Aaiun"), e_str("Africa/Freetown"), e_str("Africa/Gaborone"), e_str("Africa/Harare"), e_str("Africa/Johannesburg"), e_str("Africa/Juba"), e_str("Africa/Kampala"), e_str("Africa/Khartoum"), e_str("Africa/Kigali"), e_str("Africa/Kinshasa"), e_str("Africa/Lagos"), e_str("Africa/Libreville"), e_str("Africa/Lome"), e_str("Africa/Luanda"), e_str("Africa/Lubumbashi"), e_str("Africa/Lusaka"), e_str("Africa/Malabo"), e_str("Africa/Maputo"), e_str("Africa/Maseru"), e_str("Africa/Mbabane"), e_str("Africa/Mogadishu"), e_str("Africa/Monrovia"), e_str("Africa/Nairobi"), e_str("Africa/Ndjamena"), e_str("Africa/Niamey"), e_str("Africa/Nouakchott"), e_str("Africa/Ouagadougou"), e_str("Africa/Porto-Novo"), e_str("Africa/Sao_Tome"), e_str("Africa/Tripoli"), e_str("Africa/Tunis"), e_str("Africa/Windhoek"), e_str("America/Adak"), e_str("America/Anchorage"), e_str("America/Anguilla"), e_str("America/Antigua"), e_str("America/Araguaina"), e_str("America/Argentina/Buenos_Aires"), e_str("America/Argentina/Catamarca"), e_str("America/Argentina/Cordoba"), e_str("America/Argentina/Jujuy"), e_str("America/Argentina/La_Rioja"), e_str("America/Argentina/Mendoza"), e_str("America/Argentina/Rio_Gallegos"), e_str("America/Argentina/Salta"), e_str("America/Argentina/San_Juan"), e_str("America/Argentina/San_Luis"), e_str("America/Argentina/Tucuman"), e_str("America/Argentina/Ushuaia"), e_str("America/Aruba"), e_str("America/Asuncion"), e_str("America/Atikokan"), e_str("America/Bahia"), e_str("America/Bahia_Banderas"), e_str("America/Barbados"), e_str("America/Belem"), e_str("America/Belize"), e_str("America/Blanc-Sablon"), e_str("America/Boa_Vista"), e_str("America/Bogota"), e_str("America/Boise"), e_str("America/Cambridge_Bay"), e_str("America/Campo_Grande"), e_str("America/Cancun"), e_str("America/Caracas"), e_str("America/Cayenne"), e_str("America/Cayman"), e_str("America/Chicago"), e_str("America/Chihuahua"), e_str("America/Ciudad_Juarez"), e_str("America/Costa_Rica"), e_str("America/Coyhaique"), e_str("America/Creston"), e_str("America/Cuiaba"), e_str("America/Curacao"), e_str("America/Danmarkshavn"), e_str("America/Dawson"), e_str("America/Dawson_Creek"), e_str("America/Denver"), e_str("America/Detroit"), e_str("America/Dominica"), e_str("America/Edmonton"), e_str("America/Eirunepe"), e_str("America/El_Salvador"), e_str("America/Fort_Nelson"), e_str("America/Fortaleza"), e_str("America/Glace_Bay"), e_str("America/Goose_Bay"), e_str("America/Grand_Turk"), e_str("America/Grenada"), e_str("America/Guadeloupe"), e_str("America/Guatemala"), e_str("America/Guayaquil"), e_str("America/Guyana"), e_str("America/Halifax"), e_str("America/Havana"), e_str("America/Hermosillo"), e_str("America/Indiana/Indianapolis"), e_str("America/Indiana/Knox"), e_str("America/Indiana/Marengo"), e_str("America/Indiana/Petersburg"), e_str("America/Indiana/Tell_City"), e_str("America/Indiana/Vevay"), e_str("America/Indiana/Vincennes"), e_str("America/Indiana/Winamac"), e_str("America/Inuvik"), e_str("America/Iqaluit"), e_str("America/Jamaica"), e_str("America/Juneau"), e_str("America/Kentucky/Louisville"), e_str("America/Kentucky/Monticello"), e_str("America/Kralendijk"), e_str("America/La_Paz"), e_str("America/Lima"), e_str("America/Los_Angeles"), e_str("America/Lower_Princes"), e_str("America/Maceio"), e_str("America/Managua"), e_str("America/Manaus"), e_str("America/Marigot"), e_str("America/Martinique"), e_str("America/Matamoros"), e_str("America/Mazatlan"), e_str("America/Menominee"), e_str("America/Merida"), e_str("America/Metlakatla"), e_str("America/Mexico_City"), e_str("America/Miquelon"), e_str("America/Moncton"), e_str("America/Monterrey"), e_str("America/Montevideo"), e_str("America/Montserrat"), e_str("America/Nassau"), e_str("America/New_York"), e_str("America/Nome"), e_str("America/Noronha"), e_str("America/North_Dakota/Beulah"), e_str("America/North_Dakota/Center"), e_str("America/North_Dakota/New_Salem"), e_str("America/Nuuk"), e_str("America/Ojinaga"), e_str("America/Panama"), e_str("America/Paramaribo"), e_str("America/Phoenix"), e_str("America/Port-au-Prince"), e_str("America/Port_of_Spain"), e_str("America/Porto_Velho"), e_str("America/Puerto_Rico"), e_str("America/Punta_Arenas"), e_str("America/Rankin_Inlet"), e_str("America/Recife"), e_str("America/Regina"), e_str("America/Resolute"), e_str("America/Rio_Branco"), e_str("America/Santarem"), e_str("America/Santiago"), e_str("America/Santo_Domingo"), e_str("America/Sao_Paulo"), e_str("America/Scoresbysund"), e_str("America/Sitka"), e_str("America/St_Barthelemy"), e_str("America/St_Johns"), e_str("America/St_Kitts"), e_str("America/St_Lucia"), e_str("America/St_Thomas"), e_str("America/St_Vincent"), e_str("America/Swift_Current"), e_str("America/Tegucigalpa"), e_str("America/Thule"), e_str("America/Tijuana"), e_str("America/Toronto"), e_str("America/Tortola"), e_str("America/Vancouver"), e_str("America/Whitehorse"), e_str("America/Winnipeg"), e_str("America/Yakutat"), e_str("Antarctica/Casey"), e_str("Antarctica/Davis"), e_str("Antarctica/DumontDUrville"), e_str("Antarctica/Macquarie"), e_str("Antarctica/Mawson"), e_str("Antarctica/McMurdo"), e_str("Antarctica/Palmer"), e_str("Antarctica/Rothera"), e_str("Antarctica/Syowa"), e_str("Antarctica/Troll"), e_str("Antarctica/Vostok"), e_str("Arctic/Longyearbyen"), e_str("Asia/Aden"), e_str("Asia/Almaty"), e_str("Asia/Amman"), e_str("Asia/Anadyr"), e_str("Asia/Aqtau"), e_str("Asia/Aqtobe"), e_str("Asia/Ashgabat"), e_str("Asia/Atyrau"), e_str("Asia/Baghdad"), e_str("Asia/Bahrain"), e_str("Asia/Baku"), e_str("Asia/Bangkok"), e_str("Asia/Barnaul"), e_str("Asia/Beirut"), e_str("Asia/Bishkek"), e_str("Asia/Brunei"), e_str("Asia/Chita"), e_str("Asia/Colombo"), e_str("Asia/Damascus"), e_str("Asia/Dhaka"), e_str("Asia/Dili"), e_str("Asia/Dubai"), e_str("Asia/Dushanbe"), e_str("Asia/Famagusta"), e_str("Asia/Gaza"), e_str("Asia/Hebron"), e_str("Asia/Ho_Chi_Minh"), e_str("Asia/Hong_Kong"), e_str("Asia/Hovd"), e_str("Asia/Irkutsk"), e_str("Asia/Jakarta"), e_str("Asia/Jayapura"), e_str("Asia/Jerusalem"), e_str("Asia/Kabul"), e_str("Asia/Kamchatka"), e_str("Asia/Karachi"), e_str("Asia/Kathmandu"), e_str("Asia/Khandyga"), e_str("Asia/Kolkata"), e_str("Asia/Krasnoyarsk"), e_str("Asia/Kuala_Lumpur"), e_str("Asia/Kuching"), e_str("Asia/Kuwait"), e_str("Asia/Macau"), e_str("Asia/Magadan"), e_str("Asia/Makassar"), e_str("Asia/Manila"), e_str("Asia/Muscat"), e_str("Asia/Nicosia"), e_str("Asia/Novokuznetsk"), e_str("Asia/Novosibirsk"), e_str("Asia/Omsk"), e_str("Asia/Oral"), e_str("Asia/Phnom_Penh"), e_str("Asia/Pontianak"), e_str("Asia/Pyongyang"), e_str("Asia/Qatar"), e_str("Asia/Qostanay"), e_str("Asia/Qyzylorda"), e_str("Asia/Riyadh"), e_str("Asia/Sakhalin"), e_str("Asia/Samarkand"), e_str("Asia/Seoul"), e_str("Asia/Shanghai"), e_str("Asia/Singapore"), e_str("Asia/Srednekolymsk"), e_str("Asia/Taipei"), e_str("Asia/Tashkent"), e_str("Asia/Tbilisi"), e_str("Asia/Tehran"), e_str("Asia/Thimphu"), e_str("Asia/Tokyo"), e_str("Asia/Tomsk"), e_str("Asia/Ulaanbaatar"), e_str("Asia/Urumqi"), e_str("Asia/Ust-Nera"), e_str("Asia/Vientiane"), e_str("Asia/Vladivostok"), e_str("Asia/Yakutsk"), e_str("Asia/Yangon"), e_str("Asia/Yekaterinburg"), e_str("Asia/Yerevan"), e_str("Atlantic/Azores"), e_str("Atlantic/Bermuda"), e_str("Atlantic/Canary"), e_str("Atlantic/Cape_Verde"), e_str("Atlantic/Faroe"), e_str("Atlantic/Madeira"), e_str("Atlantic/Reykjavik"), e_str("Atlantic/South_Georgia"), e_str("Atlantic/St_Helena"), e_str("Atlantic/Stanley"), e_str("Australia/Adelaide"), e_str("Australia/Brisbane"), e_str("Australia/Broken_Hill"), e_str("Australia/Darwin"), e_str("Australia/Eucla"), e_str("Australia/Hobart"), e_str("Australia/Lindeman"), e_str("Australia/Lord_Howe"), e_str("Australia/Melbourne"), e_str("Australia/Perth"), e_str("Australia/Sydney"), e_str("Europe/Amsterdam"), e_str("Europe/Andorra"), e_str("Europe/Astrakhan"), e_str("Europe/Athens"), e_str("Europe/Belgrade"), e_str("Europe/Berlin"), e_str("Europe/Bratislava"), e_str("Europe/Brussels"), e_str("Europe/Bucharest"), e_str("Europe/Budapest"), e_str("Europe/Busingen"), e_str("Europe/Chisinau"), e_str("Europe/Copenhagen"), e_str("Europe/Dublin"), e_str("Europe/Gibraltar"), e_str("Europe/Guernsey"), e_str("Europe/Helsinki"), e_str("Europe/Isle_of_Man"), e_str("Europe/Istanbul"), e_str("Europe/Jersey"), e_str("Europe/Kaliningrad"), e_str("Europe/Kirov"), e_str("Europe/Kyiv"), e_str("Europe/Lisbon"), e_str("Europe/Ljubljana"), e_str("Europe/London"), e_str("Europe/Luxembourg"), e_str("Europe/Madrid"), e_str("Europe/Malta"), e_str("Europe/Mariehamn"), e_str("Europe/Minsk"), e_str("Europe/Monaco"), e_str("Europe/Moscow"), e_str("Europe/Oslo"), e_str("Europe/Paris"), e_str("Europe/Podgorica"), e_str("Europe/Prague"), e_str("Europe/Riga"), e_str("Europe/Rome"), e_str("Europe/Samara"), e_str("Europe/San_Marino"), e_str("Europe/Sarajevo"), e_str("Europe/Saratov"), e_str("Europe/Simferopol"), e_str("Europe/Skopje"), e_str("Europe/Sofia"), e_str("Europe/Stockholm"), e_str("Europe/Tallinn"), e_str("Europe/Tirane"), e_str("Europe/Ulyanovsk"), e_str("Europe/Vaduz"), e_str("Europe/Vatican"), e_str("Europe/Vienna"), e_str("Europe/Vilnius"), e_str("Europe/Volgograd"), e_str("Europe/Warsaw"), e_str("Europe/Zagreb"), e_str("Europe/Zurich"), e_str("Indian/Antananarivo"), e_str("Indian/Chagos"), e_str("Indian/Christmas"), e_str("Indian/Cocos"), e_str("Indian/Comoro"), e_str("Indian/Kerguelen"), e_str("Indian/Mahe"), e_str("Indian/Maldives"), e_str("Indian/Mauritius"), e_str("Indian/Mayotte"), e_str("Indian/Reunion"), e_str("Pacific/Apia"), e_str("Pacific/Auckland"), e_str("Pacific/Bougainville"), e_str("Pacific/Chatham"), e_str("Pacific/Chuuk"), e_str("Pacific/Easter"), e_str("Pacific/Efate"), e_str("Pacific/Fakaofo"), e_str("Pacific/Fiji"), e_str("Pacific/Funafuti"), e_str("Pacific/Galapagos"), e_str("Pacific/Gambier"), e_str("Pacific/Guadalcanal"), e_str("Pacific/Guam"), e_str("Pacific/Honolulu"), e_str("Pacific/Kanton"), e_str("Pacific/Kiritimati"), e_str("Pacific/Kosrae"), e_str("Pacific/Kwajalein"), e_str("Pacific/Majuro"), e_str("Pacific/Marquesas"), e_str("Pacific/Midway"), e_str("Pacific/Nauru"), e_str("Pacific/Niue"), e_str("Pacific/Norfolk"), e_str("Pacific/Noumea"), e_str("Pacific/Pago_Pago"), e_str("Pacific/Palau"), e_str("Pacific/Pitcairn"), e_str("Pacific/Pohnpei"), e_str("Pacific/Port_Moresby"), e_str("Pacific/Rarotonga"), e_str("Pacific/Saipan"), e_str("Pacific/Tahiti"), e_str("Pacific/Tarawa"), e_str("Pacific/Tongatapu"), e_str("Pacific/Wake"), e_str("Pacific/Wallis"), e_str("UTC")])),
+        s_assign("entryPoint", e_str("DateTimeZone::listIdentifiers")),
+        s_assign("table", e_str("Africa/Abidjan,1,CI;Africa/Accra,1,GH;Africa/Addis_Ababa,1,ET;Africa/Algiers,1,DZ;Africa/Asmara,1,ER;Africa/Asmera,2048,??;Africa/Bamako,1,ML;Africa/Bangui,1,CF;Africa/Banjul,1,GM;Africa/Bissau,1,GW;Africa/Blantyre,1,MW;Africa/Brazzaville,1,CG;Africa/Bujumbura,1,BI;Africa/Cairo,1,EG;Africa/Casablanca,1,MA;Africa/Ceuta,1,ES;Africa/Conakry,1,GN;Africa/Dakar,1,SN;Africa/Dar_es_Salaam,1,TZ;Africa/Djibouti,1,DJ;Africa/Douala,1,CM;Africa/El_Aaiun,1,EH;Africa/Freetown,1,SL;Africa/Gaborone,1,BW;Africa/Harare,1,ZW;Africa/Johannesburg,1,ZA;Africa/Juba,1,SS;Africa/Kampala,1,UG;Africa/Khartoum,1,SD;Africa/Kigali,1,RW;Africa/Kinshasa,1,CD;Africa/Lagos,1,NG;Africa/Libreville,1,GA;Africa/Lome,1,TG;Africa/Luanda,1,AO;Africa/Lubumbashi,1,CD;Africa/Lusaka,1,ZM;Africa/Malabo,1,GQ;Africa/Maputo,1,MZ;Africa/Maseru,1,LS;Africa/Mbabane,1,SZ;Africa/Mogadishu,1,SO;Africa/Monrovia,1,LR;Africa/Nairobi,1,KE;Africa/Ndjamena,1,TD;Africa/Niamey,1,NE;Africa/Nouakchott,1,MR;Africa/Ouagadougou,1,BF;Africa/Porto-Novo,1,BJ;Africa/Sao_Tome,1,ST;Africa/Timbuktu,2048,??;Africa/Tripoli,1,LY;Africa/Tunis,1,TN;Africa/Windhoek,1,NA;America/Adak,2,US;America/Anchorage,2,US;America/Anguilla,2,AI;America/Antigua,2,AG;America/Araguaina,2,BR;America/Argentina/Buenos_Aires,2,AR;America/Argentina/Catamarca,2,AR;America/Argentina/ComodRivadavia,2048,??;America/Argentina/Cordoba,2,AR;America/Argentina/Jujuy,2,AR;America/Argentina/La_Rioja,2,AR;America/Argentina/Mendoza,2,AR;America/Argentina/Rio_Gallegos,2,AR;America/Argentina/Salta,2,AR;America/Argentina/San_Juan,2,AR;America/Argentina/San_Luis,2,AR;America/Argentina/Tucuman,2,AR;America/Argentina/Ushuaia,2,AR;America/Aruba,2,AW;America/Asuncion,2,PY;America/Atikokan,2,CA;America/Atka,2048,??;America/Bahia,2,BR;America/Bahia_Banderas,2,MX;America/Barbados,2,BB;America/Belem,2,BR;America/Belize,2,BZ;America/Blanc-Sablon,2,CA;America/Boa_Vista,2,BR;America/Bogota,2,CO;America/Boise,2,US;America/Buenos_Aires,2048,??;America/Cambridge_Bay,2,CA;America/Campo_Grande,2,BR;America/Cancun,2,MX;America/Caracas,2,VE;America/Catamarca,2048,??;America/Cayenne,2,GF;America/Cayman,2,KY;America/Chicago,2,US;America/Chihuahua,2,MX;America/Ciudad_Juarez,2,MX;America/Coral_Harbour,2048,??;America/Cordoba,2048,??;America/Costa_Rica,2,CR;America/Coyhaique,2,CL;America/Creston,2,CA;America/Cuiaba,2,BR;America/Curacao,2,CW;America/Danmarkshavn,2,GL;America/Dawson,2,CA;America/Dawson_Creek,2,CA;America/Denver,2,US;America/Detroit,2,US;America/Dominica,2,DM;America/Edmonton,2,CA;America/Eirunepe,2,BR;America/El_Salvador,2,SV;America/Ensenada,2048,??;America/Fort_Nelson,2,CA;America/Fort_Wayne,2048,??;America/Fortaleza,2,BR;America/Glace_Bay,2,CA;America/Godthab,2048,??;America/Goose_Bay,2,CA;America/Grand_Turk,2,TC;America/Grenada,2,GD;America/Guadeloupe,2,GP;America/Guatemala,2,GT;America/Guayaquil,2,EC;America/Guyana,2,GY;America/Halifax,2,CA;America/Havana,2,CU;America/Hermosillo,2,MX;America/Indiana/Indianapolis,2,US;America/Indiana/Knox,2,US;America/Indiana/Marengo,2,US;America/Indiana/Petersburg,2,US;America/Indiana/Tell_City,2,US;America/Indiana/Vevay,2,US;America/Indiana/Vincennes,2,US;America/Indiana/Winamac,2,US;America/Indianapolis,2048,??;America/Inuvik,2,CA;America/Iqaluit,2,CA;America/Jamaica,2,JM;America/Jujuy,2048,??;America/Juneau,2,US;America/Kentucky/Louisville,2,US;America/Kentucky/Monticello,2,US;America/Knox_IN,2048,??;America/Kralendijk,2,BQ;America/La_Paz,2,BO;America/Lima,2,PE;America/Los_Angeles,2,US;America/Louisville,2048,??;America/Lower_Princes,2,SX;America/Maceio,2,BR;America/Managua,2,NI;America/Manaus,2,BR;America/Marigot,2,MF;America/Martinique,2,MQ;America/Matamoros,2,MX;America/Mazatlan,2,MX;America/Mendoza,2048,??;America/Menominee,2,US;America/Merida,2,MX;America/Metlakatla,2,US;America/Mexico_City,2,MX;America/Miquelon,2,PM;America/Moncton,2,CA;America/Monterrey,2,MX;America/Montevideo,2,UY;America/Montreal,2048,??;America/Montserrat,2,MS;America/Nassau,2,BS;America/New_York,2,US;America/Nipigon,2048,??;America/Nome,2,US;America/Noronha,2,BR;America/North_Dakota/Beulah,2,US;America/North_Dakota/Center,2,US;America/North_Dakota/New_Salem,2,US;America/Nuuk,2,GL;America/Ojinaga,2,MX;America/Panama,2,PA;America/Pangnirtung,2048,??;America/Paramaribo,2,SR;America/Phoenix,2,US;America/Port-au-Prince,2,HT;America/Port_of_Spain,2,TT;America/Porto_Acre,2048,??;America/Porto_Velho,2,BR;America/Puerto_Rico,2,PR;America/Punta_Arenas,2,CL;America/Rainy_River,2048,??;America/Rankin_Inlet,2,CA;America/Recife,2,BR;America/Regina,2,CA;America/Resolute,2,CA;America/Rio_Branco,2,BR;America/Rosario,2048,??;America/Santa_Isabel,2048,??;America/Santarem,2,BR;America/Santiago,2,CL;America/Santo_Domingo,2,DO;America/Sao_Paulo,2,BR;America/Scoresbysund,2,GL;America/Shiprock,2048,??;America/Sitka,2,US;America/St_Barthelemy,2,BL;America/St_Johns,2,CA;America/St_Kitts,2,KN;America/St_Lucia,2,LC;America/St_Thomas,2,VI;America/St_Vincent,2,VC;America/Swift_Current,2,CA;America/Tegucigalpa,2,HN;America/Thule,2,GL;America/Thunder_Bay,2048,??;America/Tijuana,2,MX;America/Toronto,2,CA;America/Tortola,2,VG;America/Vancouver,2,CA;America/Virgin,2048,??;America/Whitehorse,2,CA;America/Winnipeg,2,CA;America/Yakutat,2,US;America/Yellowknife,2048,??;Antarctica/Casey,4,AQ;Antarctica/Davis,4,AQ;Antarctica/DumontDUrville,4,AQ;Antarctica/Macquarie,4,AU;Antarctica/Mawson,4,AQ;Antarctica/McMurdo,4,AQ;Antarctica/Palmer,4,AQ;Antarctica/Rothera,4,AQ;Antarctica/South_Pole,2048,??;Antarctica/Syowa,4,AQ;Antarctica/Troll,4,AQ;Antarctica/Vostok,4,AQ;Arctic/Longyearbyen,8,SJ;Asia/Aden,16,YE;Asia/Almaty,16,KZ;Asia/Amman,16,JO;Asia/Anadyr,16,RU;Asia/Aqtau,16,KZ;Asia/Aqtobe,16,KZ;Asia/Ashgabat,16,TM;Asia/Ashkhabad,2048,??;Asia/Atyrau,16,KZ;Asia/Baghdad,16,IQ;Asia/Bahrain,16,BH;Asia/Baku,16,AZ;Asia/Bangkok,16,TH;Asia/Barnaul,16,RU;Asia/Beirut,16,LB;Asia/Bishkek,16,KG;Asia/Brunei,16,BN;Asia/Calcutta,2048,??;Asia/Chita,16,RU;Asia/Choibalsan,2048,??;Asia/Chongqing,2048,??;Asia/Chungking,2048,??;Asia/Colombo,16,LK;Asia/Dacca,2048,??;Asia/Damascus,16,SY;Asia/Dhaka,16,BD;Asia/Dili,16,TL;Asia/Dubai,16,AE;Asia/Dushanbe,16,TJ;Asia/Famagusta,16,CY;Asia/Gaza,16,PS;Asia/Harbin,2048,??;Asia/Hebron,16,PS;Asia/Ho_Chi_Minh,16,VN;Asia/Hong_Kong,16,HK;Asia/Hovd,16,MN;Asia/Irkutsk,16,RU;Asia/Istanbul,2048,??;Asia/Jakarta,16,ID;Asia/Jayapura,16,ID;Asia/Jerusalem,16,IL;Asia/Kabul,16,AF;Asia/Kamchatka,16,RU;Asia/Karachi,16,PK;Asia/Kashgar,2048,??;Asia/Kathmandu,16,NP;Asia/Katmandu,2048,??;Asia/Khandyga,16,RU;Asia/Kolkata,16,IN;Asia/Krasnoyarsk,16,RU;Asia/Kuala_Lumpur,16,MY;Asia/Kuching,16,MY;Asia/Kuwait,16,KW;Asia/Macao,2048,??;Asia/Macau,16,MO;Asia/Magadan,16,RU;Asia/Makassar,16,ID;Asia/Manila,16,PH;Asia/Muscat,16,OM;Asia/Nicosia,16,CY;Asia/Novokuznetsk,16,RU;Asia/Novosibirsk,16,RU;Asia/Omsk,16,RU;Asia/Oral,16,KZ;Asia/Phnom_Penh,16,KH;Asia/Pontianak,16,ID;Asia/Pyongyang,16,KP;Asia/Qatar,16,QA;Asia/Qostanay,16,KZ;Asia/Qyzylorda,16,KZ;Asia/Rangoon,2048,??;Asia/Riyadh,16,SA;Asia/Saigon,2048,??;Asia/Sakhalin,16,RU;Asia/Samarkand,16,UZ;Asia/Seoul,16,KR;Asia/Shanghai,16,CN;Asia/Singapore,16,SG;Asia/Srednekolymsk,16,RU;Asia/Taipei,16,TW;Asia/Tashkent,16,UZ;Asia/Tbilisi,16,GE;Asia/Tehran,16,IR;Asia/Tel_Aviv,2048,??;Asia/Thimbu,2048,??;Asia/Thimphu,16,BT;Asia/Tokyo,16,JP;Asia/Tomsk,16,RU;Asia/Ujung_Pandang,2048,??;Asia/Ulaanbaatar,16,MN;Asia/Ulan_Bator,2048,??;Asia/Urumqi,16,CN;Asia/Ust-Nera,16,RU;Asia/Vientiane,16,LA;Asia/Vladivostok,16,RU;Asia/Yakutsk,16,RU;Asia/Yangon,16,MM;Asia/Yekaterinburg,16,RU;Asia/Yerevan,16,AM;Atlantic/Azores,32,PT;Atlantic/Bermuda,32,BM;Atlantic/Canary,32,ES;Atlantic/Cape_Verde,32,CV;Atlantic/Faeroe,2048,??;Atlantic/Faroe,32,FO;Atlantic/Jan_Mayen,2048,??;Atlantic/Madeira,32,PT;Atlantic/Reykjavik,32,IS;Atlantic/South_Georgia,32,GS;Atlantic/St_Helena,32,SH;Atlantic/Stanley,32,FK;Australia/ACT,2048,??;Australia/Adelaide,64,AU;Australia/Brisbane,64,AU;Australia/Broken_Hill,64,AU;Australia/Canberra,2048,??;Australia/Currie,2048,??;Australia/Darwin,64,AU;Australia/Eucla,64,AU;Australia/Hobart,64,AU;Australia/LHI,2048,??;Australia/Lindeman,64,AU;Australia/Lord_Howe,64,AU;Australia/Melbourne,64,AU;Australia/North,2048,??;Australia/NSW,2048,??;Australia/Perth,64,AU;Australia/Queensland,2048,??;Australia/South,2048,??;Australia/Sydney,64,AU;Australia/Tasmania,2048,??;Australia/Victoria,2048,??;Australia/West,2048,??;Australia/Yancowinna,2048,??;Brazil/Acre,2048,??;Brazil/DeNoronha,2048,??;Brazil/East,2048,??;Brazil/West,2048,??;Canada/Atlantic,2048,??;Canada/Central,2048,??;Canada/Eastern,2048,??;Canada/Mountain,2048,??;Canada/Newfoundland,2048,??;Canada/Pacific,2048,??;Canada/Saskatchewan,2048,??;Canada/Yukon,2048,??;CET,2048,??;Chile/Continental,2048,??;Chile/EasterIsland,2048,??;CST6CDT,2048,??;Cuba,2048,??;EET,2048,??;Egypt,2048,??;Eire,2048,??;EST,2048,??;EST5EDT,2048,??;Etc/GMT,2048,??;Etc/GMT+0,2048,??;Etc/GMT+1,2048,??;Etc/GMT+10,2048,??;Etc/GMT+11,2048,??;Etc/GMT+12,2048,??;Etc/GMT+2,2048,??;Etc/GMT+3,2048,??;Etc/GMT+4,2048,??;Etc/GMT+5,2048,??;Etc/GMT+6,2048,??;Etc/GMT+7,2048,??;Etc/GMT+8,2048,??;Etc/GMT+9,2048,??;Etc/GMT-0,2048,??;Etc/GMT-1,2048,??;Etc/GMT-10,2048,??;Etc/GMT-11,2048,??;Etc/GMT-12,2048,??;Etc/GMT-13,2048,??;Etc/GMT-14,2048,??;Etc/GMT-2,2048,??;Etc/GMT-3,2048,??;Etc/GMT-4,2048,??;Etc/GMT-5,2048,??;Etc/GMT-6,2048,??;Etc/GMT-7,2048,??;Etc/GMT-8,2048,??;Etc/GMT-9,2048,??;Etc/GMT0,2048,??;Etc/Greenwich,2048,??;Etc/UCT,2048,??;Etc/Universal,2048,??;Etc/UTC,2048,??;Etc/Zulu,2048,??;Europe/Amsterdam,128,NL;Europe/Andorra,128,AD;Europe/Astrakhan,128,RU;Europe/Athens,128,GR;Europe/Belfast,2048,??;Europe/Belgrade,128,RS;Europe/Berlin,128,DE;Europe/Bratislava,128,SK;Europe/Brussels,128,BE;Europe/Bucharest,128,RO;Europe/Budapest,128,HU;Europe/Busingen,128,DE;Europe/Chisinau,128,MD;Europe/Copenhagen,128,DK;Europe/Dublin,128,IE;Europe/Gibraltar,128,GI;Europe/Guernsey,128,GG;Europe/Helsinki,128,FI;Europe/Isle_of_Man,128,IM;Europe/Istanbul,128,TR;Europe/Jersey,128,JE;Europe/Kaliningrad,128,RU;Europe/Kiev,2048,??;Europe/Kirov,128,RU;Europe/Kyiv,128,UA;Europe/Lisbon,128,PT;Europe/Ljubljana,128,SI;Europe/London,128,GB;Europe/Luxembourg,128,LU;Europe/Madrid,128,ES;Europe/Malta,128,MT;Europe/Mariehamn,128,AX;Europe/Minsk,128,BY;Europe/Monaco,128,MC;Europe/Moscow,128,RU;Europe/Nicosia,2048,??;Europe/Oslo,128,NO;Europe/Paris,128,FR;Europe/Podgorica,128,ME;Europe/Prague,128,CZ;Europe/Riga,128,LV;Europe/Rome,128,IT;Europe/Samara,128,RU;Europe/San_Marino,128,SM;Europe/Sarajevo,128,BA;Europe/Saratov,128,RU;Europe/Simferopol,128,UA;Europe/Skopje,128,MK;Europe/Sofia,128,BG;Europe/Stockholm,128,SE;Europe/Tallinn,128,EE;Europe/Tirane,128,AL;Europe/Tiraspol,2048,??;Europe/Ulyanovsk,128,RU;Europe/Uzhgorod,2048,??;Europe/Vaduz,128,LI;Europe/Vatican,128,VA;Europe/Vienna,128,AT;Europe/Vilnius,128,LT;Europe/Volgograd,128,RU;Europe/Warsaw,128,PL;Europe/Zagreb,128,HR;Europe/Zaporozhye,2048,??;Europe/Zurich,128,CH;Factory,2048,??;GB,2048,??;GB-Eire,2048,??;GMT,2048,??;GMT+0,2048,??;GMT-0,2048,??;GMT0,2048,??;Greenwich,2048,??;Hongkong,2048,??;HST,2048,??;Iceland,2048,??;Indian/Antananarivo,256,MG;Indian/Chagos,256,IO;Indian/Christmas,256,CX;Indian/Cocos,256,CC;Indian/Comoro,256,KM;Indian/Kerguelen,256,TF;Indian/Mahe,256,SC;Indian/Maldives,256,MV;Indian/Mauritius,256,MU;Indian/Mayotte,256,YT;Indian/Reunion,256,RE;Iran,2048,??;Israel,2048,??;Jamaica,2048,??;Japan,2048,??;Kwajalein,2048,??;Libya,2048,??;MET,2048,??;Mexico/BajaNorte,2048,??;Mexico/BajaSur,2048,??;Mexico/General,2048,??;MST,2048,??;MST7MDT,2048,??;Navajo,2048,??;NZ,2048,??;NZ-CHAT,2048,??;Pacific/Apia,512,WS;Pacific/Auckland,512,NZ;Pacific/Bougainville,512,PG;Pacific/Chatham,512,NZ;Pacific/Chuuk,512,FM;Pacific/Easter,512,CL;Pacific/Efate,512,VU;Pacific/Enderbury,2048,??;Pacific/Fakaofo,512,TK;Pacific/Fiji,512,FJ;Pacific/Funafuti,512,TV;Pacific/Galapagos,512,EC;Pacific/Gambier,512,PF;Pacific/Guadalcanal,512,SB;Pacific/Guam,512,GU;Pacific/Honolulu,512,US;Pacific/Johnston,2048,??;Pacific/Kanton,512,KI;Pacific/Kiritimati,512,KI;Pacific/Kosrae,512,FM;Pacific/Kwajalein,512,MH;Pacific/Majuro,512,MH;Pacific/Marquesas,512,PF;Pacific/Midway,512,UM;Pacific/Nauru,512,NR;Pacific/Niue,512,NU;Pacific/Norfolk,512,NF;Pacific/Noumea,512,NC;Pacific/Pago_Pago,512,AS;Pacific/Palau,512,PW;Pacific/Pitcairn,512,PN;Pacific/Pohnpei,512,FM;Pacific/Ponape,2048,??;Pacific/Port_Moresby,512,PG;Pacific/Rarotonga,512,CK;Pacific/Saipan,512,MP;Pacific/Samoa,2048,??;Pacific/Tahiti,512,PF;Pacific/Tarawa,512,KI;Pacific/Tongatapu,512,TO;Pacific/Truk,2048,??;Pacific/Wake,512,UM;Pacific/Wallis,512,WF;Pacific/Yap,2048,??;Poland,2048,??;Portugal,2048,??;PRC,2048,??;PST8PDT,2048,??;ROC,2048,??;ROK,2048,??;Singapore,2048,??;Turkey,2048,??;UCT,2048,??;Universal,2048,??;US/Alaska,2048,??;US/Aleutian,2048,??;US/Arizona,2048,??;US/Central,2048,??;US/East-Indiana,2048,??;US/Eastern,2048,??;US/Hawaii,2048,??;US/Indiana-Starke,2048,??;US/Michigan,2048,??;US/Mountain,2048,??;US/Pacific,2048,??;US/Samoa,2048,??;UTC,1024,??;W-SU,2048,??;WET,2048,??;Zulu,2048,??")),
+        s_assign("rows", e_call("explode", vec![e_str(";"), e_var("table")])),
+        s_assign("result", e_array(vec![])),
+        s_assign("perCountry", e_binop(e_var("timezoneGroup"), BinOp::StrictEq, e_int(4096))),
+        s_if(
+            e_binop(e_var("perCountry"), BinOp::And, e_binop(e_call("strlen", vec![e_cast(CastType::String, e_var("countryCode"))]), BinOp::StrictNotEq, e_int(2))),
+            vec![
+                s_throw(e_new("ValueError", vec![e_binop(e_var("entryPoint"), BinOp::Concat, e_str("(): Argument #2 ($countryCode) must be a two-letter ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is DateTimeZone::PER_COUNTRY"))])),
+            ],
+            vec![],
+            None,
+        ),
+        s_foreach(e_var("rows"), None, "row", vec![
+            s_assign("f", e_call("explode", vec![e_str(","), e_var("row")])),
+            s_assign("name", e_index(e_var("f"), e_int(0))),
+            s_if(
+                e_var("perCountry"),
+                vec![
+                    s_if(
+                        e_binop(e_index(e_var("f"), e_int(2)), BinOp::StrictEq, e_var("countryCode")),
+                        vec![
+                            s_array_push("result", e_var("name")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ],
+                vec![],
+                Some(vec![
+                s_assign("mask", e_cast(CastType::Int, e_index(e_var("f"), e_int(1)))),
+                s_if(
+                    e_binop(e_var("timezoneGroup"), BinOp::StrictEq, e_int(4095)),
+                    vec![
+                        s_array_push("result", e_var("name")),
+                    ],
+                    vec![],
+                    Some(vec![
+                    s_if(
+                        e_binop(e_binop(e_var("mask"), BinOp::StrictNotEq, e_int(2048)), BinOp::And, e_binop(e_binop(e_var("mask"), BinOp::BitAnd, e_var("timezoneGroup")), BinOp::NotEq, e_int(0))),
+                        vec![
+                            s_array_push("result", e_var("name")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+                ),
+            ]),
+            ),
+        ]),
+        s_return(e_var("result")),
     ])
 }
 
 /// `DateTimeZone::__elephc_compare` — transcribed method builder.
-fn decl_class_datetimezone_method_6_elephc_compare() -> MethodBuilder {
+fn decl_class_datetimezone_method_8_elephc_compare() -> MethodBuilder {
 method("__elephc_compare")
+    .private()
     .final_()
     .param("other", t_class("DateTimeZone"))
     .returns(TypeExpr::Int)
@@ -10110,7 +10925,7 @@ method("__elephc_compare")
 }
 
 /// `DateTimeZone::__elephc_begin_argument_array` — transcribed method builder.
-fn decl_class_datetimezone_method_7_elephc_begin_argument_array() -> MethodBuilder {
+fn decl_class_datetimezone_method_9_elephc_begin_argument_array() -> MethodBuilder {
 method("__elephc_begin_argument_array")
     .private()
     .returns(TypeExpr::Void)
@@ -10121,7 +10936,7 @@ method("__elephc_begin_argument_array")
 }
 
 /// `DateTimeZone::__elephc_append_one_argument` — transcribed method builder.
-fn decl_class_datetimezone_method_8_elephc_append_one_argument() -> MethodBuilder {
+fn decl_class_datetimezone_method_10_elephc_append_one_argument() -> MethodBuilder {
 method("__elephc_append_one_argument")
     .private()
     .param("key", t_mixed())
@@ -10206,7 +11021,7 @@ method("__elephc_append_one_argument")
 }
 
 /// `DateTimeZone::__elephc_append_argument_chunk` — transcribed method builder.
-fn decl_class_datetimezone_method_9_elephc_append_argument_chunk() -> MethodBuilder {
+fn decl_class_datetimezone_method_11_elephc_append_argument_chunk() -> MethodBuilder {
 method("__elephc_append_argument_chunk")
     .private()
     .param("kind", TypeExpr::Int)
@@ -10247,7 +11062,7 @@ method("__elephc_append_argument_chunk")
 }
 
 /// `DateTimeZone::__elephc_finish_argument_array` — transcribed method builder.
-fn decl_class_datetimezone_method_10_elephc_finish_argument_array() -> MethodBuilder {
+fn decl_class_datetimezone_method_12_elephc_finish_argument_array() -> MethodBuilder {
 method("__elephc_finish_argument_array")
     .private()
     .returns(TypeExpr::Void)
@@ -10302,25 +11117,18 @@ method("__elephc_finish_argument_array")
 }
 
 /// `DateTimeZone::__wakeup` — transcribed method builder.
-fn decl_class_datetimezone_method_11_wakeup() -> MethodBuilder {
+fn decl_class_datetimezone_method_13_wakeup() -> MethodBuilder {
 method("__wakeup")
     .attr("\\Deprecated", vec![e_named_arg("since", e_str("8.5")), e_named_arg("message", e_str("this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()"))])
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_call("__elephc_diag_warning", vec![e_str("Deprecated: Method DateTimeZone::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n"), e_int(0), e_const("E_DEPRECATED")])),
-        s_if(
-            e_binop(e_str("DateTimeZone"), BinOp::StrictNotEq, e_str("DateInterval")),
-            vec![
-                s_throw(e_new("Error", vec![e_str("Invalid serialization data for DateTimeZone object")])),
-            ],
-            vec![],
-            None,
-        ),
+        s_expr(e_method_call(e_this(), "__unserialize", vec![e_call("get_object_vars", vec![e_this()])])),
     ])
 }
 
 /// `DateTimeZone::__serialize` — transcribed method builder.
-fn decl_class_datetimezone_method_12_serialize() -> MethodBuilder {
+fn decl_class_datetimezone_method_14_serialize() -> MethodBuilder {
 method("__serialize")
     .returns(t_array())
     .body_exact(vec![
@@ -10330,7 +11138,7 @@ method("__serialize")
 }
 
 /// `DateTimeZone::__unserialize` — transcribed method builder.
-fn decl_class_datetimezone_method_13_unserialize() -> MethodBuilder {
+fn decl_class_datetimezone_method_15_unserialize() -> MethodBuilder {
 method("__unserialize")
     .param("data", t_array())
     .returns(TypeExpr::Void)
@@ -10354,11 +11162,31 @@ method("__unserialize")
         ),
         s_prop_assign(e_this(), "name", e_var("__normalized")),
         s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
+        s_assign("data", e_method_call(e_this(), "__elephc_restore_date_properties", vec![e_var("data")])),
+        s_foreach(e_var("data"), Some("__property"), "__value", vec![
+            s_if(
+                e_binop(e_binop(e_call("is_string", vec![e_var("__property")]), BinOp::And, e_binop(e_call("strlen", vec![e_var("__property")]), BinOp::Gt, e_int(3))), BinOp::And, e_binop(e_call("substr", vec![e_var("__property"), e_int(0), e_int(3)]), BinOp::StrictEq, e_str("\0*\0"))),
+                vec![
+                    s_assign("__property", e_call("substr", vec![e_var("__property"), e_int(3)])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_binop(e_not(e_call("is_string", vec![e_var("__property")])), BinOp::Or, e_binop(e_binop(e_call("strlen", vec![e_var("__property")]), BinOp::Gt, e_int(0)), BinOp::And, e_binop(e_index(e_var("__property"), e_int(0)), BinOp::StrictEq, e_str("\0")))), BinOp::Or, e_call("in_array", vec![e_var("__property"), e_array(vec![e_str("timezone_type"), e_str("timezone")]), e_bool(true)])),
+                vec![
+                    s_continue(1),
+                ],
+                vec![],
+                None,
+            ),
+            s_expr(e_assign(e_dyn_prop(e_this(), e_var("__property")), e_var("__value"))),
+        ]),
     ])
 }
 
 /// `DateTimeZone::__set_state` — transcribed method builder.
-fn decl_class_datetimezone_method_14_set_state() -> MethodBuilder {
+fn decl_class_datetimezone_method_16_set_state() -> MethodBuilder {
 method("__set_state")
     .static_()
     .param("array", t_array())
@@ -10386,8 +11214,9 @@ method("__set_state")
 }
 
 /// `DateTimeZone::__elephc_debug_dump` — transcribed method builder.
-fn decl_class_datetimezone_method_15_elephc_debug_dump() -> MethodBuilder {
+fn decl_class_datetimezone_method_17_elephc_debug_dump() -> MethodBuilder {
 method("__elephc_debug_dump")
+    .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -10409,8 +11238,9 @@ method("__elephc_debug_dump")
 }
 
 /// `DateTimeZone::__elephc_print_r_dump` — transcribed method builder.
-fn decl_class_datetimezone_method_16_elephc_print_r_dump() -> MethodBuilder {
+fn decl_class_datetimezone_method_18_elephc_print_r_dump() -> MethodBuilder {
 method("__elephc_print_r_dump")
+    .private()
     .returns(TypeExpr::Void)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
@@ -10423,7 +11253,7 @@ method("__elephc_print_r_dump")
 }
 
 /// `DateTimeZone::getLocation` — transcribed method builder.
-fn decl_class_datetimezone_method_17_getlocation() -> MethodBuilder {
+fn decl_class_datetimezone_method_19_getlocation() -> MethodBuilder {
 method("getLocation")
     .returns(t_mixed())
     .body_exact(vec![
@@ -10443,14 +11273,14 @@ method("getLocation")
 }
 
 /// `DateTimeZone::getTransitions` — transcribed method builder.
-fn decl_class_datetimezone_method_18_gettransitions() -> MethodBuilder {
+fn decl_class_datetimezone_method_20_gettransitions() -> MethodBuilder {
 method("getTransitions")
     .param_default("timestampBegin", TypeExpr::Int, e_int(-9223372036854775808))
     .param_default("timestampEnd", TypeExpr::Int, e_int(2147483647))
     .returns(t_mixed())
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
-        s_assign("raw", e_call("elephc_tz_transitions", vec![e_this_prop("name")])),
+        s_assign("raw", e_call("elephc_tz_transitions_range", vec![e_this_prop("name"), e_var("timestampBegin"), e_var("timestampEnd")])),
         s_if(
             e_binop(e_var("raw"), BinOp::StrictEq, e_str("")),
             vec![
@@ -10460,64 +11290,17 @@ method("getTransitions")
             None,
         ),
         s_assign("lines", e_call("explode", vec![e_str("\n"), e_var("raw")])),
-        s_assign("lineCount", e_call("count", vec![e_var("lines")])),
         s_assign("result", e_array(vec![])),
-        s_assign("resultIndex", e_int(0)),
-        s_assign("activeFound", e_bool(false)),
-        s_assign("activeTs", e_int(0)),
-        s_assign("activeOffset", e_int(0)),
-        s_assign("activeDst", e_bool(false)),
-        s_assign("activeAbbr", e_str("")),
-        s_assign("activeTime", e_str("")),
-        s_assign("i", e_int(0)),
-        s_while(e_binop(e_var("i"), BinOp::Lt, e_var("lineCount")), vec![
-            s_assign("g", e_call("explode", vec![e_str("\t"), e_index(e_var("lines"), e_var("i"))])),
-            s_assign("ts", e_cast(CastType::Int, e_index(e_var("g"), e_int(0)))),
-            s_if(
-                e_binop(e_var("ts"), BinOp::LtEq, e_var("timestampBegin")),
-                vec![
-                    s_assign("activeFound", e_bool(true)),
-                    s_assign("activeTs", e_var("ts")),
-                    s_assign("activeOffset", e_cast(CastType::Int, e_index(e_var("g"), e_int(1)))),
-                    s_assign("activeDst", e_binop(e_index(e_var("g"), e_int(2)), BinOp::StrictEq, e_str("1"))),
-                    s_assign("activeAbbr", e_index(e_var("g"), e_int(3))),
-                    s_assign("activeTime", e_index(e_var("g"), e_int(4))),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("i", e_call("intval", vec![e_binop(e_var("i"), BinOp::Add, e_int(1))])),
+        s_foreach(e_var("lines"), None, "line", vec![
+            s_assign("g", e_call("explode", vec![e_str("\t"), e_var("line")])),
+            s_array_push("result", e_array_assoc(vec![(e_str("ts"), e_cast(CastType::Int, e_index(e_var("g"), e_int(0)))), (e_str("time"), e_index(e_var("g"), e_int(4))), (e_str("offset"), e_cast(CastType::Int, e_index(e_var("g"), e_int(1)))), (e_str("isdst"), e_binop(e_index(e_var("g"), e_int(2)), BinOp::StrictEq, e_str("1"))), (e_str("abbr"), e_index(e_var("g"), e_int(3)))])),
         ]),
-        s_if(
-            e_var("activeFound"),
-            vec![
-                s_array_assign("result", e_var("resultIndex"), e_array_assoc(vec![(e_str("ts"), e_ternary(e_binop(e_var("timestampBegin"), BinOp::LtEq, e_var("activeTs")), e_var("activeTs"), e_var("timestampBegin"))), (e_str("time"), e_ternary(e_binop(e_var("timestampBegin"), BinOp::LtEq, e_var("activeTs")), e_var("activeTime"), e_call("gmdate", vec![e_str("Y-m-d\\TH:i:sP"), e_var("timestampBegin")]))), (e_str("offset"), e_var("activeOffset")), (e_str("isdst"), e_var("activeDst")), (e_str("abbr"), e_var("activeAbbr"))])),
-                s_assign("resultIndex", e_call("intval", vec![e_binop(e_var("resultIndex"), BinOp::Add, e_int(1))])),
-            ],
-            vec![],
-            None,
-        ),
-        s_assign("i", e_int(0)),
-        s_while(e_binop(e_var("i"), BinOp::Lt, e_var("lineCount")), vec![
-            s_assign("g", e_call("explode", vec![e_str("\t"), e_index(e_var("lines"), e_var("i"))])),
-            s_assign("ts", e_cast(CastType::Int, e_index(e_var("g"), e_int(0)))),
-            s_if(
-                e_binop(e_binop(e_var("ts"), BinOp::Gt, e_var("timestampBegin")), BinOp::And, e_binop(e_var("ts"), BinOp::LtEq, e_var("timestampEnd"))),
-                vec![
-                    s_array_assign("result", e_var("resultIndex"), e_array_assoc(vec![(e_str("ts"), e_var("ts")), (e_str("time"), e_index(e_var("g"), e_int(4))), (e_str("offset"), e_cast(CastType::Int, e_index(e_var("g"), e_int(1)))), (e_str("isdst"), e_binop(e_index(e_var("g"), e_int(2)), BinOp::StrictEq, e_str("1"))), (e_str("abbr"), e_index(e_var("g"), e_int(3)))])),
-                    s_assign("resultIndex", e_call("intval", vec![e_binop(e_var("resultIndex"), BinOp::Add, e_int(1))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("i", e_call("intval", vec![e_binop(e_var("i"), BinOp::Add, e_int(1))])),
-        ]),
-        s_return(e_call("array_slice", vec![e_var("result"), e_int(0), e_var("resultIndex")])),
+        s_return(e_var("result")),
     ])
 }
 
 /// `DateTimeZone::listAbbreviations` — transcribed method builder.
-fn decl_class_datetimezone_method_19_listabbreviations() -> MethodBuilder {
+fn decl_class_datetimezone_method_21_listabbreviations() -> MethodBuilder {
 method("listAbbreviations")
     .static_()
     .returns(t_array())
@@ -10542,8 +11325,9 @@ method("listAbbreviations")
 }
 
 /// `DateTimeZone::__elephc_assert_initialized` — transcribed method builder.
-fn decl_class_datetimezone_method_20_elephc_assert_initialized() -> MethodBuilder {
+fn decl_class_datetimezone_method_22_elephc_assert_initialized() -> MethodBuilder {
 method("__elephc_assert_initialized")
+    .private()
     .final_()
     .returns(TypeExpr::Void)
     .body_exact(vec![
@@ -10585,23 +11369,25 @@ fn decl_class_datetimezone() -> Stmt {
         .method(decl_class_datetimezone_method_1_construct())
         .method(decl_class_datetimezone_method_2_elephc_timezone_open())
         .method(decl_class_datetimezone_method_3_getname())
-        .method(decl_class_datetimezone_method_4_getoffset())
-        .method(decl_class_datetimezone_method_5_listidentifiers())
-        .method(decl_class_datetimezone_method_6_elephc_compare())
-        .method(decl_class_datetimezone_method_7_elephc_begin_argument_array())
-        .method(decl_class_datetimezone_method_8_elephc_append_one_argument())
-        .method(decl_class_datetimezone_method_9_elephc_append_argument_chunk())
-        .method(decl_class_datetimezone_method_10_elephc_finish_argument_array())
-        .method(decl_class_datetimezone_method_11_wakeup())
-        .method(decl_class_datetimezone_method_12_serialize())
-        .method(decl_class_datetimezone_method_13_unserialize())
-        .method(decl_class_datetimezone_method_14_set_state())
-        .method(decl_class_datetimezone_method_15_elephc_debug_dump())
-        .method(decl_class_datetimezone_method_16_elephc_print_r_dump())
-        .method(decl_class_datetimezone_method_17_getlocation())
-        .method(decl_class_datetimezone_method_18_gettransitions())
-        .method(decl_class_datetimezone_method_19_listabbreviations())
-        .method(decl_class_datetimezone_method_20_elephc_assert_initialized())
+        .method(decl_class_datetimezone_method_4_elephc_export_name_instance())
+        .method(decl_class_datetimezone_method_5_elephc_export_name())
+        .method(decl_class_datetimezone_method_6_getoffset())
+        .method(decl_class_datetimezone_method_7_listidentifiers())
+        .method(decl_class_datetimezone_method_8_elephc_compare())
+        .method(decl_class_datetimezone_method_9_elephc_begin_argument_array())
+        .method(decl_class_datetimezone_method_10_elephc_append_one_argument())
+        .method(decl_class_datetimezone_method_11_elephc_append_argument_chunk())
+        .method(decl_class_datetimezone_method_12_elephc_finish_argument_array())
+        .method(decl_class_datetimezone_method_13_wakeup())
+        .method(decl_class_datetimezone_method_14_serialize())
+        .method(decl_class_datetimezone_method_15_unserialize())
+        .method(decl_class_datetimezone_method_16_set_state())
+        .method(decl_class_datetimezone_method_17_elephc_debug_dump())
+        .method(decl_class_datetimezone_method_18_elephc_print_r_dump())
+        .method(decl_class_datetimezone_method_19_getlocation())
+        .method(decl_class_datetimezone_method_20_gettransitions())
+        .method(decl_class_datetimezone_method_21_listabbreviations())
+        .method(decl_class_datetimezone_method_22_elephc_assert_initialized())
         .build()
 }
 

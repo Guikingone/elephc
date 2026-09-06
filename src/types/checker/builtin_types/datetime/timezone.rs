@@ -78,19 +78,9 @@ pub(super) fn datetime_zone_get_offset() -> ClassMethod {
 }
 
 /// `DateTimeZone::listIdentifiers(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array`
-/// — returns the embedded IANA timezone identifier list. The body is a parsed `return [ ... ];`
-/// over the identifiers in `timezone_ids::TIMEZONE_IDENTIFIERS_ARRAY` (captured from PHP).
-///
-/// The `$timezoneGroup`/`$countryCode` filter parameters are declared for signature parity (so
-/// reflection reports PHP's real signature), but the body returns the full unfiltered list: real
-/// calls are desugared by the name resolver to the injected `__elephc_list_identifiers()` free
-/// function (which performs the group/country filter), so this body only runs via reflection
-/// invocation, where filtering is best-effort.
+/// — applies the same direct-AST group/country filter as the resolver prelude.
 pub(super) fn datetime_zone_list_identifiers() -> ClassMethod {
-    // Built straight from the identifier slice. This body used to be assembled as PHP text and
-    // handed back to the tokenizer and parser — 419 string literals formatted into a `return [];`
-    // only to be read back into the same array literal this builds directly.
-    let body = super::bodies::list_identifiers(super::timezone_ids::TIMEZONE_IDENTIFIERS);
+    let body = super::bodies::list_identifiers();
     ClassMethod {
         name: "listIdentifiers".to_string(),
         visibility: Visibility::Public,
@@ -118,7 +108,7 @@ pub(super) fn datetime_zone_list_identifiers() -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("array"))),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -150,61 +140,23 @@ return [
 /// Test-only: the compilation path builds this body; the oracle checks the two agree.
 #[cfg(test)]
 pub(super) const GET_TRANSITIONS_SRC: &str = r#"<?php
-$raw = elephc_tz_transitions($this->name);
+$raw = elephc_tz_transitions_range($this->name, $timestampBegin, $timestampEnd);
 if ($raw === "") {
     return false;
 }
 $lines = explode("\n", $raw);
-$lineCount = count($lines);
 $result = [];
-$resultIndex = 0;
-$activeFound = false;
-$activeTs = 0;
-$activeOffset = 0;
-$activeDst = false;
-$activeAbbr = "";
-$activeTime = "";
-$i = 0;
-while ($i < $lineCount) {
-    $g = explode("\t", $lines[$i]);
-    $ts = (int) $g[0];
-    if ($ts <= $timestampBegin) {
-        $activeFound = true;
-        $activeTs = $ts;
-        $activeOffset = (int) $g[1];
-        $activeDst = $g[2] === "1";
-        $activeAbbr = $g[3];
-        $activeTime = $g[4];
-    }
-    $i = intval($i + 1);
-}
-if ($activeFound) {
-    $result[$resultIndex] = [
-        "ts" => $timestampBegin <= $activeTs ? $activeTs : $timestampBegin,
-        "time" => $timestampBegin <= $activeTs ? $activeTime : gmdate("Y-m-d\TH:i:sP", $timestampBegin),
-        "offset" => $activeOffset,
-        "isdst" => $activeDst,
-        "abbr" => $activeAbbr,
+foreach ($lines as $line) {
+    $g = explode("\t", $line);
+    $result[] = [
+        "ts" => (int) $g[0],
+        "time" => $g[4],
+        "offset" => (int) $g[1],
+        "isdst" => $g[2] === "1",
+        "abbr" => $g[3],
     ];
-    $resultIndex = intval($resultIndex + 1);
 }
-$i = 0;
-while ($i < $lineCount) {
-    $g = explode("\t", $lines[$i]);
-    $ts = (int) $g[0];
-    if ($ts > $timestampBegin && $ts <= $timestampEnd) {
-        $result[$resultIndex] = [
-            "ts" => $ts,
-            "time" => $g[4],
-            "offset" => (int) $g[1],
-            "isdst" => $g[2] === "1",
-            "abbr" => $g[3],
-        ];
-        $resultIndex = intval($resultIndex + 1);
-    }
-    $i = intval($i + 1);
-}
-return array_slice($result, 0, $resultIndex);
+return $result;
 "#;
 
 /// Test-only PHP oracle for the direct AST abbreviation-list body.
@@ -247,16 +199,14 @@ pub(super) fn datetime_zone_get_location() -> ClassMethod {
     )
 }
 
-/// `DateTimeZone::getTransitions(int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): array|false`
+/// `DateTimeZone::getTransitions(int $timestampBegin = PHP_INT_MIN, int $timestampEnd = 2147483647): array|false`
 /// — returns the DST transition rows in the window. The defaults reproduce PHP's
 /// full no-arg list: the synthetic first row coincides with the bridge's row 0, so
 /// its precomputed `time` is reused rather than asking `gmdate` to format
 /// `PHP_INT_MIN`.
 pub(super) fn datetime_zone_get_transitions() -> ClassMethod {
-    // PHP's defaults are PHP_INT_MIN/PHP_INT_MAX. They are materialized as integer
-    // literals (a `ConstRef` default is not evaluated when the method is called
-    // with no args), and `i64::MIN` is exactly the bridge's row-0 timestamp, so the
-    // no-arg call reproduces the full transition list.
+    // php-src's frozen DateTime stub uses a finite 32-bit end default. A `ConstRef`
+    // default is not evaluated at a synthetic call site, so retain concrete literals.
     let int_literal = |v: i64| Expr::new(ExprKind::IntLiteral(v), dummy());
     let body = super::bodies::tz_get_transitions();
     method(
@@ -271,7 +221,7 @@ pub(super) fn datetime_zone_get_transitions() -> ClassMethod {
             (
                 "timestampEnd".to_string(),
                 Some(TypeExpr::Int),
-                Some(int_literal(i64::MAX)),
+                Some(int_literal(2_147_483_647)),
                 false,
             ),
         ],

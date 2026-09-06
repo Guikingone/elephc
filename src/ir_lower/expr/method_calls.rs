@@ -71,6 +71,50 @@ pub(super) fn lower_method_call(
         terminate_method_call_on_null(ctx, method);
         return null_value;
     }
+    if op == Op::MethodCall
+        && args.is_empty()
+        && ctx.owner_name() == "DatePeriod::createFromISO8601String"
+        && php_symbol_key(method) == "__elephc_factory_result"
+        && matches!(object.ir_type, IrType::Heap(IrHeapKind::Mixed))
+    {
+        let consumed = if ctx.value_is_owning_temporary(object) {
+            object
+        } else {
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, object, Some(expr.span))
+        };
+        let data = ctx.intern_string(
+            "DatePeriod\0DatePeriod::createFromISO8601String(): factory result must be DatePeriod, ",
+        );
+        return ctx.emit_value(
+            Op::ReturnBoundaryMixedToObject,
+            vec![consumed.value],
+            Some(Immediate::Data(data)),
+            PhpType::Object("DatePeriod".to_string()),
+            Op::ReturnBoundaryMixedToObject.default_effects(),
+            Some(expr.span),
+        );
+    }
+    if op == Op::MethodCall
+        && args.is_empty()
+        && matches!(ctx.owner_name(), "DateTime::diff" | "DateTimeImmutable::diff")
+    {
+        let (target, result_type) = match php_symbol_key(method).as_str() {
+            "gettimestamp" => ("DateTime::getTimestamp", PhpType::Int),
+            "getmicrosecond" => ("DateTime::getMicrosecond", PhpType::Int),
+            _ => ("", PhpType::Never),
+        };
+        if !target.is_empty() {
+            let target_data = ctx.intern_string(target);
+            return ctx.emit_value(
+                Op::MethodCallExact,
+                vec![object.value],
+                Some(Immediate::Data(target_data)),
+                result_type,
+                Op::MethodCallExact.default_effects(),
+                Some(expr.span),
+            );
+        }
+    }
     if op == Op::MethodCall {
         if let Some(value) =
             lower_reflection_function_invoke_call(ctx, Some(object_expr), method, args, expr)
@@ -170,6 +214,12 @@ pub(super) fn lower_method_call(
         (method, args)
     };
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
+    let finalize_date_serialize = method_call_uses_date_serialize_finalizer(
+        ctx,
+        object.value,
+        dispatch_method,
+        &result_type,
+    );
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
@@ -183,15 +233,105 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     operands.extend(arg_values.iter().copied());
+    if op == Op::MethodCall && is_internal_date_magic_filter_marker(ctx, dispatch_method) {
+        let data = arg_values
+            .first()
+            .copied()
+            .expect("internal date reference filter has its required data argument");
+        let call = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![object.value, data],
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::DateMagicFilterReferences,
+                ),
+            )),
+            result_type.clone(),
+            crate::ir::RuntimeFnId::DateMagicFilterReferences.effects(),
+            Some(expr.span),
+        );
+        release_owned_call_arg_temporaries_with_signature(
+            ctx,
+            &arg_values,
+            Some(call.value),
+            &ReturnArgAlias::None,
+            sig.as_ref(),
+            expr.span,
+        );
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return call;
+    }
+    if op == Op::MethodCall && is_internal_date_magic_restore_marker(ctx, dispatch_method) {
+        let data = arg_values
+            .first()
+            .copied()
+            .expect("internal date restore marker has its required data argument");
+        let call = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![object.value, data],
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::DateMagicRestoreProperties,
+                ),
+            )),
+            result_type.clone(),
+            crate::ir::RuntimeFnId::DateMagicRestoreProperties.effects(),
+            Some(expr.span),
+        );
+        release_owned_call_arg_temporaries_with_signature(
+            ctx,
+            &arg_values,
+            Some(call.value),
+            &ReturnArgAlias::None,
+            sig.as_ref(),
+            expr.span,
+        );
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return call;
+    }
     let data = ctx.intern_string(dispatch_method);
-    let call = ctx.emit_value(
+    let mut call = ctx.emit_value(
         op,
         operands,
         Some(Immediate::Data(data)),
-        result_type,
+        result_type.clone(),
         op.default_effects(),
         Some(expr.span),
     );
+    if op == Op::MethodCall
+        && date_magic_uses_builtin_handler(ctx, object.value, dispatch_method)
+    {
+        match php_symbol_key(dispatch_method).as_str() {
+            "__serialize" => {
+                call = if finalize_date_serialize {
+                    ctx.emit_value(
+                        Op::RuntimeCall,
+                        vec![call.value, object.value],
+                        Some(Immediate::RuntimeCall(
+                            crate::ir::RuntimeCallTarget::DateSerializeFinalize,
+                        )),
+                        PhpType::Mixed,
+                        effects_lookup::runtime_effects(),
+                        Some(expr.span),
+                    )
+                } else {
+                    ctx.emit_value(
+                        Op::RuntimeCall,
+                        vec![call.value, object.value],
+                        Some(Immediate::RuntimeCall(
+                            crate::ir::RuntimeCallTarget::Function(
+                                crate::ir::RuntimeFnId::DateMagicAppendProperties,
+                            ),
+                        )),
+                        result_type,
+                        crate::ir::RuntimeFnId::DateMagicAppendProperties.effects(),
+                        Some(expr.span),
+                    )
+                };
+            }
+            _ => {}
+        }
+    }
     let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
     release_owned_call_arg_temporaries_with_signature(
         ctx,
@@ -203,6 +343,52 @@ pub(super) fn lower_method_call(
     );
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
+}
+
+/// Returns whether a private generated marker must lower to the non-PHP date restore runtime.
+fn is_internal_date_magic_restore_marker(ctx: &LoweringContext<'_, '_>, method: &str) -> bool {
+    if php_symbol_key(method) != "__elephc_restore_date_properties" {
+        return false;
+    }
+    let Some((owner, method_name)) = ctx.owner_name().rsplit_once("::") else {
+        return false;
+    };
+    matches!(
+        (owner.trim_start_matches('\\'), method_name),
+        ("DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DatePeriod", "__unserialize")
+            | ("DateInterval", "__unserialize" | "__elephc_restore_custom_properties")
+    )
+}
+
+/// Returns whether a private generated marker must filter references before native date hydration.
+fn is_internal_date_magic_filter_marker(ctx: &LoweringContext<'_, '_>, method: &str) -> bool {
+    if php_symbol_key(method) != "__elephc_filter_date_references" {
+        return false;
+    }
+    let Some((owner, method_name)) = ctx.owner_name().rsplit_once("::") else {
+        return false;
+    };
+    matches!(
+        (owner.trim_start_matches('\\'), method_name),
+        (
+            "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod",
+            "__unserialize"
+        )
+    )
+}
+
+/// Returns whether a method call needs the runtime-gated date magic serialization merge.
+///
+/// Runtime class metadata, rather than the receiver's static type, decides whether the helper
+/// appends DateTime-family subclass properties. This keeps `DateTimeInterface`, `Mixed`, and
+/// union receivers correct without changing user-defined `__serialize()` results.
+pub(super) fn date_magic_uses_builtin_handler(
+    _ctx: &LoweringContext<'_, '_>,
+    _receiver: ValueId,
+    method: &str,
+) -> bool {
+    let method_key = php_symbol_key(method);
+    method_key == "__serialize"
 }
 
 /// Throws php-src's uninitialized DateObjectError at a constructor's `$this->format()` callsite.
@@ -469,7 +655,17 @@ pub(super) fn lower_nullable_regular_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
+    let raw_result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
+    let result_type = if method_call_uses_date_serialize_finalizer(
+        ctx,
+        object.value,
+        method,
+        &raw_result_type,
+    ) {
+        PhpType::Mixed
+    } else {
+        raw_result_type
+    };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let fatal_block = ctx
         .builder

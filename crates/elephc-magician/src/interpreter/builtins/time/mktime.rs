@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::time` direct and by-value dispatch.
 //!
 //! Key details:
-//! - `gmmktime` and `strtotime` reuse the timestamp conversion helpers from this file.
+//! - Both local and UTC variants delegate to the vendored timelib bridge.
 
 use super::super::*;
 use super::*;
@@ -105,88 +105,19 @@ pub(in crate::interpreter) fn eval_mktime_result(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let args = (
-        eval_int_cell_as_c_int(hour, values)?,
-        eval_int_cell_as_c_int(minute, values)?,
-        eval_int_cell_as_c_int(second, values)?,
-        eval_int_cell_as_c_int(month, values)?,
-        eval_int_cell_as_c_int(day, values)?,
-        eval_int_cell_as_c_int(year, values)?,
-    );
-    let timestamp = match name {
-        "mktime" => eval_context_mktime_timestamp(args, context)?,
-        "gmmktime" => eval_gmmktime_timestamp(args)?,
+    let args = [hour, minute, second, month, day, year]
+        .map(|value| eval_int_value(value, values))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    let timezone = match name {
+        "mktime" => context.default_timezone(),
+        "gmmktime" => "UTC",
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
-    values.int(timestamp)
-}
-
-/// Converts local date components into an eval-timezone Unix timestamp.
-pub(in crate::interpreter) fn eval_context_mktime_timestamp(
-    args: (
-        libc::c_int,
-        libc::c_int,
-        libc::c_int,
-        libc::c_int,
-        libc::c_int,
-        libc::c_int,
-    ),
-    context: &ElephcEvalContext,
-) -> Result<i64, EvalStatus> {
-    eval_with_timezone(context.default_timezone(), || {
-        eval_mktime_timestamp(args.0, args.1, args.2, args.3, args.4, args.5)
-    })
-}
-
-/// Converts local date components into a Unix timestamp through libc `mktime`.
-pub(in crate::interpreter) fn eval_mktime_timestamp(
-    hour: libc::c_int,
-    minute: libc::c_int,
-    second: libc::c_int,
-    month: libc::c_int,
-    day: libc::c_int,
-    year: libc::c_int,
-) -> Result<i64, EvalStatus> {
-    let mut tm = unsafe { MaybeUninit::<libc::tm>::zeroed().assume_init() };
-    tm.tm_hour = hour;
-    tm.tm_min = minute;
-    tm.tm_sec = second;
-    tm.tm_mon = month - 1;
-    tm.tm_mday = day;
-    tm.tm_year = year - 1900;
-    tm.tm_isdst = -1;
-    let timestamp = unsafe { libc::mktime(&mut tm) };
-    i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)
-}
-
-/// Converts UTC date components into a Unix timestamp through libc `timegm`.
-pub(in crate::interpreter) fn eval_gmmktime_timestamp(
-    args: (
-        libc::c_int,
-        libc::c_int,
-        libc::c_int,
-        libc::c_int,
-        libc::c_int,
-        libc::c_int,
-    ),
-) -> Result<i64, EvalStatus> {
-    let mut tm = unsafe { MaybeUninit::<libc::tm>::zeroed().assume_init() };
-    tm.tm_hour = args.0;
-    tm.tm_min = args.1;
-    tm.tm_sec = args.2;
-    tm.tm_mon = args.3 - 1;
-    tm.tm_mday = args.4;
-    tm.tm_year = args.5 - 1900;
-    tm.tm_isdst = 0;
-    let timestamp = unsafe { libc::timegm(&mut tm) };
-    i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)
-}
-
-/// Casts one eval cell to a PHP int and checks it fits a libc `c_int`.
-pub(in crate::interpreter) fn eval_int_cell_as_c_int(
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<libc::c_int, EvalStatus> {
-    let value = eval_int_value(value, values)?;
-    libc::c_int::try_from(value).map_err(|_| EvalStatus::RuntimeFatal)
+    match elephc_tz::mktime_timestamp_php(
+        args[0], args[1], args[2], args[3], args[4], args[5], timezone,
+    ) {
+        Some(timestamp) => values.int(timestamp),
+        None => values.bool_value(false),
+    }
 }

@@ -272,7 +272,9 @@ pub(super) fn property_get_result_type(
         return fallback_expr_type(expr);
     };
     if let Some(property_ty) = runtime_property_type_override(ctx, normalized, property) {
-        let property_ty = normalize_value_php_type(property_ty);
+        let property_ty = normalize_value_php_type(
+            crate::types::property_runtime_storage_type(&property_ty),
+        );
         return if nullable {
             nullable_result_type(property_ty)
         } else {
@@ -296,7 +298,9 @@ pub(super) fn property_get_result_type(
         }
         return fallback_expr_type(expr);
     };
-    let property_ty = normalize_value_php_type(property_ty.clone());
+    let property_ty = normalize_value_php_type(
+        crate::types::property_runtime_storage_type(property_ty),
+    );
     if nullable {
         nullable_result_type(property_ty)
     } else {

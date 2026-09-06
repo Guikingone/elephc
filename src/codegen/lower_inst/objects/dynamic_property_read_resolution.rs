@@ -74,7 +74,7 @@ pub(super) fn lower_runtime_dynamic_declared_prop_get(
                 emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
             }
             emit_property_load(ctx, slot, base_reg)?;
-            materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+            materialize_loaded_property_result(ctx, inst, &slot.storage_type)?;
         }
         abi::emit_release_temporary_stack(ctx.emitter, 32);
         abi::emit_jump(ctx.emitter, &done_label);
@@ -262,13 +262,15 @@ pub(super) fn emit_branch_if_dynamic_name_matches(
     let (label, len) = ctx.data.add_string(property.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            let no_match = ctx.emitter.unique_local_label("dynamic_property_name_miss");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
             abi::emit_symbol_address(ctx.emitter, "x3", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
             ctx.emitter.instruction("bl __rt_str_eq");                          // compare the runtime property name against this declared property
-            ctx.emitter
-                .instruction(&format!("cbnz x0, {}", target_label)); // dispatch to the declared property slot when the names match
+            ctx.emitter.instruction(&format!("cbz x0, {}", no_match));          // keep the conditional hop local when the property arm is far away
+            ctx.emitter.instruction(&format!("b {}", target_label));            // dispatch to the declared property slot when the names match
+            ctx.emitter.label(&no_match);
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);

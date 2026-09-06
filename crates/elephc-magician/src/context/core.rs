@@ -24,6 +24,7 @@ pub enum EvalPcntlSignalHandler {
 /// back to the eval bridge. Keeping a concrete Rust type here lets the bridge
 /// grow dynamic registries without exposing them to generated assembly.
 pub struct ElephcEvalContext {
+    owner_count: std::sync::atomic::AtomicUsize,
     pub(super) abi_version: u32,
     pub(super) classes: HashMap<String, EvalClass>,
     pub(super) class_aliases: HashMap<String, EvalClassAlias>,
@@ -98,9 +99,23 @@ pub struct ElephcEvalContext {
 }
 
 impl ElephcEvalContext {
+    /// Retains one opaque ABI owner of this context.
+    pub(crate) fn acquire_owner(&self) {
+        self.owner_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Releases one opaque ABI owner and reports whether the context must be dropped.
+    pub(crate) fn release_owner(&self) -> bool {
+        self.owner_count
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel)
+            == 1
+    }
+
     /// Creates a context using the current eval bridge ABI version.
     pub fn new() -> Self {
         Self {
+            owner_count: std::sync::atomic::AtomicUsize::new(1),
             abi_version: ABI_VERSION,
             classes: HashMap::new(),
             class_aliases: HashMap::new(),
@@ -178,6 +193,7 @@ impl ElephcEvalContext {
     #[cfg(test)]
     pub fn for_abi_version(abi_version: u32) -> Self {
         Self {
+            owner_count: std::sync::atomic::AtomicUsize::new(1),
             abi_version,
             classes: HashMap::new(),
             class_aliases: HashMap::new(),

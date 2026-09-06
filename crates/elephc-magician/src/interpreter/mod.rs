@@ -263,6 +263,24 @@ pub fn execute_context_is_callable(
     eval_is_callable_value(callback, None, context, values)
 }
 
+/// Materializes a PHP `Closure` for one runtime-resolved static method.
+pub fn execute_context_static_method_callable(
+    context: &mut ElephcEvalContext,
+    class_name: &str,
+    method: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let target = eval_static_method_callable_target(
+        class_name.to_string(),
+        method.to_string(),
+        Some(class_name.to_string()),
+        None,
+        context,
+        values,
+    )?;
+    eval_closure_object_expr(target, context, values)
+}
+
 /// Constructs a class declared in the shared eval context with prepared positional arguments.
 pub fn execute_context_new_object_outcome(
     context: &mut ElephcEvalContext,

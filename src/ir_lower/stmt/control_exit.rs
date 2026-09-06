@@ -170,8 +170,16 @@ pub(super) fn acquire_borrowed_return_value(
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }
+    let defining_op = ctx.builder.value_defining_op(value.value);
+    if matches!(
+        defining_op,
+        Some(Op::HashToArrayReturn | Op::DateSerializeHashReturn)
+    ) && hash_to_array_return_borrows_source(ctx, value.value)
+    {
+        return crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    }
     if !matches!(
-        ctx.builder.value_defining_op(value.value),
+        defining_op,
         Some(
             Op::ArrayGet
                 | Op::HashGet
@@ -185,6 +193,50 @@ pub(super) fn acquire_borrowed_return_value(
         return value;
     }
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+}
+
+/// Returns whether a typed hash-to-array boundary forwards a borrowed container source.
+///
+/// The boundary itself is pointer identity. A local load transfers its stored owner through the
+/// frame trace, including transparent `Move`/`Borrow` wrappers. Static/property storage roots are
+/// always borrowed even where provisional write metadata says `Owned`; all remaining producers,
+/// including refcounted element reads, are classified by their lowering ownership contract.
+fn hash_to_array_return_borrows_source(
+    ctx: &LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+) -> bool {
+    let Some(inst) = ctx.builder.value_defining_instruction(value) else {
+        return false;
+    };
+    let Some(source) = inst.operands.first().copied() else {
+        return false;
+    };
+    match ctx.builder.value_defining_op(source) {
+        Some(Op::LoadLocal) => false,
+        Some(
+            Op::Move
+            | Op::Borrow
+            | Op::HashToArrayReturn
+            | Op::DateSerializeHashReturn,
+        ) => hash_to_array_return_borrows_source(ctx, source),
+        // Static/global/ref-cell/property storage retains its own root. Some of these loads carry
+        // provisional `Owned` metadata so a later write may safely replace them, but a plain read
+        // never transfers that root to the return value.
+        Some(
+            Op::LoadStaticLocal
+            | Op::LoadGlobal
+            | Op::LoadRefCell
+            | Op::LoadStaticProperty
+            | Op::LoadReflectionStaticProperty
+            | Op::PropGet
+            | Op::DynamicPropGet
+            | Op::NullsafePropGet,
+        ) => true,
+        _ => !ctx.value_is_owning_temporary(LoweredValue {
+            value: source,
+            ir_type: ctx.builder.value_type(source),
+        }),
+    }
 }
 
 /// Terminates with a return after running active finally bodies from inner to outer.

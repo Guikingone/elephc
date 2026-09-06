@@ -2,7 +2,7 @@
 title: "__elephc_print_r_object_properties() — internals"
 description: "Compiler internals for __elephc_print_r_object_properties(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 560
+  order: 637
 ---
 
 ## `__elephc_print_r_object_properties()` — internals

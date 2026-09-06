@@ -18,7 +18,7 @@
 //!   `__elephc_tz_location_get` marker) is what gates adding the three OOP methods
 //!   to the synthetic `DateTimeZone` (see `inject_builtin_datetime`).
 //! - `getTransitions($begin,$end)` is handled by one windowing routine whose
-//!   defaults (`PHP_INT_MIN`/`PHP_INT_MAX`) reduce exactly to PHP's full no-arg
+//!   defaults (`PHP_INT_MIN`/`2147483647`) reduce exactly to PHP's full no-arg
 //!   list, reusing the bridge's row-0 `time` so `gmdate` is never asked to format
 //!   `PHP_INT_MIN`.
 
@@ -248,27 +248,39 @@ function __elephc_timelib_period_parse(string $input) {
             "status" => "P",
             "has_start" => intval($parts[1]) !== 0,
             "start" => intval($parts[2]),
-            "has_end" => intval($parts[3]) !== 0,
-            "end" => intval($parts[4]),
-            "has_interval" => intval($parts[5]) !== 0,
-            "recurrences" => intval($parts[6]),
-            "y" => intval($parts[7]),
-            "m" => intval($parts[8]),
-            "d" => intval($parts[9]),
-            "h" => intval($parts[10]),
-            "i" => intval($parts[11]),
-            "s" => intval($parts[12]),
-            "us" => intval($parts[13]),
+            "start_localtime" => intval($parts[3]) !== 0,
+            "start_timezone" => $parts[4],
+            "has_end" => intval($parts[5]) !== 0,
+            "end" => intval($parts[6]),
+            "end_localtime" => intval($parts[7]) !== 0,
+            "end_timezone" => $parts[8],
+            "has_interval" => intval($parts[9]) !== 0,
+            "recurrences" => intval($parts[10]),
+            "y" => intval($parts[11]),
+            "m" => intval($parts[12]),
+            "d" => intval($parts[13]),
+            "h" => intval($parts[14]),
+            "i" => intval($parts[15]),
+            "s" => intval($parts[16]),
+            "us" => intval($parts[17]),
         ];
     }
     return [
         "status" => $parts[0],
-        "has_start" => false, "start" => 0,
-        "has_end" => false, "end" => 0,
+        "has_start" => false, "start" => 0, "start_localtime" => false, "start_timezone" => "",
+        "has_end" => false, "end" => 0, "end_localtime" => false, "end_timezone" => "",
         "has_interval" => false, "recurrences" => 0,
         "y" => 0, "m" => 0, "d" => 0,
         "h" => 0, "i" => 0, "s" => 0, "us" => 0,
     ];
+}
+
+function __elephc_timelib_period_datetime(int $timestamp, bool $localtime, string $timezone): DateTime {
+    $result = new DateTime("@" . $timestamp);
+    if ($localtime) {
+        $result->setTimezone(new DateTimeZone($timezone));
+    }
+    return $result;
 }
 
 function __elephc_timelib_apply_interval(
@@ -295,6 +307,27 @@ function __elephc_timelib_apply_interval(
         "microsecond" => intval($parts[1]),
         "warning" => intval($parts[2]) !== 0,
     ];
+}
+
+function __elephc_timelib_period_advance(
+    int $timestamp,
+    int $microsecond,
+    string $timezone,
+    string $payload
+) {
+    $parts = explode(
+        "\t",
+        elephc_tz_apply_interval(
+            $timestamp,
+            $microsecond,
+            $timezone,
+            strlen($timezone),
+            $payload,
+            strlen($payload),
+            2
+        )
+    );
+    return [intval($parts[0]), intval($parts[1])];
 }
 
 function __elephc_timelib_modify(
@@ -468,10 +501,8 @@ function timezone_offset_get(mixed $object, mixed $datetime) {
 /// so it is written once; the procedural functions are thin wrappers, matching PHP's
 /// procedural/OOP duality.
 ///
-/// `getTransitions`'s window defaults are integer LITERALS, not constant references:
-/// `PHP_INT_MIN`/`PHP_INT_MAX` are dedicated lexer tokens that never reach the parser as
-/// names, so the PHP form produced `IntLiteral` here too. They reduce exactly to PHP's
-/// full no-arg list.
+/// `getTransitions`'s window defaults are integer literals, including php-src's finite
+/// `2147483647` end default from the frozen DateTime stub.
 pub(crate) fn tz_declarations() -> Program {
     internal_declarations(|| {
         vec![
@@ -481,6 +512,12 @@ pub(crate) fn tz_declarations() -> Program {
                 .build(),
             extern_fn("elephc_tz_transitions", TZ_BRIDGE)
                 .param("zone", CType::Str)
+                .returns(CType::Str)
+                .build(),
+            extern_fn("elephc_tz_transitions_range", TZ_BRIDGE)
+                .param("zone", CType::Str)
+                .param("begin", CType::Int)
+                .param("end", CType::Int)
                 .returns(CType::Str)
                 .build(),
             extern_fn("elephc_tz_abbreviations", TZ_BRIDGE)
@@ -493,7 +530,7 @@ pub(crate) fn tz_declarations() -> Program {
             function("timezone_transitions_get")
                 .param_untyped("object")
                 .param_default("timestampBegin", TypeExpr::Int, e_int(i64::MIN))
-                .param_default("timestampEnd", TypeExpr::Int, e_int(i64::MAX))
+                .param_default("timestampEnd", TypeExpr::Int, e_int(2_147_483_647))
                 .returning(e_method_call(
                     e_var("object"),
                     "getTransitions",
@@ -584,6 +621,7 @@ mod tests {
             vec![
                 "elephc_tz_location",
                 "elephc_tz_transitions",
+                "elephc_tz_transitions_range",
                 "elephc_tz_abbreviations",
                 "timezone_location_get",
                 "timezone_transitions_get",
@@ -610,8 +648,7 @@ mod tests {
         }
     }
 
-    /// The window defaults reduce to PHP's full no-arg list. They are integer literals
-    /// because `PHP_INT_MIN`/`PHP_INT_MAX` are lexer tokens, not parsed constant names.
+    /// The window defaults reproduce the finite literals frozen in the php-src DateTime stub.
     #[test]
     fn the_transition_window_defaults_span_the_whole_range() {
         let transitions = tz_declarations()
@@ -631,7 +668,7 @@ mod tests {
             defaults,
             vec![
                 &crate::parser::ast::ExprKind::IntLiteral(i64::MIN),
-                &crate::parser::ast::ExprKind::IntLiteral(i64::MAX),
+                &crate::parser::ast::ExprKind::IntLiteral(2_147_483_647),
             ]
         );
     }

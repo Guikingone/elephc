@@ -297,9 +297,9 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.label_global("__rt_print_r_value");
 
     emitter.instruction("cmp x0, #11");                                         // inline TaggedScalar property descriptor?
-    emitter.instruction("b.ne __rt_pr_value_input_ready");                     // ordinary tags already use canonical value words
-    emitter.instruction("mov x0, x2");                                         // dispatch using the slot's int/null runtime tag
-    emitter.instruction("mov x2, xzr");                                        // tagged scalar payloads have no third word
+    emitter.instruction("b.ne __rt_pr_value_input_ready");                      // ordinary tags already use canonical value words
+    emitter.instruction("mov x0, x2");                                          // dispatch using the slot's int/null runtime tag
+    emitter.instruction("mov x2, xzr");                                         // tagged scalar payloads have no third word
     emitter.label("__rt_pr_value_input_ready");
 
     emitter.instruction("sub sp, sp, #48");                                     // allocate the value frame
@@ -311,6 +311,8 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
 
     emitter.instruction("cmp x0, #7");                                          // boxed Mixed cell?
     emitter.instruction("b.eq __rt_pr_val_mixed");                              // unbox then redispatch
+    emitter.instruction("cmp x0, #10");                                         // Closure descriptor?
+    emitter.instruction("b.eq __rt_pr_val_closure");                            // render the descriptor's Closure print_r projection
     emitter.instruction("cmp x0, #0");                                          // tag 0 = int
     emitter.instruction("b.eq __rt_pr_val_int");                                // render the integer
     emitter.instruction("cmp x0, #1");                                          // tag 1 = string
@@ -386,6 +388,13 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0=inner tag, x1=lo, x2=hi
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the nested paren base indent
     emitter.instruction("bl __rt_print_r_value");                               // redispatch the unboxed scalar/array
+    emitter.instruction("b __rt_pr_val_done");                                  // the nested value already completed its print_r projection
+
+    emitter.label("__rt_pr_val_closure");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Closure descriptor identity
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload the nested parenthesis base indent
+    emitter.instruction("bl __rt_print_r_closure");                             // render php-src Closure debug information
+    emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
     emitter.label("__rt_pr_val_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -399,10 +408,10 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: print_r_value ---");
     emitter.label_global("__rt_print_r_value");
 
-    emitter.instruction("cmp rdi, 11");                                        // inline TaggedScalar property descriptor?
-    emitter.instruction("jne __rt_pr_value_input_ready_x86");                  // ordinary tags already use canonical value words
-    emitter.instruction("mov rdi, rdx");                                       // dispatch using the slot's int/null runtime tag
-    emitter.instruction("xor edx, edx");                                       // tagged scalar payloads have no third word
+    emitter.instruction("cmp rdi, 11");                                         // inline TaggedScalar property descriptor?
+    emitter.instruction("jne __rt_pr_value_input_ready_x86");                   // ordinary tags already use canonical value words
+    emitter.instruction("mov rdi, rdx");                                        // dispatch using the slot's int/null runtime tag
+    emitter.instruction("xor edx, edx");                                        // tagged scalar payloads have no third word
     emitter.label("__rt_pr_value_input_ready_x86");
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
@@ -415,6 +424,8 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("cmp rax, 7");                                          // boxed Mixed cell?
     emitter.instruction("je __rt_pr_val_mixed_x86");                            // unbox then redispatch
+    emitter.instruction("cmp rax, 10");                                         // Closure descriptor?
+    emitter.instruction("je __rt_pr_val_closure_x86");                          // render the descriptor's Closure print_r projection
     emitter.instruction("cmp rax, 0");                                          // tag 0 = int
     emitter.instruction("je __rt_pr_val_int_x86");                              // render the integer
     emitter.instruction("cmp rax, 1");                                          // tag 1 = string
@@ -497,6 +508,13 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // unboxed tag → value tag argument
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the nested paren base indent
     emitter.instruction("call __rt_print_r_value");                             // redispatch the unboxed scalar/array
+    emitter.instruction("jmp __rt_pr_val_done_x86");                            // the nested value already completed its print_r projection
+
+    emitter.label("__rt_pr_val_closure_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the Closure descriptor identity
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the nested parenthesis base indent
+    emitter.instruction("call __rt_print_r_closure");                           // render php-src Closure debug information
+    emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
 
     emitter.label("__rt_pr_val_done_x86");
     emitter.instruction("add rsp, 48");                                         // release the value frame
@@ -531,7 +549,7 @@ pub fn emit_print_r_object_properties(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");            // resolve the class-id table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
     emitter.instruction("cmp x9, x10");                                         // is the class id in range?
-    emitter.instruction("b.hs __rt_pr_obj_props_missing");                       // out-of-range ids use an empty descriptor
+    emitter.instruction("b.hs __rt_pr_obj_props_missing");                      // out-of-range ids use an empty descriptor
     abi::emit_symbol_address(emitter, "x10", "_class_pr_desc_ptrs");             // resolve the print_r descriptor table
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // load this class's descriptor pointer
     emitter.instruction("b __rt_pr_obj_props_desc_ready");                      // continue with the resolved descriptor
@@ -549,7 +567,7 @@ pub fn emit_print_r_object_properties(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // rendered every declared property?
     emitter.instruction("b.ge __rt_pr_obj_props_done");                         // walk complete
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the descriptor pointer
-    emitter.instruction(&format!("mov x12, #{}", PR_DESC_ROW_BYTES));            // each descriptor row occupies 32 bytes
+    emitter.instruction(&format!("mov x12, #{}", PR_DESC_ROW_BYTES));           // each descriptor row occupies 32 bytes
     emitter.instruction("mul x12, x9, x12");                                    // byte offset of this descriptor row
     emitter.instruction("add x11, x11, x12");                                   // advance into the descriptor
     emitter.instruction("add x11, x11, #8");                                    // skip the leading property-count word
@@ -626,7 +644,7 @@ fn emit_print_r_object_properties_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, r10");                                         // rendered every declared property?
     emitter.instruction("jge __rt_pr_obj_props_done_x86");                      // walk complete
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the descriptor pointer
-    emitter.instruction(&format!("imul r9, r9, {}", PR_DESC_ROW_BYTES));         // byte offset of this descriptor row
+    emitter.instruction(&format!("imul r9, r9, {}", PR_DESC_ROW_BYTES));        // byte offset of this descriptor row
     emitter.instruction("add r11, r9");                                         // advance into the descriptor
     emitter.instruction("add r11, 8");                                          // skip the leading property-count word
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the row pointer across calls

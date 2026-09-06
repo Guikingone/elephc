@@ -68,9 +68,15 @@ const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
 /// Resolved declared-property storage metadata for a known object receiver.
 #[derive(Clone)]
 pub(super) struct PropertySlot {
+    /// Concrete receiver class used for physical object layout and dispatch.
     class_name: String,
+    /// Physical declaring class used by PHP property diagnostics and visibility metadata.
+    declaring_class_name: String,
     property: String,
+    /// Declared PHP type used for compatibility checks, diagnostics, and reflection behavior.
     php_type: PhpType,
+    /// Physical runtime representation used for this slot's load, store, and ownership paths.
+    storage_type: PhpType,
     offset: usize,
     is_declared: bool,
     is_packed: bool,

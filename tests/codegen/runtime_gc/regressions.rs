@@ -9,6 +9,100 @@
 
 use crate::support::*;
 
+/// Verifies callback helpers release partially built native owners before rethrowing.
+#[test]
+fn test_callback_exception_boundaries_release_partial_results() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function throw_on_two(int $value): int {
+    if ($value === 2) { throw new Exception("stop"); }
+    return $value;
+}
+function throw_string_on_two(int $value): string {
+    if ($value === 2) { throw new Exception("stop"); }
+    return "ok";
+}
+function throw_compare(int $left, int $right): int {
+    if ($left === 2) { throw new Exception("stop"); }
+    return $left <=> $right;
+}
+function throw_preg(array $matches): string { throw new Exception("stop"); }
+$caught = 0;
+$source = [1, 2, 3];
+$other = [3];
+for ($i = 0; $i < 20; $i++) {
+    try { array_map("throw_on_two", $source); } catch (Exception) { $caught++; }
+    try { array_map("throw_string_on_two", $source); } catch (Exception) { $caught++; }
+    try { array_filter($source, "throw_on_two"); } catch (Exception) { $caught++; }
+    try { array_udiff($source, $other, "throw_compare"); } catch (Exception) { $caught++; }
+    try { preg_replace_callback('/./', "throw_preg", 'ab'); } catch (Exception) { $caught++; }
+}
+unset($source);
+unset($other);
+echo $caught;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "100");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected callback exception owners to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies JsonSerializable prefix and result owners are balanced on success and throw paths.
+#[test]
+fn test_jsonserializable_exception_boundaries_release_native_owners() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class DatePayload implements JsonSerializable {
+    public bool $throw;
+    public function __construct(bool $throw) {
+        $this->throw = $throw;
+    }
+    public function jsonSerialize(): mixed {
+        if ($this->throw) { throw new Exception("stop"); }
+        return ["stamp" => "1970-01-01T00:00:00+00:00", "fresh" => str_repeat("x", 64)];
+    }
+}
+class NestedPayload implements JsonSerializable {
+    public DatePayload $payload;
+    public function __construct(DatePayload $payload) { $this->payload = $payload; }
+    public function jsonSerialize(): mixed { return [$this->payload]; }
+}
+$caught = 0;
+$key = str_repeat("prefix", 100);
+$ok = new DatePayload(false);
+$throwing = new DatePayload(true);
+$nested = new NestedPayload($throwing);
+$okArg = [$key => $ok];
+$throwArg = [$key => $throwing];
+$nestedArg = [$key => $nested];
+for ($i = 0; $i < 20; $i++) {
+    json_encode($okArg, 0, 8);
+    try { json_encode($throwArg, 0, 8); } catch (Exception) { $caught++; }
+    try { json_encode($nestedArg, 0, 8); } catch (Exception) { $caught++; }
+}
+unset($nestedArg);
+unset($throwArg);
+unset($okArg);
+unset($key);
+unset($nested);
+unset($throwing);
+unset($ok);
+echo $caught;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "40");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected JsonSerializable owners to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies fresh disk-space results do not retain owned temporary directory arguments.
 /// Each result is a newly boxed float-or-false cell and therefore cannot alias the `getcwd()`
 /// string passed to the builtin; the old may-alias classification leaked one path per call.

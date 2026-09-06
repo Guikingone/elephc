@@ -219,6 +219,7 @@ const EVAL_DATE_ALIAS_METHOD_NAMES: &[&str] = &[
     "createFromImmutable",
     "createFromMutable",
     "getLastErrors",
+        "__elephc_date_create",
         "__elephc_date_parse_from_format",
         "__elephc_date_parse",
         "__elephc_date_sun_info",
@@ -404,10 +405,45 @@ fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)>
                 }
             }
             match inst.op {
+                Op::FirstClassCallableNew => {
+                    let Some((receiver_label, method_name)) =
+                        string_data_name(module, inst).and_then(|name| name.rsplit_once("::"))
+                    else {
+                        continue;
+                    };
+                    let method_key = php_method_key(method_name);
+                    if receiver_label.trim_start_matches('\\') == "object" {
+                        let receiver_ty = inst
+                            .operands
+                            .first()
+                            .and_then(|receiver| function.value(*receiver))
+                            .map(|value| &value.php_type);
+                        for class_name in receiver_ty
+                            .map(|ty| builtin_datetime_classes_in_type(module, ty))
+                            .unwrap_or_default()
+                        {
+                            let impl_class = method_impl_class(module, &class_name, &method_key);
+                            methods.push((impl_class, method_key.clone()));
+                        }
+                    } else if module.class_infos.contains_key(receiver_label) {
+                        let impl_class = method_impl_class(module, receiver_label, &method_key);
+                        methods.push((impl_class, method_key));
+                    }
+                }
                 Op::ObjectNew | Op::ObjectNewWithoutConstructor => {
                     if let Some(class_name) = datetime_class_data_name(module, inst) {
                         push_constructor_and_interface_methods(&mut methods, module, class_name);
                     }
+                }
+                Op::MethodCallExact => {
+                    let Some((class_name, method_name)) =
+                        string_data_name(module, inst).and_then(|name| name.rsplit_once("::"))
+                    else {
+                        continue;
+                    };
+                    let method_key = php_method_key(method_name);
+                    let impl_class = method_impl_class(module, class_name, &method_key);
+                    methods.push((impl_class, method_key));
                 }
                 Op::MethodCall | Op::NullsafeMethodCall => {
                     let Some(receiver) = inst.operands.first().copied() else {
@@ -786,8 +822,9 @@ fn datetime_class_data_name<'a>(
 
 /// Returns the string immediate attached to an instruction.
 fn string_data_name<'a>(module: &'a Module, inst: &crate::ir::Instruction) -> Option<&'a str> {
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return None;
+    let data = match inst.immediate {
+        Some(Immediate::Data(data) | Immediate::ProfiledData { data, .. }) => data,
+        _ => return None,
     };
     module
         .data

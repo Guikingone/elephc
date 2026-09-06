@@ -28,6 +28,7 @@ pub(super) fn body_must_not_use_this(body: &[Stmt], span: Span) -> Result<(), Co
 /// which exempts bare `isset($this)` arguments (PHP allows the probe inside
 /// static closures), this walker counts every `$this` mention so EIR lowering
 /// captures `$this` for non-static closures that probe it via `isset`.
+#[allow(dead_code)]
 pub(crate) fn closure_body_uses_this(body: &[Stmt]) -> bool {
     body_uses_this(body)
 }

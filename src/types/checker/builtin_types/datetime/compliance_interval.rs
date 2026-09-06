@@ -66,6 +66,9 @@ if (array_key_exists("date_string", $data) && is_string($data["date_string"])) {
     $this->_period_date_string = "";
     $this->_wall = false;
     $this->__elephc_initialized = true;
+    if (count($data) > 0) {
+        $this->__elephc_restore_custom_properties($data);
+    }
     return;
 }
 $this->y = intval(array_key_exists("y", $data) ? $data["y"] : -1);
@@ -98,6 +101,9 @@ $this->_period_from_string = false;
 $this->_period_date_string = "";
 $this->_wall = true;
 $this->__elephc_initialized = true;
+if (count($data) > 0) {
+    $this->__elephc_restore_custom_properties($data);
+}
 "#;
 
 /// Component-only fallback used when no source operation can reach serialized date-string state.
@@ -136,6 +142,9 @@ $this->_period_from_string = false;
 $this->_period_date_string = "";
 $this->_wall = true;
 $this->__elephc_initialized = true;
+if (count($data) > 0) {
+    $this->__elephc_restore_custom_properties($data);
+}
 "#;
 
 /// PHP source backing `DateInterval::__set_state()`. Rebuilds the relative-string form directly
@@ -231,6 +240,58 @@ pub(super) fn dateinterval_unserialize(uses_timelib: bool) -> ClassMethod {
         is_static: false,
         is_abstract: false,
         is_final: false,
+        has_body: true,
+        params: vec![(
+            "data".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
+            None,
+            false,
+        )],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Restores public subclass and dynamic properties after DateInterval native hydration.
+pub(super) fn dateinterval_restore_custom_properties() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(
+        r#"<?php
+$data = $this->__elephc_restore_date_properties($data);
+foreach ($data as $__property => $__value) {
+    if (is_string($__property)
+        && strlen($__property) > 3
+        && substr($__property, 0, 3) === "\0*\0"
+    ) {
+        $__property = substr($__property, 3);
+    }
+    if (!is_string($__property)
+        || (strlen($__property) > 0 && $__property[0] === "\0")
+        || in_array($__property, [
+            "from_string", "date_string", "y", "m", "d", "h", "i", "s", "f", "invert", "days",
+        ], true)
+    ) {
+        continue;
+    }
+    $this->{$__property} = $__value;
+}
+"#,
+    )
+    .expect("DateInterval custom-property restore body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateInterval custom-property restore body must parse");
+    ClassMethod {
+        name: "__elephc_restore_custom_properties".to_string(),
+        visibility: Visibility::Private,
+        is_static: false,
+        is_abstract: false,
+        is_final: true,
         has_body: true,
         params: vec![(
             "data".to_string(),
@@ -1129,23 +1190,15 @@ pub(super) fn datetime_diff_method(uses_timelib: bool) -> ClassMethod {
     if uses_timelib {
         return datetime_timelib_diff_method();
     }
-    let target_ts = Expr::new(
-        ExprKind::MethodCall {
-            object: Box::new(Expr::new(ExprKind::Variable("targetObject".to_string()), dummy())),
-            method: "getTimestamp".to_string(),
-            args: Vec::new(),
-        },
-        dummy(),
+    let target_ts = crate::synthetic_class::e_ternary(
+        crate::synthetic_class::e_instance_of(crate::synthetic_class::e_var("targetObject"), "DateTimeImmutable"),
+        crate::synthetic_class::e_static_call("DateTimeImmutable", "__elephc_timestamp_of", vec![crate::synthetic_class::e_var("targetObject")]),
+        crate::synthetic_class::e_static_call("DateTime", "__elephc_timestamp_of", vec![crate::synthetic_class::e_var("targetObject")]),
     );
-    // $target->getMicrosecond() — read the target's sub-second component (PHP 8.4
-    // promoted it onto DateTimeInterface).
-    let target_micro = Expr::new(
-        ExprKind::MethodCall {
-            object: Box::new(Expr::new(ExprKind::Variable("targetObject".to_string()), dummy())),
-            method: "getMicrosecond".to_string(),
-            args: Vec::new(),
-        },
-        dummy(),
+    let target_micro = crate::synthetic_class::e_ternary(
+        crate::synthetic_class::e_instance_of(crate::synthetic_class::e_var("targetObject"), "DateTimeImmutable"),
+        crate::synthetic_class::e_static_call("DateTimeImmutable", "__elephc_microsecond_of", vec![crate::synthetic_class::e_var("targetObject")]),
+        crate::synthetic_class::e_static_call("DateTime", "__elephc_microsecond_of", vec![crate::synthetic_class::e_var("targetObject")]),
     );
     let secs_var = || Expr::new(ExprKind::Variable("secs".to_string()), dummy());
     let rem_var = || Expr::new(ExprKind::Variable("rem".to_string()), dummy());
@@ -1403,7 +1456,7 @@ $leftMicrosecond = $this->microsecond;
 $leftTimezone = $this->timezone_name;
 $rightTimestamp = $targetObject->getTimestamp();
 $rightMicrosecond = $targetObject->getMicrosecond();
-$rightTimezone = $targetObject->format("e");
+$rightTimezone = $targetObject->getTimezone()->getName();
 $parsed = __elephc_timelib_diff(
     $leftTimestamp,
     $leftMicrosecond,
@@ -1543,6 +1596,7 @@ pub(crate) fn inject_builtin_datetime(
             dateinterval_wakeup(),
             dateinterval_serialize(),
             dateinterval_unserialize(uses_tz_introspection),
+            dateinterval_restore_custom_properties(),
             dateinterval_set_state(),
             dateinterval_debug_dump(),
             dateinterval_print_r_dump(),
@@ -1601,6 +1655,8 @@ pub(crate) fn inject_builtin_datetime(
                         datetime_zone_constructor(),
                         datetime_zone_procedural_open(),
                         datetime_zone_get_name(),
+                        datetime_zone_export_name_instance(),
+                        datetime_zone_export_name(),
                         datetime_zone_get_offset(),
                         datetime_zone_list_identifiers(),
                         datetime_zone_compare(),
@@ -1671,6 +1727,31 @@ pub(crate) fn inject_builtin_datetime(
                         "DateTime",
                         "DateTimeImmutable",
                     ));
+                    m.push(datetime_export_state_instance());
+                    m.push(datetime_export_state("DateTimeImmutable"));
+                    m.push(datetime_import_state_instance());
+                    m.push(datetime_import_state("DateTimeImmutable"));
+                    m.push(datetime_internal_state_accessor(
+                        "__elephc_timestamp_internal",
+                        "timestamp",
+                        TypeExpr::Int,
+                    ));
+                    m.push(datetime_internal_state_accessor(
+                        "__elephc_microsecond_internal",
+                        "microsecond",
+                        TypeExpr::Int,
+                    ));
+                    m.push(datetime_internal_state_accessor(
+                        "__elephc_timezone_name_internal",
+                        "timezone_name",
+                        TypeExpr::Str,
+                    ));
+                    m.push(datetime_static_state_accessor("DateTimeImmutable", "__elephc_timestamp_of", "__elephc_timestamp_internal", TypeExpr::Int));
+                    m.push(datetime_static_state_accessor("DateTimeImmutable", "__elephc_microsecond_of", "__elephc_microsecond_internal", TypeExpr::Int));
+                    m.push(datetime_static_state_accessor("DateTimeImmutable", "__elephc_timezone_name_of", "__elephc_timezone_name_internal", TypeExpr::Str));
+                    if uses_tz_introspection {
+                        m.push(datetime_period_advance());
+                    }
                     let mut set_iso_date = datetime_set_isodate("DateTimeImmutable");
                     set_iso_date.attributes = no_discard_attribute("setISODate");
                     m.push(set_iso_date);
@@ -1687,7 +1768,7 @@ pub(crate) fn inject_builtin_datetime(
                     m.push(date_object_is_initialized());
                     m.push(date_object_assert_initialized("DateTimeImmutable"));
                     m.push(datetime_assert_comparable());
-                    m.push(datetime_compare());
+                    m.push(datetime_compare("DateTimeImmutable"));
                     guard_date_object_instance_methods(&mut m);
                     m
                 },
@@ -1719,6 +1800,46 @@ pub(crate) fn inject_builtin_datetime(
             "DateTimeImmutable",
             "DateTime",
         ));
+        methods.push(datetime_export_state_instance());
+        methods.push(datetime_export_state("DateTime"));
+        methods.push(datetime_import_state_instance());
+        methods.push(datetime_import_state("DateTime"));
+        methods.push(datetime_internal_state_accessor(
+            "__elephc_timestamp_internal",
+            "timestamp",
+            TypeExpr::Int,
+        ));
+        methods.push(datetime_internal_state_accessor(
+            "__elephc_microsecond_internal",
+            "microsecond",
+            TypeExpr::Int,
+        ));
+        methods.push(datetime_internal_state_accessor(
+            "__elephc_timezone_name_internal",
+            "timezone_name",
+            TypeExpr::Str,
+        ));
+        methods.push(datetime_static_state_accessor(
+            "DateTime",
+            "__elephc_timestamp_of",
+            "__elephc_timestamp_internal",
+            TypeExpr::Int,
+        ));
+        methods.push(datetime_static_state_accessor(
+            "DateTime",
+            "__elephc_microsecond_of",
+            "__elephc_microsecond_internal",
+            TypeExpr::Int,
+        ));
+        methods.push(datetime_static_state_accessor(
+            "DateTime",
+            "__elephc_timezone_name_of",
+            "__elephc_timezone_name_internal",
+            TypeExpr::Str,
+        ));
+        if uses_tz_introspection {
+            methods.push(datetime_period_advance());
+        }
         methods.push(datetime_set_isodate("DateTime"));
         methods.push(datetime_date_parse_from_format(uses_tz_introspection));
         methods.push(datetime_date_parse(uses_tz_introspection));
@@ -1767,7 +1888,7 @@ pub(crate) fn inject_builtin_datetime(
         methods.push(date_object_is_initialized());
         methods.push(date_object_assert_initialized("DateTime"));
         methods.push(datetime_assert_comparable());
-        methods.push(datetime_compare());
+        methods.push(datetime_compare("DateTime"));
         guard_date_object_instance_methods(&mut methods);
         class_map.insert(
             "DateTime".to_string(),

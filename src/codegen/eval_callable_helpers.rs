@@ -119,6 +119,28 @@ pub(super) fn module_needs_eval_callable_descriptor_support(module: &Module) -> 
     module_uses_eval(module) && module_has_callable_aot_method_param(module)
 }
 
+/// Returns true when a late-static first-class callable can capture an eval override.
+pub(super) fn module_needs_eval_dynamic_callable_descriptor_support(module: &Module) -> bool {
+    module_uses_eval(module)
+        && all_module_functions(module).any(|function| {
+            function.instructions.iter().any(|inst| {
+                if inst.op != crate::ir::Op::FirstClassCallableNew {
+                    return false;
+                }
+                let data = match inst.immediate {
+                    Some(crate::ir::Immediate::Data(data))
+                    | Some(crate::ir::Immediate::ProfiledData { data, .. }) => data,
+                    _ => return false,
+                };
+                module
+                    .data
+                    .strings
+                    .get(data.as_raw() as usize)
+                    .is_some_and(|target| target.starts_with("static::"))
+            })
+        })
+}
+
 /// Returns true when the EIR module contains a function that can call eval.
 fn module_uses_eval(module: &Module) -> bool {
     all_module_functions(module).any(function_uses_eval)
@@ -172,8 +194,9 @@ pub(super) fn emit_eval_callable_descriptor_support(
     emitter: &mut Emitter,
     data: &mut DataSection,
     needed: bool,
+    dynamic_needed: bool,
 ) -> EvalCallableDescriptorSupport {
-    if !needed {
+    if !needed && !dynamic_needed {
         return EvalCallableDescriptorSupport {
             string_cases: Vec::new(),
             instance_array_cases: Vec::new(),
@@ -183,10 +206,26 @@ pub(super) fn emit_eval_callable_descriptor_support(
         };
     }
     let mut state = EvalCallableEmitState::new();
-    let string_cases = eval_user_function_callable_cases(module, emitter, data, &mut state);
-    let instance_array_cases = eval_instance_method_callable_cases(module, emitter, data, &mut state);
-    let static_array_cases = eval_static_method_callable_cases(module, emitter, data, &mut state);
-    let object_cases = eval_invokable_object_callable_cases(module, emitter, data, &mut state);
+    let string_cases = if needed {
+        eval_user_function_callable_cases(module, emitter, data, &mut state)
+    } else {
+        Vec::new()
+    };
+    let instance_array_cases = if needed {
+        eval_instance_method_callable_cases(module, emitter, data, &mut state)
+    } else {
+        Vec::new()
+    };
+    let static_array_cases = if needed {
+        eval_static_method_callable_cases(module, emitter, data, &mut state)
+    } else {
+        Vec::new()
+    };
+    let object_cases = if needed {
+        eval_invokable_object_callable_cases(module, emitter, data, &mut state)
+    } else {
+        Vec::new()
+    };
     let dynamic_descriptor_label = Some(eval_dynamic_callable_descriptor(data));
     emit_eval_dynamic_callable_invoker(module, emitter, data);
     EvalCallableDescriptorSupport {
@@ -199,7 +238,7 @@ pub(super) fn emit_eval_callable_descriptor_support(
 }
 
 /// Emits the static descriptor template for eval-owned callback values.
-fn eval_dynamic_callable_descriptor(data: &mut DataSection) -> String {
+pub(crate) fn eval_dynamic_callable_descriptor(data: &mut DataSection) -> String {
     let captures = vec![
         (
             "__elephc_eval_callable_context".to_string(),
@@ -267,11 +306,11 @@ fn emit_aarch64_eval_dynamic_callable_invoker(
     emitter.instruction("str xzr, [sp, #24]");                                  // clear result value pointer before the FFI call
     emitter.instruction("str xzr, [sp, #32]");                                  // clear result error pointer before the FFI call
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload descriptor before reading eval captures
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the captured eval context for callback dispatch
         "ldr x0, [x9, #{}]",
         dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE)
     ));                                                                         // pass the captured eval context as FFI argument 1
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the captured eval callback cell for dispatch
         "ldr x1, [x9, #{}]",
         dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE)
     ));                                                                         // pass the captured eval callback as FFI argument 2
@@ -317,11 +356,11 @@ fn emit_x86_64_eval_dynamic_callable_invoker(
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // clear result value pointer before the FFI call
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // clear result error pointer before the FFI call
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload descriptor before reading eval captures
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the captured eval context for callback dispatch
         "mov rdi, QWORD PTR [r9 + {}]",
         dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE)
     ));                                                                         // pass the captured eval context as FFI argument 1
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the captured eval callback cell for dispatch
         "mov rsi, QWORD PTR [r9 + {}]",
         dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE)
     ));                                                                         // pass the captured eval callback as FFI argument 2
@@ -715,6 +754,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         label: &label,
         sig,
         captures,
+        date_serialize_finalize: false,
     };
     abi::emit_jump(emitter, &done_label);
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);
@@ -1324,7 +1364,7 @@ fn emit_aarch64_eval_dynamic_callable_descriptor(
         .as_deref()
         .expect("dynamic eval callable descriptor must exist");
     let is_callable_symbol = module.target.extern_symbol("__elephc_eval_is_callable");
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the active eval context for dynamic callable validation
         "ldr x0, [x29, #{}]",
         AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET
     ));                                                                         // load the active eval context for dynamic callable validation
@@ -1333,6 +1373,12 @@ fn emit_aarch64_eval_dynamic_callable_descriptor(
     abi::emit_call_label(emitter, &is_callable_symbol);
     emitter.instruction("cmp w0, #0");                                          // check whether magician accepts the callback value
     emitter.instruction(&format!("b.eq {}", fail_label));                       // reject non-callable eval values
+    emitter.instruction(&format!(                                               // reload the context before transferring descriptor ownership
+        "ldr x0, [x29, #{}]",
+        AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET
+    ));                                                                         // reload the context before transferring one descriptor owner
+    let acquire_context = module.target.extern_symbol("__elephc_eval_context_acquire");
+    abi::emit_call_label(emitter, &acquire_context);
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed callback value to retain it
     emitter.instruction("bl __rt_incref");                                      // retain the callback for descriptor capture ownership
     abi::emit_push_reg(emitter, "x0");
@@ -1344,7 +1390,7 @@ fn emit_aarch64_eval_dynamic_callable_descriptor(
     );
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate runtime descriptor storage with eval captures
     callable_descriptor::emit_copy_static_descriptor_to_runtime(emitter, "x0", descriptor_label);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // reload the retained context for descriptor capture zero
         "ldr x10, [x29, #{}]",
         AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET
     ));                                                                         // reload the active eval context for descriptor capture 0
@@ -1381,7 +1427,7 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
         .as_deref()
         .expect("dynamic eval callable descriptor must exist");
     let is_callable_symbol = module.target.extern_symbol("__elephc_eval_is_callable");
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the active eval context for dynamic callable validation
         "mov rdi, QWORD PTR [rbp - {}]",
         context_frame_offset
     ));                                                                         // load the active eval context for dynamic callable validation
@@ -1391,6 +1437,12 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
     abi::emit_call_label(emitter, &is_callable_symbol);
     emitter.instruction("test eax, eax");                                       // check whether magician accepts the callback value
     emitter.instruction(&format!("jz {}", fail_label));                         // reject non-callable eval values
+    emitter.instruction(&format!(                                               // reload the context before transferring descriptor ownership
+        "mov rdi, QWORD PTR [rbp - {}]",
+        context_frame_offset
+    ));                                                                         // reload the context before transferring one descriptor owner
+    let acquire_context = module.target.extern_symbol("__elephc_eval_context_acquire");
+    abi::emit_call_label(emitter, &acquire_context);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed callback value to retain it
     emitter.instruction("call __rt_incref");                                    // retain the callback for descriptor capture ownership
     abi::emit_push_reg(emitter, "rax");
@@ -1402,7 +1454,7 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
     );
     emitter.instruction("call __rt_heap_alloc");                                // allocate runtime descriptor storage with eval captures
     callable_descriptor::emit_copy_static_descriptor_to_runtime(emitter, "rax", descriptor_label);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // reload the retained context for descriptor capture zero
         "mov r10, QWORD PTR [rbp - {}]",
         context_frame_offset
     ));                                                                         // reload the active eval context for descriptor capture 0

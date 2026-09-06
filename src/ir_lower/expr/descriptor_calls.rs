@@ -391,13 +391,20 @@ pub(super) fn lower_first_class_callable_expr_call(
             Some(lower_static_method_call(ctx, receiver, method, args, expr))
         }
         ExprKind::FirstClassCallable(target @ CallableTarget::Method { .. }) => {
-            let signature = static_callable_binding_for_expr(ctx, callee)
-                .and_then(|target| signature_for_static_callable_binding(ctx, target));
+            let binding = static_callable_binding_for_expr(ctx, callee);
             let callable = lower_first_class_callable(ctx, target, callee);
-            let result_type = signature
+            let result_type = if binding
                 .as_ref()
-                .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
-                .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+                .is_some_and(|binding| instance_callable_is_date_serialize(ctx, binding))
+            {
+                PhpType::Mixed
+            } else {
+                binding
+                    .clone()
+                    .and_then(|target| signature_for_static_callable_binding(ctx, target))
+                    .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+                    .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr))
+            };
             let arg_container =
                 lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
             Some(emit_callable_descriptor_invoke(

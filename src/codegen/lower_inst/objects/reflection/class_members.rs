@@ -24,14 +24,52 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
         let Some((resolved_name, info)) = resolve_reflection_class(ctx, &current_name) else {
             break;
         };
-        push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
-        push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
+        push_unique_method_names(
+            info.methods
+                .keys()
+                .filter(|name| !reflection_method_is_hidden_datetime_helper(info, name)),
+            &mut names,
+            &mut seen,
+        );
+        push_unique_method_names(
+            info.static_methods
+                .keys()
+                .filter(|name| !reflection_method_is_hidden_datetime_helper(info, name)),
+            &mut names,
+            &mut seen,
+        );
         current = info.parent.clone();
         if current.as_deref() == Some(resolved_name) {
             break;
         }
     }
     names
+}
+
+/// Returns whether `method_name` is a compiler helper inherited from one native date base.
+///
+/// A user subclass may legally declare an identically-prefixed method, so the declaring
+/// class metadata—not the receiver ancestry or prefix alone—decides whether to hide it.
+pub(super) fn reflection_method_is_hidden_datetime_helper(
+    info: &crate::types::ClassInfo,
+    method_name: &str,
+) -> bool {
+    let method_key = php_symbol_key(method_name);
+    if method_key.starts_with("__elephc_date_magic_restore$") {
+        return true;
+    }
+    if !method_key.starts_with("__elephc_") {
+        return false;
+    }
+    info.method_declaring_classes
+        .get(&method_key)
+        .or_else(|| info.static_method_declaring_classes.get(&method_key))
+        .is_some_and(|declaring_class| {
+            matches!(
+                php_symbol_key(declaring_class.trim_start_matches('\\')).as_str(),
+                "datetime" | "datetimeimmutable" | "datetimezone" | "dateinterval" | "dateperiod"
+            )
+        })
 }
 
 /// Returns PHP case-sensitive property names visible to `ReflectionClass::hasProperty()`.

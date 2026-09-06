@@ -58,6 +58,8 @@ pub enum ValidationError {
         expected: &'static str,
     },
     UnexpectedImmediate(InstId),
+    DateSerializeHashReturnOutsideProvenance(InstId),
+    DateSerializeMixedToArrayReturnOutsideProvenance(InstId),
     UnknownRuntimeCallSignature(InstId),
     EffectMismatch {
         inst: InstId,
@@ -517,6 +519,38 @@ fn validate_opcode_rules(
         | MixedCastString => {
             check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)")
         }
+        HashToArrayReturn | DateSerializeHashReturn => {
+            if inst.op == Op::DateSerializeHashReturn
+                && (!function.flags.is_date_serialize_method || function.flags.by_ref_return)
+            {
+                return Err(ValidationError::DateSerializeHashReturnOutsideProvenance(inst_id));
+            }
+            if inst.immediate.is_some() {
+                return Err(ValidationError::UnexpectedImmediate(inst_id));
+            }
+            check_heap_unary(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")?;
+            if inst.result_type != IrType::Heap(IrHeapKind::Array) {
+                return Err(ValidationError::ResultTypeMismatch(
+                    inst.result.expect("HashToArrayReturn must produce a result"),
+                ));
+            }
+            let source = function
+                .value(inst.operands[0])
+                .ok_or(ValidationError::UnknownValue(inst.operands[0]))?
+                .php_type
+                .codegen_repr();
+            if !matches!(source, PhpType::AssocArray { .. })
+                || !matches!(
+                    inst.result_php_type.codegen_repr(),
+                    PhpType::Array(value) if value.codegen_repr() == PhpType::Mixed
+                )
+            {
+                return Err(ValidationError::PhpTypeMismatch(
+                    inst.result.expect("HashToArrayReturn must produce a result"),
+                ));
+            }
+            Ok(())
+        }
         ArrayUnion => check_binary(
             function,
             inst_id,
@@ -619,6 +653,26 @@ fn validate_opcode_rules(
         | InstanceOfDynamic => {
             check_count_at_least(inst_id, inst, 1, "at least 1")
         }
+        MethodCallExact => {
+            check_count_at_least(inst_id, inst, 1, "at least 1")?;
+            check_operand_type(
+                function,
+                inst_id,
+                inst,
+                0,
+                IrType::Heap(IrHeapKind::Object),
+                "Heap(Object)",
+            )?;
+            let receiver = function
+                .value(inst.operands[0])
+                .ok_or(ValidationError::UnknownValue(inst.operands[0]))?;
+            if !matches!(receiver.php_type.codegen_repr(), PhpType::Object(_)) {
+                return Err(ValidationError::PhpTypeMismatch(inst.operands[0]));
+            }
+            require_immediate(inst_id, inst, "exact declaring-class method data", |imm| {
+                matches!(imm, Immediate::Data(_))
+            })
+        }
         CallablePtr
         | NormalizeCallable
         | PdoAdapterAddr
@@ -689,6 +743,13 @@ fn validate_typed_runtime_call(
     let Some(Immediate::RuntimeCall(target)) = inst.immediate else {
         return Ok(());
     };
+    if target == crate::ir::RuntimeCallTarget::DateSerializeMixedToArrayReturn
+        && (!function.flags.is_date_serialize_method || function.flags.by_ref_return)
+    {
+        return Err(ValidationError::DateSerializeMixedToArrayReturnOutsideProvenance(
+            inst_id,
+        ));
+    }
     if is_runtime_argument_count_error(target, inst.operands.len()) {
         return Ok(());
     }
@@ -733,6 +794,124 @@ fn validate_typed_runtime_call(
                 });
             }
         }
+        crate::ir::RuntimeCallSignature::DateSerializeFinalize => {
+            validate_date_serialize_finalize_signature(function, inst_id, inst)?;
+        }
+        crate::ir::RuntimeCallSignature::MixedToArrayReturn => {
+            validate_mixed_to_array_return_signature(function, inst_id, inst)?;
+        }
+    }
+    Ok(())
+}
+
+/// Validates the consuming `mixed -> array<mixed>` return boundary.
+///
+/// The storage signature is deliberately insufficient here: a heap `Mixed` cell may carry any
+/// PHP value, while the lowering consumes it and promises an `array<mixed>` result. Enforce the
+/// PHP annotations for both the generic and DateTime serializer targets before code generation.
+fn validate_mixed_to_array_return_signature(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 1, "1")?;
+    check_operand_type(
+        function,
+        inst_id,
+        inst,
+        0,
+        IrType::Heap(IrHeapKind::Mixed),
+        "Heap(Mixed)",
+    )?;
+    let source = function
+        .value(inst.operands[0])
+        .ok_or(ValidationError::UnknownValue(inst.operands[0]))?;
+    if source.php_type.codegen_repr() != PhpType::Mixed {
+        return Err(ValidationError::PhpTypeMismatch(inst.operands[0]));
+    }
+    if inst.result_type != IrType::Heap(IrHeapKind::Array) {
+        return Err(ValidationError::ResultTypeMismatch(
+            inst.result.expect("MixedToArrayReturn must produce a result"),
+        ));
+    }
+    if !matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    ) {
+        return Err(ValidationError::PhpTypeMismatch(
+            inst.result.expect("MixedToArrayReturn must produce a result"),
+        ));
+    }
+    Ok(())
+}
+
+/// Validates the ownership boundary that boxes an ambiguous DateTime serializer result.
+///
+/// The raw method ABI must remain a generic mixed-element array until this operation inspects
+/// its concrete heap kind; the receiver may be statically object-typed or a dynamically proven
+/// Mixed/union object. The helper always returns one owned Mixed cell.
+fn validate_date_serialize_finalize_signature(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 2, "2")?;
+    let raw_ir_type = function
+        .value(inst.operands[0])
+        .ok_or(ValidationError::UnknownValue(inst.operands[0]))?
+        .ir_type;
+    if !matches!(raw_ir_type, IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash)) {
+        return Err(ValidationError::OperandTypeMismatch {
+            inst: inst_id,
+            operand: inst.operands[0],
+            expected: "Heap(Array) or Heap(Hash)",
+            actual: raw_ir_type,
+        });
+    }
+    let raw_result = function
+        .value(inst.operands[0])
+        .ok_or(ValidationError::UnknownValue(inst.operands[0]))?;
+    if !matches!(
+        raw_result.php_type.codegen_repr(),
+        PhpType::Array(value) if value.codegen_repr() == PhpType::Mixed
+    ) && !matches!(
+        raw_result.php_type.codegen_repr(),
+        PhpType::AssocArray { key, value }
+            if key.codegen_repr() == PhpType::Str && value.codegen_repr() == PhpType::Mixed
+    ) {
+        return Err(ValidationError::PhpTypeMismatch(inst.operands[0]));
+    }
+
+    let receiver = function
+        .value(inst.operands[1])
+        .ok_or(ValidationError::UnknownValue(inst.operands[1]))?;
+    if !matches!(
+        receiver.ir_type,
+        IrType::Heap(IrHeapKind::Object | IrHeapKind::Mixed | IrHeapKind::Union)
+    ) {
+        return Err(ValidationError::OperandTypeMismatch {
+            inst: inst_id,
+            operand: inst.operands[1],
+            expected: "Heap(Object), Heap(Mixed), or Heap(Union)",
+            actual: receiver.ir_type,
+        });
+    }
+    if !matches!(
+        receiver.php_type.codegen_repr(),
+        PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return Err(ValidationError::PhpTypeMismatch(inst.operands[1]));
+    }
+
+    if inst.result_type != IrType::Heap(IrHeapKind::Mixed) {
+        return Err(ValidationError::ResultTypeMismatch(
+            inst.result.expect("DateSerializeFinalize must produce a result"),
+        ));
+    }
+    if inst.result_php_type.codegen_repr() != PhpType::Mixed {
+        return Err(ValidationError::PhpTypeMismatch(
+            inst.result.expect("DateSerializeFinalize must produce a result"),
+        ));
     }
     Ok(())
 }

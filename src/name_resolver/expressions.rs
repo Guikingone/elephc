@@ -48,6 +48,13 @@ fn deprecated_constant_read(
 /// Rewrites compiler-only synthetic method names in user source so they cannot
 /// reach implementation helpers that php-src does not expose.
 fn source_visible_method_name(method: &str) -> String {
+    // Compiler-built and parse_internal preludes are trusted callers of their
+    // implementation methods. The surrounding statement resolver enters the
+    // statement's source mode before resolving expressions, so preserve those
+    // calls without exposing the same names to ordinary PHP input.
+    if crate::strict_php::source_mode() == crate::source::SourceMode::Internal {
+        return method.to_string();
+    }
     // The compiler-injected HashContext prelude calls this helper from its own
     // PHP body. It is already part of main's public prelude contract, so hiding
     // it here would rewrite the prelude itself and leave hash_init() unresolved.
@@ -77,6 +84,7 @@ pub(super) fn resolve_expr(
     imports: &Imports,
     symbols: &Symbols,
 ) -> Expr {
+    let mut resolved_span = expr.span;
     let kind = match &expr.kind {
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(resolve_expr(left, current_namespace, imports, symbols)),
@@ -162,6 +170,13 @@ pub(super) fn resolve_expr(
             } else if let Some(rewritten) =
                 rewrite_date_procedural_alias(&function_name, &resolved_args, expr.span)
             {
+                if matches!(
+                    &rewritten,
+                    ExprKind::StaticMethodCall { method, .. }
+                        if method.starts_with("__elephc_")
+                ) {
+                    resolved_span = crate::span::Span::dummy();
+                }
                 rewritten
             } else {
                 ExprKind::FunctionCall {
@@ -582,7 +597,7 @@ pub(super) fn resolve_expr(
         },
         _ => expr.kind.clone(),
     };
-    Expr::new(kind, expr.span)
+    Expr::new(kind, resolved_span)
 }
 
 /// Resolves the target of an instanceof expression.
@@ -1279,4 +1294,29 @@ pub(crate) fn date_procedural_alias_arity(name: &str) -> Option<(usize, usize)> 
         _ => return None,
     };
     Some(range)
+}
+
+#[cfg(test)]
+mod source_visibility_tests {
+    use super::source_visible_method_name;
+    use crate::source::SourceMode;
+
+    /// Verifies trusted prelude expressions retain compiler-only method names.
+    #[test]
+    fn internal_source_preserves_compiler_only_method_names() {
+        crate::strict_php::with_source_mode(SourceMode::Internal, || {
+            assert_eq!(source_visible_method_name("__elephc_attach"), "__elephc_attach");
+        });
+    }
+
+    /// Verifies ordinary PHP cannot address compiler-only method names directly.
+    #[test]
+    fn php_source_hides_compiler_only_method_names() {
+        crate::strict_php::with_source_mode(SourceMode::Php, || {
+            assert_eq!(
+                source_visible_method_name("__elephc_attach"),
+                "__elephc_attach__php_src_hidden"
+            );
+        });
+    }
 }

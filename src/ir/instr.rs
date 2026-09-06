@@ -364,6 +364,11 @@ pub enum Op {
     MixedTagOf,
     ArrayToMixed,
     HashToMixed,
+    /// Reinterprets an associative hash as PHP's generic array return without changing ownership.
+    HashToArrayReturn,
+    /// Reinterprets a DateTime-family `__serialize()` hash as its declared `array` return without
+    /// touching the pointer, its header, or its reference count; includes user overrides.
+    DateSerializeHashReturn,
     MixedCastBool,
     MixedCastInt,
     MixedCastFloat,
@@ -488,6 +493,8 @@ pub enum Op {
     NullsafeMethodCall,
     MethodLookup,
     MethodCall,
+    /// Calls one reflected declaring-class instance method without virtual override dispatch.
+    MethodCallExact,
     StaticMethodCall,
     EvalStaticMethodCall,
     /// Coerces a PHP numeric string operand to its integer value for an int-backed enum
@@ -658,6 +665,8 @@ impl Op {
             | DynamicClassHasConstructor
             | DynamicPdoStatementClassStatus
             | DynamicPdoCalledClassStatus
+            | HashToArrayReturn
+            | DateSerializeHashReturn
             | Move
             | Borrow
             | Nop => E::PURE,
@@ -769,7 +778,7 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
-            MethodCall | NullsafeMethodCall => {
+            MethodCall | MethodCallExact | NullsafeMethodCall => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT
             }
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
@@ -984,6 +993,8 @@ impl Op {
             MixedTagOf => "mixed_tag_of",
             ArrayToMixed => "array_to_mixed",
             HashToMixed => "hash_to_mixed",
+            HashToArrayReturn => "hash_to_array_return",
+            DateSerializeHashReturn => "date_serialize_hash_return",
             MixedCastBool => "mixed_cast_bool",
             MixedCastInt => "mixed_cast_int",
             MixedCastFloat => "mixed_cast_float",
@@ -1072,6 +1083,7 @@ impl Op {
             NullsafeMethodCall => "nullsafe_method_call",
             MethodLookup => "method_lookup",
             MethodCall => "method_call",
+            MethodCallExact => "method_call_exact",
             StaticMethodCall => "static_method_call",
             EvalStaticMethodCall => "eval_static_method_call",
             EnumBackingStringToInt => "enum_backing_string_to_int",

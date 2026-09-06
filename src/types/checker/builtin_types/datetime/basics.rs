@@ -8,6 +8,7 @@
 //! - Parsed PHP bodies preserve object-local timezone and sub-second state.
 
 use super::*;
+use crate::synthetic_class::{e_bool, e_not, e_this_prop, s_if};
 
 /// `DateTime`/`DateTimeImmutable::__construct(string $datetime = "now", ?DateTimeZone $timezone = null)`
 /// — stores a UNIX timestamp and the object's display zone.
@@ -51,19 +52,30 @@ pub(super) fn datetime_get_microsecond() -> ClassMethod {
     method("getMicrosecond", Vec::new(), Some(TypeExpr::Int), vec![return_expr(this_property("microsecond"))])
 }
 
-/// `DateTimeImmutable::getTimezone(): DateTimeZone` — re-materializes a zone from the stored name.
+/// Builds `DateTimeInterface::getTimezone(): DateTimeZone|false` from stored timelib state.
 pub(super) fn datetime_immutable_get_timezone() -> ClassMethod {
     method(
         "getTimezone",
         Vec::new(),
-        Some(TypeExpr::Named(Name::unqualified("DateTimeZone"))),
-        vec![return_expr(Expr::new(
-            ExprKind::NewObject {
-                class_name: Name::unqualified("DateTimeZone"),
-                args: vec![this_property("timezone_name")],
-            },
-            dummy(),
-        ))],
+        Some(TypeExpr::Union(vec![
+            TypeExpr::Named(Name::unqualified("DateTimeZone")),
+            TypeExpr::False,
+        ])),
+        vec![
+            s_if(
+                e_not(e_this_prop("__elephc_is_localtime")),
+                vec![return_expr(e_bool(false))],
+                vec![],
+                None,
+            ),
+            return_expr(Expr::new(
+                ExprKind::NewObject {
+                    class_name: Name::unqualified("DateTimeZone"),
+                    args: vec![this_property("timezone_name")],
+                },
+                dummy(),
+            )),
+        ],
     )
 }
 

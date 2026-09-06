@@ -87,7 +87,9 @@ fn eval_call_user_func_callback(
             eval_validate_call_user_func_callback(&callback, function_name, context, values)?;
             Ok(callback)
         }
-        Err(EvalStatus::UnsupportedConstruct) if values.type_tag(callback)? == EVAL_TAG_OBJECT => {
+        Err(EvalStatus::UnsupportedConstruct)
+            if matches!(values.type_tag(callback)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) =>
+        {
             eval_call_user_func_type_error(
                 function_name,
                 "no array or string given",
@@ -137,7 +139,7 @@ pub(in crate::interpreter) fn eval_callable_with_optional_scope(
             owner,
         });
     }
-    if values.type_tag(callback)? == EVAL_TAG_OBJECT {
+    if matches!(values.type_tag(callback)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) {
         return eval_object_callable(callback, context, values);
     }
     if values.is_array_like(callback)? {

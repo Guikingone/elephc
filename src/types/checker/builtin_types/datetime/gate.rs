@@ -17,7 +17,7 @@ use crate::parser::ast::Stmt;
 /// WHY THIS GATE EXISTS, measured rather than assumed. The `_class_*` metadata tables are dense
 /// arrays `max_class_id + 1` entries wide, and a class the checker registers but codegen never
 /// emits still claims its slot — 184 bytes across 22 id-indexed tables, counted from the
-/// emitted assembly. For `<?php echo 1;` 35 of 44 slots were sentinels, and this family held
+/// emitted assembly. For a trivial `echo 1;` program 35 of 44 slots were sentinels, and this family held
 /// the largest single share: gating it takes that program to 29 slots and its type-check phase
 /// from 13.75 ms to 3.30 ms. It is the same shape as the SPL and Reflection gates next door, and
 /// the same argument applies to the checker work these classes cost: DateTime alone carries

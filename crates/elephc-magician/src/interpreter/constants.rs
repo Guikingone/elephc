@@ -131,11 +131,6 @@ pub(super) const EVAL_MONTH_NAMES: &[&str; 12] = &[
     "December",
 ];
 
-/// Short English month names used by eval `date()`.
-pub(super) const EVAL_MONTH_SHORT_NAMES: &[&str; 12] = &[
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
 /// Full English weekday names used by eval `date()`.
 pub(super) const EVAL_WEEKDAY_NAMES: &[&str; 7] = &[
     "Sunday",
@@ -146,10 +141,6 @@ pub(super) const EVAL_WEEKDAY_NAMES: &[&str; 7] = &[
     "Friday",
     "Saturday",
 ];
-
-/// Short English weekday names used by eval `date()`.
-pub(super) const EVAL_WEEKDAY_SHORT_NAMES: &[&str; 7] =
-    &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /// `PHP_MAJOR_VERSION` — invariant across every profile elephc supports, so unlike
 /// `PHP_VERSION` / `PHP_VERSION_ID` / `PHP_MINOR_VERSION` it needs no lookup through

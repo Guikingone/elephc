@@ -154,7 +154,8 @@ pub(in crate::interpreter) fn eval_time_values_result(
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "microtime" => match evaluated_args {
-            [] | [_] => eval_microtime_result(values),
+            [] => eval_microtime_result(None, values),
+            [as_float] => eval_microtime_result(Some(*as_float), values),
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "sleep" => {

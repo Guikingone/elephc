@@ -19,7 +19,7 @@ pub(super) fn method_signature(
     let key = php_symbol_key(method);
     if let Some(class_name) = method_receiver_object_class(&object_ty) {
         let normalized = class_name.trim_start_matches('\\');
-        return class_method_signature(ctx, normalized, &key).cloned();
+        return runtime_class_method_signature(ctx, normalized, &key);
     }
     if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
         if ctx.has_eval_barrier() {
@@ -174,6 +174,19 @@ pub(super) fn class_method_signature<'a>(
         .and_then(|interface_info| interface_info.methods.get(method_key))
 }
 
+/// Resolves runtime instance signatures, including concrete methods behind date interfaces.
+pub(super) fn runtime_class_method_signature(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method_key: &str,
+) -> Option<FunctionSig> {
+    class_method_signature(ctx, class_name, method_key).cloned().or_else(|| {
+        crate::types::date_method_dispatch::concrete_date_interface_method(
+            ctx.classes, class_name, method_key,
+        )
+    })
+}
+
 /// Returns the checked return type for an instance method call when metadata is available.
 pub(super) fn method_call_result_type(
     ctx: &LoweringContext<'_, '_>,
@@ -208,6 +221,68 @@ pub(super) fn method_call_result_type(
     } else {
         return_ty
     }
+}
+
+/// Returns whether an ambiguously typed DateTime `__serialize()` result needs runtime-kind boxing.
+///
+/// Exact builtin DateTime implementations retain their proven hash representation. Calls through
+/// `DateTimeInterface` or a union containing it retain the declared raw `array` ABI result, then
+/// use `RuntimeCallTarget::DateSerializeFinalize` to inspect and box the actual layout without
+/// applying a generic array tag to a hash pointer.
+pub(super) fn method_call_uses_date_serialize_finalizer(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+    raw_result_type: &PhpType,
+) -> bool {
+    if php_symbol_key(method) != "__serialize"
+        || !matches!(
+            raw_result_type.codegen_repr(),
+            PhpType::Array(value) if value.codegen_repr() == PhpType::Mixed
+        ) && !matches!(
+            raw_result_type.codegen_repr(),
+            PhpType::AssocArray { key, value }
+                if key.codegen_repr() == PhpType::Str
+                    && value.codegen_repr() == PhpType::Mixed
+        )
+    {
+        return false;
+    }
+    date_serialize_receiver_is_ambiguous(ctx, &ctx.builder.value_php_type(object))
+}
+
+/// Returns whether a receiver type can dispatch `__serialize()` through the DateTime interface.
+fn date_serialize_receiver_is_ambiguous(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| date_serialize_receiver_is_ambiguous(ctx, member)),
+        PhpType::Object(class_name) => {
+            let normalized = class_name.trim_start_matches('\\');
+            normalized == "DateTimeInterface" || class_is_datetime_family(ctx, normalized)
+        }
+        _ => false,
+    }
+}
+
+/// Returns whether a class belongs to one of PHP's five built-in DateTime object families.
+fn class_is_datetime_family(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let mut current = Some(class_name);
+    while let Some(candidate) = current {
+        if matches!(
+            candidate,
+            "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+        ) {
+            return true;
+        }
+        current = ctx
+            .classes
+            .get(candidate)
+            .and_then(|class_info| class_info.parent.as_deref())
+            .map(|parent| parent.trim_start_matches('\\'));
+    }
+    false
 }
 
 /// Preserves the known associative representation of inherited ext/date `__serialize()` hooks.

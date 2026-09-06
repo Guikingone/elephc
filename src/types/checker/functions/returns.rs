@@ -374,6 +374,13 @@ impl Checker {
             return Ok(());
         }
 
+        // A runtime-opaque Mixed value is legal source for any declared value return. PHP
+        // validates its concrete tag at the return boundary and raises a catchable TypeError;
+        // rejecting it statically would erase that observable control flow.
+        if matches!(actual, PhpType::Mixed) {
+            return Ok(());
+        }
+
         if matches!(actual, PhpType::Void) && !Self::return_type_accepts_null(expected) {
             return Err(CompileError::new(
                 span,

@@ -1245,7 +1245,7 @@ fn return_cleanup_skip_slot_inner(
                 None
             }
         }
-        Op::ArrayToMixed | Op::HashToMixed => {
+        Op::ArrayToMixed | Op::HashToMixed | Op::HashToArrayReturn | Op::DateSerializeHashReturn => {
             let source = *inst.operands.first()?;
             let slot = direct_return_local_slot_inner(function, source, visited)?;
             let local_ty = local_codegen_type(function, slot)?;
@@ -1284,7 +1284,7 @@ fn direct_return_local_slot_inner(
             Some(Immediate::LocalSlot(slot)) => Some(slot),
             _ => None,
         },
-        Op::ArrayToMixed | Op::HashToMixed => {
+        Op::ArrayToMixed | Op::HashToMixed | Op::HashToArrayReturn | Op::DateSerializeHashReturn => {
             let source = *inst.operands.first()?;
             direct_return_local_slot_inner(function, source, visited)
         }

@@ -18,7 +18,7 @@ mod evaluation;
 
 pub(in crate::interpreter) use evaluation::{
     eval_array_access_object_matches, eval_array_get_result, eval_binary_result,
-    eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
+    eval_closure_object_expr, eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
 };
 use evaluation::*;
 

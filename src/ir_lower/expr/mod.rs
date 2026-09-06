@@ -12,7 +12,7 @@
 
 use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId,
-    MixedNumericOp, Op, Ownership, Terminator, ValueId,
+    MixedNumericOp, Op, Ownership, RuntimeCallTarget, Terminator, ValueId,
 };
 use crate::ir_lower::context::{
     value_ir_type, ClosureCapture, LoweredValue, LoweringContext, StaticCallableBinding,

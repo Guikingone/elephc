@@ -260,6 +260,9 @@ pub(crate) fn lower_class_method(
         is_method: true,
         is_static,
         by_ref_return: signature.by_ref_return,
+        is_date_serialize_method: !is_static
+            && !signature.by_ref_return
+            && is_date_serialize_method(class_name, method_name, &module.class_infos),
         ..FunctionFlags::default()
     };
     function.source_signature = Some(source_signature(&name, &signature));
@@ -329,6 +332,35 @@ pub(crate) fn lower_class_method(
     );
     add_closures(module, closures);
     module.class_methods.push(function);
+}
+
+/// Returns whether one instance method belongs to the DateTime serialization family.
+///
+/// The flag covers builtin methods and user overrides on descendants. The returned payload may be
+/// either indexed or associative, but only an associative source needs the typed hash-to-array
+/// owner transfer; the EIR validator uses this flag to reject that transfer in unrelated methods.
+fn is_date_serialize_method(
+    class_name: &str,
+    method_name: &str,
+    classes: &std::collections::HashMap<String, ClassInfo>,
+) -> bool {
+    if php_symbol_key(method_name) != "__serialize" {
+        return false;
+    }
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(candidate) = current {
+        if matches!(
+            candidate,
+            "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+        ) {
+            return true;
+        }
+        current = classes
+            .get(candidate)
+            .and_then(|class_info| class_info.parent.as_deref())
+            .map(|name| name.trim_start_matches('\\'));
+    }
+    false
 }
 
 /// Returns the local-binding decision maps an eval-AOT fragment lowers against: all three EMPTY.

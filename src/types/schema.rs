@@ -317,8 +317,15 @@ pub struct ClassInfo {
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
+    /// Declaring class for every physical instance-property slot, in `properties` order.
+    ///
+    /// The name-keyed map above deliberately names the currently visible property. Private parent
+    /// shadows need their original declaration provenance for serialization and restoration.
+    pub property_slot_declaring_classes: Vec<String>,
     pub defaults: Vec<Option<Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
+    /// Visibility for every physical instance-property slot, in `properties` order.
+    pub property_slot_visibilities: Vec<Visibility>,
     /// PHP 8.4 asymmetric write (`set`) visibility, only for properties whose write visibility
     /// differs from their read visibility (e.g. `public private(set)`). Properties absent here
     /// use their `property_visibilities` entry for writes too.

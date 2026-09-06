@@ -23,9 +23,11 @@ pub(super) fn make_set_timestamp(mutable: bool, class_name: &str) -> ClassMethod
         "setTimestamp",
         vec![("timestamp".to_string(), Some(TypeExpr::Int), None, false)],
         Some(TypeExpr::Named(Name::unqualified(class_name))),
-        result_tail_micro(
+        result_tail_micro_with_timezone_and_localtime(
             Expr::new(ExprKind::Variable("timestamp".to_string()), dummy()),
             Some(Expr::new(ExprKind::IntLiteral(0), dummy())),
+            None,
+            Some(Expr::new(ExprKind::BoolLiteral(true), dummy())),
             mutable,
             class_name,
         ),
@@ -91,9 +93,10 @@ pub(super) fn make_set_microsecond(mutable: bool, class_name: &str) -> ClassMeth
     let update = if mutable {
         "$this->microsecond = $microsecond;\nreturn $this;"
     } else {
-        "$__new = __elephc_new_instance_without_constructor(static::class);\n\
-         $__new->__unserialize($this->__serialize());\n\
-         $__new->__elephc_set_microsecond_raw($microsecond);\n\
+        "$__state = DateTimeImmutable::__elephc_export_state($this);\n\
+         $__state[\"microsecond\"] = $microsecond;\n\
+         $__new = __elephc_new_instance_without_constructor(static::class);\n\
+         DateTimeImmutable::__elephc_import_state($__new, $__state);\n\
          return $__new;"
     };
     let source = format!(
@@ -164,9 +167,11 @@ $__parsed = __elephc_timelib_set_civil(
                 dummy(),
             )
         };
-        body.extend(result_tail_micro(
+        body.extend(result_tail_micro_with_timezone_and_localtime(
             parsed_field("timestamp"),
             Some(parsed_field("microsecond")),
+            None,
+            Some(Expr::new(ExprKind::BoolLiteral(true), dummy())),
             mutable,
             class_name,
         ));
@@ -197,9 +202,11 @@ $__parsed = __elephc_timelib_set_civil(
         Stmt::assign("__mo", date_component_int("n")),
         Stmt::assign("__d", date_component_int("j")),
     ];
-    body.extend(result_tail_micro(
+    body.extend(result_tail_micro_with_timezone_and_localtime(
         mktime_call(["hour", "minute", "second", "__mo", "__d", "__y"]),
         Some(Expr::new(ExprKind::Variable("microsecond".to_string()), dummy())),
+        None,
+        Some(Expr::new(ExprKind::BoolLiteral(true), dummy())),
         mutable,
         class_name,
     ));
@@ -258,9 +265,11 @@ $__parsed = __elephc_timelib_set_civil(
                 dummy(),
             )
         };
-        body.extend(result_tail_micro(
+        body.extend(result_tail_micro_with_timezone_and_localtime(
             parsed_field("timestamp"),
             Some(parsed_field("microsecond")),
+            None,
+            Some(Expr::new(ExprKind::BoolLiteral(true), dummy())),
             mutable,
             class_name,
         ));
@@ -280,8 +289,11 @@ $__parsed = __elephc_timelib_set_civil(
         Stmt::assign("__mi", date_component_int("i")),
         Stmt::assign("__s", date_component_int("s")),
     ];
-    body.extend(result_tail(
+    body.extend(result_tail_micro_with_timezone_and_localtime(
         mktime_call(["__h", "__mi", "__s", "month", "day", "year"]),
+        Some(this_property("microsecond")),
+        None,
+        Some(Expr::new(ExprKind::BoolLiteral(true), dummy())),
         mutable,
         class_name,
     ));
@@ -310,23 +322,27 @@ pub(super) fn var_property(var: &str, property: &str) -> Expr {
 
 /// `setTimezone(DateTimeZone $timezone)` — stores the zone identifier (keeps the timestamp).
 ///
-/// Reads the zone through its public `getName()` API. `DateTime` mutates `$this`;
+/// Reads the zone through the private final state boundary. `DateTime` mutates `$this`;
 /// `DateTimeImmutable` returns a fresh instance with the same timestamp and the new timezone name.
 pub(super) fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod {
     let tz_name = Expr::new(
-        ExprKind::MethodCall {
-            object: Box::new(Expr::new(
+        ExprKind::StaticMethodCall {
+            receiver: StaticReceiver::Named(Name::unqualified("DateTimeZone")),
+            method: "__elephc_export_name".to_string(),
+            args: vec![Expr::new(
                 ExprKind::Variable("timezone".to_string()),
                 dummy(),
-            )),
-            method: "getName".to_string(),
-            args: Vec::new(),
+            )],
         },
         dummy(),
     );
     let body = if mutable {
         vec![
             assign_this_property("timezone_name", tz_name),
+            assign_this_property(
+                "__elephc_is_localtime",
+                Expr::new(ExprKind::BoolLiteral(true), dummy()),
+            ),
             return_expr(Expr::new(ExprKind::This, dummy())),
         ]
     } else {
@@ -355,6 +371,14 @@ pub(super) fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod 
                     object: Box::new(new_var()),
                     property: "timezone_name".to_string(),
                     value: tz_name,
+                },
+                dummy(),
+            ),
+            Stmt::new(
+                StmtKind::PropertyAssign {
+                    object: Box::new(new_var()),
+                    property: "__elephc_is_localtime".to_string(),
+                    value: Expr::new(ExprKind::BoolLiteral(true), dummy()),
                 },
                 dummy(),
             ),
@@ -456,9 +480,11 @@ if ($__interval_result["warning"]) {{
                 dummy(),
             )
         };
-        body.extend(result_tail_micro(
+        body.extend(result_tail_micro_with_timezone_and_localtime(
             result_value("timestamp"),
             Some(result_value("microsecond")),
+            None,
+            Some(Expr::new(ExprKind::BoolLiteral(true), dummy())),
             mutable,
             class_name,
         ));
@@ -564,9 +590,11 @@ if ($__interval_result["warning"]) {{
         carry_up,
         borrow_down,
     ];
-    body.extend(result_tail_micro(
+    body.extend(result_tail_micro_with_timezone_and_localtime(
         mktime_call(["__h", "__mi", "__s", "__mo", "__d", "__y"]),
         Some(var("__micro")),
+        None,
+        Some(Expr::new(ExprKind::BoolLiteral(true), dummy())),
         mutable,
         class_name,
     ));
@@ -615,13 +643,14 @@ $__timezone = $__modified["reset_to_utc"] ? "+00:00" : $this->timezone_name;
     );
     let tokens = crate::lexer::tokenize(&src).expect("modify body must tokenize");
     let mut body = crate::parser::parse(&tokens).expect("modify body must parse");
-    body.extend(result_tail_micro_with_timezone(
+    body.extend(result_tail_micro_with_timezone_and_localtime(
         Expr::new(ExprKind::Variable("__ts".to_string()), dummy()),
         Some(Expr::new(ExprKind::Variable("__micro".to_string()), dummy())),
         Some(Expr::new(
             ExprKind::Variable("__timezone".to_string()),
             dummy(),
         )),
+        Some(Expr::new(ExprKind::BoolLiteral(true), dummy())),
         mutable,
         class_name,
     ));
@@ -1058,7 +1087,7 @@ if ($parsedO !== "") {
     } catch (DateInvalidTimeZoneException $exception) {
         return false;
     }
-    $parseZone = $zoneObject->getName();
+    $parseZone = DateTimeZone::__elephc_export_name($zoneObject);
     $displayZone = $parseZone;
 }
 if ($hasU) {
@@ -1074,7 +1103,7 @@ if ($hasU) {
     $ts = __elephc_mktime_raw($H, $mi, $se, $mo, $da, $Y);
 } else {
     $saved = date_default_timezone_get();
-    date_default_timezone_set(DateTime::__elephc_runtime_timezone_name($timezone->getName()));
+    date_default_timezone_set(DateTime::__elephc_runtime_timezone_name(DateTimeZone::__elephc_export_name($timezone)));
     $ts = __elephc_mktime_raw($H, $mi, $se, $mo, $da, $Y);
     date_default_timezone_set($saved);
 }
@@ -1090,7 +1119,7 @@ if (!$hasU) {
     } else if ($displayZone !== "") {
         date_default_timezone_set(DateTime::__elephc_runtime_timezone_name($displayZone));
     } else if ($timezone !== null) {
-        date_default_timezone_set(DateTime::__elephc_runtime_timezone_name($timezone->getName()));
+        date_default_timezone_set(DateTime::__elephc_runtime_timezone_name(DateTimeZone::__elephc_export_name($timezone)));
     }
     $__checkY = intval(date("Y", $ts));
     $__checkM = intval(date("n", $ts));
@@ -1110,7 +1139,7 @@ if ($displayZone !== "") {
     // `?DateTimeZone`, whose value reaches here boxed as Mixed, and setTimezone reads the
     // `name` property directly (which mis-reads a boxed receiver). getName() dispatches by
     // runtime class id, so it resolves correctly, mirroring the two-argument constructor.
-    $o->timezone_name = $timezone->getName();
+    $o->timezone_name = DateTimeZone::__elephc_export_name($timezone);
 }
 DateTime::$lastErrorCount = 0;
 $o = $o->setMicrosecond($umicro);
@@ -1138,7 +1167,7 @@ if (str_contains($datetime, chr(0))) {
 }
 $timezoneName = date_default_timezone_get();
 if ($timezone !== null) {
-    $timezoneName = $timezone->getName();
+    $timezoneName = DateTimeZone::__elephc_export_name($timezone);
 }
 $parsed = __elephc_timelib_create_from_format($format, $datetime, $timezoneName);
 if ($parsed["error_count"] > 0) {
@@ -1318,20 +1347,21 @@ pub(super) fn datetime_idate() -> ClassMethod {
 /// target class name.
 pub(super) const CREATE_FROM_OBJECT_SRC: &str = r#"<?php
 __VALIDATION__
+if ($object instanceof DateTime) {
+    $state = DateTime::__elephc_export_state($object);
+} elseif ($object instanceof DateTimeImmutable) {
+    $state = DateTimeImmutable::__elephc_export_state($object);
+} else {
+    throw new TypeError("__TARGET__::__METHOD__(): Argument #1 ($object) must be of type __SOURCE__");
+}
 $className = static::class;
-$timezone = $object->format("e");
-$data = [
-    "date" => $object->format("x-m-d H:i:s.u"),
-    "timezone_type" => DateTime::__elephc_timezone_type($timezone),
-    "timezone" => $timezone,
-];
 if ($className === __TARGET__::class) {
     $baseResult = new __TARGET__();
-    $baseResult->__unserialize($data);
+    __TARGET__::__elephc_import_state($baseResult, $state);
     return $baseResult;
 }
 $subclassResult = __elephc_new_instance_without_constructor($className);
-$subclassResult->__unserialize($data);
+__TARGET__::__elephc_import_state($subclassResult, $state);
 return $subclassResult;
 "#;
 
@@ -1363,6 +1393,9 @@ if (!($object instanceof __SOURCE__)) {
     let src = CREATE_FROM_OBJECT_SRC
         .replace("__VALIDATION__", &validation)
         .replace("__TARGET__", target_class);
+    let src = src
+        .replace("__METHOD__", method_name)
+        .replace("__SOURCE__", source_class);
     let tokens =
         crate::lexer::tokenize(&src).expect("createFrom* body source must tokenize");
     let body = crate::parser::parse(&tokens).expect("createFrom* body source must parse");
@@ -1395,6 +1428,277 @@ if (!($object instanceof __SOURCE__)) {
         span: dummy(),
         attributes: Vec::new(),
     }
+}
+
+/// Exports one concrete DateTime implementation state without virtual method dispatch.
+///
+/// php-src clones `timelib_time` directly for the public cross-conversion factories;
+/// keeping this helper static and class-scoped prevents subclass overrides of `format()`
+/// or `__unserialize()` from observing the implementation path.
+pub(super) fn datetime_export_state(class_name: &str) -> ClassMethod {
+    let source = r#"<?php
+return $value->__elephc_export_state_instance();
+"#;
+    let tokens = crate::lexer::tokenize(&source)
+        .expect("DateTime internal state export body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTime internal state export body must parse");
+    ClassMethod {
+        name: "__elephc_export_state".to_string(),
+        visibility: Visibility::Private,
+        is_static: true,
+        is_abstract: false,
+        is_final: true,
+        has_body: true,
+        params: vec![(
+            "value".to_string(),
+            Some(TypeExpr::Named(Name::unqualified(class_name))),
+            None,
+            false,
+        )],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("array"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Exports the receiver's DateTime storage after eval has materialized the native object handle.
+///
+/// The helper is private and final so cross-conversion never invokes a user override. Keeping the
+/// slot reads on `$this` also lets the eval-to-AOT method bridge translate an eval-held object into
+/// its native receiver representation before the fixed-layout properties are accessed.
+pub(super) fn datetime_export_state_instance() -> ClassMethod {
+    let source = r#"<?php
+return [
+    "timestamp" => $this->timestamp,
+    "timezone_name" => $this->timezone_name,
+    "is_localtime" => $this->__elephc_is_localtime,
+    "microsecond" => $this->microsecond,
+    "civil_override" => $this->__elephc_civil_override,
+    "civil_year" => $this->__elephc_civil_year,
+    "civil_month" => $this->__elephc_civil_month,
+    "civil_day" => $this->__elephc_civil_day,
+];
+"#;
+    let tokens = crate::lexer::tokenize(source)
+        .expect("DateTime internal instance state export body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTime internal instance state export body must parse");
+    ClassMethod {
+        name: "__elephc_export_state_instance".to_string(),
+        visibility: Visibility::Private,
+        is_static: false,
+        is_abstract: false,
+        is_final: true,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("array"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Imports one DateTime state into a concrete target without invoking magic methods.
+pub(super) fn datetime_import_state(class_name: &str) -> ClassMethod {
+    let source = r#"<?php
+return $value->__elephc_import_state_instance($state);
+"#;
+    let tokens = crate::lexer::tokenize(source)
+        .expect("DateTime internal state import body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTime internal state import body must parse");
+    ClassMethod {
+        name: "__elephc_import_state".to_string(),
+        visibility: Visibility::Private,
+        is_static: true,
+        is_abstract: false,
+        is_final: true,
+        has_body: true,
+        params: vec![
+            (
+                "value".to_string(),
+                Some(TypeExpr::Named(Name::unqualified(class_name))),
+                None,
+                false,
+            ),
+            (
+                "state".to_string(),
+                Some(TypeExpr::Named(Name::unqualified("array"))),
+                None,
+                false,
+            ),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Imports DateTime storage through a materialized native receiver.
+///
+/// Like the export counterpart, this helper is private and final so state transfer cannot invoke
+/// user code while eval-to-AOT calls still receive the correct fixed-layout object representation.
+pub(super) fn datetime_import_state_instance() -> ClassMethod {
+    let source = r#"<?php
+$this->timestamp = $state["timestamp"];
+$this->timezone_name = $state["timezone_name"];
+$this->__elephc_is_localtime = $state["is_localtime"];
+$this->microsecond = $state["microsecond"];
+$this->__elephc_civil_override = $state["civil_override"];
+$this->__elephc_civil_year = $state["civil_year"];
+$this->__elephc_civil_month = $state["civil_month"];
+$this->__elephc_civil_day = $state["civil_day"];
+$this->__elephc_initialized = true;
+"#;
+    let tokens = crate::lexer::tokenize(source)
+        .expect("DateTime internal instance state import body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTime internal instance state import body must parse");
+    ClassMethod {
+        name: "__elephc_import_state_instance".to_string(),
+        visibility: Visibility::Private,
+        is_static: false,
+        is_abstract: false,
+        is_final: true,
+        has_body: true,
+        params: vec![(
+            "state".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
+            None,
+            false,
+        )],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds one private final scalar-state accessor for internal DateTime operations.
+pub(super) fn datetime_internal_state_accessor(
+    method_name: &str,
+    property_name: &str,
+    return_type: TypeExpr,
+) -> ClassMethod {
+    let mut result = method(
+        method_name,
+        Vec::new(),
+        Some(return_type),
+        vec![return_expr(this_property(property_name))],
+    );
+    result.visibility = Visibility::Private;
+    result.is_final = true;
+    result
+}
+
+/// Builds a private static scalar-state boundary for one concrete DateTime family.
+pub(super) fn datetime_static_state_accessor(
+    class_name: &str,
+    method_name: &str,
+    instance_method: &str,
+    return_type: TypeExpr,
+) -> ClassMethod {
+    let property_name = match instance_method {
+        "__elephc_timestamp_internal" => "timestamp",
+        "__elephc_microsecond_internal" => "microsecond",
+        "__elephc_timezone_name_internal" => "timezone_name",
+        _ => panic!("unknown DateTime internal scalar accessor: {instance_method}"),
+    };
+    let body = vec![return_expr(Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(
+                ExprKind::Variable("value".to_string()),
+                dummy(),
+            )),
+            property: property_name.to_string(),
+        },
+        dummy(),
+    ))];
+    let mut result = method(
+        method_name,
+        vec![(
+            "value".to_string(),
+            Some(TypeExpr::Named(Name::unqualified(class_name))),
+            None,
+            false,
+        )],
+        Some(return_type),
+        body,
+    );
+    result.visibility = Visibility::Private;
+    result.is_static = true;
+    result.is_final = true;
+    result
+}
+
+/// Builds the private DatePeriod-only civil progression method backed by vendored timelib.
+pub(super) fn datetime_period_advance() -> ClassMethod {
+    let advanced = crate::synthetic_class::e_var("advanced");
+    let body = vec![
+        crate::synthetic_class::s_assign(
+            "advanced",
+            crate::synthetic_class::e_call(
+                "__elephc_timelib_period_advance",
+                vec![
+                    crate::synthetic_class::e_this_prop("timestamp"),
+                    crate::synthetic_class::e_this_prop("microsecond"),
+                    crate::synthetic_class::e_this_prop("timezone_name"),
+                    crate::synthetic_class::e_method_call(
+                        crate::synthetic_class::e_var("interval"),
+                        "__elephc_payload",
+                        Vec::new(),
+                    ),
+                ],
+            ),
+        ),
+        crate::synthetic_class::s_prop_assign(
+            crate::synthetic_class::e_this(),
+            "timestamp",
+            crate::synthetic_class::e_index(advanced.clone(), crate::synthetic_class::e_int(0)),
+        ),
+        crate::synthetic_class::s_prop_assign(
+            crate::synthetic_class::e_this(),
+            "microsecond",
+            crate::synthetic_class::e_index(advanced, crate::synthetic_class::e_int(1)),
+        ),
+    ];
+    let mut result = method(
+        "__elephc_period_advance",
+        vec![(
+            "interval".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("DateInterval"))),
+            None,
+            false,
+        )],
+        Some(TypeExpr::Void),
+        body,
+    );
+    result.visibility = Visibility::Private;
+    result.is_final = true;
+    result
 }
 
 /// PHP source backing `createFromTimestamp(int|float $timestamp): static` (PHP 8.4): reject
@@ -1431,13 +1735,19 @@ if ($microseconds >= 1000000) {
 if (static::class === __CFT_CLASS__::class) {
     $baseResult = new __CFT_CLASS__("@" . $secs);
     $baseResult->microsecond = $microseconds;
-    return $baseResult;
+$baseResult->__elephc_is_localtime = true;
+return $baseResult;
 }
 $subclassResult = __elephc_new_instance_without_constructor(static::class);
-$subclassResult->__unserialize([
-    "date" => gmdate("x-m-d H:i:s", $secs) . "." . sprintf("%06d", $microseconds),
-    "timezone_type" => 1,
-    "timezone" => "+00:00",
+__CFT_CLASS__::__elephc_import_state($subclassResult, [
+    "timestamp" => $secs,
+    "timezone_name" => "+00:00",
+    "is_localtime" => true,
+    "microsecond" => $microseconds,
+    "civil_override" => false,
+    "civil_year" => 1970,
+    "civil_month" => 1,
+    "civil_day" => 1,
 ]);
 return $subclassResult;
 "#;
@@ -1518,6 +1828,7 @@ $result = new {class_name}();
 $result->timestamp = $timestamp;
 $result->timezone_name = $this->timezone_name;
 $result->microsecond = $microsecond;
+$result->__elephc_is_localtime = $this->__elephc_is_localtime;
 $result->__elephc_civil_override = true;
 $result->__elephc_civil_year = $civilYear;
 $result->__elephc_civil_month = $civilMonth;

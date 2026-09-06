@@ -49,8 +49,8 @@ function date_default_timezone_set(string $timezoneId): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_set.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_set.rs) (`eval_builtin!`)
-- **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `runtime-state-or-resource`.
+- **Execution**: generated-runtime ABI (`RuntimeBuiltinId(23)`) with a Magician fallback adapter.
+- **Adapter reason**: `additional-signature-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

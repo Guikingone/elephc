@@ -147,6 +147,19 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             }
             abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
         }
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            if is_x86 {
+                ctx.emitter.instruction("mov rsi, rax");                        // value_lo = Closure descriptor pointer
+                ctx.emitter.instruction("mov rdi, 10");                         // value_tag = non-serializable Closure
+                ctx.emitter.instruction("mov rdx, 0");                          // value_hi unused
+            } else {
+                ctx.emitter.instruction("mov x1, x0");                          // value_lo = Closure descriptor pointer
+                ctx.emitter.instruction("mov x0, #10");                         // value_tag = non-serializable Closure
+                ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "serialize() of {:?} is not yet supported",

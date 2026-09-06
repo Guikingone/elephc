@@ -30,9 +30,6 @@ use super::calendar;
 #[cfg(test)]
 use super::declarations::InterfaceDeclInfo;
 #[cfg(test)]
-use super::timezone_ids;
-
-#[cfg(test)]
 #[allow(dead_code)]
 mod ast;
 #[cfg(test)]
@@ -240,25 +237,15 @@ mod bodies_oracle {
         }
     }
 
-    /// `listIdentifiers()` has no PHP constant to diff — its body was FORMATTED from the
-    /// identifier fragment and reparsed. This pins the two representations of that data together:
-    /// the slice the builder reads and the PHP fragment the old path spliced must produce the
-    /// same array literal, so neither can drift without the other.
+    /// `listIdentifiers()` shares the production prelude's direct-AST filter body.
     #[test]
-    fn built_identifier_list_matches_the_php_fragment() {
-        let php = format!(
-            "<?php\nreturn [{}];\n",
-            super::timezone_ids::TIMEZONE_IDENTIFIERS_ARRAY
-        );
-        let tokens = crate::lexer::tokenize(&php).expect("identifier fragment must tokenize");
-        let parsed = crate::parser::parse_internal(&tokens).expect("identifier fragment must parse");
-        let built = bodies::list_identifiers(super::timezone_ids::TIMEZONE_IDENTIFIERS);
-
-        assert_eq!(built.len(), parsed.len(), "listIdentifiers: statement COUNT differs");
+    fn built_identifier_list_reuses_the_shared_filter() {
+        let built = bodies::list_identifiers();
+        let shared = crate::list_id_prelude::list_identifier_filter_body();
         assert_eq!(
-            strip_spans(&format!("{:?}", built[0])),
-            strip_spans(&format!("{:?}", parsed[0])),
-            "listIdentifiers: the built array literal differs from the PHP fragment"
+            strip_spans(&format!("{built:?}")),
+            strip_spans(&format!("{shared:?}")),
+            "listIdentifiers must reuse the shared php-src filter"
         );
     }
 
@@ -315,6 +302,7 @@ mod bodies_oracle {
             &mut classes,
             uses_timelib,
         );
+        hide_datetime_implementation_helpers(&mut interfaces, &mut classes);
 
         let mut declarations = Vec::new();
         declarations.push(interface_declaration(
@@ -336,6 +324,35 @@ mod bodies_oracle {
             ));
         }
         declarations
+    }
+
+    /// Hides compiler-only DateTime helper methods from the generated PHP surface.
+    ///
+    /// Native ext/date exposes no `__elephc_*` methods or interface members.  The
+    /// generated classes still need the helpers internally, so concrete methods stay
+    /// private and source-mode-aware checker access retains their cross-class calls.
+    fn hide_datetime_implementation_helpers(
+        interfaces: &mut HashMap<String, InterfaceDeclInfo>,
+        classes: &mut HashMap<String, FlattenedClass>,
+    ) {
+        for interface in interfaces.values_mut() {
+            interface
+                .methods
+                .retain(|method| !method.name.starts_with("__elephc_"));
+        }
+        for class in classes.values_mut() {
+            for method in &mut class.methods {
+                if method.name.starts_with("__elephc_")
+                    && !matches!(
+                        method.name.as_str(),
+                        "__elephc_deprecated_string_constant"
+                            | "__elephc_deprecated_int_constant"
+                    )
+                {
+                    method.visibility = Visibility::Private;
+                }
+            }
+        }
     }
 
     /// Generates one direct-AST DateTime declaration variant into `output_path`.

@@ -42,7 +42,7 @@ pub(in crate::interpreter) fn bind_evaluated_builtin_args(
 
     for arg in evaluated_args {
         if let Some(name) = arg.name {
-            bind_builtin_named_arg(params, &mut bound_args, &name, arg.value)?;
+            bind_builtin_named_arg(&params, &mut bound_args, &name, arg.value)?;
         } else {
             bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, arg.value)?;
         }
@@ -120,10 +120,10 @@ fn eval_builtin_default_arg(
 /// Returns PHP parameter names for builtin calls implemented by eval.
 pub(in crate::interpreter) fn eval_builtin_param_names(
     name: &str,
-) -> Option<&'static [&'static str]> {
+) -> Option<Vec<&'static str>> {
     if let Some(params) = eval_declared_builtin_param_names(name) {
-        return Some(params);
+        return Some(params.to_vec());
     }
-
-    None
+    elephc_builtin_contract::lookup(name)
+        .map(|contract| contract.params.iter().map(|param| param.name).collect())
 }
