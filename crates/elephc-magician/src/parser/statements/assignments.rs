@@ -698,6 +698,20 @@ impl Parser {
         // (`eval_property_get_result` / `eval_property_set_result`), which enforce visibility
         // and consult the dynamic-property overlay. Unfolding it back is what keeps that path,
         // and every expectation that names those statements, exactly as it was.
+        // A whole-STATEMENT reference bind keeps its dedicated statement. The expression parser
+        // now folds `TARGET = &SOURCE` into one node so it can also be a condition, and this
+        // unfolds it back: `PropertyReferenceBind` and its siblings resolve their source through
+        // `scope.reference_target()`, which an expression node does not do.
+        if let EvalExpr::ReferenceBind {
+            target: bind_target,
+            source,
+        } = target
+        {
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return reference_bind_statements(*bind_target, *source);
+        }
         if let EvalExpr::ArrayAppendAssign {
             target: append_target,
             value,
@@ -1031,4 +1045,47 @@ fn next_reference_binding_name() -> String {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("\0elephc_reference_source:{id}")
+}
+
+/// Lowers one parsed `TARGET = &SOURCE` into the statement family that binds it.
+///
+/// Each target family has its own statement because each resolves its source differently: an
+/// element writes through `ArrayReferenceBind`, a plain name aliases symmetrically through
+/// `ReferenceAssign`, and a property identifies its source by SCOPE NAME -- so a source that is
+/// not already a name is bound to a hidden one first, which is what
+/// `parse_reference_source_via_alias` does when the source is parsed rather than handed over.
+fn reference_bind_statements(
+    target: EvalExpr,
+    source: EvalExpr,
+) -> Result<Vec<EvalStmt>, EvalParseError> {
+    if matches!(target, EvalExpr::ArrayGet { .. }) {
+        return Ok(vec![EvalStmt::ArrayReferenceBind { target, source }]);
+    }
+    if let EvalExpr::LoadVar(name) = target {
+        return Ok(vec![match source {
+            EvalExpr::LoadVar(source) => EvalStmt::ReferenceAssign {
+                target: name,
+                source,
+            },
+            source => EvalStmt::VarReferenceBind {
+                target: name,
+                source,
+            },
+        }]);
+    }
+    let (mut stmts, source) = match source {
+        EvalExpr::LoadVar(name) => (Vec::new(), name),
+        source => {
+            let alias = next_reference_binding_name();
+            (
+                vec![EvalStmt::VarReferenceBind {
+                    target: alias.clone(),
+                    source,
+                }],
+                alias,
+            )
+        }
+    };
+    stmts.push(property_reference_bind_stmt(target, source)?);
+    Ok(stmts)
 }

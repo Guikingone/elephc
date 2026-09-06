@@ -494,6 +494,10 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
             target: value,
             value: default,
         }
+        | EvalExpr::ReferenceBind {
+            target: value,
+            source: default,
+        }
         | EvalExpr::Assign {
             target: value,
             value: default,

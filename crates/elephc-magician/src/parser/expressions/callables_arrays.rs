@@ -493,6 +493,10 @@ fn collect_arrow_expr_variables(expr: &EvalExpr, names: &mut Vec<String>) {
             target: object,
             value: method,
         }
+        | EvalExpr::ReferenceBind {
+            target: object,
+            source: method,
+        }
         | EvalExpr::Assign {
             target: object,
             value: method,

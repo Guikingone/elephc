@@ -200,6 +200,15 @@ pub enum EvalExpr {
     ArrayAppendSlot {
         target: Box<EvalExpr>,
     },
+    /// `TARGET = &SOURCE` used where a VALUE is wanted, as in `if (null !== $e = &self::$c[$k])`.
+    ///
+    /// PHP's reference assignment is an expression. Its value is the bound value as a COPY, not
+    /// a second alias: after `$a = ($b = &$one); $one = 9;` php reports `$b` as 9 and `$a` as
+    /// the 1 it copied.
+    ReferenceBind {
+        target: Box<EvalExpr>,
+        source: Box<EvalExpr>,
+    },
     /// `$target[] = value` used where a VALUE is wanted, as in `return $this->rules[] = $r;`.
     ///
     /// PHP's append is an ordinary assignment expression whose value is the assigned one, so it

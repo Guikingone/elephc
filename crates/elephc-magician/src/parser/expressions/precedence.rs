@@ -173,9 +173,32 @@ impl Parser {
         }
         if assignment == Some(None)
             && matches!(self.peek(), TokenKind::Ampersand)
-            && is_property_reference_target(&target)
+            && !is_assignment_target(&target)
+            && nested_assignment_target
         {
-            return Ok(target);
+            // `null !== $exists = &self::$cache[$key]` binds the RIGHTMOST writable child, the
+            // same rule `nested_assignment_expr` applies to an ordinary assignment.
+            self.advance();
+            self.advance();
+            let source = self.parse_reference_source_expr()?;
+            return nested_reference_bind_expr(&target, source)
+                .ok_or(EvalParseError::UnexpectedToken);
+        }
+        if assignment == Some(None)
+            && matches!(self.peek(), TokenKind::Ampersand)
+            && is_assignment_target(&target)
+        {
+            // PHP's reference assignment is an EXPRESSION, and
+            // `if (null !== $exists = &self::$cache[$key])` needs it to be one. The statement
+            // tails unfold this node back into their dedicated binding statements, the way they
+            // do for an append, so a whole-statement bind keeps the lowering it had.
+            self.advance();
+            self.advance();
+            let source = self.parse_reference_source_expr()?;
+            return Ok(EvalExpr::ReferenceBind {
+                target: Box::new(target),
+                source: Box::new(source),
+            });
         }
         // `$name = &<lvalue>` where the result is used. PHP's `=` takes a `&` source wherever an
         // assignment is an expression, and `symfony/config/Resource/ClassExistenceResource.php`
@@ -769,6 +792,39 @@ fn nested_assignment_target(target: &EvalExpr) -> bool {
         _ => return false,
     };
     is_assignment_target(right) || nested_assignment_target(right)
+}
+
+/// Rebuilds an expression with its rightmost writable child replaced by a REFERENCE bind.
+///
+/// The mirror of `nested_assignment_expr`, for `= &`. PHP puts assignment below comparison, so
+/// `null !== $e = &$src` binds `$e` and compares the result, and a condition written that way is
+/// the whole reason the bind has to be an expression.
+fn nested_reference_bind_expr(target: &EvalExpr, source: EvalExpr) -> Option<EvalExpr> {
+    if let Some(inner) = negated_assignment_target(target) {
+        return Some(EvalExpr::Unary {
+            op: EvalUnaryOp::LogicalNot,
+            expr: Box::new(EvalExpr::ReferenceBind {
+                target: Box::new(inner),
+                source: Box::new(source),
+            }),
+        });
+    }
+    let EvalExpr::Binary { op, left, right } = target else {
+        return None;
+    };
+    let bound = if is_assignment_target(right) {
+        EvalExpr::ReferenceBind {
+            target: Box::new(right.as_ref().clone()),
+            source: Box::new(source),
+        }
+    } else {
+        nested_reference_bind_expr(right, source)?
+    };
+    Some(EvalExpr::Binary {
+        op: *op,
+        left: Box::new(left.as_ref().clone()),
+        right: Box::new(bound),
+    })
 }
 
 /// Rebuilds an expression with its rightmost writable child replaced by an assignment.

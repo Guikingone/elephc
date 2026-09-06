@@ -207,6 +207,49 @@ pub(in crate::interpreter) fn eval_array_append_reference_bind(
     write_reference_location(location, source_target, source_value, context, scope, values)
 }
 
+/// Binds one reference and returns the bound VALUE, for `TARGET = &SOURCE` in expression position.
+///
+/// PHP's value here is the bound value as a COPY rather than a second alias: after
+/// `$a = ($b = &$one); $one = 9;` php reports `$b` as 9 and `$a` as the 1 it copied. Returning
+/// the source's current cell gives exactly that, because the outer assignment copies it.
+pub(in crate::interpreter) fn eval_reference_bind_result(
+    target: &EvalExpr,
+    source: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    // Two plain NAMES alias SYMMETRICALLY -- writing either updates both -- and only the scope's
+    // named-alias table models that; a one-way reference target does not. This is the same split
+    // the statement world makes between `ReferenceAssign` and `VarReferenceBind`.
+    if let (EvalExpr::LoadVar(name), EvalExpr::LoadVar(source_name)) = (target, source) {
+        for replaced in set_reference_alias(context, scope, name, source_name, values)? {
+            eval_release_value(context, values, replaced)?;
+        }
+        return visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok);
+    }
+    let (source_target, source_value) = eval_reference_source(source, context, scope, values)?;
+    // A NAME aliases through the scope's own alias table, which is what makes two names update
+    // each other symmetrically; `write_reference_location` knows only element targets and would
+    // refuse this one. The two are separate mechanisms in the statement world too
+    // (`ReferenceAssign` and `VarReferenceBind` against `ArrayReferenceBind`).
+    if let EvalExpr::LoadVar(name) = target {
+        let replaced = scope.rebind_reference(
+            name.to_string(),
+            source_value,
+            ScopeCellOwnership::Borrowed,
+        );
+        scope.set_reference_target(name.to_string(), source_target);
+        if let Some(replaced) = replaced {
+            eval_release_value(context, values, replaced)?;
+        }
+        return Ok(source_value);
+    }
+    let location = evaluate_plain_assignment_location(target, context, scope, values)?;
+    write_reference_location(location, source_target, source_value, context, scope, values)?;
+    Ok(source_value)
+}
+
 /// Appends a value through any writable array lvalue while preserving PHP evaluation order.
 pub(in crate::interpreter) fn eval_array_append(
     target: &EvalExpr,
