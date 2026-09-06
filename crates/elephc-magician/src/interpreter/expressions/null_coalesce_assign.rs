@@ -494,6 +494,18 @@ fn eval_reference_source(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(EvalReferenceTarget, RuntimeCellHandle), EvalStatus> {
+    if let EvalExpr::ArrayAppendSlot { target } = source {
+        // PHP CREATES the element and binds to it: after `$c = &$a[];` the array has one more
+        // entry, holding null, and writing `$c` writes that entry. Appending the null first and
+        // then resolving the source as `target[index]` reuses every rule the ordinary element
+        // path already applies, instead of inventing a second way to name an element.
+        let index = eval_array_append_slot_index(target, context, scope, values)?;
+        let element = EvalExpr::ArrayGet {
+            array: target.clone(),
+            index: Box::new(EvalExpr::Const(EvalConst::Int(index))),
+        };
+        return eval_reference_source(&element, context, scope, values);
+    }
     if let EvalExpr::LoadVar(source) = source {
         if let Some(target) = scope.reference_target(source).cloned() {
             let value = visible_scope_cell(context, scope, source).map_or_else(
@@ -507,6 +519,32 @@ fn eval_reference_source(
     target
         .map(|target| (target, value))
         .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Appends a null element to one writable array lvalue and returns the integer key it took.
+///
+/// This is the element `$target[]` names as a reference SOURCE. PHP creates it before the bind,
+/// which is observable: `count()` grows by one and the new entry reads back as null even if the
+/// bound name is never written.
+fn eval_array_append_slot_index(
+    target: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let location = evaluate_location(target, context, scope, values)?;
+    let current = location.current();
+    let array = if values.is_null(current)? {
+        values.array_new(1)?
+    } else {
+        current
+    };
+    let index = eval_array_append_key(array, values)?;
+    let key = eval_int_value(index, values)?;
+    let empty = values.null()?;
+    let updated = values.array_set(array, index, empty)?;
+    write_location(location, updated, false, context, scope, values)?;
+    Ok(key)
 }
 
 /// Writes one by-reference assignment through an already evaluated array-element location.

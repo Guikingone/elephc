@@ -934,11 +934,23 @@ impl Parser {
         &mut self,
     ) -> Result<EvalExpr, EvalParseError> {
         let source = self.parse_expr()?;
-        if eval_expr_binds_a_reference(&source) {
-            Ok(source)
-        } else {
-            Err(EvalParseError::UnsupportedConstruct)
+        if !eval_expr_binds_a_reference(&source) {
+            return Err(EvalParseError::UnsupportedConstruct);
         }
+        // `parse_postfix` stops in front of an empty `[]`, so a source that ends in one arrives
+        // here with the brackets unconsumed and the statement then demanded its semicolon at the
+        // `[`. As a reference SOURCE that `[]` names the element the bind should create:
+        // `$closure = &$this->optimized[$e][];` appends null and aliases it.
+        if matches!(self.current(), TokenKind::LBracket)
+            && matches!(self.peek(), TokenKind::RBracket)
+        {
+            self.advance();
+            self.advance();
+            return Ok(EvalExpr::ArrayAppendSlot {
+                target: Box::new(source),
+            });
+        }
+        Ok(source)
     }
 
     /// Parses a `= &` source and splits it into the plain-variable and general-lvalue cases.
@@ -990,7 +1002,8 @@ enum ReferenceSource {
 fn eval_expr_binds_a_reference(expr: &EvalExpr) -> bool {
     matches!(
         expr,
-        EvalExpr::LoadVar(_)
+        EvalExpr::ArrayAppendSlot { .. }
+            | EvalExpr::LoadVar(_)
             | EvalExpr::ArrayGet { .. }
             | EvalExpr::PropertyGet { .. }
             | EvalExpr::DynamicPropertyGet { .. }

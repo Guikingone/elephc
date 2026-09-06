@@ -336,7 +336,8 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
                     || eval_expr_uses_this_property(value, property_name)
             }
         }),
-        EvalExpr::ArrayDestructureAssign { value, .. } => {
+        EvalExpr::ArrayDestructureAssign { value, .. }
+        | EvalExpr::ArrayAppendSlot { target: value } => {
             eval_expr_uses_this_property(value, property_name)
         }
         EvalExpr::ReferenceBindAssign { source, .. } => {

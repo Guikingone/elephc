@@ -11,6 +11,7 @@
 //! - Child modules import the interpreter entry points from their parent module.
 
 mod append_reference_bind;
+mod append_slot_reference;
 mod array_append_expression;
 mod array_spread;
 mod array_literals;

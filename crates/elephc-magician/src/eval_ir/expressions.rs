@@ -192,6 +192,14 @@ pub enum EvalExpr {
         target: String,
         source: Box<EvalExpr>,
     },
+    /// `$target[]` naming the element an append WOULD create, valid only as a reference source.
+    ///
+    /// `$closure = &$this->optimized[$e][];` creates the element, leaves it null and binds to
+    /// it. PHP refuses the same syntax where a value is wanted -- `echo $a[];` is the fatal
+    /// `Cannot use [] for reading` -- so this node never reaches `eval_expr`.
+    ArrayAppendSlot {
+        target: Box<EvalExpr>,
+    },
     /// `$target[] = value` used where a VALUE is wanted, as in `return $this->rules[] = $r;`.
     ///
     /// PHP's append is an ordinary assignment expression whose value is the assigned one, so it

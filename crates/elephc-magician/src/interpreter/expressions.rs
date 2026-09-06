@@ -89,6 +89,9 @@ pub(in crate::interpreter) fn eval_expr(
                 eval_indexed_array(elements, context, scope, values)
             }
         }
+        // `echo $a[];` is the fatal `Cannot use [] for reading` in php, so this node only ever
+        // reaches the reference-source path and never produces a value.
+        EvalExpr::ArrayAppendSlot { .. } => Err(EvalStatus::UnsupportedConstruct),
         EvalExpr::ArrayGet { array, index } => {
             let array = eval_expr(array, context, scope, values)?;
             let index = eval_expr(index, context, scope, values)?;

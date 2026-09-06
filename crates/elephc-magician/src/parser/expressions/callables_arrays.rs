@@ -428,7 +428,8 @@ fn collect_arrow_expr_variables(expr: &EvalExpr, names: &mut Vec<String>) {
                 }
             }
         }
-        EvalExpr::ArrayDestructureAssign { value, .. } => {
+        EvalExpr::ArrayDestructureAssign { value, .. }
+        | EvalExpr::ArrayAppendSlot { target: value } => {
             collect_arrow_expr_variables(value, names);
         }
         // The bound name is written, not read, so only the source is a capture.
