@@ -253,7 +253,16 @@ pub(super) fn eval_static_method_call_result_resolved(
     // PHP gives registered SPL autoloaders one chance to materialize an otherwise unknown class
     // before reporting the static call as undefined. Re-dispatch after a successful load so the
     // normal eval-declared or AOT-native method paths remain the single execution mechanism.
-    if eval_spl_autoload_class(&class_name, context, values)? {
+    //
+    // The retry is only sound for a class NOTHING knows yet. `eval_spl_autoload_class` answers
+    // true as soon as the target exists, without loading anything, so for a class the runtime
+    // already has — an AOT class whose static method simply is not the one being called — it
+    // reported success on every attempt and this re-dispatch took the identical path again. That
+    // is not a deep recursion, it is an unbounded one: four tests aborted the whole test PROCESS
+    // with a stack overflow rather than failing.
+    if !values.class_exists(&class_name)?
+        && eval_spl_autoload_class(&class_name, context, values)?
+    {
         return eval_static_method_call_result_resolved(
             class_name,
             called_class_name,
