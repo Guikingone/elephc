@@ -17,6 +17,8 @@ use super::util::clear_result;
 use crate::abi::ElephcEvalResult;
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
 #[cfg(not(test))]
+use crate::context::EvalCallFrame;
+#[cfg(not(test))]
 use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::interpreter::RuntimeValueOps;
@@ -47,6 +49,42 @@ pub unsafe extern "C" fn __elephc_eval_function_exists(
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe { eval_function_exists_inner(ctx, name_ptr, name_len) })
         .unwrap_or(0)
+}
+
+/// Reports whether the bridge can answer a call to this function name with no declaring context.
+///
+/// Generated code resolves a call by asking which eval context DECLARED the function; a name no
+/// context declares was then an undefined function, full stop. But the bridge answers for names
+/// nobody declares -- the two backtrace functions, the OPcache family, the procedural date aliases
+/// and every builtin the interpreter implements -- so that question was the wrong one to end on.
+///
+/// PHP resolves an unqualified call written inside a namespace against the namespaced name first
+/// and the global name second, and generated code hands over the namespaced candidate, so the
+/// global fallback is applied here too. The answer comes from `context_function_is_callable()`,
+/// the same table the call itself dispatches through.
+///
+/// # Safety
+/// `name_ptr` must be null or readable for `name_len` bytes.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_bridge_can_call_function(
+    name_ptr: *const u8,
+    name_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| {
+        let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+            return 0;
+        };
+        let name = name.to_ascii_lowercase();
+        let mut context = ElephcEvalContext::new();
+        crate::context::sync_global_eval_aot_metadata(&mut context);
+        let callable = crate::interpreter::context_function_is_callable(&context, &name)
+            || name.rsplit_once('\\').is_some_and(|(_, bare)| {
+                crate::interpreter::context_function_is_callable(&context, bare)
+            });
+        i32::from(callable)
+    })
+    .unwrap_or(0)
 }
 
 /// Checks whether a constant was previously defined through `eval()`.
@@ -295,12 +333,40 @@ unsafe fn eval_dynamic_class_like_exists_inner(
     if autoload == 0 {
         return 0;
     }
+    // PHP calls an internal function on a frame of its own, and a loader started by one reads it:
+    // `ClassExistenceResource::throwOnRequiredClass` returns quietly only when `$trace[1]` names
+    // one of these probes and carries no `class` key. The interpreter's own probes have pushed
+    // that frame for a while; a probe written in COMPILED code arrives here instead and pushed
+    // nothing, so the same loader saw its own frame and nothing above it.
+    let probe_argument = values.string(&name).ok();
+    if let Some(argument) = probe_argument {
+        context.push_call_frame(EvalCallFrame::function(
+            eval_class_like_probe_name(kind),
+            Some(vec![argument]),
+            context,
+        ));
+    }
     let _ = eval_spl_autoload_class_bridge(&name, context, &mut values);
+    if let Some(argument) = probe_argument {
+        context.pop_call_frame();
+        let _ = values.release(argument);
+    }
     context.sync_global_eval_classes();
     i32::from(
         eval_context_has_class_like(context, &name, kind)
             || eval_runtime_has_class_like(&mut values, &name, kind),
     )
+}
+
+/// Returns the PHP function name of the class-like probe that can start an autoloader.
+#[cfg(not(test))]
+fn eval_class_like_probe_name(kind: DynamicClassLikeKind) -> &'static str {
+    match kind {
+        DynamicClassLikeKind::Class => "class_exists",
+        DynamicClassLikeKind::Interface => "interface_exists",
+        DynamicClassLikeKind::Trait => "trait_exists",
+        DynamicClassLikeKind::Enum => "enum_exists",
+    }
 }
 
 /// Checks an eval declaration table in unit tests without native runtime callbacks.

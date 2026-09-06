@@ -31211,3 +31211,187 @@ echo 'done';
         "ctxA;ctxB;closure:ProbeNeedNested;ctxC;aot:ProbeNeedAot:null;n;ctxCdone;n;ctxBdone;done"
     );
 }
+
+/// Verifies an unqualified `debug_backtrace()` written inside a namespace resolves by name.
+///
+/// Oracle: `php -n` 8.5.6 prints `piece;main;array;0;printed;done`.
+///
+/// PHP resolves an unqualified call inside a namespace against the namespaced name first and the
+/// global name second. Compiled code hands the bridge the namespaced candidate, the bridge asked
+/// which eval context DECLARED it, no context declares a runtime handler, and the call died as
+/// `Call to undefined function Probe\Deep\Space\debug_backtrace()`. The declaration question was
+/// the wrong one to end on: the answer now comes from the same table `function_exists()` reports,
+/// which is also the table the call dispatches through, so the two cannot disagree again.
+///
+/// The probe runs at file scope on purpose. There is no caller, so php's trace is empty and the
+/// assertion measures the RESOLUTION and nothing else -- a compiled call is not yet a frame the
+/// interpreter records, which would otherwise show up as a count difference here.
+#[test]
+fn test_a_namespaced_unqualified_backtrace_call_resolves_through_the_bridge() {
+    let out = compile_and_run_files(
+        &[
+            ("piece.php", "<?php\necho 'piece;';\n"),
+            (
+                "main.php",
+                r#"<?php
+
+namespace Probe\Deep\Space;
+
+$piece = __DIR__ . '/piece.php';
+include $piece;
+$trace = debug_backtrace();
+echo 'main;', gettype($trace), ';', count($trace), ';';
+debug_print_backtrace();
+echo 'printed;done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "piece;main;array;0;printed;done");
+}
+
+/// Verifies an autoloader sees the class probe that started it, the frame Symfony reads.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `piece;A[0:report|Probe\Loader\Reporter|::|NopeA;1:class_exists|-|-|NopeA;2:none;n];B[0:report|Probe\Loader\Reporter|::|NopeB;1:class_exists|-|-|NopeB;2:eval|-|-|-;n];C[0:report|Probe\Loader\Reporter|::|NopeC;1:none;2:none;Error];done`.
+///
+/// `ClassExistenceResource::throwOnRequiredClass` reads exactly `$trace[1]` and returns quietly
+/// only when that frame's `function` is one of the class probes AND it has no `class` key;
+/// anything else throws a `ReflectionException` nobody catches. Two things hid that frame. The
+/// call stack was kept per eval context while php has one per request, and the interpreter runs a
+/// callback in the context that REGISTERED it, so the loader saw only its own frame. And a probe
+/// written in COMPILED code reached the autoload chain through the bridge ABI, which recorded no
+/// frame at all where the interpreter's own probes had recorded one for a while.
+///
+/// The three triggers are the three php shapes: a compiled `class_exists()`, an interpreted one
+/// inside `eval()` -- which adds php's `eval` frame above it -- and a `new` on a missing class,
+/// where php pushes NO frame and the loader correctly sees nothing above itself.
+#[test]
+fn test_an_autoload_loader_sees_the_class_probe_frame_that_started_it() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+namespace Probe\Loader;
+
+class Reporter
+{
+    public static function report(string $class): void
+    {
+        $trace = debug_backtrace();
+        foreach ([0, 1, 2] as $i) {
+            if (!isset($trace[$i])) {
+                echo $i, ':none;';
+                continue;
+            }
+            $frame = $trace[$i];
+            $arg = '-';
+            if (isset($frame['args'][0])) {
+                $arg = is_string($frame['args'][0]) ? $frame['args'][0] : gettype($frame['args'][0]);
+            }
+            echo $i, ':', $frame['function'] ?? '-', '|', $frame['class'] ?? '-', '|', $frame['type'] ?? '-', '|', $arg, ';';
+        }
+    }
+}
+
+echo 'piece;';
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+$piece = __DIR__ . '/piece.php';
+include $piece;
+spl_autoload_register('Probe\\Loader\\Reporter::report');
+echo 'A[';
+echo class_exists('NopeA') ? 'y' : 'n';
+echo '];B[';
+eval('echo class_exists("NopeB") ? "y" : "n";');
+echo '];C[';
+try {
+    $o = new NopeC();
+    echo 'made';
+} catch (\Throwable $e) {
+    echo get_class($e);
+}
+echo '];done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "piece;A[0:report|Probe\\Loader\\Reporter|::|NopeA;1:class_exists|-|-|NopeA;2:none;n];\
+         B[0:report|Probe\\Loader\\Reporter|::|NopeB;1:class_exists|-|-|NopeB;2:eval|-|-|-;n];\
+         C[0:report|Probe\\Loader\\Reporter|::|NopeC;1:none;2:none;Error];done"
+    );
+}
+
+/// Verifies an include and an `eval()` are frames of their own, as php describes them.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `inc<0:Probe\Deep\frames|-|-|inc;1:include|-|-|piece.php;2:none;>ev<0:Probe\Deep\frames|-|-|ev;1:eval|-|-|-;2:none;>top<0:Probe\Deep\frames|-|-|top;1:none;2:none;>done`.
+///
+/// php names the include frame for the form that was written and carries the path as its single
+/// argument; the `eval` frame carries none, because the code it ran is not an argument. Neither
+/// was recorded, so a function called from an included file reported the include's caller as its
+/// own, one frame short. The path is reduced to its basename here so the assertion does not
+/// depend on the temporary directory the harness compiles in.
+#[test]
+fn test_an_include_and_an_eval_are_frames_of_their_own() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+namespace Probe\Deep;
+
+function frames(string $tag): void
+{
+    $trace = debug_backtrace();
+    echo $tag, '<';
+    foreach ([0, 1, 2] as $i) {
+        if (!isset($trace[$i])) {
+            echo $i, ':none;';
+            continue;
+        }
+        $frame = $trace[$i];
+        $arg = '-';
+        if (isset($frame['args'][0])) {
+            $arg = is_string($frame['args'][0]) ? basename($frame['args'][0]) : gettype($frame['args'][0]);
+        }
+        echo $i, ':', $frame['function'] ?? '-', '|', $frame['class'] ?? '-', '|', $frame['type'] ?? '-', '|', $arg, ';';
+    }
+    echo '>';
+}
+
+frames('inc');
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+$piece = __DIR__ . '/piece.php';
+include $piece;
+eval('\\Probe\\Deep\\frames("ev");');
+\Probe\Deep\frames('top');
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "inc<0:Probe\\Deep\\frames|-|-|inc;1:include|-|-|piece.php;2:none;>\
+         ev<0:Probe\\Deep\\frames|-|-|ev;1:eval|-|-|-;2:none;>\
+         top<0:Probe\\Deep\\frames|-|-|top;1:none;2:none;>done"
+    );
+}

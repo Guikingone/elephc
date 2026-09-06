@@ -24,6 +24,7 @@
 //!   frames the same code throws `ReflectionException` instead.
 
 use super::*;
+use std::cell::RefCell;
 
 /// How one call was written, which PHP reports as the frame's `type`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -143,19 +144,37 @@ pub fn eval_builtin_is_backtrace_visible(name: &str) -> bool {
     )
 }
 
+thread_local! {
+    /// PHP has ONE call stack per request; elephc had one per eval context.
+    ///
+    /// That difference is not academic. The interpreter runs an autoload callback in the context
+    /// that REGISTERED it, not in the one that asked, so a loader calling `debug_backtrace()` saw
+    /// only its own frame: the `class_exists()` that started the chain had been recorded on a
+    /// different context and was invisible. Symfony's
+    /// `ClassExistenceResource::throwOnRequiredClass` reads exactly that frame -- `$trace[1]`,
+    /// whose `function` is one of the class probes and which has no `class` key -- and when it is
+    /// missing the same code throws a `ReflectionException` nobody catches.
+    ///
+    /// A request runs on one thread and a forked web worker gets its own copy, so thread-local is
+    /// the request's own stack. Pushes and pops are paired by the callers that own them.
+    static EVAL_CALL_FRAMES: RefCell<Vec<EvalCallFrame>> = const { RefCell::new(Vec::new()) };
+}
+
 impl ElephcEvalContext {
     /// Records one call as entered.
     pub fn push_call_frame(&mut self, frame: EvalCallFrame) {
-        self.call_frames.push(frame);
+        EVAL_CALL_FRAMES.with(|frames| frames.borrow_mut().push(frame));
     }
 
     /// Records one call as left.
     pub fn pop_call_frame(&mut self) {
-        self.call_frames.pop();
+        EVAL_CALL_FRAMES.with(|frames| {
+            frames.borrow_mut().pop();
+        });
     }
 
-    /// Returns the live frames, innermost last, for the backtrace builder to reverse.
-    pub fn call_frames(&self) -> &[EvalCallFrame] {
-        &self.call_frames
+    /// Reads the live frames, innermost last, for the backtrace builder to reverse.
+    pub fn with_call_frames<R>(&self, read: impl FnOnce(&[EvalCallFrame]) -> R) -> R {
+        EVAL_CALL_FRAMES.with(|frames| read(&frames.borrow()))
     }
 }

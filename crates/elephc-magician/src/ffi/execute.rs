@@ -14,6 +14,8 @@ use super::util::clear_result;
 #[cfg(not(test))]
 use super::util::write_outcome;
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ElephcEvalScope, ABI_VERSION};
+#[cfg(not(test))]
+use crate::context::EvalCallFrame;
 use crate::errors::{report_fatal_diagnostic, EvalParseDiagnostic, EvalStatus};
 use crate::eval_ir;
 #[cfg(not(test))]
@@ -213,7 +215,15 @@ unsafe fn execute_parsed_eval(
     };
     context.sync_global_eval_classes();
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_program_outcome_with_context(context, program, scope, &mut values) {
+    // php describes `eval()` as a frame too, named `eval` and carrying no arguments -- the code
+    // it ran is not one. Without it a function defined in evaluated code reported its caller as
+    // whatever lay below the eval.
+    let frame = EvalCallFrame::function("eval", None, context);
+    context.push_call_frame(frame);
+    let outcome =
+        interpreter::execute_program_outcome_with_context(context, program, scope, &mut values);
+    context.pop_call_frame();
+    match outcome {
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => {
             if eval_trace_enabled() {

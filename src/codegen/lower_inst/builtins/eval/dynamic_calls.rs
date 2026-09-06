@@ -86,8 +86,39 @@ fn lower_eval_owned_function_call(ctx: &mut FunctionContext<'_>, inst: &Instruct
         .target
         .extern_symbol("__elephc_eval_function_owner_context");
     abi::emit_call_label(ctx.emitter, &owner_symbol);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &missing_label);
+    let bridge_serves_label = ctx.next_label("eval_owned_function_bridge_serves");
+    let owner_found_label = ctx.next_label("eval_owned_function_owner_found");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &bridge_serves_label);
     abi::emit_store_to_sp(ctx.emitter, &result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
+    abi::emit_jump(ctx.emitter, &owner_found_label);
+
+    // "Which context DECLARED this function" is not the same question as "can this call be
+    // answered". The bridge answers for names no context declares: the two backtrace functions,
+    // the OPcache family, the procedural date aliases, every builtin the interpreter implements.
+    // An unqualified `debug_backtrace()` written inside a namespace arrives here as the namespaced
+    // candidate, no context declares it, and ending on the declaration question turned it into
+    // `Call to undefined function <namespace>\\debug_backtrace()` where PHP returns the frames.
+    // A null context handle is what the bridge takes for "resolve this yourself".
+    ctx.emitter.label(&bridge_serves_label);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        name_len as i64,
+    );
+    let can_call_symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_bridge_can_call_function");
+    abi::emit_call_label(ctx.emitter, &can_call_symbol);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &missing_label);
+    abi::emit_load_int_immediate(ctx.emitter, &result_reg, 0);
+    abi::emit_store_to_sp(ctx.emitter, &result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
+    ctx.emitter.label(&owner_found_label);
 
     let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::emit_load_temporary_stack_slot(ctx.emitter, context_arg, EVAL_CONTEXT_HANDLE_OFFSET);
@@ -239,8 +270,34 @@ fn lower_eval_owned_function_call_array(
         .target
         .extern_symbol("__elephc_eval_function_owner_context");
     abi::emit_call_label(ctx.emitter, &owner_symbol);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &missing_label);
+    let bridge_serves_label = ctx.next_label("eval_owned_function_bridge_serves");
+    let owner_found_label = ctx.next_label("eval_owned_function_owner_found");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &bridge_serves_label);
     abi::emit_store_to_sp(ctx.emitter, &result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
+    abi::emit_jump(ctx.emitter, &owner_found_label);
+
+    // Same as the positional call above: a name no context declares can still be one the bridge
+    // answers itself, and a null context handle is how it is asked to.
+    ctx.emitter.label(&bridge_serves_label);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        name_len as i64,
+    );
+    let can_call_symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_bridge_can_call_function");
+    abi::emit_call_label(ctx.emitter, &can_call_symbol);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &missing_label);
+    abi::emit_load_int_immediate(ctx.emitter, &result_reg, 0);
+    abi::emit_store_to_sp(ctx.emitter, &result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
+    ctx.emitter.label(&owner_found_label);
 
     let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::emit_load_temporary_stack_slot(ctx.emitter, context_arg, EVAL_CONTEXT_HANDLE_OFFSET);

@@ -123,20 +123,21 @@ struct EvalBacktraceFrame {
 
 /// Collects the live frames innermost-first, honouring `$limit`.
 fn eval_backtrace_frames(context: &ElephcEvalContext, limit: usize) -> Vec<EvalBacktraceFrame> {
-    let mut frames: Vec<EvalBacktraceFrame> = context
-        .call_frames()
-        .iter()
-        .rev()
-        .map(|frame| EvalBacktraceFrame {
-            function: frame.function.clone(),
-            class: frame.class.clone(),
-            kind: frame.kind,
-            object: frame.object,
-            args: frame.args.clone(),
-            file: frame.file.clone(),
-            line: frame.line,
-        })
-        .collect();
+    let mut frames: Vec<EvalBacktraceFrame> = context.with_call_frames(|frames| {
+        frames
+            .iter()
+            .rev()
+            .map(|frame| EvalBacktraceFrame {
+                function: frame.function.clone(),
+                class: frame.class.clone(),
+                kind: frame.kind,
+                object: frame.object,
+                args: frame.args.clone(),
+                file: frame.file.clone(),
+                line: frame.line,
+            })
+            .collect()
+    });
     if limit > 0 && frames.len() > limit {
         frames.truncate(limit);
     }

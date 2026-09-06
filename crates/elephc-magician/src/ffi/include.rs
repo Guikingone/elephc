@@ -15,6 +15,8 @@ use super::util::clear_result;
 #[cfg(not(test))]
 use super::util::write_outcome;
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ElephcEvalScope, ABI_VERSION};
+#[cfg(not(test))]
+use crate::context::EvalCallFrame;
 use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::interpreter;
@@ -83,6 +85,17 @@ unsafe fn execute_include_inner(
     execute_materialized_include(ctx, scope, RuntimeCellHandle::from_raw(path), required, once, out)
 }
 
+/// Returns the PHP name of the include form, which is the frame's `function`.
+#[cfg(not(test))]
+fn eval_include_frame_name(required: bool, once: bool) -> &'static str {
+    match (required, once) {
+        (true, true) => "require_once",
+        (true, false) => "require",
+        (false, true) => "include_once",
+        (false, false) => "include",
+    }
+}
+
 /// Executes the include in production builds through elephc runtime value hooks.
 ///
 /// # Safety
@@ -113,14 +126,26 @@ unsafe fn execute_materialized_include(
     };
     context.sync_global_eval_classes();
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_include_outcome_with_context(
+    // php describes an include as a frame of its own, named for the form that was written and
+    // carrying the path as its single argument, so code in the included file sees the include
+    // above itself. The path cell belongs to the caller for the whole call and a frame does not
+    // retain its arguments, so it can be named here without a copy.
+    let frame = EvalCallFrame::function(
+        eval_include_frame_name(required, once),
+        Some(vec![path]),
+        context,
+    );
+    context.push_call_frame(frame);
+    let outcome = interpreter::execute_include_outcome_with_context(
         context,
         scope,
         path,
         required,
         once,
         &mut values,
-    ) {
+    );
+    context.pop_call_frame();
+    match outcome {
         Ok(outcome) => {
             if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
                 let call_site = context.call_site();

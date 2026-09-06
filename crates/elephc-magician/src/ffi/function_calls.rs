@@ -95,12 +95,22 @@ unsafe fn call_eval_function_inner(
     arg_count: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
-        return EvalStatus::RuntimeFatal.code();
+    // A null handle is how generated code says "no context declares this name, resolve it
+    // yourself": the bridge answers for the backtrace pair, the OPcache family, the procedural
+    // date aliases and every builtin the interpreter implements. Refusing null made those calls
+    // a runtime fatal. The include, eval, symbol and object-construction entries all take a null
+    // handle this way already.
+    let mut fallback_context;
+    let context = if let Some(context) = ctx.as_mut() {
+        if context.abi_version() != ABI_VERSION {
+            return EvalStatus::AbiMismatch.code();
+        }
+        context
+    } else {
+        fallback_context = ElephcEvalContext::new();
+        crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
+        &mut fallback_context
     };
-    if context.abi_version() != ABI_VERSION {
-        return EvalStatus::AbiMismatch.code();
-    }
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return EvalStatus::RuntimeFatal.code();
     };
@@ -139,12 +149,18 @@ unsafe fn call_eval_function_array_inner(
     arg_array: *mut RuntimeCell,
     out: *mut ElephcEvalResult,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
-        return EvalStatus::RuntimeFatal.code();
+    // Same null-handle contract as the positional entry above.
+    let mut fallback_context;
+    let context = if let Some(context) = ctx.as_mut() {
+        if context.abi_version() != ABI_VERSION {
+            return EvalStatus::AbiMismatch.code();
+        }
+        context
+    } else {
+        fallback_context = ElephcEvalContext::new();
+        crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
+        &mut fallback_context
     };
-    if context.abi_version() != ABI_VERSION {
-        return EvalStatus::AbiMismatch.code();
-    }
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return EvalStatus::RuntimeFatal.code();
     };

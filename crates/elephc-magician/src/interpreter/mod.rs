@@ -198,19 +198,37 @@ pub fn execute_context_function_outcome(
     args: Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    context
-        .function(name)
-        .cloned()
-        .map_or(Err(EvalStatus::UnsupportedConstruct), |function| {
-            match eval_dynamic_function_with_values(&function, args, context, values) {
-                Ok(result) => Ok(EvalOutcome::Value(result)),
-                Err(EvalStatus::UncaughtThrowable) => context
-                    .take_pending_throw()
-                    .map(EvalOutcome::Throwable)
-                    .ok_or(EvalStatus::UncaughtThrowable),
-                Err(status) => Err(status),
-            }
-        })
+    let Some(function) = context.function(name).cloned() else {
+        // A name this context does not declare can still be one the bridge answers itself: the
+        // two backtrace functions, the OPcache family and the procedural date aliases are
+        // runtime handlers rather than PHP-visible builtins. `eval_context_function_exists()`
+        // already reports exactly that set, so answering the CALL from the same table is what
+        // stops the two from disagreeing. They did: an unqualified `debug_backtrace()` written
+        // inside a namespace arrives here as PHP's global fallback, and refusing it turned the
+        // call into `Call to undefined function <namespace>\\debug_backtrace()`.
+        return match eval_builtin_with_values(name, &args, context, values)? {
+            Some(result) => Ok(EvalOutcome::Value(result)),
+            None => Err(EvalStatus::UnsupportedConstruct),
+        };
+    };
+    match eval_dynamic_function_with_values(&function, args, context, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Reports whether the bridge can answer a call to this function name by itself.
+///
+/// This is the predicate `function_exists()` answers with AND the set
+/// `execute_context_function_outcome()` dispatches through, deliberately the same one: a name this
+/// reports callable is a name that call resolves, so the existence answer and the call answer
+/// cannot drift apart the way they had.
+pub fn context_function_is_callable(context: &ElephcEvalContext, name: &str) -> bool {
+    eval_function_probe_exists(context, name)
 }
 
 /// Executes a named eval-context callable with arguments from a PHP array container.

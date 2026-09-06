@@ -74,7 +74,6 @@ pub struct ElephcEvalContext {
     pub(super) array_cursors: HashMap<usize, EvalArrayCursor>,
     pub(super) dynamic_initialized_properties: HashSet<(u64, String)>,
     /// Live interpreter call frames, innermost last, for `debug_backtrace()`.
-    pub(super) call_frames: Vec<EvalCallFrame>,
     /// Execution state of every live generator, keyed by its object identity.
     ///
     /// A generator outlives the call that created it, so its frame — including its own
@@ -168,7 +167,6 @@ impl ElephcEvalContext {
             array_element_aliases: HashMap::new(),
             array_cursors: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
-            call_frames: Vec::new(),
             eval_generators: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
@@ -259,7 +257,6 @@ impl ElephcEvalContext {
             array_element_aliases: HashMap::new(),
             array_cursors: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
-            call_frames: Vec::new(),
             eval_generators: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
