@@ -147,7 +147,15 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         }
     };
     let mut method_scope = ElephcEvalScope::new();
-    method_scope.set("this", object, ScopeCellOwnership::Borrowed);
+    // A generator method's scope OUTLIVES this call, so its `$this` cannot stay a borrow of the
+    // caller's reference: the receiver has to be kept alive by the generator itself. That is
+    // also what makes PHP's ordering come out right for an `IteratorAggregate` whose
+    // `getIterator()` is a generator — the aggregate survives until the generator is destroyed.
+    if eval_body_is_generator(method.body()) {
+        method_scope.set("this", values.retain(object)?, ScopeCellOwnership::Owned);
+    } else {
+        method_scope.set("this", object, ScopeCellOwnership::Borrowed);
+    }
     let scope_parameter_is_by_ref =
         method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
     bind_method_scope_args(

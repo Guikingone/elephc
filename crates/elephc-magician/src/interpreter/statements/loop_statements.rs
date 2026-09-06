@@ -172,6 +172,11 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    // A subject the loop ALLOCATED belongs to the loop. Nothing else will ever release it: the
+    // value never reaches a scope name, so no activation teardown sees it, and PHP's destruction
+    // is observable — `foreach (new Bag() as $x)` runs `__destruct`, and breaking out of
+    // `foreach (gen() as $v)` runs the generator's `finally`.
+    let subject_owned = !value_by_ref && eval_foreach_owns_subject(array);
     let (array, array_target) = if value_by_ref {
         eval_call_arg_value(array, context, scope, values)?
     } else {
@@ -198,20 +203,57 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
             if value_by_ref {
                 values.release(iteration_array)?;
             }
-            result
+            // Released on EVERY exit edge, which is why the loop's result is bound rather than
+            // propagated with `?`: completion, `break`, `return` and a throw passing through all
+            // arrive here.
+            let released = if subject_owned {
+                eval_release_value(context, values, array)
+            } else {
+                Ok(())
+            };
+            released.and(result)
         }
         EVAL_TAG_OBJECT => execute_foreach_object_stmt(
             array,
             key_name,
             value_name,
             value_by_ref,
+            subject_owned,
             body,
             context,
             scope,
             values,
         ),
-        _ => Err(EvalStatus::RuntimeFatal),
+        _ => {
+            if subject_owned {
+                eval_release_value(context, values, array)?;
+            }
+            Err(EvalStatus::RuntimeFatal)
+        }
     }
+}
+
+/// Returns whether the loop owns the value its subject expression produced.
+///
+/// This is the ownership rule the call machinery already uses for an argument allocated for the
+/// call, widened by the call shapes: an interpreted call hands its return value to the caller —
+/// `release_activation_scope` excludes exactly that handle from the activation's teardown — and
+/// the statement-expression path already releases any expression result on that basis. A read of
+/// existing storage such as `LoadVar` hands back a BORROWED cell and must not be released here.
+fn eval_foreach_owns_subject(expr: &EvalExpr) -> bool {
+    eval_expr_is_owning_temporary(expr)
+        || matches!(
+            expr,
+            EvalExpr::Call { .. }
+                | EvalExpr::NamespacedCall { .. }
+                | EvalExpr::DynamicCall { .. }
+                | EvalExpr::MethodCall { .. }
+                | EvalExpr::NullsafeMethodCall { .. }
+                | EvalExpr::DynamicMethodCall { .. }
+                | EvalExpr::NullsafeDynamicMethodCall { .. }
+                | EvalExpr::StaticMethodCall { .. }
+                | EvalExpr::DynamicStaticMethodCall { .. }
+        )
 }
 
 /// Executes `foreach` over a PHP array value using insertion-order runtime hooks.
@@ -292,6 +334,46 @@ pub(super) fn execute_foreach_object_stmt(
     key_name: Option<&str>,
     value_name: &str,
     value_by_ref: bool,
+    subject_owned: bool,
+    body: &[EvalStmt],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    // The aggregate arm gives the subject back early, on purpose — PHP destroys an
+    // `IteratorAggregate` temporary as soon as `getIterator()` has returned, so
+    // `foreach (new Bag("temp") as $x) { echo $x; }` prints `destruct:temp;12`. Every other arm
+    // holds the subject for the whole loop and lets go here.
+    let mut subject_released = false;
+    let result = execute_foreach_object_body(
+        object,
+        key_name,
+        value_name,
+        value_by_ref,
+        subject_owned,
+        &mut subject_released,
+        body,
+        context,
+        scope,
+        values,
+    );
+    let released = if subject_owned && !subject_released {
+        eval_release_value(context, values, object)
+    } else {
+        Ok(())
+    };
+    released.and(result)
+}
+
+/// Runs the arm that matches the object's iteration protocol.
+#[allow(clippy::too_many_arguments)]
+fn execute_foreach_object_body(
+    object: RuntimeCellHandle,
+    key_name: Option<&str>,
+    value_name: &str,
+    value_by_ref: bool,
+    subject_owned: bool,
+    subject_released: &mut bool,
     body: &[EvalStmt],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -315,7 +397,15 @@ pub(super) fn execute_foreach_object_stmt(
     }
     if eval_foreach_object_is_a(object, "IteratorAggregate", context, values)? {
         let iterator = eval_method_call_result(object, "getIterator", Vec::new(), context, values)?;
-        return match values.type_tag(iterator)? {
+        // PHP's ordering: the aggregate's last reference dies with `getIterator()`, so a
+        // temporary is destroyed BEFORE the first body run. An iterator that keeps the aggregate
+        // alive — a generator method holding `$this` — keeps it alive here too.
+        if subject_owned {
+            *subject_released = true;
+            eval_release_value(context, values, object)?;
+        }
+        let iterator_identity = values.object_identity(iterator).ok();
+        let result = match values.type_tag(iterator)? {
             EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => execute_foreach_array_stmt(
                 iterator,
                 None,
@@ -327,6 +417,19 @@ pub(super) fn execute_foreach_object_stmt(
                 scope,
                 values,
             ),
+            EVAL_TAG_OBJECT
+                if iterator_identity.is_some_and(|identity| context.has_eval_generator(identity)) =>
+            {
+                execute_foreach_generator_stmt(
+                    iterator_identity.expect("checked just above"),
+                    key_name,
+                    value_name,
+                    body,
+                    context,
+                    scope,
+                    values,
+                )
+            }
             EVAL_TAG_OBJECT if eval_foreach_object_is_a(iterator, "Iterator", context, values)? => {
                 execute_foreach_iterator_stmt(
                     iterator, key_name, value_name, body, context, scope, values,
@@ -334,6 +437,10 @@ pub(super) fn execute_foreach_object_stmt(
             }
             _ => Err(EvalStatus::RuntimeFatal),
         };
+        // `getIterator()` handed its return value over, so the loop owns it whatever the subject
+        // was: the aggregate may be a plain variable and the iterator still a fresh object.
+        let released = eval_release_value(context, values, iterator);
+        return released.and(result);
     }
     execute_foreach_plain_object_stmt(
         object,

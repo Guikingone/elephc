@@ -1309,3 +1309,72 @@ return function (): void {
         "built 1\ndestruct literal\nclosure end\nrun end\nend\n"
     );
 }
+
+/// A `foreach` subject the loop ALLOCATED is destroyed when the loop is done with it.
+///
+/// The value never reaches a variable, so nothing but the loop can release it. Note where the
+/// destructor lands: at the end of the `foreach` STATEMENT, before the `echo` on the next line.
+/// Measured with `php -n` 8.5.6.
+#[test]
+fn test_destruct_of_a_foreach_subject_the_loop_allocated() {
+    let out = compile_and_run(
+        r#"<?php
+class Probe {
+    public $a = 1;
+    public $b = 2;
+    public $tag;
+    public function __construct($t) { $this->tag = $t; }
+    public function __destruct() { echo "destruct {$this->tag}\n"; }
+}
+foreach (new Probe('new') as $k => $v) { echo "$k=$v,"; }
+echo "\nafter\n";
+"#,
+    );
+    assert_eq!(out, "a=1,b=2,tag=new,destruct new\n\nafter\n");
+}
+
+/// A `foreach` subject read from a variable outlives the loop.
+///
+/// The mirror of the case above: the loop borrows the caller's reference, so the object dies
+/// with the variable and NOT with the loop. Measured with `php -n` 8.5.6.
+#[test]
+fn test_no_destruct_of_a_foreach_subject_held_in_a_variable() {
+    let out = compile_and_run(
+        r#"<?php
+class Probe {
+    public $a = 1;
+    public $tag;
+    public function __construct($t) { $this->tag = $t; }
+    public function __destruct() { echo "destruct {$this->tag}\n"; }
+}
+$held = new Probe('held');
+foreach ($held as $k => $v) { echo "$k=$v,"; }
+echo "\nafterloop\n";
+unset($held);
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "a=1,tag=held,\nafterloop\ndestruct held\nend\n");
+}
+
+/// Breaking out of a `foreach` over an allocated subject still destroys it.
+///
+/// The release has to sit on every exit edge, not only on the loop running out of values.
+/// Measured with `php -n` 8.5.6.
+#[test]
+fn test_destruct_of_a_foreach_subject_broken_out_of() {
+    let out = compile_and_run(
+        r#"<?php
+class Probe {
+    public $a = 1;
+    public $b = 2;
+    public $tag;
+    public function __construct($t) { $this->tag = $t; }
+    public function __destruct() { echo "destruct {$this->tag}\n"; }
+}
+foreach (new Probe('broken') as $k => $v) { echo "$k=$v,"; break; }
+echo "\nafter\n";
+"#,
+    );
+    assert_eq!(out, "a=1,destruct broken\n\nafter\n");
+}

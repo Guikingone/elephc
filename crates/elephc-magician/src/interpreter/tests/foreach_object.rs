@@ -128,6 +128,117 @@ fn every_enumerator_agrees_on_php_creation_order() {
     );
 }
 
+/// Verifies a `foreach` subject the loop allocated is destroyed when the loop is done with it.
+///
+/// `php -n` 8.5.6 prints `a=1,b=2,tag=new,destruct:new;|a=1,b=2,tag=call,destruct:call;`. The
+/// value never reaches a scope name, so nothing but the loop can ever release it: before this
+/// the object simply leaked and `__destruct` never ran.
+#[test]
+fn a_foreach_subject_the_loop_allocated_is_destroyed_after_it() {
+    assert_eq!(
+        out(
+            br#"class Probe {
+    public $a = 1;
+    public $b = 2;
+    public $tag;
+    public function __construct($t) { $this->tag = $t; }
+    public function __destruct() { echo "destruct:"; echo $this->tag; echo ";"; }
+}
+function makeProbe($t) { return new Probe($t); }
+foreach (new Probe("new") as $k => $v) { echo "$k=$v,"; }
+echo "|";
+foreach (makeProbe("call") as $k => $v) { echo "$k=$v,"; }"#
+        ),
+        "a=1,b=2,tag=new,destruct:new;|a=1,b=2,tag=call,destruct:call;",
+    );
+}
+
+/// Verifies a subject that is a plain variable read is NOT destroyed by the loop.
+///
+/// `php -n` 8.5.6 prints `a=1,b=2,tag=held,afterC;destruct:held;`: the loop borrows the caller's
+/// reference and the object dies with the variable, not with the loop. Releasing a borrowed cell
+/// here would destroy an object its owner still holds.
+#[test]
+fn a_foreach_subject_read_from_a_variable_is_left_alone() {
+    assert_eq!(
+        out(
+            br#"class Probe2 {
+    public $a = 1;
+    public $b = 2;
+    public $tag;
+    public function __construct($t) { $this->tag = $t; }
+    public function __destruct() { echo "destruct:"; echo $this->tag; echo ";"; }
+}
+$held = new Probe2("held");
+foreach ($held as $k => $v) { echo "$k=$v,"; }
+echo "afterC;";
+unset($held);"#
+        ),
+        "a=1,b=2,tag=held,afterC;destruct:held;",
+    );
+}
+
+/// Verifies the subject is released on every exit edge, not only on completion.
+///
+/// `php -n` 8.5.6 prints `a=1,destruct:broken;|destruct:returned;r|destruct:thrown;caught;` for
+/// `break`, `return` out of the enclosing function, and a throw passing through.
+#[test]
+fn a_foreach_subject_is_released_on_break_return_and_throw() {
+    assert_eq!(
+        out(
+            br#"class Probe3 {
+    public $a = 1;
+    public $b = 2;
+    public $tag;
+    public function __construct($t) { $this->tag = $t; }
+    public function __destruct() { echo "destruct:"; echo $this->tag; echo ";"; }
+}
+foreach (new Probe3("broken") as $k => $v) { echo "$k=$v,"; break; }
+echo "|";
+function walk() { foreach (new Probe3("returned") as $k => $v) { return "r"; } }
+echo walk();
+echo "|";
+function boom() { foreach (new Probe3("thrown") as $k => $v) { throw new RuntimeException("b"); } }
+try { boom(); } catch (RuntimeException $e) { echo "caught;"; }"#
+        ),
+        "a=1,destruct:broken;|destruct:returned;r|destruct:thrown;caught;",
+    );
+}
+
+/// Verifies a generator the loop called is destroyed when the loop lets go of it.
+///
+/// `php -n` 8.5.6 prints `1fin;|12fin;`: breaking out of `foreach (gen() as $v)` destroys the
+/// generator right there and runs the `finally` its yield was suspended inside, and running the
+/// loop to completion runs it at the end. This is the case that made the leak visible.
+#[test]
+fn a_generator_subject_runs_its_finally_when_the_loop_lets_go() {
+    assert_eq!(
+        out(
+            br#"function gen() { try { yield 1; yield 2; } finally { echo "fin;"; } }
+foreach (gen() as $v) { echo $v; break; }
+echo "|";
+foreach (gen() as $v) { echo $v; }"#
+        ),
+        "1fin;|12fin;",
+    );
+}
+
+/// Verifies an array subject the loop allocated still iterates after being released.
+///
+/// `php -n` 8.5.6 prints `78`. An array has no destructor to observe, so what this pins is that
+/// releasing the temporary does not disturb the iteration that used it.
+#[test]
+fn an_array_subject_the_loop_allocated_still_iterates() {
+    assert_eq!(
+        out(
+            br#"function makeArray() { return [7, 8]; }
+foreach (makeArray() as $v) { echo $v; }
+foreach ([9] as $v) { echo $v; }"#
+        ),
+        "789",
+    );
+}
+
 /// Verifies overwriting a dynamic property keeps its original position.
 ///
 /// `php -n` 8.5.6 prints `{"z":"Z2","a":"A","m":"M"}`: rewriting `z` after the others were
@@ -147,3 +258,4 @@ echo json_encode($o);"#
         "{\"z\":\"Z2\",\"a\":\"A\",\"m\":\"M\"}",
     );
 }
+
