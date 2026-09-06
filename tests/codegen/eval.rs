@@ -31894,3 +31894,78 @@ echo 'done';
          ArrayObject[doc=false;inst=y;int=y;user=n];done"
     );
 }
+
+/// Verifies an interface, trait and enum name the file that DECLARED them, as a class does.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `main;ProbeS1Class[piece.php];ProbeS1Iface[piece.php];ProbeS1Trait[piece.php];ProbeS1Enum[piece.php];ProbeS1Aot[main.php];done`.
+///
+/// Only a CLASS recorded its declaring file, so an interface, a trait and an enum an included file
+/// declared fell back to the generated program's single source file -- the entry point -- and each
+/// claimed to live in the file that included it. The rule is now one helper the four share, which
+/// is what stops them from answering differently.
+///
+/// Reduced from the shape `ContainerBuilder::addClassResource` actually runs, rather than from a
+/// probe: the reflector is built from a class name held in a VARIABLE, `isInternal()` is asked
+/// before `getFileName()`, and Symfony reflects on interfaces exactly as it does on classes.
+#[test]
+fn test_every_class_like_names_the_file_that_declared_it() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+interface ProbeS1Iface
+{
+}
+
+trait ProbeS1Trait
+{
+}
+
+enum ProbeS1Enum
+{
+    case One;
+}
+
+class ProbeS1Class
+{
+}
+
+foreach (['ProbeS1Class', 'ProbeS1Iface', 'ProbeS1Trait', 'ProbeS1Enum', 'ProbeS1Aot'] as $class) {
+    $r = new \ReflectionClass($class);
+    echo $class, '[';
+    if (!$r->isInternal()) {
+        $path = $r->getFileName();
+        echo false === $path ? 'false' : basename($path);
+    } else {
+        echo 'internal';
+    }
+    echo '];';
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class ProbeS1Aot
+{
+}
+
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "main;ProbeS1Class[piece.php];ProbeS1Iface[piece.php];ProbeS1Trait[piece.php];\
+         ProbeS1Enum[piece.php];ProbeS1Aot[main.php];done"
+    );
+}

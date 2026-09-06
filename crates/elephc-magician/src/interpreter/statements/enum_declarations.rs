@@ -32,7 +32,9 @@ pub(in crate::interpreter) fn execute_enum_decl_stmt(
     let enum_decl = expand_eval_enum_traits(enum_decl, context)?;
     let enum_decl = &enum_decl;
     validate_eval_enum_decl(enum_decl, context, values)?;
+    let declaration_file = eval_declaration_source_file(context);
     if context.define_enum(enum_decl.clone()) {
+        context.set_class_source_file(enum_decl.name(), declaration_file);
         initialize_eval_declared_constants(
             enum_decl.name(),
             enum_decl.constants(),

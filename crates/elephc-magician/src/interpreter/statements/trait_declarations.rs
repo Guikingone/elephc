@@ -44,7 +44,13 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     validate_eval_declared_constants(interface.constants())?;
     validate_eval_interface_constants(interface.constants())?;
     validate_interface_constant_parent_redeclarations(interface, context, values)?;
+    let declaration_file = eval_declaration_source_file(context);
     if context.define_interface(interface.clone()) {
+        // The declaring file is recorded for the same reason a class records it: reflection
+        // answers `getFileName()` from it, and without a record it falls back to the generated
+        // program's single source file -- the ENTRY point -- so an interface an included file
+        // declared claimed to live in the file that included it.
+        context.set_class_source_file(interface.name(), declaration_file);
         initialize_eval_declared_constants(
             interface.name(),
             interface.constants(),
@@ -104,7 +110,9 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
     validate_eval_trait_attribute_targets(&trait_decl)?;
     validate_eval_declared_constants(trait_decl.constants())?;
     validate_eval_magic_methods(trait_decl.methods())?;
+    let declaration_file = eval_declaration_source_file(context);
     if context.define_trait(trait_decl.clone()) {
+        context.set_class_source_file(trait_decl.name(), declaration_file);
         initialize_eval_declared_constants(
             trait_decl.name(),
             trait_decl.constants(),
