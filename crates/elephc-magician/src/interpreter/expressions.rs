@@ -24,7 +24,8 @@ pub(in crate::interpreter) use evaluation::{
 };
 use evaluation::*;
 pub(in crate::interpreter) use null_coalesce_assign::{
-    eval_array_append, eval_array_append_reference_bind, eval_array_reference_bind,
+    eval_array_append, eval_array_append_reference_bind, eval_array_append_result,
+    eval_array_reference_bind,
     eval_var_reference_bind,
 };
 use null_coalesce_assign::{
@@ -45,6 +46,7 @@ pub(in crate::interpreter) fn eval_expr_result_aliases_storage(expr: &EvalExpr) 
     match expr {
         EvalExpr::LoadVar(_)
         | EvalExpr::Assign { .. }
+        | EvalExpr::ArrayAppendAssign { .. }
         | EvalExpr::CompoundAssign { .. }
         | EvalExpr::NullCoalesceAssign { .. } => true,
         EvalExpr::Ternary {
@@ -402,6 +404,9 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::ReferenceBindAssign { target, source } => {
             eval_var_reference_bind(target, source, context, scope, values)?;
             eval_expr(&EvalExpr::LoadVar(target.clone()), context, scope, values)
+        }
+        EvalExpr::ArrayAppendAssign { target, value } => {
+            eval_array_append_result(target, value, context, scope, values)
         }
         EvalExpr::NullsafePropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;

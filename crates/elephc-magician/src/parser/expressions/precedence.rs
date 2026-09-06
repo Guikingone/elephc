@@ -124,6 +124,9 @@ impl Parser {
     /// Parses supported right-associative assignment expressions.
     pub(in crate::parser) fn parse_assignment(&mut self) -> Result<EvalExpr, EvalParseError> {
         let target = self.parse_ternary()?;
+        if let Some(append) = self.parse_array_append_assignment(&target)? {
+            return Ok(append);
+        }
         let array_destructure_targets = short_array_destructure_targets(&target);
         let negated_assignment_target = negated_assignment_target(&target);
         let nested_assignment_target = nested_assignment_target(&target);
@@ -216,6 +219,47 @@ impl Parser {
                 value: Box::new(value),
             },
         })
+    }
+
+    /// Parses `TARGET[] = value` as an EXPRESSION when an append is not the whole statement.
+    ///
+    /// `parse_postfix` deliberately stops in front of an empty `[]` so the statement parser can
+    /// recognise `$a[] = 1;` and build one of the dedicated append statements. That left the
+    /// append with no expression spelling at all, so `return $this->rules[] = $r;` and the
+    /// chained `$dirs[] = $paths[] = $d;` were refused at the `[` with `ExpectedSemicolon` --
+    /// the parser had a complete expression in hand and no rule that let a `[` follow it.
+    ///
+    /// This is the missing rule. It fires only where `parse_postfix` stopped, so a statement
+    /// append still takes the statement path and keeps its existing lowering; only the nested
+    /// and value-producing positions come here. `parse_assignment` for the right-hand side is
+    /// what makes the chain right-associative, matching PHP.
+    ///
+    /// A REFERENCE append (`$a[] = &$b`) is deliberately not taken here: it binds rather than
+    /// assigns, `EvalStmt::ArrayAppendReferenceBind` is its statement form, and the `&` family
+    /// is its own gap. Leaving it to fail where it already failed is better than accepting it
+    /// into a node that would silently copy.
+    fn parse_array_append_assignment(
+        &mut self,
+        target: &EvalExpr,
+    ) -> Result<Option<EvalExpr>, EvalParseError> {
+        if !matches!(self.current(), TokenKind::LBracket)
+            || !matches!(self.tokens.get(self.pos + 1), Some(TokenKind::RBracket))
+            || !matches!(self.tokens.get(self.pos + 2), Some(TokenKind::Equal))
+            || matches!(self.tokens.get(self.pos + 3), Some(TokenKind::Ampersand))
+        {
+            return Ok(None);
+        }
+        if !is_assignment_target(target) {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        self.advance();
+        self.advance();
+        self.advance();
+        let value = self.parse_assignment()?;
+        Ok(Some(EvalExpr::ArrayAppendAssign {
+            target: Box::new(target.clone()),
+            value: Box::new(value),
+        }))
     }
 
     /// Parses PHP ternary expressions, including the short `expr ?: fallback` form.

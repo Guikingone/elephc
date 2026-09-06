@@ -672,6 +672,31 @@ impl Parser {
         target: EvalExpr,
         require_semicolon: bool,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        // The expression parser now recognises `TARGET[] = value`, so a WHOLE-STATEMENT append
+        // arrives here already folded into one expression instead of leaving the `[` for the
+        // loop below. A statement append keeps its dedicated statement: `PropertyArrayAppend`
+        // and its dynamic and static siblings run through the property-aware read/write helpers
+        // (`eval_property_get_result` / `eval_property_set_result`), which enforce visibility
+        // and consult the dynamic-property overlay. Unfolding it back is what keeps that path,
+        // and every expectation that names those statements, exactly as it was.
+        if let EvalExpr::ArrayAppendAssign {
+            target: append_target,
+            value,
+        } = target
+        {
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return match property_array_append_stmt((*append_target).clone(), (*value).clone()) {
+                Ok(stmt) => Ok(vec![stmt]),
+                // A target with no dedicated statement -- `$this->rows["k"][] = 1;` writes
+                // through an ARRAY ELEMENT, not through a property -- keeps the expression.
+                Err(_) => Ok(vec![EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
+                    target: append_target,
+                    value,
+                })]),
+            };
+        }
         if matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
             let increment = matches!(self.current(), TokenKind::PlusPlus);
             self.advance();

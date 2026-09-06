@@ -10,6 +10,7 @@
 //! - `support` exposes the fake runtime cells used by all interpreter tests.
 //! - Child modules import the interpreter entry points from their parent module.
 
+mod array_append_expression;
 mod array_literals;
 mod builtins_arrays_core;
 mod builtins_arrays_iterators;

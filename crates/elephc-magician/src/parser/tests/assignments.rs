@@ -23,6 +23,87 @@ fn parse_fragment_accepts_assignment_source() {
     );
 }
 
+/// Verifies an append in RETURN position lowers to the append EXPRESSION node.
+///
+/// `parse_postfix` stops in front of an empty `[]` so the statement parser can claim
+/// `$a[] = 1;`, which left every other position with no rule at all: this refused at the `[`
+/// with `ExpectedSemicolon`.
+#[test]
+fn parse_fragment_accepts_an_array_append_in_return_position() {
+    let program = parse_fragment(br#"return $this->before[] = $name;"#)
+        .expect("an append in return position should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::ArrayAppendAssign {
+            target: Box::new(EvalExpr::PropertyGet {
+                object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                property: "before".to_string(),
+            }),
+            value: Box::new(EvalExpr::LoadVar("name".to_string())),
+        }))]
+    );
+}
+
+/// Verifies a CHAINED append keeps the statement lowering outside and the expression inside.
+///
+/// The outer append is still a whole statement, so it keeps `ArrayAppendVar`; only the nested
+/// one needs the expression node. Pinning both halves in one expectation is what says the new
+/// rule did not swallow the statement form.
+#[test]
+fn parse_fragment_accepts_a_chained_array_append() {
+    let program = parse_fragment(br#"$dirs[] = $paths[] = "/res";"#)
+        .expect("a chained append should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ArrayAppendVar {
+            name: "dirs".to_string(),
+            value: EvalExpr::ArrayAppendAssign {
+                target: Box::new(EvalExpr::LoadVar("paths".to_string())),
+                value: Box::new(EvalExpr::Const(EvalConst::String("/res".to_string()))),
+            },
+        }]
+    );
+}
+
+/// Verifies an append through an ARRAY ELEMENT of a property parses as the expression node.
+///
+/// `$this->rows["k"][] = 1;` has no dedicated statement -- the write goes through an element,
+/// not through a property -- and used to be refused outright. It is Symfony's
+/// `EventDispatcher::addListener()` and `DebugClassLoader`'s `self::$method[$class][] = ...`.
+#[test]
+fn parse_fragment_accepts_an_append_through_a_property_element() {
+    let program = parse_fragment(br#"$this->rows["k"][] = 1;"#)
+        .expect("an append through a property element should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
+            target: Box::new(EvalExpr::ArrayGet {
+                array: Box::new(EvalExpr::PropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: "rows".to_string(),
+                }),
+                index: Box::new(EvalExpr::Const(EvalConst::String("k".to_string()))),
+            }),
+            value: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+        })]
+    );
+}
+
+/// Verifies a REFERENCE append is still refused rather than accepted as a copy.
+///
+/// `php -n` 8.5.6 ACCEPTS `return $this->rows["k"][] = &$b;`, so this is a gap, not a rule --
+/// but `$a[] = &$b` BINDS, and taking it into the append expression node would silently copy
+/// instead. The append rule declines when a `&` follows the `=`, which leaves the pre-existing
+/// `ExpectedSemicolon` at the `[` in place. A truthful refusal is worth more than a wrong
+/// answer; the `&` family is its own gap and this is pinned so a later fix has to change it
+/// deliberately.
+#[test]
+fn parse_fragment_refuses_a_reference_append_in_expression_position() {
+    let error = parse_fragment(br#"return $this->rows["k"][] = &$b;"#)
+        .expect_err("a reference append should not be accepted as a copy");
+    assert_eq!(error.error(), EvalParseError::ExpectedSemicolon);
+}
+
 /// Verifies null-coalescing assignment is an expression with a writable array target.
 #[test]
 fn parse_fragment_accepts_null_coalesce_assignment_expression() {

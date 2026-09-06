@@ -212,6 +212,24 @@ pub(in crate::interpreter) fn eval_array_append(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    // The appended cell is the one the array now holds, exactly as `EvalExpr::Assign` returns
+    // the cell it stored, so a statement append has nothing of its own to release.
+    eval_array_append_result(target, value, context, scope, values).map(|_| ())
+}
+
+/// Appends a value and returns the ASSIGNED value, which is what `$a[] = $v` evaluates to.
+///
+/// PHP's append is an assignment expression: `return $this->rules[] = $r;` returns `$r`, and
+/// `$a[] = $b[] = 'x'` appends the same value to both. The returned handle ALIASES the array's
+/// element rather than carrying a reference of its own, which is the rule
+/// `eval_expr_result_aliases_storage` records for every assignment shape.
+pub(in crate::interpreter) fn eval_array_append_result(
+    target: &EvalExpr,
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let location = evaluate_location(target, context, scope, values)?;
     let current = location.current();
     if values.type_tag(current)? == EVAL_TAG_OBJECT {
@@ -221,7 +239,9 @@ pub(in crate::interpreter) fn eval_array_append(
         let offset = values.null()?;
         let value = eval_expr(value, context, scope, values)?;
         let result = eval_method_call_result(current, "offsetSet", vec![offset, value], context, values)?;
-        return eval_release_value(context, values, result);
+        // `offsetSet()` returns void in PHP; the expression's value is the ASSIGNED one.
+        eval_release_value(context, values, result)?;
+        return Ok(value);
     }
     let array = if values.is_null(current)? {
         values.array_new(1)?
@@ -231,7 +251,8 @@ pub(in crate::interpreter) fn eval_array_append(
     let index = eval_array_append_key(array, values)?;
     let value = eval_expr(value, context, scope, values)?;
     let updated = values.array_set(array, index, value)?;
-    write_location(location, updated, false, context, scope, values)
+    write_location(location, updated, false, context, scope, values)?;
+    Ok(value)
 }
 
 /// Evaluates a plain-assignment target without reading an existing property value first.

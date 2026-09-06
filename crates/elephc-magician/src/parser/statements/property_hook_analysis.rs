@@ -490,6 +490,10 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
             value: default,
             ..
         }
+        | EvalExpr::ArrayAppendAssign {
+            target: value,
+            value: default,
+        }
         | EvalExpr::Assign {
             target: value,
             value: default,

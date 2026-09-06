@@ -192,6 +192,16 @@ pub enum EvalExpr {
         target: String,
         source: Box<EvalExpr>,
     },
+    /// `$target[] = value` used where a VALUE is wanted, as in `return $this->rules[] = $r;`.
+    ///
+    /// PHP's append is an ordinary assignment expression whose value is the assigned one, so it
+    /// nests (`$a[] = $b[] = 'x'`) and can stand anywhere an expression can. The statement
+    /// spellings (`EvalStmt::ArrayAppendVar` and friends) stay as they are; this is what the
+    /// expression parser builds when an append is not the whole statement.
+    ArrayAppendAssign {
+        target: Box<EvalExpr>,
+        value: Box<EvalExpr>,
+    },
     NullsafePropertyGet {
         object: Box<EvalExpr>,
         property: String,

@@ -466,6 +466,10 @@ fn collect_arrow_expr_variables(expr: &EvalExpr, names: &mut Vec<String>) {
             value: method,
             ..
         }
+        | EvalExpr::ArrayAppendAssign {
+            target: object,
+            value: method,
+        }
         | EvalExpr::Assign {
             target: object,
             value: method,
