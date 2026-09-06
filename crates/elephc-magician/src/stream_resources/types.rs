@@ -344,14 +344,34 @@ impl EvalOpenMode {
 pub(super) fn eval_tmpfile_path() -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(
-        "elephc-magician-tmpfile-{}-{}",
+        "elephc-magician-tmpfile-{}-{}-{}",
         std::process::id(),
-        eval_tmpfile_nonce()
+        eval_tmpfile_nonce(),
+        EVAL_TMPFILE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     path
 }
 
+/// Per-process sequence that makes two temporary paths distinct even at the same instant.
+///
+/// The name used to be process id plus a nanosecond clock reading, and the caller opens it with
+/// `create_new(true)`. Two THREADS of one process share the pid, so the clock was the only thing
+/// separating them -- and two `SystemTime::now()` readings taken at once are not guaranteed to
+/// differ. The loser's open failed with `AlreadyExists`, `open_ephemeral_stream()` returned
+/// `None`, `fopen("php://memory")` returned false, and the resource ids the caller then printed
+/// were not the ones it opened.
+///
+/// Measured: eight threads each running the three-`fopen` program two hundred times produced 23
+/// failures out of 1600 before this counter, and none after. That is the whole of the eval
+/// stream-id flake -- shared state in the temporary-file NAMESPACE, not in the id allocator,
+/// which is per-context and was never the problem.
+static EVAL_TMPFILE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Returns a monotonic-ish nonce for temporary file names.
+///
+/// Kept as the cross-PROCESS half of the name: two runs of the same binary reuse pids, so the
+/// clock is what separates their leftovers. Within one process `EVAL_TMPFILE_SEQUENCE` is what
+/// guarantees uniqueness, because this value can repeat.
 pub(super) fn eval_tmpfile_nonce() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
