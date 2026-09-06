@@ -12,7 +12,12 @@ use super::*;
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
-    pub(super) descriptor: *mut c_void,
+    /// Descriptor pointer held as a word so the table can be shared across threads.
+    ///
+    /// Generated descriptors are immutable module-level data; keeping the address as
+    /// an integer lets one registration snapshot be published behind an `Arc` instead
+    /// of deep-copied into every context.
+    pub(super) descriptor: usize,
     pub(super) invoker: NativeFunctionInvoker,
     pub(super) param_count: usize,
     pub(super) param_names: Vec<String>,
@@ -33,7 +38,7 @@ impl NativeFunction {
         param_count: usize,
     ) -> Self {
         Self {
-            descriptor,
+            descriptor: descriptor as usize,
             invoker,
             param_count,
             param_names: Vec::new(),
@@ -189,6 +194,9 @@ impl NativeFunction {
     /// `arg_array` must be a boxed Mixed indexed array whose elements are boxed
     /// Mixed cells following the descriptor-invoker ABI.
     pub unsafe fn call(&self, arg_array: RuntimeCellHandle) -> RuntimeCellHandle {
-        RuntimeCellHandle::from_raw((self.invoker)(self.descriptor, arg_array.as_ptr()))
+        RuntimeCellHandle::from_raw((self.invoker)(
+            self.descriptor as *mut c_void,
+            arg_array.as_ptr(),
+        ))
     }
 }

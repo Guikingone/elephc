@@ -195,7 +195,7 @@ impl ElephcEvalContext {
         if self.functions.contains_key(&name) || self.native_functions.contains_key(&name) {
             return Err(function);
         }
-        self.native_functions.insert(name, function);
+        Arc::make_mut(&mut self.native_functions).insert(name, function);
         Ok(())
     }
 
@@ -221,7 +221,7 @@ impl ElephcEvalContext {
         index: usize,
         param_name: impl Into<String>,
     ) -> bool {
-        self.native_functions
+        Arc::make_mut(&mut self.native_functions)
             .get_mut(function_name)
             .is_some_and(|function| function.set_param_name(index, param_name))
     }
@@ -233,7 +233,7 @@ impl ElephcEvalContext {
         index: usize,
         param_type: EvalParameterType,
     ) -> bool {
-        self.native_functions
+        Arc::make_mut(&mut self.native_functions)
             .get_mut(function_name)
             .is_some_and(|function| function.set_param_type(index, param_type))
     }
@@ -245,7 +245,7 @@ impl ElephcEvalContext {
         index: usize,
         default: NativeCallableDefault,
     ) -> bool {
-        self.native_functions
+        Arc::make_mut(&mut self.native_functions)
             .get_mut(function_name)
             .is_some_and(|function| function.set_param_default(index, default))
     }
@@ -257,7 +257,7 @@ impl ElephcEvalContext {
         index: usize,
         by_ref: bool,
     ) -> bool {
-        self.native_functions
+        Arc::make_mut(&mut self.native_functions)
             .get_mut(function_name)
             .is_some_and(|function| function.set_param_by_ref(index, by_ref))
     }
@@ -268,7 +268,7 @@ impl ElephcEvalContext {
         function_name: &str,
         index: usize,
     ) -> bool {
-        self.native_functions
+        Arc::make_mut(&mut self.native_functions)
             .get_mut(function_name)
             .is_some_and(|function| function.set_variadic_index(index))
     }
@@ -279,7 +279,7 @@ impl ElephcEvalContext {
         function_name: &str,
         return_type: EvalParameterType,
     ) -> bool {
-        self.native_functions
+        Arc::make_mut(&mut self.native_functions)
             .get_mut(function_name)
             .is_some_and(|function| {
                 function.set_return_type(return_type);
@@ -293,7 +293,7 @@ impl ElephcEvalContext {
         function_name: &str,
         supported: bool,
     ) -> bool {
-        self.native_functions
+        Arc::make_mut(&mut self.native_functions)
             .get_mut(function_name)
             .is_some_and(|function| {
                 function.set_bridge_supported(supported);

@@ -21,7 +21,7 @@ impl ElephcEvalContext {
         {
             return false;
         }
-        self.declared_interface_names
+        Arc::make_mut(&mut self.declared_interface_names)
             .push(interface.name().to_string());
         #[cfg(not(test))]
         register_global_eval_interface(&interface);
@@ -58,7 +58,7 @@ impl ElephcEvalContext {
 
     /// Registers a runtime-visible interface declaration name for `get_declared_interfaces()`.
     pub fn define_external_declared_interface_name(&mut self, name: &str) -> bool {
-        push_external_declared_name(&mut self.declared_interface_names, name)
+        push_external_declared_name(Arc::make_mut(&mut self.declared_interface_names), name)
     }
 
     /// Defines an eval-declared trait, failing if this context already has the name.
@@ -72,7 +72,7 @@ impl ElephcEvalContext {
         {
             return false;
         }
-        self.declared_trait_names
+        Arc::make_mut(&mut self.declared_trait_names)
             .push(trait_decl.name().to_string());
         #[cfg(not(test))]
         register_global_eval_trait(&trait_decl);
@@ -109,7 +109,7 @@ impl ElephcEvalContext {
 
     /// Registers a runtime-visible trait declaration name for `get_declared_traits()`.
     pub fn define_external_declared_trait_name(&mut self, name: &str) -> bool {
-        push_external_declared_name(&mut self.declared_trait_names, name)
+        push_external_declared_name(Arc::make_mut(&mut self.declared_trait_names), name)
     }
 
     /// Defines an eval-declared enum plus class-shaped metadata for dispatch.
@@ -125,7 +125,7 @@ impl ElephcEvalContext {
         }
         self.declared_enum_names
             .push(enum_decl.name().trim_start_matches('\\').to_string());
-        self.declared_class_names
+        Arc::make_mut(&mut self.declared_class_names)
             .push(enum_decl.name().trim_start_matches('\\').to_string());
         #[cfg(not(test))]
         register_global_eval_enum(&enum_decl);

@@ -33,6 +33,7 @@ mod runtime_state;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::sync::Arc;
 #[cfg(not(test))]
 use std::sync::{Mutex, OnceLock};
 
@@ -68,7 +69,8 @@ static GLOBAL_EVAL_FUNCTIONS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock
 #[cfg(not(test))]
 static GLOBAL_EVAL_AUTOLOAD_CONTEXTS: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
 #[cfg(not(test))]
-static GLOBAL_EVAL_AOT_METADATA: OnceLock<Mutex<Option<GlobalEvalAotMetadata>>> = OnceLock::new();
+static GLOBAL_EVAL_AOT_METADATA: OnceLock<Mutex<Option<Arc<GlobalEvalAotMetadata>>>> =
+    OnceLock::new();
 
 thread_local! {
     static NATIVE_FRAME_CALLED_CLASS_OVERRIDES: RefCell<Vec<NativeFrameCalledClassOverride>> =

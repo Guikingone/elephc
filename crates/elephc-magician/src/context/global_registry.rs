@@ -129,87 +129,40 @@ pub(super) struct GlobalEvalClassRegistry {
     pub(super) aliases: HashMap<String, EvalClassAlias>,
 }
 
-/// Immutable AOT metadata copied into fallback contexts created without a generated frame.
+/// Immutable AOT metadata shared with fallback contexts created without a generated frame.
 ///
 /// Dynamic class-like declarations stay in `GlobalEvalClassRegistry`; this snapshot contains
 /// only compiler-provided declarations and signatures that are valid for the whole binary.
+///
+/// Every table is reference-counted rather than owned: the first generated context builds
+/// them, publishes the handles, and each later context adopts the same allocations instead
+/// of deep-copying a Symfony-sized registration stream per request. Contexts only ever read
+/// a synced table; the registration setters go through `Arc::make_mut`, so a context that
+/// registers after adopting the snapshot silently forks its own table and the published one
+/// is never observed to change.
 #[cfg(not(test))]
-#[derive(Clone)]
 pub(super) struct GlobalEvalAotMetadata {
-    declared_class_names: Vec<String>,
-    declared_interface_names: Vec<String>,
-    declared_trait_names: Vec<String>,
-    native_functions: HashMap<String, GlobalNativeFunction>,
-    native_methods: HashMap<(String, String), NativeCallableSignature>,
-    native_static_methods: HashMap<(String, String), NativeCallableSignature>,
-    native_constructors: HashMap<String, NativeCallableSignature>,
-    native_class_parents: HashMap<String, String>,
-    native_class_attributes: HashMap<String, Vec<EvalAttribute>>,
-    native_method_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
-    native_constant_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
-    native_interface_properties: HashMap<String, Vec<(String, EvalInterfaceProperty)>>,
-    native_abstract_properties: HashMap<String, Vec<(String, EvalInterfaceProperty)>>,
-    native_property_types: HashMap<(String, String), EvalParameterType>,
-    native_property_defaults: HashMap<(String, String), NativeCallableDefault>,
-    native_property_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
-}
-
-/// Sendable snapshot of one generated function descriptor registered by AOT startup code.
-#[cfg(not(test))]
-#[derive(Clone)]
-struct GlobalNativeFunction {
-    descriptor: usize,
-    invoker: NativeFunctionInvoker,
-    param_count: usize,
-    param_names: Vec<String>,
-    param_types: Vec<Option<EvalParameterType>>,
-    param_defaults: Vec<Option<NativeCallableDefault>>,
-    param_by_ref: Vec<bool>,
-    variadic_index: Option<usize>,
-    return_type: Option<EvalParameterType>,
-    required_param_count: Option<usize>,
-    bridge_supported: bool,
-}
-
-/// Copies a native callback descriptor into metadata safe to store behind a global mutex.
-#[cfg(not(test))]
-fn snapshot_native_function(function: &NativeFunction) -> GlobalNativeFunction {
-    GlobalNativeFunction {
-        descriptor: function.descriptor as usize,
-        invoker: function.invoker,
-        param_count: function.param_count,
-        param_names: function.param_names.clone(),
-        param_types: function.param_types.clone(),
-        param_defaults: function.param_defaults.clone(),
-        param_by_ref: function.param_by_ref.clone(),
-        variadic_index: function.variadic_index,
-        return_type: function.return_type.clone(),
-        required_param_count: function.required_param_count,
-        bridge_supported: function.bridge_supported,
-    }
-}
-
-/// Rebuilds a context-local native callback descriptor from global AOT metadata.
-#[cfg(not(test))]
-fn restore_native_function(function: GlobalNativeFunction) -> NativeFunction {
-    NativeFunction {
-        descriptor: function.descriptor as *mut std::ffi::c_void,
-        invoker: function.invoker,
-        param_count: function.param_count,
-        param_names: function.param_names,
-        param_types: function.param_types,
-        param_defaults: function.param_defaults,
-        param_by_ref: function.param_by_ref,
-        variadic_index: function.variadic_index,
-        return_type: function.return_type,
-        required_param_count: function.required_param_count,
-        bridge_supported: function.bridge_supported,
-    }
+    declared_class_names: Arc<Vec<String>>,
+    declared_interface_names: Arc<Vec<String>>,
+    declared_trait_names: Arc<Vec<String>>,
+    native_functions: Arc<HashMap<String, NativeFunction>>,
+    native_methods: Arc<HashMap<(String, String), NativeCallableSignature>>,
+    native_static_methods: Arc<HashMap<(String, String), NativeCallableSignature>>,
+    native_constructors: Arc<HashMap<String, NativeCallableSignature>>,
+    native_class_parents: Arc<HashMap<String, String>>,
+    native_class_attributes: Arc<HashMap<String, Vec<EvalAttribute>>>,
+    native_method_attributes: Arc<HashMap<(String, String), Vec<EvalAttribute>>>,
+    native_constant_attributes: Arc<HashMap<(String, String), Vec<EvalAttribute>>>,
+    native_interface_properties: Arc<HashMap<String, Vec<(String, EvalInterfaceProperty)>>>,
+    native_abstract_properties: Arc<HashMap<String, Vec<(String, EvalInterfaceProperty)>>>,
+    native_property_types: Arc<HashMap<(String, String), EvalParameterType>>,
+    native_property_defaults: Arc<HashMap<(String, String), NativeCallableDefault>>,
+    native_property_attributes: Arc<HashMap<(String, String), Vec<EvalAttribute>>>,
 }
 
 /// Returns the process-local snapshot of generated AOT metadata.
 #[cfg(not(test))]
-fn global_eval_aot_metadata() -> &'static Mutex<Option<GlobalEvalAotMetadata>> {
+fn global_eval_aot_metadata() -> &'static Mutex<Option<Arc<GlobalEvalAotMetadata>>> {
     GLOBAL_EVAL_AOT_METADATA.get_or_init(|| Mutex::new(None))
 }
 
@@ -219,28 +172,24 @@ pub(crate) fn publish_global_eval_aot_metadata(context: &ElephcEvalContext) {
     let Ok(mut metadata) = global_eval_aot_metadata().lock() else {
         return;
     };
-    *metadata = Some(GlobalEvalAotMetadata {
-        declared_class_names: context.declared_class_names.clone(),
-        declared_interface_names: context.declared_interface_names.clone(),
-        declared_trait_names: context.declared_trait_names.clone(),
-        native_functions: context
-            .native_functions
-            .iter()
-            .map(|(name, function)| (name.clone(), snapshot_native_function(function)))
-            .collect(),
-        native_methods: context.native_methods.clone(),
-        native_static_methods: context.native_static_methods.clone(),
-        native_constructors: context.native_constructors.clone(),
-        native_class_parents: context.native_class_parents.clone(),
-        native_class_attributes: context.native_class_attributes.clone(),
-        native_method_attributes: context.native_method_attributes.clone(),
-        native_constant_attributes: context.native_constant_attributes.clone(),
-        native_interface_properties: context.native_interface_properties.clone(),
-        native_abstract_properties: context.native_abstract_properties.clone(),
-        native_property_types: context.native_property_types.clone(),
-        native_property_defaults: context.native_property_defaults.clone(),
-        native_property_attributes: context.native_property_attributes.clone(),
-    });
+    *metadata = Some(Arc::new(GlobalEvalAotMetadata {
+            declared_class_names: Arc::clone(&context.declared_class_names),
+            declared_interface_names: Arc::clone(&context.declared_interface_names),
+            declared_trait_names: Arc::clone(&context.declared_trait_names),
+            native_functions: Arc::clone(&context.native_functions),
+            native_methods: Arc::clone(&context.native_methods),
+            native_static_methods: Arc::clone(&context.native_static_methods),
+            native_constructors: Arc::clone(&context.native_constructors),
+            native_class_parents: Arc::clone(&context.native_class_parents),
+            native_class_attributes: Arc::clone(&context.native_class_attributes),
+            native_method_attributes: Arc::clone(&context.native_method_attributes),
+            native_constant_attributes: Arc::clone(&context.native_constant_attributes),
+            native_interface_properties: Arc::clone(&context.native_interface_properties),
+            native_abstract_properties: Arc::clone(&context.native_abstract_properties),
+            native_property_types: Arc::clone(&context.native_property_types),
+            native_property_defaults: Arc::clone(&context.native_property_defaults),
+            native_property_attributes: Arc::clone(&context.native_property_attributes),
+    }));
 }
 
 /// Imports compiler-provided metadata into a newly created context.
@@ -257,26 +206,22 @@ pub(crate) fn sync_global_eval_aot_metadata(context: &mut ElephcEvalContext) -> 
     else {
         return false;
     };
-    context.declared_class_names = metadata.declared_class_names;
-    context.declared_interface_names = metadata.declared_interface_names;
-    context.declared_trait_names = metadata.declared_trait_names;
-    context.native_functions = metadata
-        .native_functions
-        .into_iter()
-        .map(|(name, function)| (name, restore_native_function(function)))
-        .collect();
-    context.native_methods = metadata.native_methods;
-    context.native_static_methods = metadata.native_static_methods;
-    context.native_constructors = metadata.native_constructors;
-    context.native_class_parents = metadata.native_class_parents;
-    context.native_class_attributes = metadata.native_class_attributes;
-    context.native_method_attributes = metadata.native_method_attributes;
-    context.native_constant_attributes = metadata.native_constant_attributes;
-    context.native_interface_properties = metadata.native_interface_properties;
-    context.native_abstract_properties = metadata.native_abstract_properties;
-    context.native_property_types = metadata.native_property_types;
-    context.native_property_defaults = metadata.native_property_defaults;
-    context.native_property_attributes = metadata.native_property_attributes;
+    context.declared_class_names = Arc::clone(&metadata.declared_class_names);
+    context.declared_interface_names = Arc::clone(&metadata.declared_interface_names);
+    context.declared_trait_names = Arc::clone(&metadata.declared_trait_names);
+    context.native_functions = Arc::clone(&metadata.native_functions);
+    context.native_methods = Arc::clone(&metadata.native_methods);
+    context.native_static_methods = Arc::clone(&metadata.native_static_methods);
+    context.native_constructors = Arc::clone(&metadata.native_constructors);
+    context.native_class_parents = Arc::clone(&metadata.native_class_parents);
+    context.native_class_attributes = Arc::clone(&metadata.native_class_attributes);
+    context.native_method_attributes = Arc::clone(&metadata.native_method_attributes);
+    context.native_constant_attributes = Arc::clone(&metadata.native_constant_attributes);
+    context.native_interface_properties = Arc::clone(&metadata.native_interface_properties);
+    context.native_abstract_properties = Arc::clone(&metadata.native_abstract_properties);
+    context.native_property_types = Arc::clone(&metadata.native_property_types);
+    context.native_property_defaults = Arc::clone(&metadata.native_property_defaults);
+    context.native_property_attributes = Arc::clone(&metadata.native_property_attributes);
     true
 }
 

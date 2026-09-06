@@ -20,7 +20,7 @@ impl ElephcEvalContext {
         if let Some(existing_parent) = self.native_class_parents.get(&class_key) {
             return existing_parent.eq_ignore_ascii_case(parent_name);
         }
-        self.native_class_parents
+        Arc::make_mut(&mut self.native_class_parents)
             .insert(class_key, parent_name.to_string());
         true
     }
@@ -42,7 +42,7 @@ impl ElephcEvalContext {
         if key.is_empty() {
             return false;
         }
-        self.native_class_attributes
+        Arc::make_mut(&mut self.native_class_attributes)
             .entry(key)
             .or_default()
             .push(attribute);
@@ -68,7 +68,7 @@ impl ElephcEvalContext {
         if key.0.is_empty() || key.1.is_empty() {
             return false;
         }
-        self.native_method_attributes
+        Arc::make_mut(&mut self.native_method_attributes)
             .entry(key)
             .or_default()
             .push(attribute);
@@ -98,7 +98,7 @@ impl ElephcEvalContext {
         if key.0.is_empty() || key.1.is_empty() {
             return false;
         }
-        self.native_constant_attributes
+        Arc::make_mut(&mut self.native_constant_attributes)
             .entry(key)
             .or_default()
             .push(attribute);
@@ -129,7 +129,7 @@ impl ElephcEvalContext {
         if key.is_empty() || owner.is_empty() || property.name().is_empty() {
             return false;
         }
-        let requirements = self.native_interface_properties.entry(key).or_default();
+        let requirements = Arc::make_mut(&mut self.native_interface_properties).entry(key).or_default();
         if requirements.iter().any(|(_, existing)| existing.name() == property.name()) {
             return false;
         }
@@ -160,7 +160,7 @@ impl ElephcEvalContext {
         if key.is_empty() || owner.is_empty() || property.name().is_empty() {
             return false;
         }
-        let requirements = self.native_abstract_properties.entry(key).or_default();
+        let requirements = Arc::make_mut(&mut self.native_abstract_properties).entry(key).or_default();
         if requirements
             .iter()
             .any(|(_, existing)| existing.name() == property.name())
@@ -193,7 +193,7 @@ impl ElephcEvalContext {
         if key.0.is_empty() || key.1.is_empty() {
             return false;
         }
-        self.native_property_types
+        Arc::make_mut(&mut self.native_property_types)
             .insert(key, property_type)
             .is_none()
     }
@@ -220,7 +220,7 @@ impl ElephcEvalContext {
         if key.0.is_empty() || key.1.is_empty() {
             return false;
         }
-        self.native_property_defaults.insert(key, default).is_none()
+        Arc::make_mut(&mut self.native_property_defaults).insert(key, default).is_none()
     }
 
     /// Returns generated AOT property default metadata by PHP class and property name.
@@ -245,7 +245,7 @@ impl ElephcEvalContext {
         if key.0.is_empty() || key.1.is_empty() {
             return false;
         }
-        self.native_property_attributes
+        Arc::make_mut(&mut self.native_property_attributes)
             .entry(key)
             .or_default()
             .push(attribute);
@@ -262,5 +262,61 @@ impl ElephcEvalContext {
             .get(&native_property_key(class_name, property_name))
             .cloned()
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies a registration made after adopting the published table forks a private copy.
+    ///
+    /// Contexts no longer deep-copy the AOT registration stream: they adopt the first
+    /// context's tables by reference count. That is only sound while a later write cannot
+    /// reach the shared allocation, so exercise the one registration setter that can run
+    /// after a sync and assert the snapshot every other context still holds is unchanged.
+    #[test]
+    fn a_registration_after_adopting_the_shared_table_forks_it() {
+        let mut publisher = ElephcEvalContext::new();
+        assert!(publisher.define_native_property_default(
+            "Publisher",
+            "kept",
+            NativeCallableDefault::Int(7),
+        ));
+
+        // What `publish_global_eval_aot_metadata` stores and `sync_global_eval_aot_metadata`
+        // hands out: one allocation, reference-counted rather than copied.
+        let published = Arc::clone(&publisher.native_property_defaults);
+        let mut adopter = ElephcEvalContext::new();
+        adopter.native_property_defaults = Arc::clone(&published);
+        assert_eq!(published.len(), 1);
+
+        assert!(adopter.define_native_property_default(
+            "Adopter",
+            "added",
+            NativeCallableDefault::Bool(true),
+        ));
+
+        assert_eq!(
+            published.len(),
+            1,
+            "a write made after the sync must not reach the published snapshot",
+        );
+        assert!(published
+            .get(&native_property_key("Adopter", "added"))
+            .is_none());
+
+        // The adopting context keeps both the inherited entry and its own.
+        assert_eq!(
+            adopter.native_property_default("Publisher", "kept"),
+            Some(NativeCallableDefault::Int(7)),
+        );
+        assert_eq!(
+            adopter.native_property_default("Adopter", "added"),
+            Some(NativeCallableDefault::Bool(true)),
+        );
+
+        // And the publishing context never sees another context's later registration.
+        assert_eq!(publisher.native_property_default("Adopter", "added"), None);
     }
 }

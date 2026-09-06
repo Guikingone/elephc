@@ -17,7 +17,7 @@ impl ElephcEvalContext {
         method_name: &str,
         signature: NativeCallableSignature,
     ) -> bool {
-        self.native_methods
+        Arc::make_mut(&mut self.native_methods)
             .insert(native_method_key(class_name, method_name), signature)
             .is_none()
     }
@@ -29,7 +29,7 @@ impl ElephcEvalContext {
         method_name: &str,
         signature: NativeCallableSignature,
     ) -> bool {
-        self.native_static_methods
+        Arc::make_mut(&mut self.native_static_methods)
             .insert(native_method_key(class_name, method_name), signature)
             .is_none()
     }
@@ -40,7 +40,7 @@ impl ElephcEvalContext {
         class_name: &str,
         signature: NativeCallableSignature,
     ) -> bool {
-        self.native_constructors
+        Arc::make_mut(&mut self.native_constructors)
             .insert(normalize_class_name(class_name), signature)
             .is_none()
     }
@@ -53,7 +53,7 @@ impl ElephcEvalContext {
         index: usize,
         param_name: impl Into<String>,
     ) -> bool {
-        self.native_methods
+        Arc::make_mut(&mut self.native_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_param_name(index, param_name))
     }
@@ -66,7 +66,7 @@ impl ElephcEvalContext {
         index: usize,
         param_type: EvalParameterType,
     ) -> bool {
-        self.native_methods
+        Arc::make_mut(&mut self.native_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_param_type(index, param_type))
     }
@@ -79,7 +79,7 @@ impl ElephcEvalContext {
         index: usize,
         default: NativeCallableDefault,
     ) -> bool {
-        self.native_methods
+        Arc::make_mut(&mut self.native_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_param_default(index, default))
     }
@@ -92,7 +92,7 @@ impl ElephcEvalContext {
         index: usize,
         by_ref: bool,
     ) -> bool {
-        self.native_methods
+        Arc::make_mut(&mut self.native_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_param_by_ref(index, by_ref))
     }
@@ -104,7 +104,7 @@ impl ElephcEvalContext {
         method_name: &str,
         index: usize,
     ) -> bool {
-        self.native_methods
+        Arc::make_mut(&mut self.native_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_variadic_index(index))
     }
@@ -116,7 +116,7 @@ impl ElephcEvalContext {
         method_name: &str,
         supported: bool,
     ) -> bool {
-        self.native_methods
+        Arc::make_mut(&mut self.native_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| {
                 signature.set_bridge_supported(supported);
@@ -131,7 +131,7 @@ impl ElephcEvalContext {
         method_name: &str,
         return_type: EvalParameterType,
     ) -> bool {
-        self.native_methods
+        Arc::make_mut(&mut self.native_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| {
                 signature.set_return_type(return_type);
@@ -147,7 +147,7 @@ impl ElephcEvalContext {
         index: usize,
         param_name: impl Into<String>,
     ) -> bool {
-        self.native_static_methods
+        Arc::make_mut(&mut self.native_static_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_param_name(index, param_name))
     }
@@ -160,7 +160,7 @@ impl ElephcEvalContext {
         index: usize,
         param_type: EvalParameterType,
     ) -> bool {
-        self.native_static_methods
+        Arc::make_mut(&mut self.native_static_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_param_type(index, param_type))
     }
@@ -173,7 +173,7 @@ impl ElephcEvalContext {
         index: usize,
         default: NativeCallableDefault,
     ) -> bool {
-        self.native_static_methods
+        Arc::make_mut(&mut self.native_static_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_param_default(index, default))
     }
@@ -186,7 +186,7 @@ impl ElephcEvalContext {
         index: usize,
         by_ref: bool,
     ) -> bool {
-        self.native_static_methods
+        Arc::make_mut(&mut self.native_static_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_param_by_ref(index, by_ref))
     }
@@ -198,7 +198,7 @@ impl ElephcEvalContext {
         method_name: &str,
         index: usize,
     ) -> bool {
-        self.native_static_methods
+        Arc::make_mut(&mut self.native_static_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_variadic_index(index))
     }
@@ -210,7 +210,7 @@ impl ElephcEvalContext {
         method_name: &str,
         supported: bool,
     ) -> bool {
-        self.native_static_methods
+        Arc::make_mut(&mut self.native_static_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| {
                 signature.set_bridge_supported(supported);
@@ -225,7 +225,7 @@ impl ElephcEvalContext {
         method_name: &str,
         return_type: EvalParameterType,
     ) -> bool {
-        self.native_static_methods
+        Arc::make_mut(&mut self.native_static_methods)
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| {
                 signature.set_return_type(return_type);
@@ -240,7 +240,7 @@ impl ElephcEvalContext {
         index: usize,
         param_name: impl Into<String>,
     ) -> bool {
-        self.native_constructors
+        Arc::make_mut(&mut self.native_constructors)
             .get_mut(&normalize_class_name(class_name))
             .is_some_and(|signature| signature.set_param_name(index, param_name))
     }
@@ -252,7 +252,7 @@ impl ElephcEvalContext {
         index: usize,
         param_type: EvalParameterType,
     ) -> bool {
-        self.native_constructors
+        Arc::make_mut(&mut self.native_constructors)
             .get_mut(&normalize_class_name(class_name))
             .is_some_and(|signature| signature.set_param_type(index, param_type))
     }
@@ -264,7 +264,7 @@ impl ElephcEvalContext {
         index: usize,
         default: NativeCallableDefault,
     ) -> bool {
-        self.native_constructors
+        Arc::make_mut(&mut self.native_constructors)
             .get_mut(&normalize_class_name(class_name))
             .is_some_and(|signature| signature.set_param_default(index, default))
     }
@@ -276,7 +276,7 @@ impl ElephcEvalContext {
         index: usize,
         by_ref: bool,
     ) -> bool {
-        self.native_constructors
+        Arc::make_mut(&mut self.native_constructors)
             .get_mut(&normalize_class_name(class_name))
             .is_some_and(|signature| signature.set_param_by_ref(index, by_ref))
     }
@@ -287,7 +287,7 @@ impl ElephcEvalContext {
         class_name: &str,
         index: usize,
     ) -> bool {
-        self.native_constructors
+        Arc::make_mut(&mut self.native_constructors)
             .get_mut(&normalize_class_name(class_name))
             .is_some_and(|signature| signature.set_variadic_index(index))
     }
@@ -298,7 +298,7 @@ impl ElephcEvalContext {
         class_name: &str,
         supported: bool,
     ) -> bool {
-        self.native_constructors
+        Arc::make_mut(&mut self.native_constructors)
             .get_mut(&normalize_class_name(class_name))
             .is_some_and(|signature| {
                 signature.set_bridge_supported(supported);

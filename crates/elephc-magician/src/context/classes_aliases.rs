@@ -21,7 +21,7 @@ impl ElephcEvalContext {
         {
             return false;
         }
-        self.declared_class_names.push(class.name().to_string());
+        Arc::make_mut(&mut self.declared_class_names).push(class.name().to_string());
         #[cfg(not(test))]
         register_global_eval_class(&class);
         self.classes.insert(key, class);
@@ -69,7 +69,7 @@ impl ElephcEvalContext {
             let Some(class) = registry.classes.get(&key).cloned() else {
                 continue;
             };
-            self.declared_class_names.push(class.name().to_string());
+            Arc::make_mut(&mut self.declared_class_names).push(class.name().to_string());
             self.classes.insert(key.clone(), class);
             if let Some(file) = registry.class_source_files.get(&key) {
                 self.class_source_files.insert(key.clone(), file.clone());
@@ -88,7 +88,7 @@ impl ElephcEvalContext {
             let Some(interface) = registry.interfaces.get(&key).cloned() else {
                 continue;
             };
-            self.declared_interface_names
+            Arc::make_mut(&mut self.declared_interface_names)
                 .push(interface.name().to_string());
             self.interfaces.insert(key, interface);
         }
@@ -105,7 +105,7 @@ impl ElephcEvalContext {
             let Some(trait_decl) = registry.traits.get(&key).cloned() else {
                 continue;
             };
-            self.declared_trait_names
+            Arc::make_mut(&mut self.declared_trait_names)
                 .push(trait_decl.name().to_string());
             self.traits.insert(key, trait_decl);
         }
@@ -124,7 +124,7 @@ impl ElephcEvalContext {
             };
             self.declared_enum_names
                 .push(enum_decl.name().trim_start_matches('\\').to_string());
-            self.declared_class_names
+            Arc::make_mut(&mut self.declared_class_names)
                 .push(enum_decl.name().trim_start_matches('\\').to_string());
             self.classes
                 .insert(key.clone(), enum_decl.as_class_metadata());
@@ -395,6 +395,6 @@ impl ElephcEvalContext {
 
     /// Registers a runtime-visible class or enum declaration name for `get_declared_classes()`.
     pub fn define_external_declared_class_name(&mut self, name: &str) -> bool {
-        push_external_declared_name(&mut self.declared_class_names, name)
+        push_external_declared_name(Arc::make_mut(&mut self.declared_class_names), name)
     }
 }
