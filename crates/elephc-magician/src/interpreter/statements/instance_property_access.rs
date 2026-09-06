@@ -541,6 +541,14 @@ pub(in crate::interpreter) fn eval_property_set_result(
     if !declared_property_found || declared_property_is_public {
         let _ = values.property_set(object, &storage_property_name, value);
     }
+    // `eval_store_dynamic_property_value` is the ONE place the overlay's reference is taken and
+    // given back: it releases the cell it displaces, and re-storing the cell already held is a
+    // no-op precisely because nothing was displaced. This site kept a release of its own from
+    // before that consolidation, which gave the same cell back TWICE -- and in the no-op case
+    // gave back the overlay's own LIVE reference. An append into a nested property array is
+    // exactly that case, because the array is mutated in place and the write re-stores the same
+    // handle: the value then survived only on the mirror slot, and the next write to that slot
+    // freed it, so the whole property read back empty. `replaced` stays for the trace line only.
     let replaced = context.dynamic_property_value(identity, &storage_property_name);
     eval_store_dynamic_property_value(identity, &storage_property_name, value, context, values)?;
     if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
@@ -552,9 +560,6 @@ pub(in crate::interpreter) fn eval_property_set_result(
             call_site.0,
             call_site.2,
         );
-    }
-    if let Some(replaced) = replaced {
-        values.release(replaced)?;
     }
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())

@@ -31478,3 +31478,49 @@ echo 'done';
          seen=ProbeMissingOne,ProbeMissingTwo;done"
     );
 }
+
+/// Verifies an APPEND into a nested property array survives the writes that follow it.
+///
+/// The dynamic-property overlay OWNS what it holds, and `eval_store_dynamic_property_value` is
+/// the single place that takes and gives back that reference. `eval_property_set_result` kept a
+/// hand-rolled release of its own from before that consolidation, so every property write gave
+/// the overlay's cell back TWICE -- and when the write re-stores the cell already held, which is
+/// exactly what an append does because the array is mutated in place, the overlay's own
+/// reference was the one dropped. The array then lived only on the object's slot, and the next
+/// write to that slot freed it: the whole property read back empty.
+///
+/// FakeOps cannot see this. Its `array_set` always returns the same handle and its boxing keeps
+/// a second reference alive, so the accounting error stays balanced there; only the real runtime
+/// frees the cell. That is why this test is here and not in the interpreter suite.
+///
+/// Reference value captured from `php -n` (PHP 8.5.6): `zero[7]n[3]count[1];done`.
+#[test]
+fn test_eval_include_keeps_a_nested_property_append_alive_across_later_writes() {
+    let out = compile_and_run(
+        r#"<?php
+$piece = __DIR__ . "/eval-overlay-append.php";
+file_put_contents($piece, '<?php
+class OverlayBagInc {
+    public array $m = [];
+    public function build(): void {
+        $this->m["a"][] = 7;
+        $this->m["n"] = 3;
+        $this->m["count"] = 0;
+        $this->m["count"] += 1;
+    }
+    public function show(): string {
+        return "zero[" . ($this->m["a"][0] ?? "MISS") . "]"
+            . "n[" . ($this->m["n"] ?? "MISS") . "]"
+            . "count[" . ($this->m["count"] ?? 0) . "]";
+    }
+}
+$bag = new OverlayBagInc();
+$bag->build();
+echo $bag->show();
+');
+include $piece;
+echo ";done";
+"#,
+    );
+    assert_eq!(out, "zero[7]n[3]count[1];done");
+}
