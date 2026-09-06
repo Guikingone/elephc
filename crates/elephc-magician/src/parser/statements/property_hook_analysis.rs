@@ -62,6 +62,11 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         | EvalStmt::ReferenceAssign { .. }
         | EvalStmt::TraitDecl(_)
         | EvalStmt::UnsetVar { .. } => false,
+        // A `declare(…) { … }` body is ordinary statements in the same scope, so a hook writing
+        // its backing slot inside one still writes it.
+        EvalStmt::DeclareTicks { body, .. } | EvalStmt::DeclareDirective { body, .. } => body
+            .as_ref()
+            .is_some_and(|body| eval_stmt_list_uses_this_property(body, property_name)),
         EvalStmt::UnsetArrayElement { array, index } => {
             eval_expr_uses_this_property(array, property_name)
                 || eval_expr_uses_this_property(index, property_name)

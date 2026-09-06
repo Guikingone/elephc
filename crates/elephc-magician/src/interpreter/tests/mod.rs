@@ -63,6 +63,7 @@ mod classes;
 mod closures;
 mod control_flow;
 mod core;
+mod declare_directives;
 mod destructuring;
 mod dynamic_calls;
 mod dynamic_property_store;

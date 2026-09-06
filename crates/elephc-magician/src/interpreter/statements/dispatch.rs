@@ -22,7 +22,10 @@ pub(in crate::interpreter) fn execute_statements(
     let mut position = 0;
     while let Some(stmt) = statements.get(position) {
         match execute_stmt(stmt, context, scope, values) {
-            Ok(EvalControl::None) => position += 1,
+            Ok(EvalControl::None) => {
+                eval_run_due_tick(context, values)?;
+                position += 1;
+            }
             Ok(EvalControl::Goto(label)) => {
                 let Some(target) = statements.iter().position(
                     |statement| matches!(statement, EvalStmt::Label(candidate) if candidate == &label),
@@ -102,6 +105,12 @@ pub(in crate::interpreter) fn execute_stmt(
         EvalStmt::DeclareStrictTypes(enabled) => {
             context.set_strict_types(*enabled);
             Ok(EvalControl::None)
+        }
+        EvalStmt::DeclareTicks { every, body } => {
+            execute_declare_ticks_stmt(*every, body.as_deref(), context, scope, values)
+        }
+        EvalStmt::DeclareDirective { name, body } => {
+            execute_declare_directive_stmt(name, body.as_deref(), context, scope, values)
         }
         EvalStmt::Goto(label) => Ok(EvalControl::Goto(label.clone())),
         EvalStmt::DoWhile { body, condition } => {
@@ -349,4 +358,80 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
     }
+}
+
+/// Runs a `declare(ticks=N)` body, or turns ticking on for the rest of the enclosing scope.
+///
+/// The interval is saved and restored around a BLOCK body, because php scopes a block-form
+/// directive to that block: `declare(ticks=1) { … }` ticks inside the braces and nowhere after.
+/// The statement form has no body and simply runs to the end of the scope it was written in.
+fn execute_declare_ticks_stmt(
+    every: i64,
+    body: Option<&[EvalStmt]>,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    let Some(body) = body else {
+        context.set_tick_interval(every);
+        return Ok(EvalControl::None);
+    };
+    let previous = context.set_tick_interval(every);
+    let result = execute_statements(body, context, scope, values);
+    context.set_tick_interval(previous);
+    result
+}
+
+/// Runs any other `declare(name=…)`, warning the way php warns and continuing either way.
+///
+/// Measured with `php -n` 8.5.6: `declare(encoding='UTF-8');` says
+/// `declare(encoding=...) ignored because Zend multibyte feature is turned off by settings`, and
+/// any unknown name says `Unsupported declare 'NAME'`. Both are warnings; the script runs on.
+fn execute_declare_directive_stmt(
+    name: &str,
+    body: Option<&[EvalStmt]>,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    if name.eq_ignore_ascii_case("encoding") {
+        values.warning(
+            "declare(encoding=...) ignored because Zend multibyte feature is turned off by \
+             settings",
+        )?;
+    } else {
+        values.warning(&format!("Unsupported declare '{name}'"))?;
+    }
+    match body {
+        None => Ok(EvalControl::None),
+        Some(body) => execute_statements(body, context, scope, values),
+    }
+}
+
+/// Runs the registered tick handlers when `declare(ticks=N)` says one is due.
+///
+/// Measured with `php -n` 8.5.6: with `declare(ticks=1)` and one handler registered, the handler
+/// runs after EVERY statement of the declared scope, including the `register_tick_function()`
+/// call that registered it and the statements of a function declared in the same file -- but not
+/// after the `unregister_tick_function()` that removed it.
+fn eval_run_due_tick(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !context.tick_statement_is_due() {
+        return Ok(());
+    }
+    let handlers = context.tick_functions();
+    let previous = context.set_tick_running(true);
+    let mut result = Ok(());
+    for handler in handlers {
+        if result.is_err() {
+            break;
+        }
+        result = eval_call_user_func_with_values(vec![handler], context, values).map(|value| {
+            let _ = values.release(value);
+        });
+    }
+    context.set_tick_running(previous);
+    result
 }

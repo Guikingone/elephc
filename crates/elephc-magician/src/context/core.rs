@@ -96,6 +96,14 @@ pub struct ElephcEvalContext {
     pub(super) function_stack: Vec<String>,
     pub(super) returns_by_ref: bool,
     pub(super) strict_types: bool,
+    /// `declare(ticks=N)`'s N, or 0 when no tick directive is in force.
+    pub(super) tick_interval: i64,
+    /// Statements executed since the last tick fired.
+    pub(super) tick_counter: i64,
+    /// Callables `register_tick_function()` has registered, in registration order.
+    pub(super) tick_functions: Vec<RuntimeCellHandle>,
+    /// Whether a tick handler is running, so its own statements do not tick again.
+    pub(super) tick_running: bool,
     pub(super) array_iterators: HashMap<u64, EvalArrayIteratorState>,
     pub(super) pending_return_reference: Option<(EvalReferenceTarget, RuntimeCellHandle)>,
     pub(super) class_stack: Vec<String>,
@@ -189,6 +197,10 @@ impl ElephcEvalContext {
             function_stack: Vec::new(),
             returns_by_ref: false,
             strict_types: false,
+            tick_interval: 0,
+            tick_counter: 0,
+            tick_functions: Vec::new(),
+            tick_running: false,
             array_iterators: HashMap::new(),
             pending_return_reference: None,
             class_stack: Vec::new(),
@@ -283,6 +295,10 @@ impl ElephcEvalContext {
             function_stack: Vec::new(),
             returns_by_ref: false,
             strict_types: false,
+            tick_interval: 0,
+            tick_counter: 0,
+            tick_functions: Vec::new(),
+            tick_running: false,
             array_iterators: HashMap::new(),
             pending_return_reference: None,
             class_stack: Vec::new(),

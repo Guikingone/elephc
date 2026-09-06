@@ -88,6 +88,22 @@ pub enum EvalStmt {
     /// interpreter's coercion rules, and because php scopes it to the file whose calls it
     /// governs rather than to the callee.
     DeclareStrictTypes(bool),
+    /// `declare(ticks=N);` or `declare(ticks=N) { … }` -- php's statement-counting hook.
+    ///
+    /// `body` is `None` for the statement form, which runs to the end of the enclosing scope, and
+    /// `Some` for the block and `enddeclare` forms, which scope the directive to their body.
+    DeclareTicks {
+        every: i64,
+        body: Option<Vec<EvalStmt>>,
+    },
+    /// Any other `declare(name=…)`, kept so its body still runs and its name can be reported.
+    ///
+    /// php never refuses one of these: `encoding` is accepted and ignored when Zend multibyte is
+    /// off, and an unknown name is a warning the script continues past.
+    DeclareDirective {
+        name: String,
+        body: Option<Vec<EvalStmt>>,
+    },
     Goto(String),
     Global {
         vars: Vec<String>,

@@ -118,13 +118,20 @@ echo "still running";"#
     );
 }
 
-/// Verifies `declare(ticks=1)` is REFUSED rather than accepted and ignored.
+/// Verifies the ONE `declare` shape php refuses: `strict_types` in block mode.
 ///
-/// php accepts it and changes when tick handlers run, which this interpreter does not model.
-/// Accepting the directive and doing nothing would be a silent divergence; refusing says so.
+/// This test used to assert that `declare(ticks=1)` was refused, on the reasoning that accepting
+/// a directive and doing nothing would be a silent divergence. Measuring it settled the point the
+/// other way: `php -n` 8.5.6 accepts `ticks`, and it does not refuse an unknown directive either
+/// -- `declare(foo=1);` is a warning and the script runs on. Refusing was the larger divergence,
+/// because a file php parses did not parse at all. What php DOES refuse is a block body on
+/// `strict_types`: `Fatal error: strict_types declaration must not use block mode`. The rest of
+/// the surface is pinned in `interpreter/tests/declare_directives.rs`.
 #[test]
-fn a_directive_other_than_strict_types_is_refused() {
-    let error = parse_fragment(br#"declare(ticks=1); echo 1;"#)
-        .expect_err("an unmodelled declare directive should be refused");
+fn strict_types_is_refused_in_block_mode() {
+    let error = parse_fragment(
+        br#"declare(strict_types=1) { $a = 1; }"#,
+    )
+    .expect_err("strict_types must not use block mode");
     assert_eq!(error.error(), EvalParseError::UnsupportedConstruct);
 }

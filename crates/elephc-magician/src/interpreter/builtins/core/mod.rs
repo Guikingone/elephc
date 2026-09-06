@@ -34,6 +34,7 @@ mod ob_implicit_flush;
 mod ob_list_handlers;
 mod ob_start;
 mod print_r;
+mod tick_functions;
 mod trigger_error;
 mod var_dump;
 
@@ -46,6 +47,7 @@ pub(in crate::interpreter) use defined::*;
 pub(in crate::interpreter) use die::*;
 pub(in crate::interpreter) use exit::*;
 pub(in crate::interpreter) use ob_get_clean::*;
+pub(in crate::interpreter) use tick_functions::*;
 pub(in crate::interpreter) use ob_get_contents::*;
 pub(in crate::interpreter) use ob_get_flush::*;
 pub(in crate::interpreter) use ob_get_status::*;
@@ -80,6 +82,12 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         "ob_list_handlers" => eval_builtin_ob_list_handlers(args, context, scope, values),
         "ob_start" => eval_builtin_ob_start(args, context, scope, values),
         "print_r" => eval_builtin_print_r(args, context, scope, values),
+        "register_tick_function" => {
+            eval_builtin_register_tick_function(args, context, scope, values)
+        }
+        "unregister_tick_function" => {
+            eval_builtin_unregister_tick_function(args, context, scope, values)
+        }
         "var_dump" => eval_builtin_var_dump(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -115,6 +123,12 @@ pub(in crate::interpreter) fn eval_core_values_result(
         "ob_list_handlers" => eval_ob_list_handlers_result(evaluated_args, context, values),
         "ob_start" => eval_ob_start_result(evaluated_args, context, values),
         "print_r" => eval_print_r_result(evaluated_args, context, values),
+        "register_tick_function" => {
+            eval_register_tick_function_result(evaluated_args, context, values)
+        }
+        "unregister_tick_function" => {
+            eval_unregister_tick_function_result(evaluated_args, context, values)
+        }
         "var_dump" => eval_var_dump_result(evaluated_args, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }

@@ -314,11 +314,11 @@ impl ElephcEvalContext {
 
     /// Turns PHP's `declare(strict_types=1)` on or off, returning the previous setting.
     ///
-    /// php scopes this to the FILE whose calls it governs, not to the callee, so a caller in a
-    /// strict file checking a function declared in a lenient one is checked strictly. One flag
-    /// with save/restore around each program gives that for a single file; a call CROSSING files
-    /// still uses the flag in force at the moment of binding, which is the caller's only when
-    /// the callee does not itself call across files. That limit is stated rather than implied.
+    /// php scopes this to the file containing the code doing the coercing. An argument is coerced
+    /// at the CALL, so the caller's file decides; a returned value is coerced at the `return`, so
+    /// the callee's file decides. The flag therefore holds the mode of the file whose code is
+    /// running right now: an include frame saves and restores it, and each body-execution site
+    /// sets it to the callee's declaration stamp and puts the caller's back afterwards.
     pub fn set_strict_types(&mut self, strict_types: bool) -> bool {
         std::mem::replace(&mut self.strict_types, strict_types)
     }
@@ -326,6 +326,63 @@ impl ElephcEvalContext {
     /// Returns whether scalar arguments and returns are checked strictly.
     pub const fn strict_types(&self) -> bool {
         self.strict_types
+    }
+
+    /// Sets `declare(ticks=N)`'s interval, returning the previous one.
+    ///
+    /// Zero means no tick directive is in force, which is the state every program starts in and
+    /// the one `register_tick_function()` alone does not leave: php needs BOTH the directive and
+    /// a registered handler before anything runs.
+    pub fn set_tick_interval(&mut self, interval: i64) -> i64 {
+        self.tick_counter = 0;
+        std::mem::replace(&mut self.tick_interval, interval)
+    }
+
+    /// Returns the tick interval in force, or zero when ticking is off.
+    pub const fn tick_interval(&self) -> i64 {
+        self.tick_interval
+    }
+
+    /// Counts one executed statement and reports whether a tick is due.
+    ///
+    /// Measured with `php -n` 8.5.6: `declare(ticks=3)` over six statements fires twice, so the
+    /// counter resets on each fire rather than testing a running total.
+    pub fn tick_statement_is_due(&mut self) -> bool {
+        if self.tick_interval <= 0 || self.tick_running || self.tick_functions.is_empty() {
+            return false;
+        }
+        self.tick_counter += 1;
+        if self.tick_counter < self.tick_interval {
+            return false;
+        }
+        self.tick_counter = 0;
+        true
+    }
+
+    /// Returns the registered tick handlers, in registration order.
+    pub fn tick_functions(&self) -> Vec<RuntimeCellHandle> {
+        self.tick_functions.clone()
+    }
+
+    /// Registers one tick handler, taking ownership of the retained callable.
+    pub fn push_tick_function(&mut self, handler: RuntimeCellHandle) {
+        self.tick_functions.push(handler);
+    }
+
+    /// Removes the tick handler at one index and hands its owned reference back.
+    pub fn take_tick_function(&mut self, index: usize) -> Option<RuntimeCellHandle> {
+        if index >= self.tick_functions.len() {
+            return None;
+        }
+        Some(self.tick_functions.remove(index))
+    }
+
+    /// Marks a tick handler as running, returning the previous state.
+    ///
+    /// php does not tick inside a tick handler; without this the first handler statement would
+    /// schedule another tick and the interpreter would recurse until it ran out of stack.
+    pub fn set_tick_running(&mut self, running: bool) -> bool {
+        std::mem::replace(&mut self.tick_running, running)
     }
 
     /// Marks whether the body about to run returns BY REFERENCE, returning the previous value.

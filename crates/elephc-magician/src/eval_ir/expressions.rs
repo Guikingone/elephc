@@ -433,3 +433,13 @@ pub enum EvalUnaryOp {
     BitNot,
     ErrorSuppress,
 }
+
+/// One `declare(name=VALUE)` right-hand side, as written.
+///
+/// php takes an integer for `ticks` and `strict_types` and a string for `encoding`, and the two
+/// are not interchangeable: `declare(ticks="1")` is a parse error.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalDeclareValue {
+    Int(i64),
+    Str(String),
+}

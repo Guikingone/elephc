@@ -709,6 +709,13 @@ fn visit_static_var_declarations(
             | EvalStmt::For { body, .. }
             | EvalStmt::While { body, .. } => visit_static_var_declarations(body, seen, visitor),
             EvalStmt::FunctionDecl { .. } => {}
+            // A `declare(…) { … }` body is ordinary statements in the SAME scope, so a `static`
+            // written inside one is the enclosing function's, exactly as in an `if` branch.
+            EvalStmt::DeclareTicks { body, .. } | EvalStmt::DeclareDirective { body, .. } => {
+                if let Some(body) = body {
+                    visit_static_var_declarations(body, seen, visitor);
+                }
+            }
             EvalStmt::If {
                 then_branch,
                 else_branch,

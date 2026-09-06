@@ -289,10 +289,12 @@ mod tests {
         // Recomputed for the merged catalog: main's BCMath and iconv contracts join this
         // branch's promotions, so every one of these six is a merge result, not either side's
         // number.
-        assert_eq!(eval_registry, 489);
+        // 489 + the two tick-function contracts, both eval-registry surfaces.
+        assert_eq!(eval_registry, 491);
         assert_eq!(eval_internal, 39);
         assert_eq!(eval_pending, 40);
-        assert_eq!(aot_registry, 555);
+        // 555 + the two tick-function contracts.
+        assert_eq!(aot_registry, 557);
         assert_eq!(aot_external, 10);
         assert_eq!(aot_unsupported, 3);
     }
@@ -340,7 +342,8 @@ mod tests {
 
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 468);
+        // 468 + the two tick-function contracts, both interpreter adapters.
+        assert_eq!(interpreter_adapter, 470);
         assert_eq!(unsupported, 79);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
