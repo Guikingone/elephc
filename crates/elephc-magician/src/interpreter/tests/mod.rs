@@ -92,3 +92,4 @@ mod strict_types;
 mod strict_types_scope;
 mod support;
 mod trait_adaptations;
+mod undefined_variable_warning;

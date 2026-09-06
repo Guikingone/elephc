@@ -278,9 +278,22 @@ fn eval_expr_dispatch(
         EvalExpr::InstanceOf { value, target } => {
             eval_instanceof_expr(value, target, context, scope, values)
         }
-        EvalExpr::LoadVar(name) => {
-            visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok)
-        }
+        EvalExpr::LoadVar(name) => match visible_scope_cell(context, scope, name) {
+            Some(cell) => Ok(cell),
+            None => {
+                // php: `Warning: Undefined variable $x`, and the value is still null -- an unset
+                // variable is a WARNING, never an error. 18 cases in the php-src sweep printed
+                // the right value and no diagnostic at all.
+                //
+                // `@` already suppresses through `errors_suppressed()`. `??` and `isset()` are
+                // the other two readers php keeps quiet, and they suppress around their own
+                // operand rather than being special-cased here, because the rule is theirs.
+                if !context.errors_suppressed() {
+                    values.warning(&format!("Undefined variable ${name}"))?;
+                }
+                values.null()
+            }
+        },
         EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
         EvalExpr::Match {
             subject,
@@ -426,7 +439,13 @@ fn eval_expr_dispatch(
             )
         }
         EvalExpr::NullCoalesce { value, default } => {
-            let value = eval_expr(value, context, scope, values)?;
+            // `$x ?? $default` asks whether `$x` is there and must not complain that it is not:
+            // php raises no `Undefined variable` for the left operand of `??`. Suppressing around
+            // it is exactly that rule, and reuses the depth counter `@` already maintains.
+            context.push_error_suppression();
+            let value = eval_expr(value, context, scope, values);
+            context.pop_error_suppression();
+            let value = value?;
             if values.is_null(value)? {
                 eval_expr(default, context, scope, values)
             } else {
