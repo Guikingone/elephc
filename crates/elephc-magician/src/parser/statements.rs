@@ -81,7 +81,9 @@ impl Parser {
         if let TokenKind::DocComment(doc_comment) = self.current() {
             let doc_comment = doc_comment.clone();
             self.advance();
-            return if starts_doc_commented_declaration(self.current()) {
+            return if matches!(self.current(), TokenKind::AttributeStart) {
+                self.parse_attributed_stmt_with_doc_comment(Some(doc_comment))
+            } else if starts_doc_commented_declaration(self.current()) {
                 self.parse_class_decl_stmt_with_doc_comment(Some(doc_comment))
             } else {
                 self.parse_stmt()
@@ -299,6 +301,14 @@ impl Parser {
 
     /// Parses one declaration preceded by PHP attribute groups.
     pub(super) fn parse_attributed_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_attributed_stmt_with_doc_comment(None)
+    }
+
+    /// Parses an attributed declaration that a doc comment may precede.
+    pub(super) fn parse_attributed_stmt_with_doc_comment(
+        &mut self,
+        doc_comment: Option<String>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let attributes = self.parse_attribute_groups()?;
         match self.current() {
             TokenKind::Ident(name)
@@ -307,7 +317,7 @@ impl Parser {
                     || ident_eq(name, "readonly")
                     || ident_eq(name, "class") =>
             {
-                self.parse_class_decl_stmt_with_attributes(attributes)
+                self.parse_class_decl_stmt_with_attributes_and_doc_comment(attributes, doc_comment)
             }
             TokenKind::Ident(name) if ident_eq(name, "enum") => {
                 self.parse_enum_decl_stmt_with_attributes(attributes)

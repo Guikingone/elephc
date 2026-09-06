@@ -32,7 +32,7 @@ impl Parser {
     }
 
     /// Parses a class declaration and attaches already parsed attributes and doc-comment metadata.
-    fn parse_class_decl_stmt_with_attributes_and_doc_comment(
+    pub(super) fn parse_class_decl_stmt_with_attributes_and_doc_comment(
         &mut self,
         attributes: Vec<EvalAttribute>,
         doc_comment: Option<String>,

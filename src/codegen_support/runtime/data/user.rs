@@ -25,6 +25,8 @@ use super::instanceof::{escaped_ascii, escaped_bytes};
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
 const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
+const EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE: u64 = 64;
+const EVAL_REFLECTION_CLASS_FLAG_INTERNAL: u64 = 256;
 const EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
 const EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT: u64 = 16;
 const EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT: u64 = 40;
@@ -1950,11 +1952,37 @@ fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
     if class_info.is_readonly_class {
         flags |= EVAL_REFLECTION_CLASS_FLAG_READONLY;
     }
+    // php's `isInstantiable()`: a class you can write `new` in front of. Abstract classes are out,
+    // and so is a class whose constructor is not public -- a singleton with a private constructor
+    // is a shape Symfony's container uses. The flag word carried neither, so every generated class
+    // answered `false`.
+    if eval_reflection_class_is_instantiable(class_info) {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE;
+    }
+    // A class the compiler INJECTED -- ArrayObject and its family -- is internal in php's sense:
+    // it has no source of its own, which is exactly what the dummy declaration span says. Without
+    // the bit the reflection fallback reads "not internal" and answers `isUserDefined()` true for
+    // a builtin, because it derives that answer from this one.
+    if class_info.declaration_span == crate::span::Span::dummy() {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_INTERNAL;
+    }
     flags |= eval_reflection_source_line_flags(
         class_info.declaration_span.line,
         class_info.declaration_span.end_line,
     );
     flags
+}
+
+/// Returns php's `ReflectionClass::isInstantiable()` for one generated class.
+fn eval_reflection_class_is_instantiable(class_info: &ClassInfo) -> bool {
+    if class_info.is_abstract {
+        return false;
+    }
+    let constructor = crate::names::php_symbol_key("__construct");
+    match class_info.method_visibilities.get(&constructor) {
+        Some(Visibility::Public) | None => true,
+        Some(_) => false,
+    }
 }
 
 /// Returns eval ReflectionClass source-location bits retained for one generated/AOT interface.

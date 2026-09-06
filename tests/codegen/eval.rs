@@ -31806,3 +31806,91 @@ echo ';done';
     );
     assert_eq!(out, "main;ProbeAotSig[3|1|n:0:int:nonull:builtin:req:fix;tag:1:string:null:builtin:opt:fix;rest:2:int:nonull:builtin:opt:var;];done");
 }
+
+/// Verifies a doc comment survives an attribute, and what `new` and `internal` mean per class.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `main;ProbeR1Documented[doc=yes;inst=y;int=n;user=y];ProbeR1Public[doc=false;inst=y;int=n;user=y];ProbeR1Private[doc=false;inst=n;int=n;user=y];ProbeR1Abstract[doc=false;inst=n;int=n;user=y];ArrayObject[doc=false;inst=y;int=y;user=n];done`.
+///
+/// THE DOC COMMENT was dropped at TOKENIZATION when an attribute stood between it and its class.
+/// The filter that decides which doc comments survive asks whether the next token starts a
+/// declaration, and `#[` was not on that list -- so `/** … */ #[AsCommand(…)] class C {}`, which is
+/// how most of Symfony's commands are written, lost its comment before any grammar rule could ask.
+///
+/// `isInstantiable()` is a class you can write `new` in front of: not abstract, and no constructor
+/// less visible than public -- the private-constructor singleton is a shape Symfony's container
+/// uses. The flag word the compiler publishes carried neither fact, so every generated class
+/// answered `false`.
+///
+/// `isInternal()` is published from the declaration span: a class the compiler INJECTED has none
+/// of its own, which is what a dummy span says. It matters twice over, because `isUserDefined()`
+/// is derived from it -- without the bit a builtin claimed to be user-defined.
+#[test]
+fn test_reflection_answers_doc_comments_instantiability_and_internal_per_class_kind() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+#[Attribute]
+class ProbeR1Mark
+{
+}
+
+/** Documented through an attribute. */
+#[ProbeR1Mark]
+class ProbeR1Documented
+{
+}
+
+foreach (['ProbeR1Documented', 'ProbeR1Public', 'ProbeR1Private', 'ProbeR1Abstract', 'ArrayObject'] as $name) {
+    $r = new ReflectionClass($name);
+    $d = $r->getDocComment();
+    echo $name, '[doc=', false === $d ? 'false' : 'yes';
+    echo ';inst=', $r->isInstantiable() ? 'y' : 'n';
+    echo ';int=', $r->isInternal() ? 'y' : 'n';
+    echo ';user=', $r->isUserDefined() ? 'y' : 'n', '];';
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class ProbeR1Public
+{
+    public function __construct()
+    {
+    }
+}
+
+class ProbeR1Private
+{
+    private function __construct()
+    {
+    }
+}
+
+abstract class ProbeR1Abstract
+{
+}
+
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "main;ProbeR1Documented[doc=yes;inst=y;int=n;user=y];\
+         ProbeR1Public[doc=false;inst=y;int=n;user=y];\
+         ProbeR1Private[doc=false;inst=n;int=n;user=y];\
+         ProbeR1Abstract[doc=false;inst=n;int=n;user=y];\
+         ArrayObject[doc=false;inst=y;int=y;user=n];done"
+    );
+}

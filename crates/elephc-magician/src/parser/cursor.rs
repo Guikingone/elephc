@@ -97,11 +97,16 @@ impl Parser {
 /// `Parser::new()` and `parse_stmt()` share this predicate so the two can never disagree about
 /// which doc comments survive tokenization.
 pub(super) fn starts_doc_commented_declaration(token: &TokenKind) -> bool {
-    matches!(token, TokenKind::Ident(name)
-        if ident_eq(name, "abstract")
-            || ident_eq(name, "final")
-            || ident_eq(name, "readonly")
-            || ident_eq(name, "class"))
+    // An attribute list may stand between the doc comment and the declaration it documents --
+    // `/** … */ #[AsCommand(…)] class C {}` is how most of Symfony's commands are written -- and
+    // the comment belongs to the class either way. Leaving the attribute out dropped the comment
+    // at tokenization, before any grammar rule could ask for it.
+    matches!(token, TokenKind::AttributeStart)
+        || matches!(token, TokenKind::Ident(name)
+            if ident_eq(name, "abstract")
+                || ident_eq(name, "final")
+                || ident_eq(name, "readonly")
+                || ident_eq(name, "class"))
 }
 
 /// Returns true when the current token closes or starts a switch case arm.
