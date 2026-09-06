@@ -138,6 +138,7 @@ All measured in this repository:
 
 - The packet id derives from the first ~80 characters of the **title**, so a second `kage_learn` with the same title prefix overwrites the packet in place. Useful to repair a broken packet, destructive otherwise.
 - The secret scanner rejects prose containing `token: <word>`, or any `NAME=value` shape, as an "api key assignment". Write "X set to 1" instead.
+- Never use an `Object.prototype` name as a packet tag (`constructor`, `toString`, `valueOf`, `hasOwnProperty`, `__proto__`, `prototype`): the index builder keys a plain JavaScript object by tag, and such a tag breaks **every** Kage tool with `map[key].includes is not a function` (measured 2026-09-06; fix by renaming the tag in the packet and refreshing).
 - A packet is flagged stale as soon as a cited file changes in the **working tree** — uncommitted edits count, not only commits.
 - `kage_refresh` on a non-default branch is a quiet refresh: flags are computed, not written.
 - The graph's "related tests" list can be noise (unrelated repository scripts). Judge it before trusting it.
