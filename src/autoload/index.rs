@@ -72,11 +72,49 @@ impl AutoloadIndex {
 }
 
 /// Finds the nearest ancestor containing a structurally recognized autoload manifest.
+///
+/// THE WALK MUST START FROM AN ABSOLUTE DIRECTORY, and not doing so made the compiler's answer
+/// depend on how the entry file's path was SPELLED. `Path::ancestors` is pure lexical string work:
+/// for the relative `public` it yields `["public", ""]` and stops, so the walk never reaches the
+/// project root sitting one real directory above, finds no `composer.json`, and builds an EMPTY
+/// autoload index. For `examples/symfony-app/public` — the same directory, named from one level
+/// up — it yields four ancestors, finds the manifest, and indexes everything.
+///
+/// Measured on a three-file project outside `examples/`, one `composer.json` with a PSR-4 `App\`
+/// mapping, one `src/Thing.php`, one `web/entry.php` doing `new Thing()`. Compiled from INSIDE the
+/// project as `web/entry.php` it failed with `error[5:6]: Undefined class: App\Thing`; compiled
+/// from the parent as `cwdproj/web/entry.php`, or from inside with the absolute path, it printed
+/// `thing;done`. Same file, same bytes, three different spellings, two different answers.
+///
+/// On the Symfony fixture the same fault was worth an order of magnitude: `--web` from the
+/// worktree root produced a 108,317,352-byte binary with 631 class-name symbols, and from inside
+/// `examples/symfony-app` an 11,023,640-byte one with 122 — a different program, silently, with a
+/// clean exit code.
+///
+/// PHP HAS NO SUCH BEHAVIOUR: it resolves `__DIR__` and `dirname(__DIR__)` from the script's real
+/// path, so where the shell happens to stand is invisible to it. Absolutising here restores that.
+/// `canonicalize` is preferred because it also resolves symlinks and `..`; when it fails — the
+/// directory does not exist, or permissions deny it — joining the process's current directory is
+/// the honest fallback and is still strictly better than walking a bare relative path.
 fn nearest_autoload_manifest_root(entry_dir: &Path) -> Option<PathBuf> {
-    entry_dir
+    let absolute_entry_dir = absolute_entry_dir(entry_dir);
+    absolute_entry_dir
         .ancestors()
         .find(|candidate| !autoload_manifest_paths(candidate).is_empty())
         .map(Path::to_path_buf)
+}
+
+/// Returns `entry_dir` as an absolute path, so a lexical ancestor walk sees the real directories.
+fn absolute_entry_dir(entry_dir: &Path) -> PathBuf {
+    if let Ok(canonical) = entry_dir.canonicalize() {
+        return canonical;
+    }
+    if entry_dir.is_absolute() {
+        return entry_dir.to_path_buf();
+    }
+    // An empty entry directory is what `Path::new("index.php").parent()` yields, and joining it to
+    // the current directory is exactly the "." the caller means by it.
+    std::env::current_dir().map_or_else(|_| entry_dir.to_path_buf(), |cwd| cwd.join(entry_dir))
 }
 
 /// Returns direct JSON manifests containing a supported autoload section.
@@ -606,6 +644,62 @@ mod tests {
         assert_eq!(
             index.lookup("Demo\\Thing"),
             Some(source_dir.join("Thing.php").canonicalize().unwrap().as_path())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Verifies the index is the same whether the entry directory is named relatively or absolutely.
+    ///
+    /// THE WALK IS LEXICAL, so before this was fixed the answer depended on how the path was
+    /// SPELLED rather than on where the file is. `Path::ancestors` on the relative `public` yields
+    /// `["public", ""]` and stops, so the project root one real directory above was never reached
+    /// and the index came back EMPTY; the same directory named from one level up yields enough
+    /// ancestors to find the manifest.
+    ///
+    /// Measured end to end before the fix, on a three-file project: compiled from inside as
+    /// `web/entry.php` it failed `Undefined class: App\Thing`, and from the parent as
+    /// `cwdproj/web/entry.php` it printed `thing;done`. On the Symfony fixture it was the
+    /// difference between a 108,317,352-byte binary with 631 class-name symbols and an
+    /// 11,023,640-byte one with 122 — silently, with a clean exit code. PHP resolves `__DIR__`
+    /// from the script's real path, so the shell's position is invisible to it.
+    ///
+    /// The test changes the process directory, which is global, so it restores it before
+    /// asserting and never holds it across an assertion that can panic.
+    #[test]
+    fn a_relative_entry_directory_finds_the_same_root_as_an_absolute_one() {
+        let dir = manifest_test_dir().canonicalize().unwrap();
+        let entry_dir = dir.join("public");
+        let source_dir = dir.join("src");
+        std::fs::create_dir_all(&entry_dir).unwrap();
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            dir.join("composer.json"),
+            r#"{"autoload":{"psr-4":{"Demo\\":"src/"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source_dir.join("Thing.php"),
+            "<?php namespace Demo; class Thing {}",
+        )
+        .unwrap();
+
+        let absolute = AutoloadIndex::from_project_root(&entry_dir);
+
+        // The relative spelling `public`, resolved from inside the project, is the one that used
+        // to come back empty.
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let relative = AutoloadIndex::from_project_root(std::path::Path::new("public"));
+        std::env::set_current_dir(previous).unwrap();
+
+        assert_eq!(
+            relative.lookup("Demo\\Thing"),
+            absolute.lookup("Demo\\Thing"),
+            "the entry directory's spelling must not change what the autoload index finds"
+        );
+        assert!(
+            relative.lookup("Demo\\Thing").is_some(),
+            "the relative spelling must still find the project root"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
