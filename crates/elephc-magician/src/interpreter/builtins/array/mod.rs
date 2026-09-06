@@ -50,7 +50,7 @@ mod end;
 mod in_array;
 mod iterator_apply;
 mod iterator_count;
-mod iterator_to_array;
+pub(in crate::interpreter) mod iterator_to_array;
 mod key;
 mod krsort;
 mod ksort;

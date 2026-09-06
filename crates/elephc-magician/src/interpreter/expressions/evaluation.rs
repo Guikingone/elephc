@@ -9,6 +9,7 @@
 //!   and preserve PHP runtime conversion, class-alias, and closure-capture rules.
 
 use super::*;
+use crate::interpreter::builtins::spl::array_iterator::eval_array_iterator_new;
 
 /// Applies one already-evaluated binary operation with eval runtime semantics.
 pub(in crate::interpreter) fn eval_binary_result(
@@ -223,7 +224,7 @@ fn eval_array_cast_value(
 }
 
 /// Casts the runtime-visible public properties of one object to an associative PHP array.
-fn eval_object_array_cast_value(
+pub(in crate::interpreter) fn eval_object_array_cast_value(
     object: RuntimeCellHandle,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -268,6 +269,9 @@ pub(in crate::interpreter) fn eval_new_object_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if class_name.trim_start_matches('\\').eq_ignore_ascii_case("ArrayIterator") {
+        return eval_array_iterator_new(args, context, values);
+    }
     let reflection = eval_reflection_owner_new_object(class_name, args.clone(), context, values)
         .map_err(|status| trace_new_object_error("reflection", class_name, status, context))?;
     if let Some(object) = reflection {

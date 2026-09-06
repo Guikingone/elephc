@@ -13,6 +13,7 @@
 mod append_reference_bind;
 mod append_slot_reference;
 mod array_append_expression;
+mod array_iterator;
 mod array_spread;
 mod array_literals;
 mod builtin_interface_covariance;

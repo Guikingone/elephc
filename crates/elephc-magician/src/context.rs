@@ -49,6 +49,7 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 pub use alias_metadata::*;
 pub use call_frames::*;
 pub(crate) use callable_descriptor::*;
+pub use classlike_objects::{eval_array_iterator_class_is_a, EvalArrayIteratorState};
 pub use closure_metadata::*;
 pub use generators::*;
 pub use core::*;

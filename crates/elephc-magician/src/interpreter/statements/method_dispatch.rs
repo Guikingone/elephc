@@ -8,6 +8,9 @@
 //! - Private shadows, native bridges, closures, magic methods, and reference args remain ordered.
 
 use super::*;
+use crate::interpreter::builtins::spl::array_iterator::{
+    eval_array_iterator_method_result, eval_object_is_array_iterator,
+};
 
 /// Dispatches a method call to an eval-declared class method or to the runtime hook.
 pub(in crate::interpreter) fn eval_method_call_result(
@@ -68,6 +71,18 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         );
     }
     eval_rebind_foreign_reflection_target(object, identity, context, values)?;
+    if eval_object_is_array_iterator(identity, context) {
+        let positional = positional_evaluated_arg_values(evaluated_args.clone())?;
+        if let Some(result) = eval_array_iterator_method_result(
+            identity,
+            method_name,
+            &positional,
+            context,
+            values,
+        )? {
+            return Ok(result);
+        }
+    }
     if let Some(target) = context.closure_object_target(identity).cloned() {
         if let Some(result) =
             eval_closure_object_method_result(target, method_name, evaluated_args.clone(), context, values)?

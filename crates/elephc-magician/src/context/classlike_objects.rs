@@ -253,6 +253,52 @@ impl ElephcEvalContext {
             .retain(|(object, _)| *object != identity);
     }
 
+    /// Registers one `ArrayIterator` instance's backing array, which the context OWNS.
+    ///
+    /// `ArrayIterator` is a NAME in the known-class list with no implementation behind it, so the
+    /// object it builds has no members at all. Its state lives here for the same reason a
+    /// closure's target does: the runtime object carries no eval-visible storage of its own.
+    /// Returns any array it replaces, so the caller can give that reference back.
+    pub fn set_array_iterator(
+        &mut self,
+        identity: u64,
+        storage: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let replaced = self
+            .array_iterators
+            .insert(identity, EvalArrayIteratorState { storage, position: 0 })
+            .map(|state| state.storage);
+        replaced.filter(|previous| *previous != storage)
+    }
+
+    /// Replaces one `ArrayIterator`'s backing array, keeping its cursor.
+    pub fn replace_array_iterator_storage(
+        &mut self,
+        identity: u64,
+        storage: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let state = self.array_iterators.get_mut(&identity)?;
+        let replaced = std::mem::replace(&mut state.storage, storage);
+        (replaced != storage).then_some(replaced)
+    }
+
+    /// Returns one `ArrayIterator`'s backing array, if the identity is one.
+    pub fn array_iterator_storage(&self, identity: u64) -> Option<RuntimeCellHandle> {
+        self.array_iterators.get(&identity).map(|state| state.storage)
+    }
+
+    /// Returns one `ArrayIterator`'s zero-based cursor.
+    pub fn array_iterator_position(&self, identity: u64) -> Option<usize> {
+        self.array_iterators.get(&identity).map(|state| state.position)
+    }
+
+    /// Moves one `ArrayIterator`'s cursor.
+    pub fn set_array_iterator_position(&mut self, identity: u64, position: usize) {
+        if let Some(state) = self.array_iterators.get_mut(&identity) {
+            state.position = position;
+        }
+    }
+
     /// Removes one dynamic object and returns its owned properties plus deferred-free state.
     pub fn forget_dynamic_object(&mut self, identity: u64) -> (Vec<RuntimeCellHandle>, bool) {
         let removed_dynamic_object = self.dynamic_objects.remove(&identity).is_some();
@@ -271,6 +317,10 @@ impl ElephcEvalContext {
         self.dynamic_initialized_properties
             .retain(|(object, _)| *object != identity);
         crate::ffi::dynamic_destructors::unregister_dynamic_object(identity);
+        let mut property_values: Vec<RuntimeCellHandle> = property_values;
+        if let Some(state) = self.array_iterators.remove(&identity) {
+            property_values.push(state.storage);
+        }
         let should_finalize = removed_dynamic_object && self.forget_dynamic_object_owner();
         (property_values, should_finalize)
     }
@@ -499,6 +549,13 @@ impl ElephcEvalContext {
         if let Some(class_key) = self.dynamic_objects.get(&identity) {
             return self.class_is_a(class_key, target, false);
         }
+        if self.array_iterators.contains_key(&identity) {
+            // An `ArrayIterator` has no eval class to walk, so its interfaces are answered from
+            // the side table that holds its state. Without this a declared
+            // `getIterator(): Traversable` returning one is a TypeError -- which is the shape
+            // every Symfony bag uses.
+            return eval_array_iterator_class_is_a(target);
+        }
         #[cfg(not(test))]
         {
             let Some(owner) =
@@ -647,4 +704,31 @@ mod tests {
         assert!(properties.is_empty());
         assert!(should_finalize);
     }
+}
+
+/// One live `ArrayIterator` instance's backing array and cursor.
+///
+/// The array is OWNED: it is retained on the way in and given back when the object is forgotten.
+#[derive(Debug, Clone, Copy)]
+pub struct EvalArrayIteratorState {
+    pub(super) storage: RuntimeCellHandle,
+    pub(super) position: usize,
+}
+
+/// Returns whether `ArrayIterator` is, or descends from, one class-like name.
+///
+/// Kept beside the state table rather than in the interpreter, because both the `instanceof`
+/// answer and the declared-return-type check need it and neither owns the other.
+pub fn eval_array_iterator_class_is_a(target_class: &str) -> bool {
+    let target = target_class.trim_start_matches('\\');
+    [
+        "ArrayIterator",
+        "Iterator",
+        "Traversable",
+        "Countable",
+        "ArrayAccess",
+        "SeekableIterator",
+    ]
+    .iter()
+    .any(|name| name.eq_ignore_ascii_case(target))
 }

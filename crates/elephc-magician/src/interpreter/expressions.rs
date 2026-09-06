@@ -22,6 +22,7 @@ pub(in crate::interpreter) use evaluation::{
     eval_closure_object_expr, eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
     eval_new_object_result,
 };
+pub(in crate::interpreter) use evaluation::eval_object_array_cast_value;
 use evaluation::*;
 pub(in crate::interpreter) use null_coalesce_assign::{
     eval_array_append, eval_array_append_reference_bind, eval_array_append_result,

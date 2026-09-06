@@ -15,6 +15,9 @@ eval_builtin! {
     values: Symbols,
 }
 
+use crate::interpreter::builtins::spl::array_iterator::{
+    eval_array_iterator_is_a, eval_object_is_array_iterator,
+};
 use super::super::super::*;
 
 /// Evaluates direct `is_a(...)` calls over eval boxed object cells and class strings.
@@ -256,6 +259,14 @@ pub(in crate::interpreter) fn dynamic_object_is_a(
     if context.dynamic_object_is_class(identity, "Closure") {
         return Ok(Some(
             !exclude_self && eval_class_like_name_matches("Closure", target_class),
+        ));
+    }
+    if eval_object_is_array_iterator(identity, context) {
+        // `ArrayIterator` has no eval declaration to walk, so its interfaces are answered here.
+        // Without this `foreach` never reaches the Iterator protocol and `count()` never reaches
+        // `Countable::count()`, whatever the members do.
+        return Ok(Some(
+            !exclude_self && eval_array_iterator_is_a(target_class),
         ));
     }
     let Some((declaring, class)) = context.dynamic_object_declaring_class(identity) else {

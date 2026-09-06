@@ -182,14 +182,18 @@ fn eval_spread_into_array(
     Ok(array)
 }
 
-/// Reads one spread operand into owned key/value pairs.
+/// Reads one array or Traversable into owned key/value pairs.
+///
+/// Shared by the array-literal spread and `iterator_to_array()`, which need the same three
+/// traversable shapes: an eval generator, an `IteratorAggregate`, and an `Iterator` driven
+/// through its methods.
 ///
 /// PHP accepts an array or ANY Traversable here and refuses everything else with the fatal
 /// `Only arrays and Traversables can be unpacked` -- an error `catch (\Throwable)` does not
 /// catch, so it is a refusal rather than an exception. The three traversable shapes are the same
 /// three `foreach` distinguishes: an eval generator, an `IteratorAggregate` that hands over
 /// another traversable, and an `Iterator` driven through `rewind`/`valid`/`current`/`key`/`next`.
-fn eval_spread_source_entries(
+pub(in crate::interpreter) fn eval_spread_source_entries(
     source: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

@@ -30,6 +30,7 @@ mod regex;
 mod registry;
 mod scalars;
 mod spec;
+pub(in crate::interpreter) mod spl;
 mod string;
 mod symbols;
 mod time;
