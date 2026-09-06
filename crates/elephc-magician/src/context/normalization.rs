@@ -84,6 +84,27 @@ pub(super) fn same_class_name(left: &str, right: &str) -> bool {
     normalize_class_name(left) == normalize_class_name(right)
 }
 
+/// Returns the interfaces one PHP BUILTIN interface extends, in PHP's own order.
+///
+/// A builtin interface carries no eval declaration, so an interface-parent walk over eval
+/// metadata alone stops at it: a class implementing `Iterator` was never seen as a `Traversable`.
+/// The list is transitive because PHP reports it that way — measured with `php -n` 8.5.6,
+/// `ReflectionClass('OuterIterator')->getInterfaceNames()` is `Iterator,Traversable`, and a class
+/// implementing `Iterator` reports `Iterator,Traversable`.
+pub(super) fn builtin_interface_parent_names(name: &str) -> &'static [&'static str] {
+    let name = name.trim_start_matches('\\');
+    if name.eq_ignore_ascii_case("Iterator") || name.eq_ignore_ascii_case("IteratorAggregate") {
+        return &["Traversable"];
+    }
+    if name.eq_ignore_ascii_case("OuterIterator")
+        || name.eq_ignore_ascii_case("RecursiveIterator")
+        || name.eq_ignore_ascii_case("SeekableIterator")
+    {
+        return &["Iterator", "Traversable"];
+    }
+    &[]
+}
+
 /// Returns whether a class-like name is one of PHP's native enum marker interfaces.
 pub(super) fn is_php_enum_marker_interface(name: &str) -> bool {
     let name = name.trim_start_matches('\\');

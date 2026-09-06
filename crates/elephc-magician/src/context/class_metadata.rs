@@ -284,6 +284,17 @@ impl ElephcEvalContext {
         seen: &mut HashSet<String>,
     ) {
         let Some(interface) = self.interface(interface_name) else {
+            // A PHP BUILTIN interface has no eval declaration, so the walk used to stop here and
+            // a class implementing `Iterator` was never seen as a `Traversable`. That is not a
+            // cosmetic gap: `foreach` over an `IteratorAggregate` whose
+            // `getIterator(): Traversable` returns an eval Iterator failed the return-type check
+            // and the whole loop became a fatal.
+            for parent in builtin_interface_parent_names(interface_name) {
+                if skip_enum_markers && is_php_enum_marker_interface(parent) {
+                    continue;
+                }
+                push_unique_class_name(parent, names, seen);
+            }
             return;
         };
         for parent in interface.parents() {

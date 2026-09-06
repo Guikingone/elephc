@@ -435,6 +435,27 @@ fn execute_foreach_object_body(
                     iterator, key_name, value_name, body, context, scope, values,
                 )
             }
+            // PHP accepts an aggregate whose `getIterator()` returns ANOTHER aggregate and asks
+            // again until it reaches something it can walk: measured with `php -n` 8.5.6, a
+            // two-level chain yields `k0=v0,k1=v1,` rather than raising. The subject of the inner
+            // round is this iterator, which the caller already owns, so it is not owned again.
+            EVAL_TAG_OBJECT
+                if eval_foreach_object_is_a(iterator, "IteratorAggregate", context, values)? =>
+            {
+                let mut inner_released = false;
+                execute_foreach_object_body(
+                    iterator,
+                    key_name,
+                    value_name,
+                    false,
+                    false,
+                    &mut inner_released,
+                    body,
+                    context,
+                    scope,
+                    values,
+                )
+            }
             _ => Err(EvalStatus::RuntimeFatal),
         };
         // `getIterator()` handed its return value over, so the loop owns it whatever the subject

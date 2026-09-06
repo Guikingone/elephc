@@ -592,3 +592,51 @@ foreach (new EvalForeachAggregate() as $item) {
         "rewind:valid0:current0:key0:k0=v0:next0:valid1:current1:key1:k1=v1:|agg:rewind:valid0:current0:v0:next0:valid1:current1:v1:next1:valid2:"
     );
 }
+
+/// Verifies the other three shapes `getIterator()` is allowed to return.
+///
+/// `php -n` 8.5.6 prints `A:0=g0,1=g1,|B:k0=v0,k1=v1,|D:k0=v0,k1=v1,k0=v0,k1=v1,|end`. The
+/// generator is the common Symfony shape; the NESTED aggregate is the one worth pinning, because
+/// PHP asks `getIterator()` again rather than refusing, and this arm used to answer with a fatal;
+/// and iterating the same aggregate twice must build a fresh iterator each time.
+#[test]
+fn execute_program_foreach_accepts_every_get_iterator_shape() {
+    let program = parse_fragment(
+        br#"class It2 implements Iterator {
+    private int $i = 0;
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): mixed { return "v" . $this->i; }
+    public function key(): mixed { return "k" . $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+class AggGen implements IteratorAggregate {
+    public function getIterator(): Traversable { yield 'g0'; yield 'g1'; }
+}
+class AggInner implements IteratorAggregate {
+    public function getIterator(): Traversable { return new It2(); }
+}
+class AggNested implements IteratorAggregate {
+    public function getIterator(): Traversable { return new AggInner(); }
+}
+echo "A:";
+foreach (new AggGen() as $k => $v) { echo $k; echo "="; echo $v; echo ","; }
+echo "|B:";
+foreach (new AggNested() as $k => $v) { echo $k; echo "="; echo $v; echo ","; }
+echo "|D:";
+$again = new AggInner();
+foreach ($again as $k => $v) { echo $k; echo "="; echo $v; echo ","; }
+foreach ($again as $k => $v) { echo $k; echo "="; echo $v; echo ","; }
+echo "|end";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "A:0=g0,1=g1,|B:k0=v0,k1=v1,|D:k0=v0,k1=v1,k0=v0,k1=v1,|end"
+    );
+}
