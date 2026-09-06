@@ -113,9 +113,12 @@ fn declared_builtin_registry_derives_time_and_env_metadata() {        for name i
             eval_declared_builtin_default_value("phpversion", 0),
             Some(EvalBuiltinDefaultValue::Null)
         );
+        // `php -n` 8.5.6: `getenv(?string $name = null, bool $local_only = false)`. Stale for the
+        // same reason as `glob` next door -- the registry gained the second parameter and the
+        // expectation did not.
         assert_eq!(
             eval_declared_builtin_param_names("getenv"),
-            Some(["name"].as_slice())
+            Some(["name", "local_only"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("getservbyname"),

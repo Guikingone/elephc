@@ -565,6 +565,19 @@ return function_exists("crc32");"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval `hash_algos()` returns supported hash names through callable dispatch too.
+///
+/// The count is elephc's own supported SUBSET of PHP's list, not PHP's count: `php -n` 8.5.6
+/// reports 60 algorithms and every one of elephc's 29 is among them. The expectation was 28 and
+/// went stale when `xxh128` was appended, which is the whole failure — the four names this reads
+/// by index are unaffected.
+///
+/// KNOWN DIVERGENCE, deliberately not fixed here: the ORDER differs from PHP's in two places.
+/// PHP orders `sha512/224, sha512/256, sha512` and `adler32, crc32, crc32b, crc32c`, while both
+/// elephc lists have `sha512` before its truncations and `adler32` after the CRCs. The eval list
+/// mirrors `src/codegen_support/runtime/strings/hash_algos.rs`, which in turn must match
+/// `crates/elephc-crypto/src/algos.rs`, so the three move together or not at all — and changing
+/// only this one would trade a PHP divergence for an eval/AOT one. None of the indices asserted
+/// below sits at a transposed position.
 #[test]
 fn execute_program_dispatches_hash_algos_builtin() {
     let program = parse_fragment(
@@ -584,8 +597,8 @@ return count($algos);"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "28:md2:sha256:crc:whirlpool:joaat:exists");
-    assert_eq!(values.get(result), FakeValue::Int(28));
+    assert_eq!(values.output, "29:md2:sha256:crc:whirlpool:joaat:exists");
+    assert_eq!(values.get(result), FakeValue::Int(29));
 }
 /// Verifies eval one-shot hash digest builtins use the crypto bridge and dispatch dynamically.
 #[test]
