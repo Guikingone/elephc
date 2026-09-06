@@ -29,8 +29,13 @@ pub enum EvalStmt {
         targets: Vec<Option<String>>,
         value: EvalExpr,
     },
+    /// `TARGET[] = &SOURCE`: binds a NEWLY APPENDED element of `target` to `source`.
+    ///
+    /// The target is a general lvalue rather than a bare name because PHP allows the append
+    /// anywhere an array element can be written -- `$loops[$k][] = &$path;` appends through a
+    /// nested element, which is `PhpDumper`'s shape.
     ArrayAppendReferenceBind {
-        name: String,
+        target: EvalExpr,
         source: EvalExpr,
     },
     ArrayReferenceBind {

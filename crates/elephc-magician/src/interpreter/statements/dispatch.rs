@@ -81,8 +81,8 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_array_append(target, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
-        EvalStmt::ArrayAppendReferenceBind { name, source } => {
-            eval_array_append_reference_bind(name, source, context, scope, values)?;
+        EvalStmt::ArrayAppendReferenceBind { target, source } => {
+            eval_array_append_reference_bind(target, source, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::ArraySetVar { name, index, value } => {

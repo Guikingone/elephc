@@ -180,16 +180,19 @@ pub(in crate::interpreter) fn eval_array_reference_bind(
     write_reference_location(location, source_target, source_value, context, scope, values)
 }
 
-/// Appends one persistent PHP reference source expression to an array variable.
+/// Binds a NEWLY APPENDED element of one writable array lvalue to a persistent reference source.
+///
+/// The target is a general lvalue, not a bare name: PHP appends through a nested element as
+/// readily as through a variable, and `$loops[$k][] = &$path;` is that shape.
 pub(in crate::interpreter) fn eval_array_append_reference_bind(
-    name: &str,
+    target: &EvalExpr,
     source: &EvalExpr,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let (source_target, source_value) = eval_reference_source(source, context, scope, values)?;
-    let parent = evaluate_location(&EvalExpr::LoadVar(name.to_string()), context, scope, values)?;
+    let parent = evaluate_location(target, context, scope, values)?;
     let array = if values.is_null(parent.current())? {
         values.array_new(1)?
     } else {

@@ -249,7 +249,10 @@ impl Parser {
             self.expect(TokenKind::Equal)?;
             if self.consume(TokenKind::Ampersand) {
                 let source = self.parse_reference_source_expr()?;
-                return Ok(vec![EvalStmt::ArrayAppendReferenceBind { name, source }]);
+                return Ok(vec![EvalStmt::ArrayAppendReferenceBind {
+                    target: EvalExpr::LoadVar(name),
+                    source,
+                }]);
             }
             let value = self.parse_expr()?;
             return Ok(vec![EvalStmt::ArrayAppendVar { name, value }]);
@@ -264,6 +267,11 @@ impl Parser {
         while self.consume(TokenKind::LBracket) {
             if self.consume(TokenKind::RBracket) {
                 self.expect(TokenKind::Equal)?;
+                // Same rule as the statement form: an append can BIND as well as store.
+                if self.consume(TokenKind::Ampersand) {
+                    let source = self.parse_reference_source_expr()?;
+                    return Ok(vec![EvalStmt::ArrayAppendReferenceBind { target, source }]);
+                }
                 let value = self.parse_expr()?;
                 return Ok(vec![EvalStmt::ArrayAppend { target, value }]);
             }

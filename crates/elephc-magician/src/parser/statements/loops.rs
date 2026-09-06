@@ -41,7 +41,10 @@ impl Parser {
             if self.consume(TokenKind::Ampersand) {
                 let source = self.parse_expr()?;
                 self.expect_semicolon()?;
-                return Ok(vec![EvalStmt::ArrayAppendReferenceBind { name, source }]);
+                return Ok(vec![EvalStmt::ArrayAppendReferenceBind {
+                    target: EvalExpr::LoadVar(name),
+                    source,
+                }]);
             }
             let value = self.parse_expr()?;
             self.expect_semicolon()?;
@@ -57,6 +60,14 @@ impl Parser {
         while self.consume(TokenKind::LBracket) {
             if self.consume(TokenKind::RBracket) {
                 self.expect(TokenKind::Equal)?;
+                // `$loops[$k][] = &$path;` BINDS a newly appended element rather than storing a
+                // value in it. The `&` was never looked for here, so the append branch went
+                // straight to `parse_expr`, which cannot start with an ampersand.
+                if self.consume(TokenKind::Ampersand) {
+                    let source = self.parse_reference_source_expr()?;
+                    self.expect_semicolon()?;
+                    return Ok(vec![EvalStmt::ArrayAppendReferenceBind { target, source }]);
+                }
                 let value = self.parse_expr()?;
                 self.expect_semicolon()?;
                 return Ok(vec![EvalStmt::ArrayAppend { target, value }]);
