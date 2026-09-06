@@ -26,7 +26,7 @@ pub enum EvalStmt {
         value: EvalExpr,
     },
     ArrayDestructure {
-        targets: Vec<Option<String>>,
+        targets: Vec<Option<EvalDestructureTarget>>,
         value: EvalExpr,
     },
     /// `TARGET[] = &SOURCE`: binds a NEWLY APPENDED element of `target` to `source`.

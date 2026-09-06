@@ -432,96 +432,97 @@ pub(super) fn eval_non_object_array_set_var_stmt(
 
 /// Executes short array destructuring and stores each selected positional element.
 pub(in crate::interpreter) fn eval_array_destructure_stmt(
-    targets: &[Option<String>],
+    targets: &[Option<EvalDestructureTarget>],
     value: &EvalExpr,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let array = eval_expr(value, context, scope, values)?;
-    if !values.is_array_like(array)? {
-        return Err(EvalStatus::RuntimeFatal);
+    eval_destructure_into(targets, array, context, scope, values)
+}
+
+/// Writes one destructuring pattern's slots from an already-evaluated right-hand side.
+///
+/// A non-array right-hand side is NOT fatal: `php -n` 8.5.6 gives every target null and takes
+/// the right-hand side as the expression's value, warning `Cannot use int as array` only for a
+/// non-null scalar. Refusing here broke `[, , , $x] = $scopes[$name] ?? null;`, which is
+/// `var-exporter`'s `LazyDecoratorTrait` and is written precisely so the null case is reachable.
+pub(in crate::interpreter) fn eval_destructure_into(
+    targets: &[Option<EvalDestructureTarget>],
+    array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let tag = values.type_tag(array)?;
+    let readable = matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
+    if !readable && tag != EVAL_TAG_NULL {
+        values.warning(&format!(
+            "Cannot use {} as array",
+            eval_array_destructure_type_name(tag)
+        ))?;
     }
     for (position, target) in targets.iter().enumerate() {
         let Some(target) = target else {
             continue;
         };
-        let index = values.int(position as i64)?;
-        let element = eval_array_get_result(array, index, context, values)?;
-        eval_release_value(context, values, index)?;
-        for replaced in set_scope_cell(
-            context,
-            scope,
-            target.clone(),
-            element,
-            ScopeCellOwnership::Owned,
-        )? {
-            eval_release_value(context, values, replaced)?;
+        let element = if readable {
+            let key = match target.key.as_ref() {
+                Some(key) => eval_expr(key, context, scope, values)?,
+                None => values.int(position as i64)?,
+            };
+            let element = eval_array_get_result(array, key, context, values)?;
+            let key_is_owned = target
+                .key
+                .as_ref()
+                .map_or(true, eval_expr_is_owning_temporary);
+            if key_is_owned {
+                eval_release_value(context, values, key)?;
+            }
+            element
+        } else {
+            values.null()?
+        };
+        match &target.slot {
+            EvalDestructureSlot::Nested(inner) => {
+                let result = eval_destructure_into(inner, element, context, scope, values);
+                eval_release_value(context, values, element)?;
+                result?;
+            }
+            EvalDestructureSlot::Lvalue(EvalExpr::LoadVar(name)) => {
+                for replaced in set_scope_cell(
+                    context,
+                    scope,
+                    name.clone(),
+                    element,
+                    ScopeCellOwnership::Owned,
+                )? {
+                    eval_release_value(context, values, replaced)?;
+                }
+            }
+            EvalDestructureSlot::Lvalue(lvalue) => {
+                eval_store_value_in_lvalue(lvalue, element, context, scope, values)?;
+            }
         }
     }
     Ok(())
 }
 
-/// Evaluates a positional short-array destructuring assignment and returns its RHS value.
+/// Evaluates a destructuring assignment used as an EXPRESSION and returns its RHS value.
+///
+/// PHP's value here is the right-hand side itself, which is what makes
+/// `if ([, , , $x] = $scopes[$name] ?? null)` a usable condition: the `if` tests the array, not
+/// the last slot.
 pub(in crate::interpreter) fn eval_array_destructure_assign(
-    targets: &[Option<String>],
+    targets: &[Option<EvalDestructureTarget>],
     value: &EvalExpr,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let assigned = eval_expr(value, context, scope, values)?;
-    let tag = values.type_tag(assigned)?;
-    if tag == EVAL_TAG_NULL {
-        return eval_array_destructure_assign_null_targets(targets, assigned, context, scope, values);
-    }
-    if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        values.warning(&format!(
-            "Cannot use {} as array",
-            eval_array_destructure_type_name(tag)
-        ))?;
-        return eval_array_destructure_assign_null_targets(targets, assigned, context, scope, values);
-    }
-    for (position, target) in targets.iter().enumerate() {
-        let Some(target) = target else {
-            continue;
-        };
-        let index = values.int(position as i64)?;
-        let element = eval_array_get_result(assigned, index, context, values)?;
-        eval_release_value(context, values, index)?;
-        for replaced in set_scope_cell(
-            context,
-            scope,
-            target.clone(),
-            element,
-            ScopeCellOwnership::Owned,
-        )? {
-            eval_release_value(context, values, replaced)?;
-        }
-    }
-    Ok(assigned)
-}
-
-/// Assigns PHP null to every positional destructuring target while preserving the RHS result.
-fn eval_array_destructure_assign_null_targets(
-    targets: &[Option<String>],
-    assigned: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    for target in targets.iter().flatten() {
-        let null = values.null()?;
-        for replaced in set_scope_cell(
-            context,
-            scope,
-            target.clone(),
-            null,
-            ScopeCellOwnership::Owned,
-        )? {
-            eval_release_value(context, values, replaced)?;
-        }
-    }
+    eval_destructure_into(targets, assigned, context, scope, values)?;
     Ok(assigned)
 }
 

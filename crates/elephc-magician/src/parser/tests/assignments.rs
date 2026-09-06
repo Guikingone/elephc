@@ -230,7 +230,7 @@ fn parse_fragment_accepts_array_destructure_assignment_expression() {
     assert!(matches!(
         program.statements(),
         [EvalStmt::If { condition: EvalExpr::ArrayDestructureAssign { targets, value }, .. }]
-            if targets == &vec![Some("scope".to_string()), Some("name".to_string())]
+            if destructure_variable_names(targets) == vec![Some("scope".to_string()), Some("name".to_string())]
                 && matches!(value.as_ref(), EvalExpr::NullCoalesce { .. })
     ));
 }
@@ -1008,4 +1008,23 @@ fn parse_fragment_accepts_echo_comma_list_source() {
             EvalStmt::Echo(EvalExpr::Const(EvalConst::String("c".to_string()))),
         ]
     );
+}
+
+/// Returns the variable name each destructuring slot writes to, or None for a hole.
+///
+/// A pattern slot is a general lvalue now, so a test that only cares which VARIABLES a pattern
+/// fills says so here rather than spelling the whole node out.
+fn destructure_variable_names(
+    targets: &[Option<EvalDestructureTarget>],
+) -> Vec<Option<String>> {
+    targets
+        .iter()
+        .map(|target| match target {
+            Some(EvalDestructureTarget {
+                key: None,
+                slot: EvalDestructureSlot::Lvalue(EvalExpr::LoadVar(name)),
+            }) => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
 }

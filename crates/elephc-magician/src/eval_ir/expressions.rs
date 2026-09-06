@@ -18,7 +18,7 @@ pub enum EvalExpr {
         index: Box<EvalExpr>,
     },
     ArrayDestructureAssign {
-        targets: Vec<Option<String>>,
+        targets: Vec<Option<EvalDestructureTarget>>,
         value: Box<EvalExpr>,
     },
     Call {
@@ -379,6 +379,29 @@ pub enum EvalBinOp {
     Gt,
     GtEq,
     Spaceship,
+}
+
+/// One slot of a PHP list-destructuring pattern.
+///
+/// A pattern is NOT an array literal, which is why it has its own type: it may carry holes
+/// (`[, , , $x]`), its slots are LVALUES rather than values (`[$this->x, $h["k"], S::$p]`), it
+/// may name keys (`["a" => $x]`), and it nests (`[[$a, $b], $c]`). Modelling it as a list of
+/// optional variable NAMES accepted only the simplest quarter of that.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalDestructureTarget {
+    /// The key to read, for the `["a" => $x]` form; positional slots read their index.
+    pub key: Option<EvalExpr>,
+    /// Where the element goes.
+    pub slot: EvalDestructureSlot,
+}
+
+/// The destination of one destructuring slot.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalDestructureSlot {
+    /// Any writable PHP lvalue: a variable, a property, an element, a static property.
+    Lvalue(EvalExpr),
+    /// A nested pattern, for `[[$a, $b], $c] = ...`.
+    Nested(Vec<Option<EvalDestructureTarget>>),
 }
 
 /// Cast targets supported by runtime eval expressions.

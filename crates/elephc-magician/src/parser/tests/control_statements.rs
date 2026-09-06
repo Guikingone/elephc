@@ -179,25 +179,44 @@ fn parse_fragment_accepts_foreach_key_value_source() {
 fn parse_fragment_accepts_foreach_array_destructure_target() {
     let program = parse_fragment(br#"foreach ($items as [$id, $class]) { echo $id . $class; }"#)
         .expect("parse");
+    // The hidden binding name is generated per pattern, so the test reads it back rather than
+    // spelling it: what matters is that the loop binds to it and the destructure reads it.
+    let [EvalStmt::Foreach {
+        array,
+        key_name,
+        value_name,
+        value_by_ref,
+        body,
+    }] = program.statements()
+    else {
+        panic!("expected one foreach statement");
+    };
+    assert_eq!(array, &EvalExpr::LoadVar("items".to_string()));
+    assert_eq!(key_name, &None);
+    assert!(value_name.starts_with('\0'));
+    assert!(!value_by_ref);
     assert_eq!(
-        program.statements(),
-        &[EvalStmt::Foreach {
-            array: EvalExpr::LoadVar("items".to_string()),
-            key_name: None,
-            value_name: "\0elephc_foreach_destructure".to_string(),
-            value_by_ref: false,
-            body: vec![
-                EvalStmt::ArrayDestructure {
-                    targets: vec![Some("id".to_string()), Some("class".to_string())],
-                    value: EvalExpr::LoadVar("\0elephc_foreach_destructure".to_string()),
-                },
-                EvalStmt::Echo(EvalExpr::Binary {
-                    op: EvalBinOp::Concat,
-                    left: Box::new(EvalExpr::LoadVar("id".to_string())),
-                    right: Box::new(EvalExpr::LoadVar("class".to_string())),
-                }),
-            ],
-        }]
+        body,
+        &vec![
+            EvalStmt::ArrayDestructure {
+                targets: vec![
+                    Some(EvalDestructureTarget {
+                        key: None,
+                        slot: EvalDestructureSlot::Lvalue(EvalExpr::LoadVar("id".to_string())),
+                    }),
+                    Some(EvalDestructureTarget {
+                        key: None,
+                        slot: EvalDestructureSlot::Lvalue(EvalExpr::LoadVar("class".to_string())),
+                    }),
+                ],
+                value: EvalExpr::LoadVar(value_name.clone()),
+            },
+            EvalStmt::Echo(EvalExpr::Binary {
+                op: EvalBinOp::Concat,
+                left: Box::new(EvalExpr::LoadVar("id".to_string())),
+                right: Box::new(EvalExpr::LoadVar("class".to_string())),
+            }),
+        ]
     );
 }
 

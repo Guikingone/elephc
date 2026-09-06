@@ -123,11 +123,26 @@ impl Parser {
 
     /// Parses supported right-associative assignment expressions.
     pub(in crate::parser) fn parse_assignment(&mut self) -> Result<EvalExpr, EvalParseError> {
+        // A destructuring PATTERN is not an array literal and cannot be recovered from one: a
+        // literal has no way to hold the hole in `[, , , $x]`. When the tokens ahead form a
+        // pattern followed by `=`, parse it as a pattern before `parse_ternary` turns it into a
+        // literal it cannot represent.
+        if (matches!(self.current(), TokenKind::LBracket)
+            || self.current_starts_list_destructure_pattern())
+            && self.current_starts_array_destructure_assignment()
+        {
+            let targets = self.parse_destructure_pattern()?;
+            self.expect(TokenKind::Equal)?;
+            let value = self.parse_assignment()?;
+            return Ok(EvalExpr::ArrayDestructureAssign {
+                targets,
+                value: Box::new(value),
+            });
+        }
         let target = self.parse_ternary()?;
         if let Some(append) = self.parse_array_append_assignment(&target)? {
             return Ok(append);
         }
-        let array_destructure_targets = short_array_destructure_targets(&target);
         let negated_assignment_target = negated_assignment_target(&target);
         let nested_assignment_target = nested_assignment_target(&target);
         let null_coalescing = self.consume(TokenKind::QuestionQuestionEqual);
@@ -140,13 +155,9 @@ impl Parser {
             return Ok(target);
         }
         if !is_assignment_target(&target)
-            && array_destructure_targets.is_none()
             && negated_assignment_target.is_none()
             && !nested_assignment_target
         {
-            return Err(EvalParseError::UnexpectedToken);
-        }
-        if array_destructure_targets.is_some() && (null_coalescing || assignment != Some(None)) {
             return Err(EvalParseError::UnexpectedToken);
         }
         if null_coalescing {
@@ -189,12 +200,6 @@ impl Parser {
         }
         self.advance();
         let value = self.parse_assignment()?;
-        if let Some(targets) = array_destructure_targets {
-            return Ok(EvalExpr::ArrayDestructureAssign {
-                targets,
-                value: Box::new(value),
-            });
-        }
         if let Some(target) = negated_assignment_target {
             return Ok(EvalExpr::Unary {
                 op: EvalUnaryOp::LogicalNot,
@@ -613,20 +618,6 @@ impl Parser {
         }
     }
 
-}
-
-/// Extracts positional variable targets from a short-array destructuring assignment lhs.
-fn short_array_destructure_targets(target: &EvalExpr) -> Option<Vec<Option<String>>> {
-    let EvalExpr::Array(elements) = target else {
-        return None;
-    };
-    elements
-        .iter()
-        .map(|element| match element {
-            EvalArrayElement::Value(EvalExpr::LoadVar(name)) => Some(Some(name.clone())),
-            _ => None,
-        })
-        .collect()
 }
 
 /// Returns whether one expression is a regular PHP assignment lvalue in the EvalIR subset.

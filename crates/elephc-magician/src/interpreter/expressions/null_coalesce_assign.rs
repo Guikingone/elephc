@@ -430,6 +430,22 @@ fn evaluate_location(
 }
 
 /// Writes an evaluated value back through a previously materialized location.
+/// Stores one ALREADY EVALUATED value into any writable PHP lvalue.
+///
+/// Ownership follows `eval_assign`'s convention, which is what every other writer here uses: the
+/// caller does not release afterwards. The variable and element arms consume the reference, the
+/// property arms retain, and mixing the two by releasing here would over-release the first two.
+pub(in crate::interpreter) fn eval_store_value_in_lvalue(
+    target: &EvalExpr,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let location = evaluate_plain_assignment_location(target, context, scope, values)?;
+    write_location(location, value, false, context, scope, values)
+}
+
 fn write_location(
     location: EvaluatedLocation,
     value: RuntimeCellHandle,

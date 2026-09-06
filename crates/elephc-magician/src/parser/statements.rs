@@ -31,6 +31,7 @@ use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch, EvalClass,
     EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
+    EvalDestructureSlot, EvalDestructureTarget,
     EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInstanceOfTarget, EvalInterface,
     EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType, EvalParameterTypeVariant,
     EvalSourceLocation, EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation, EvalUnaryOp,
@@ -235,6 +236,12 @@ impl Parser {
                 self.parse_prefix_inc_dec_stmt(true)
             }
             TokenKind::LBracket if self.current_starts_array_destructure_assignment() => {
+                self.parse_array_destructure_stmt()
+            }
+            TokenKind::Ident(_)
+                if self.current_starts_list_destructure_pattern()
+                    && self.current_starts_array_destructure_assignment() =>
+            {
                 self.parse_array_destructure_stmt()
             }
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
@@ -539,13 +546,36 @@ impl Parser {
     }
 
     /// Returns true when the current bracketed target list is followed by `=`.
-    fn current_starts_array_destructure_assignment(&self) -> bool {
-        let mut cursor = self.pos;
+    pub(in crate::parser) fn current_starts_array_destructure_assignment(&self) -> bool {
+        if self.current_starts_list_destructure_pattern() {
+            return self.destructure_pattern_is_assigned(
+                self.pos + 1,
+                &TokenKind::LParen,
+                &TokenKind::RParen,
+            );
+        }
+        self.destructure_pattern_is_assigned(self.pos, &TokenKind::LBracket, &TokenKind::RBracket)
+    }
+
+    /// Returns whether the tokens at `pos` open PHP's legacy `list(...)` destructuring spelling.
+    pub(in crate::parser) fn current_starts_list_destructure_pattern(&self) -> bool {
+        matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "list"))
+            && matches!(self.peek(), TokenKind::LParen)
+    }
+
+    /// Returns whether a delimited pattern starting at `pos` is followed by `=`.
+    fn destructure_pattern_is_assigned(
+        &self,
+        pos: usize,
+        open: &TokenKind,
+        close: &TokenKind,
+    ) -> bool {
+        let mut cursor = pos;
         let mut depth = 0usize;
         loop {
             match self.tokens.get(cursor) {
-                Some(TokenKind::LBracket) => depth += 1,
-                Some(TokenKind::RBracket) => {
+                Some(token) if token == open => depth += 1,
+                Some(token) if token == close => {
                     depth = depth.saturating_sub(1);
                     if depth == 0 {
                         return matches!(self.tokens.get(cursor + 1), Some(TokenKind::Equal));

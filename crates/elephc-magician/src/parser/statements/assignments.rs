@@ -12,45 +12,56 @@ use crate::parser::expressions::precedence::is_assignment_target;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 impl Parser {
-    /// Parses short array destructuring assignment into ordered optional variable targets.
+    /// Parses short array destructuring assignment into ordered destructuring targets.
     pub(in crate::parser) fn parse_array_destructure_stmt(
         &mut self,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
-        let pattern = self.parse_destructure_pattern()?;
+        let targets = self.parse_destructure_pattern()?;
         self.expect(TokenKind::Equal)?;
         let value = self.parse_expr()?;
         self.expect_semicolon()?;
-        if let Some(targets) = plain_variable_destructure_targets(&pattern) {
-            return Ok(vec![EvalStmt::ArrayDestructure { targets, value }]);
-        }
-        let subject = next_destructure_subject_name();
-        let mut statements = vec![EvalStmt::StoreVar {
-            name: subject.clone(),
-            value,
-        }];
-        self.push_destructure_element_writes(&pattern, &subject, &mut statements)?;
-        Ok(statements)
+        Ok(vec![EvalStmt::ArrayDestructure { targets, value }])
     }
 
-    /// Parses one PHP list-assignment pattern, holes and keys and nesting included.
+    /// Parses one `[...]` destructuring PATTERN, which is not an array literal.
     ///
-    /// It cannot go through `parse_array_literal()`: a pattern admits a HOLE, `[$a, , $b] = $v`,
-    /// which is not a value literal, and its elements are assignment targets rather than values.
-    pub(super) fn parse_destructure_pattern(
+    /// Four things separate the two, and the old code -- a list of optional variable NAMES built
+    /// by walking an already-parsed literal -- could express only the first: a hole where PHP
+    /// allows a bare comma (`[, , , $x]`); a slot that is any LVALUE and not just a variable
+    /// (`[$this->x, $h["k"], S::$p]`); a named key (`["a" => $x]`); and nesting
+    /// (`[[$a, $b], $c]`). An array literal cannot even hold a hole, so the expression position
+    /// had to stop converting one and parse the pattern directly.
+    pub(in crate::parser) fn parse_destructure_pattern(
         &mut self,
-    ) -> Result<Vec<EvalDestructureElement>, EvalParseError> {
-        self.expect(TokenKind::LBracket)?;
-        let mut elements = Vec::new();
+    ) -> Result<Vec<Option<EvalDestructureTarget>>, EvalParseError> {
+        // PHP spells the same pattern two ways. `list(...)` is the older one and is still
+        // written -- it is not a function call, and parsing it as one is why `list($a, $b) = $v;`
+        // died on the `=`.
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "list")) {
+            self.advance();
+            return self.parse_destructure_pattern_between(TokenKind::LParen, TokenKind::RParen);
+        }
+        self.parse_destructure_pattern_between(TokenKind::LBracket, TokenKind::RBracket)
+    }
+
+    /// Parses a destructuring pattern between one pair of delimiters.
+    fn parse_destructure_pattern_between(
+        &mut self,
+        open: TokenKind,
+        close: TokenKind,
+    ) -> Result<Vec<Option<EvalDestructureTarget>>, EvalParseError> {
+        self.expect(open)?;
+        let mut targets = Vec::new();
         loop {
-            if self.consume(TokenKind::RBracket) {
+            if self.consume(close.clone()) {
                 break;
             }
             if self.consume(TokenKind::Comma) {
                 elements.push(EvalDestructureElement::Skip);
                 continue;
             }
-            elements.push(self.parse_destructure_element()?);
-            if self.consume(TokenKind::RBracket) {
+            targets.push(Some(self.parse_destructure_target()?));
+            if self.consume(close.clone()) {
                 break;
             }
             self.expect(TokenKind::Comma)?;
@@ -58,98 +69,45 @@ impl Parser {
         if elements.is_empty() {
             return Err(self.fail(EvalParseError::UnexpectedToken));
         }
-        Ok(elements)
+        Ok(targets)
     }
 
-    /// Parses one element of a destructuring pattern: an optional key, then a target or a nesting.
-    fn parse_destructure_element(&mut self) -> Result<EvalDestructureElement, EvalParseError> {
-        if matches!(self.current(), TokenKind::LBracket) {
-            let elements = self.parse_destructure_pattern()?;
-            return Ok(EvalDestructureElement::Nested { key: None, elements });
-        }
-        let first = self.parse_expr()?;
-        if !self.consume(TokenKind::FatArrow) {
-            return Ok(EvalDestructureElement::Target {
+    /// Parses one non-empty destructuring slot, with its optional `KEY =>` prefix.
+    fn parse_destructure_target(&mut self) -> Result<EvalDestructureTarget, EvalParseError> {
+        if matches!(self.current(), TokenKind::LBracket)
+            || self.current_starts_list_destructure_pattern()
+        {
+            return Ok(EvalDestructureTarget {
                 key: None,
-                target: first,
+                slot: EvalDestructureSlot::Nested(self.parse_destructure_pattern()?),
             });
         }
-        if matches!(self.current(), TokenKind::LBracket) {
-            let elements = self.parse_destructure_pattern()?;
-            return Ok(EvalDestructureElement::Nested {
-                key: Some(first),
-                elements,
-            });
-        }
-        let target = self.parse_expr()?;
-        Ok(EvalDestructureElement::Target {
-            key: Some(first),
-            target,
-        })
-    }
-
-    /// Appends one assignment per element of a destructuring pattern, recursing into nested ones.
-    ///
-    /// `EvalStmt::ArrayDestructure` names its targets by SCOPE NAME, which is every target the
-    /// vendor tree used until `[$this->keys, $this->values] = $values;` in
-    /// `symfony/cache/Adapter/PhpArrayAdapter.php`. PHP's list assignment takes any assignable
-    /// expression, an explicit key and a nested pattern; lowering to one read of the subject plus
-    /// one ordinary assignment per element reproduces all three. The subject is evaluated ONCE,
-    /// into a name whose leading NUL no PHP variable can carry, which is what PHP guarantees and
-    /// the convention the `foreach` destructuring target already used; each element becomes
-    /// `EvalExpr::Assign`, which writes through any lvalue the general location machinery accepts.
-    ///
-    /// The positional index counts EVERY keyless element, holes included, because that is what
-    /// `[$first, , $third] = [1, 2, 3]` means.
-    pub(super) fn push_destructure_element_writes(
-        &mut self,
-        elements: &[EvalDestructureElement],
-        subject: &str,
-        statements: &mut Vec<EvalStmt>,
-    ) -> Result<(), EvalParseError> {
-        let mut position = 0i64;
-        for element in elements {
-            let key = match element {
-                EvalDestructureElement::Skip => {
-                    position += 1;
-                    continue;
-                }
-                EvalDestructureElement::Target { key, .. }
-                | EvalDestructureElement::Nested { key, .. } => match key {
-                    Some(key) => key.clone(),
-                    None => {
-                        let key = EvalExpr::Const(EvalConst::Int(position));
-                        position += 1;
-                        key
-                    }
-                },
-            };
-            let read = EvalExpr::ArrayGet {
-                array: Box::new(EvalExpr::LoadVar(subject.to_string())),
-                index: Box::new(key),
-            };
-            match element {
-                EvalDestructureElement::Skip => unreachable!("a hole continues above"),
-                EvalDestructureElement::Nested { elements, .. } => {
-                    let nested = next_destructure_subject_name();
-                    statements.push(EvalStmt::StoreVar {
-                        name: nested.clone(),
-                        value: read,
-                    });
-                    self.push_destructure_element_writes(elements, &nested, statements)?;
-                }
-                EvalDestructureElement::Target { target, .. } => {
-                    if !is_assignment_target(target) {
-                        return Err(self.fail(EvalParseError::ExpectedVariable));
-                    }
-                    statements.push(EvalStmt::Expr(EvalExpr::Assign {
-                        target: Box::new(target.clone()),
-                        value: Box::new(read),
-                    }));
-                }
+        let first = self.parse_ternary()?;
+        if !self.consume(TokenKind::FatArrow) {
+            if !is_assignment_target(&first) {
+                return Err(EvalParseError::ExpectedVariable);
             }
+            return Ok(EvalDestructureTarget {
+                key: None,
+                slot: EvalDestructureSlot::Lvalue(first),
+            });
         }
-        Ok(())
+        if matches!(self.current(), TokenKind::LBracket)
+            || self.current_starts_list_destructure_pattern()
+        {
+            return Ok(EvalDestructureTarget {
+                key: Some(first),
+                slot: EvalDestructureSlot::Nested(self.parse_destructure_pattern()?),
+            });
+        }
+        let target = self.parse_ternary()?;
+        if !is_assignment_target(&target) {
+            return Err(EvalParseError::ExpectedVariable);
+        }
+        Ok(EvalDestructureTarget {
+            key: Some(first),
+            slot: EvalDestructureSlot::Lvalue(target),
+        })
     }
 
     /// Parses the optional first clause of a `for` loop.

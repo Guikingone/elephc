@@ -61,6 +61,7 @@ mod classes;
 mod closures;
 mod control_flow;
 mod core;
+mod destructuring;
 mod dynamic_calls;
 mod dynamic_property_store;
 mod element_reference_bind;
