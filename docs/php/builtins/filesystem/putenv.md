@@ -11,12 +11,14 @@ sidebar:
 function putenv(string $assignment): bool
 ```
 
-Sets an environment variable.
+Sets an environment variable. If `$assignment` does not contain an equals sign,
+the named variable is removed from the environment.
 
 **Parameters**:
 - `$assignment` (`string`)
 
-**Returns**: `bool`
+**Returns**: `bool` — `true` when the variable was set or removed successfully,
+otherwise `false`.
 
 ## Availability
 
