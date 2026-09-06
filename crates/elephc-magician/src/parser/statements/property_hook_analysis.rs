@@ -335,7 +335,6 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
                 eval_expr_uses_this_property(key, property_name)
                     || eval_expr_uses_this_property(value, property_name)
             }
-            EvalArrayElement::Spread(value) => eval_expr_uses_this_property(value, property_name),
         }),
         EvalExpr::ArrayDestructureAssign { value, .. } => {
             eval_expr_uses_this_property(value, property_name)

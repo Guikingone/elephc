@@ -31524,3 +31524,83 @@ echo ";done";
     );
     assert_eq!(out, "zero[7]n[3]count[1];done");
 }
+
+/// Verifies interpreted code can read a COMPILED class's `ReflectionClass` scalars.
+///
+/// Oracle: `php -n` 8.5.6 prints
+/// `main;ProbeAotShape[int=n;user=y;short=ProbeAotShape;ns=;inns=n;abs=n;iface=n;fin=n;anon=n;enum=n;ifn=1];done`.
+///
+/// `ReflectionClass` answered these from the eval context's own class table, and no eval context
+/// DECLARES a class the compiler produced. Every one of them therefore reported "not handled",
+/// which the bridge turns into `Fatal error: eval() runtime failed` -- while the facts existed the
+/// whole time, published by the generated program through the same reflection hooks that
+/// `getDocComment()` alone had been asking. Symfony's `ContainerBuilder` reflects on compiled
+/// classes while it tracks resources, which is where the cold path stopped.
+///
+/// `isUserDefined()` is derived rather than read: the program publishes flags only for classes it
+/// compiled FROM SOURCE, so arriving here at all answers the question unless the internal bit is
+/// set, and the flag word does not carry the bit itself.
+///
+/// TWO MEMBERS ARE LEFT OUT ON PURPOSE, because asserting what elephc prints today would pin a
+/// defect. `isInstantiable()` answers `false` where php answers `true`: php's rule needs the
+/// constructor's visibility, which the flag word does not carry. `getEndLine()` reports the line
+/// the class's LAST MEMBER starts on rather than the line its brace closes on.
+#[test]
+fn test_interpreted_code_reads_a_compiled_class_reflection_scalars() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+function probe_scalars(string $name): string
+{
+    $r = new ReflectionClass($name);
+    echo $name, '[';
+    echo 'int=' . ($r->isInternal() ? 'y' : 'n') . ';';
+    echo 'user=' . ($r->isUserDefined() ? 'y' : 'n') . ';';
+    echo 'short=' . $r->getShortName() . ';';
+    echo 'ns=' . $r->getNamespaceName() . ';';
+    echo 'inns=' . ($r->inNamespace() ? 'y' : 'n') . ';';
+    echo 'abs=' . ($r->isAbstract() ? 'y' : 'n') . ';';
+    echo 'iface=' . ($r->isInterface() ? 'y' : 'n') . ';';
+    echo 'fin=' . ($r->isFinal() ? 'y' : 'n') . ';';
+    echo 'anon=' . ($r->isAnonymous() ? 'y' : 'n') . ';';
+    echo 'enum=' . ($r->isEnum() ? 'y' : 'n') . ';';
+    echo 'ifn=' . count($r->getInterfaceNames());
+    echo ']';
+
+    return '';
+}
+
+echo probe_scalars('ProbeAotShape'), ';';
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+interface ProbeShapeContract
+{
+}
+
+class ProbeAotShape implements ProbeShapeContract
+{
+    public int $n = 1;
+}
+
+$piece = __DIR__ . '/piece.php';
+echo 'main;';
+include $piece;
+echo 'done';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "main;ProbeAotShape[int=n;user=y;short=ProbeAotShape;ns=;inns=n;abs=n;iface=n;fin=n;\
+         anon=n;enum=n;ifn=1];done"
+    );
+}

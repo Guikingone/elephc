@@ -79,19 +79,6 @@ impl Parser {
         names.iter().any(|name| self.at_keyword(name))
     }
 
-    /// Consumes the `&` that declares a by-reference return, and reports whether it was there.
-    ///
-    /// PHP's `function &f()` returns a REFERENCE, and that only changes anything at a call site
-    /// which binds one — `$r = &$o->f();`. The interpreter has no by-reference return, and such a
-    /// call site refuses to parse anyway, because `eval_expr_binds_a_reference()` does not admit a
-    /// call as a reference source. So the marker is consumed and the declaration behaves as a
-    /// value return: a loud limitation at the one site that would notice, never a silent wrong
-    /// value, and it is what lets `symfony/http-foundation/Session/Session.php` and
-    /// `var-exporter/Internal/LazyDecoratorTrait.php` be loaded at all.
-    pub(in crate::parser) fn consume_by_reference_return_marker(&mut self) -> bool {
-        self.consume(TokenKind::Ampersand)
-    }
-
     /// Consumes the keyword `name` or returns a parse error.
     pub(super) fn expect_keyword(&mut self, name: &str) -> Result<(), EvalParseError> {
         if self.at_keyword(name) {

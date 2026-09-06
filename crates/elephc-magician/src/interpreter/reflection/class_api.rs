@@ -277,14 +277,18 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
     let method_key = method_name.to_ascii_lowercase();
     let metadata = eval_reflection_class_like_attributes(&reflected_name, context);
     if metadata.is_none() {
-        if method_key == "getdoccomment" {
-            eval_reflection_bind_no_args(evaluated_args)?;
-            return match values.reflection_class_doc_comment(&reflected_name)? {
-                Some(doc_comment) => values.string(&doc_comment).map(Some),
-                None => values.bool_value(false).map(Some),
-            };
-        }
-        return Ok(None);
+        // No eval context DECLARED this class, which is the normal case for a class the compiler
+        // produced and for a builtin. The facts still exist -- the generated program publishes
+        // them through the reflection hooks -- but only `getDocComment()` ever asked, so every
+        // other scalar answered "not handled" and the bridge turned that into an anonymous fatal.
+        // Symfony's `ContainerBuilder` reflects on compiled classes while it tracks resources, so
+        // this was the cold path's next stop after the backtrace work.
+        return eval_reflection_runtime_class_scalar_result(
+            &reflected_name,
+            method_key.as_str(),
+            evaluated_args,
+            values,
+        );
     }
     let metadata = metadata.expect("class reflection metadata was checked above");
     match method_key.as_str() {
@@ -474,6 +478,85 @@ fn eval_reflection_class_flag_result(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     eval_reflection_bind_no_args(evaluated_args)?;
     values.bool_value(flags & flag != 0).map(Some)
+}
+
+/// Answers one `ReflectionClass` scalar from the generated program's own reflection metadata.
+///
+/// Used when no eval context declared the class. The flag word is the same one the eval path
+/// builds by hand, so the member-to-bit mapping is shared; the name-derived members need no
+/// metadata at all, and the interface list is already an array the runtime hands back.
+fn eval_reflection_runtime_class_scalar_result(
+    reflected_name: &str,
+    method_key: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if method_key == "getdoccomment" {
+        eval_reflection_bind_no_args(evaluated_args)?;
+        return match values.reflection_class_doc_comment(reflected_name)? {
+            Some(doc_comment) => values.string(&doc_comment).map(Some),
+            None => values.bool_value(false).map(Some),
+        };
+    }
+    let canonical = values
+        .reflection_canonical_class_name(reflected_name)?
+        .unwrap_or_else(|| reflected_name.to_string());
+    let canonical = canonical.trim_start_matches('\\').to_string();
+    match method_key {
+        "getname" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            return values.string(&canonical).map(Some);
+        }
+        "getshortname" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            let short = canonical.rsplit('\\').next().unwrap_or(&canonical).to_string();
+            return values.string(&short).map(Some);
+        }
+        "getnamespacename" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            let namespace = canonical
+                .rsplit_once('\\')
+                .map_or(String::new(), |(namespace, _)| namespace.to_string());
+            return values.string(&namespace).map(Some);
+        }
+        "innamespace" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            return values.bool_value(canonical.contains('\\')).map(Some);
+        }
+        "getinterfacenames" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            return values.reflection_class_interface_names(&canonical).map(Some);
+        }
+        _ => {}
+    }
+    let flag = match method_key {
+        "isfinal" => EVAL_REFLECTION_CLASS_FLAG_FINAL,
+        "isabstract" => EVAL_REFLECTION_CLASS_FLAG_ABSTRACT,
+        "isinterface" => EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
+        "istrait" => EVAL_REFLECTION_CLASS_FLAG_TRAIT,
+        "isenum" => EVAL_REFLECTION_CLASS_FLAG_ENUM,
+        "isreadonly" => EVAL_REFLECTION_CLASS_FLAG_READONLY,
+        "isanonymous" => EVAL_REFLECTION_CLASS_FLAG_ANONYMOUS,
+        "isinstantiable" => EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE,
+        "iscloneable" => EVAL_REFLECTION_CLASS_FLAG_CLONEABLE,
+        "isiterable" | "isiterateable" => EVAL_REFLECTION_CLASS_FLAG_ITERABLE,
+        "isinternal" => EVAL_REFLECTION_CLASS_FLAG_INTERNAL,
+        "isuserdefined" => EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED,
+        _ => return Ok(None),
+    };
+    let Some(flags) = values.reflection_class_flags(&canonical)? else {
+        return Ok(None);
+    };
+    if flag == EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED {
+        // The generated program publishes flags only for the classes it compiled FROM SOURCE, so
+        // reaching here at all means the class is user-defined unless it is marked internal. The
+        // flag word itself does not carry the bit, and answering from the bit gave `false` for
+        // every compiled class.
+        eval_reflection_bind_no_args(evaluated_args)?;
+        let internal = flags & EVAL_REFLECTION_CLASS_FLAG_INTERNAL != 0;
+        return values.bool_value(!internal).map(Some);
+    }
+    eval_reflection_class_flag_result(flags, flag, evaluated_args, values)
 }
 
 /// Handles eval-backed `ReflectionClass::hasMethod()` calls.
