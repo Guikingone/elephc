@@ -2539,6 +2539,12 @@ mod tests {
     fn a_fork_child_closes_a_claimed_control_socket() {
         let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
+            // Isolated nextest leaves fd 3 free; a suite often has it open.
+            // Free it so socketpair takes that number — the layout CI hits.
+            let original = libc::dup(super::CONTROL_FD);
+            if original >= 0 {
+                libc::close(super::CONTROL_FD);
+            }
             let mut fds = [0i32; 2];
             assert_eq!(
                 libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()),
@@ -2552,14 +2558,27 @@ mod tests {
             super::drop_inherited_control_channel();
 
             let gone = libc::fcntl(super::CONTROL_FD, libc::F_GETFD);
-            let parent_still = libc::fcntl(ours, libc::F_GETFD);
+            // Isolated nextest leaves fd 3 free, so socketpair often allocates
+            // it as `ours`. Closing CONTROL_FD then closes that number; watch
+            // the saved duplicate instead, the same way the handshake test
+            // reads the ACK.
+            let parent = if ours == super::CONTROL_FD { saved } else { ours };
+            let parent_still = libc::fcntl(parent, libc::F_GETFD);
 
             if saved >= 0 {
                 libc::dup2(saved, super::CONTROL_FD);
                 libc::close(saved);
             }
-            libc::close(ours);
-            libc::close(theirs);
+            if ours != super::CONTROL_FD {
+                libc::close(ours);
+            }
+            if theirs != super::CONTROL_FD {
+                libc::close(theirs);
+            }
+            if original >= 0 {
+                libc::dup2(original, super::CONTROL_FD);
+                libc::close(original);
+            }
             super::CONTROL_OWNED.store(owned, super::Ordering::Relaxed);
 
             assert!(gone < 0, "the child's copy of the credential must be gone");
