@@ -1114,10 +1114,11 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
         // is one nobody wanted, and one more thing between the program and its
         // exit.
         if POLLED.load(Ordering::Relaxed) {
-            std::thread::Builder::new()
-                .name("elephc-probe-control".to_string())
-                .spawn(serve_control_channel)
-                .ok();
+            start_control_channel(CONTROL_FD, || {
+                std::thread::Builder::new()
+                    .name("elephc-probe-control".to_string())
+                    .spawn(serve_control_channel)
+            });
         }
     }
 
@@ -1143,6 +1144,25 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
             if !path.is_empty() {
                 endpoint::spawn(path);
             }
+        }
+    }
+}
+
+/// Starts the control server, disconnecting the authenticated channel on failure.
+/// A receive timeout cannot distinguish a slow server from one that never started.
+/// Closing the unserved peer lets the monitor report failure and leave PHP running.
+/// The spawn operation is injected so resource exhaustion can be tested without
+/// exhausting the application's own thread or memory limits.
+fn start_control_channel(
+    fd: libc::c_int,
+    spawn: impl FnOnce() -> std::io::Result<std::thread::JoinHandle<()>>,
+) {
+    if spawn().is_err() {
+        // SAFETY: init owns this authenticated socket and no server was created.
+        // Shutdown also disconnects any inherited duplicates of the peer.
+        unsafe {
+            libc::shutdown(fd, libc::SHUT_RDWR);
+            libc::close(fd);
         }
     }
 }
@@ -2863,6 +2883,51 @@ mod tests {
                 .any(|line| line.starts_with("elephc-probe: ") && line.ends_with(" 2")),
             "and the per-stack weight has to grow with it: {after_lap}"
         );
+    }
+
+    /// A refused thread spawn must expose EOF, not an unserved socket that times out.
+    #[test]
+    fn failed_control_thread_start_disconnects_the_monitor() {
+        use std::io::{Read, Write};
+        use std::os::fd::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (mut monitor, mut server) = UnixStream::pair().unwrap();
+        monitor.set_read_timeout(Some(std::time::Duration::from_millis(200))).unwrap();
+        server.write_all(&CONTROL_ACK).unwrap();
+        start_control_channel(server.into_raw_fd(), || {
+            Err(std::io::Error::from_raw_os_error(libc::EAGAIN))
+        });
+        let mut ack = [0; CONTROL_ACK.len()];
+        monitor.read_exact(&mut ack).unwrap();
+        assert_eq!(ack, CONTROL_ACK);
+        let mut byte = [0];
+        assert_eq!(monitor.read(&mut byte).expect("startup failure must not become a timeout"), 0);
+    }
+
+    /// Successful startup retains the peer so the server can answer its monitor.
+    #[test]
+    fn successful_control_thread_start_keeps_the_channel_open() {
+        use std::io::{Read, Write};
+        use std::os::fd::{FromRawFd, IntoRawFd};
+        use std::os::unix::net::UnixStream;
+
+        let (mut monitor, server) = UnixStream::pair().unwrap();
+        monitor.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+        let fd = server.into_raw_fd();
+        start_control_channel(fd, || {
+            std::thread::Builder::new().spawn(move || {
+                // SAFETY: ownership transfers only after the server thread starts.
+                let mut server = unsafe { UnixStream::from_raw_fd(fd) };
+                let mut request = [0];
+                server.read_exact(&mut request).unwrap();
+                server.write_all(&request).unwrap();
+            })
+        });
+        monitor.write_all(b"S").unwrap();
+        let mut answer = [0];
+        monitor.read_exact(&mut answer).unwrap();
+        assert_eq!(&answer, b"S");
     }
 
     /// Concurrent endpoint/control readers must count each settled ticket once,
