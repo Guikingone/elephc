@@ -114,10 +114,13 @@ alone, so --exact cannot be combined with --out, --pprof, --dot or --html.
 exits (or Ctrl-C). --attach reads an already-running local process, discovering
 its child worker processes (a --web prefork server's workers) each window and
 merging them. A launched --live asks the program it started over the channel it
-handed it, so its answer is that process's own. --live launches its target and asks it over a socketpair, so it needs no
-external tool and works wherever elephc does; --attach is handed a pid it did not
-launch and reads it from the outside -- /usr/bin/sample on macOS, ptrace on
-Linux, and nowhere else, so point monitor at the program's endpoint instead.
+handed it. A --web binary fills one shared ring from every worker, so that
+answer is the whole server — the same ring the endpoint serves — and the live
+table reports the discovered worker count. --live launches its target and asks
+it over a socketpair, so it needs no external tool and works wherever elephc
+does; --attach is handed a pid it did not launch and reads it from the outside
+-- /usr/bin/sample on macOS, ptrace on Linux, and nowhere else, so point monitor
+at the program's endpoint instead.
 They report sampled CPU stacks only: no calls, allocation/retained counts, SQL/file-I/O counts, wait, or route
 tags. Everything else works on Linux and macOS alike.
 

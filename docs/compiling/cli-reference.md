@@ -148,8 +148,10 @@ a final cumulative table on exit. `--attach <pid>` monitors a process that is
 already running — Ctrl-C stops monitoring and leaves it running. `--attach`
 discovers the target's direct children each window and merges them, so a
 `--web` prefork server is measured across all its workers, not just the master.
-A launched `--live` asks the program it started, over the channel it handed it,
-so its answer is that process's own. Live mode skips inlined-frame recovery to keep the refresh light. When
+A launched `--live` asks the program it started, over the channel it handed it.
+A `--web` binary fills one shared ring from every worker, so that answer is the
+whole server — the same ring the endpoint serves — and the live table reports
+the discovered worker count. Live mode skips inlined-frame recovery to keep the refresh light. When
 the sampler refuses (it will not read a process it did not spawn without
 elevation), the command says so rather than reporting an empty capture.
 

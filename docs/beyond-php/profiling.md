@@ -235,7 +235,9 @@ you cannot rebuild or are not allowed to trace: start it with
 live mode) with trend arrows against the previous window and a cumulative share.
 `--attach` monitors a process that is already running, and discovers and merges
 its worker children — so a `--web` prefork server is measured across all its
-workers. When the target is a `.php` source and its `.dSYM` is present, calls the
+workers. A launched `--live` of a `--web` binary asks the master over the
+control channel; workers write into the same shared ring that answer reads, so
+the table is the whole server rather than the idle accept loop. When the target is a `.php` source and its `.dSYM` is present, calls the
 inliner erased reappear as virtual `name (inlined)` frames, recovered from the
 source spans the inliner preserved.
 
