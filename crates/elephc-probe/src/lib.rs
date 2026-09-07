@@ -1880,18 +1880,10 @@ fn decode_hex(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// How far the fold has already carried, as a ticket number.
-///
-/// The ring's head only grows, so this is a watermark: everything below it has
-/// been taken out of the buffer and added to `CARRIED`, and re-reading it would
-/// count the same samples twice.
-static CARRIED_THROUGH: AtomicU64 = AtomicU64::new(0);
-
 /// Everything carried out of the ring so far.
 ///
-/// Touched only by a reader — the control thread answering a snapshot, or the
-/// exit-time dump — and never by the signal handler, which is what makes a lock
-/// safe here at all.
+/// Shared by control-channel and endpoint readers, never by the signal handler.
+/// The lock covers ticket selection, folding and publication as one transaction.
 static CARRIED: std::sync::Mutex<Carried> = std::sync::Mutex::new(Carried::new());
 
 /// The cumulative half of the answer: stacks, allocation weights, and the count
@@ -1900,14 +1892,18 @@ struct Carried {
     folded: std::collections::BTreeMap<Vec<String>, u64>,
     allocated: std::collections::BTreeMap<Vec<String>, u64>,
     valid: u64,
+    /// First ticket not yet included in these totals; protected by the same lock.
+    through: u64,
 }
 
 impl Carried {
+    /// Creates an empty accumulator before any ring tickets have been consumed.
     const fn new() -> Self {
         Self {
             folded: std::collections::BTreeMap::new(),
             allocated: std::collections::BTreeMap::new(),
             valid: 0,
+            through: 0,
         }
     }
 }
@@ -1915,10 +1911,9 @@ impl Carried {
 /// Adds one fold's worth of ring to what has been carried, and answers the
 /// running total.
 ///
-/// A poisoned lock answers the fresh fold rather than panicking: a profiler that
-/// takes the program down because its own bookkeeping tripped is worse than one
-/// that reports a short window.
+/// The caller holds the accumulator lock from ticket selection through publication.
 fn carry_forward(
+    carried: &mut Carried,
     taken: u64,
     folded: std::collections::BTreeMap<Vec<String>, u64>,
     allocated: std::collections::BTreeMap<Vec<String>, u64>,
@@ -1928,9 +1923,6 @@ fn carry_forward(
     std::collections::BTreeMap<Vec<String>, u64>,
     u64,
 ) {
-    let Ok(mut carried) = CARRIED.lock() else {
-        return (folded, allocated, valid);
-    };
     for (stack, count) in folded {
         *carried.folded.entry(stack).or_default() += count;
     }
@@ -1938,7 +1930,7 @@ fn carry_forward(
         *carried.allocated.entry(stack).or_default() += allocs;
     }
     carried.valid += valid;
-    CARRIED_THROUGH.store(taken, Ordering::Relaxed);
+    carried.through = taken;
     (carried.folded.clone(), carried.allocated.clone(), carried.valid)
 }
 
@@ -2052,9 +2044,8 @@ unsafe fn folded_profile() -> Option<String> {
 /// total, because the ring stops growing the moment its head wraps and a
 /// consumer subtracting one answer from the last then sees nothing at all.
 ///
-/// Kept as a parameter rather than made unconditional because a fold that
-/// carries is not idempotent, and both the dump and the tests fold more than
-/// once expecting the same answer twice.
+/// The raw dump stays independent of the snapshot accumulator. Repeated reads
+/// without new samples are idempotent in either mode.
 ///
 /// # Safety
 /// As `folded_profile`.
@@ -2078,6 +2069,11 @@ unsafe fn folded_profile_with(cumulative: bool) -> Option<String> {
         .collect();
     symbols.sort_by_key(|(address, _)| *address);
 
+    // Readers share both the totals and the ticket watermark. Hold one lock
+    // across selection, folding and publication so concurrent endpoint/control
+    // readers cannot carry the same interval twice. A poisoned transaction has
+    // no trustworthy totals; return no profile instead of publishing a false one.
+    let mut carried = if cumulative { Some(CARRIED.lock().ok()?) } else { None };
     let head = region_head()?;
     let base = REGION.load(Ordering::Relaxed);
     let taken = head.load(Ordering::Relaxed);
@@ -2095,8 +2091,8 @@ unsafe fn folded_profile_with(cumulative: bool) -> Option<String> {
     // again on the next read. The reader that falls more than a full ring behind
     // loses what was overwritten, which no fixed ring can avoid.
     let oldest_live = taken.saturating_sub(RING_SLOTS as u64);
-    let from = if cumulative {
-        CARRIED_THROUGH.load(Ordering::Relaxed).max(oldest_live)
+    let from = if let Some(carried) = carried.as_ref() {
+        carried.through.max(oldest_live)
     } else {
         oldest_live
     };
@@ -2168,11 +2164,12 @@ unsafe fn folded_profile_with(cumulative: bool) -> Option<String> {
     // Carried out of the ring before anything is rendered, so what the answer
     // reports is every sample since the process started and not merely the ones
     // still in the buffer.
-    let (folded, allocated, valid) = if cumulative {
-        carry_forward(taken, folded, allocated, valid)
+    let (folded, allocated, valid) = if let Some(carried) = carried.as_mut() {
+        carry_forward(carried, taken, folded, allocated, valid)
     } else {
         (folded, allocated, valid)
     };
+    drop(carried);
     // A dormant binary took no samples and recorded no events. Saying
     // "elephc-probe-samples: 0" would still announce a profiler to anyone
     // reading the program's own stderr, which is exactly what
@@ -2868,10 +2865,63 @@ mod tests {
         );
     }
 
+    /// Concurrent endpoint/control readers must count each settled ticket once,
+    /// including both sample counts and allocation weights after a full ring.
+    #[test]
+    fn concurrent_readers_carry_each_ring_ticket_once() {
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let name = "concurrent_hot";
+        let end = "<end>";
+        let symbols = [
+            SymtabEntry { address: 0x1000, name_ptr: name.as_ptr() as u64, name_len: name.len() as u64 },
+            SymtabEntry { address: 0x2000, name_ptr: end.as_ptr() as u64, name_len: end.len() as u64 },
+        ];
+        let mut region = vec![0u64; REGION_BYTES / 8];
+        let base = region.as_mut_ptr() as usize;
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let saved_ptr = TABLE_PTR.swap(symbols.as_ptr() as usize, Ordering::Relaxed);
+        let saved_len = TABLE_LEN.swap(symbols.len(), Ordering::Relaxed);
+        reset_carried();
+        unsafe {
+            for ticket in 0..RING_SLOTS {
+                region_word(base, ticket, 0).store(1, Ordering::Release);
+                region_word(base, ticket, 2).store(3, Ordering::Relaxed);
+                region_word(base, ticket, PC_WORD0).store(0x1000, Ordering::Relaxed);
+                region_word(base, ticket, SEQ_WORD)
+                    .store(slot_seq_settled(ticket as u64), Ordering::Release);
+            }
+            region_head().expect("mapped").store(RING_SLOTS as u64, Ordering::Relaxed);
+        }
+        let barrier = &std::sync::Barrier::new(4);
+        let answers = std::thread::scope(|scope| {
+            let readers: Vec<_> = (0..4)
+                .map(|_| scope.spawn(move || {
+                    barrier.wait();
+                    current_folded_profile()
+                }))
+                .collect();
+            readers.into_iter().map(|reader| reader.join().unwrap()).collect::<Vec<_>>()
+        });
+        let serial = current_folded_profile();
+        REGION.store(saved_region, Ordering::Relaxed);
+        TABLE_PTR.store(saved_ptr, Ordering::Relaxed);
+        TABLE_LEN.store(saved_len, Ordering::Relaxed);
+        reset_carried();
+        for answer in answers.into_iter().chain([serial]) {
+            let answer = answer.expect("published symbols");
+            for expected in [
+                format!("elephc-probe-samples: {RING_SLOTS}"),
+                format!("elephc-probe: {name} {RING_SLOTS}"),
+                format!("elephc-probe-alloc: {name} {}", RING_SLOTS * 3),
+            ] {
+                assert!(answer.lines().any(|line| line == expected), "{answer}");
+            }
+        }
+    }
+
     /// Clears what previous folds carried, so one test's samples are not another
     /// test's total. The accumulator is process-wide by design.
     fn reset_carried() {
-        CARRIED_THROUGH.store(0, Ordering::Relaxed);
         if let Ok(mut carried) = CARRIED.lock() {
             *carried = Carried::new();
         }

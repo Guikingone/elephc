@@ -137,6 +137,8 @@ pub(crate) fn run_live(
     // Whether the view ended because the channel broke rather than because the
     // program did.
     let mut lost_channel = false;
+    let mut failed = false;
+    let mut target_finished = false;
     let mut previous: HashMap<String, f64> = HashMap::new();
     let mut windows = 0u32;
     let graph_title = if cmd.target.is_empty() {
@@ -158,6 +160,7 @@ pub(crate) fn run_live(
     loop {
         if let Some(child) = child.as_deref_mut() {
             if child.try_wait().ok().flatten().is_some() {
+                target_finished = true;
                 break;
             }
         }
@@ -219,10 +222,14 @@ pub(crate) fn run_live(
                     // reason to end work the operator is in the middle of.
                     if child.as_deref_mut().is_some_and(|c| c.try_wait().ok().flatten().is_none()) {
                         lost_channel = true;
+                        failed = true;
                         eprintln!(
                             "elephc monitor: lost the channel to the target; it is still running \
                              as pid {root} and is left alone. Reporting what was collected."
                         );
+                    } else {
+                        target_finished = target_has_exited(root);
+                        failed = !target_finished;
                     }
                     break;
                 }
@@ -252,14 +259,22 @@ pub(crate) fn run_live(
         } else {
             let window = match capture_display(&pids, cmd.duration_secs, None, None, image) {
                 Ok(Some(window)) => window,
-                // Attach mode has no child handle: an empty window is how we
-                // learn the target is gone.
-                Ok(None) => break,
+                // An empty window alone cannot establish target termination;
+                // attach mode has no child handle, so check the process itself.
+                Ok(None) => {
+                    target_finished = target_has_exited(root);
+                    if !target_finished {
+                        failed = true;
+                        eprintln!("elephc monitor: no samples captured; the target has not exited");
+                    }
+                    break;
+                }
                 // A refusal is not a target that ended. Ending the view silently
                 // here is what made `yama/ptrace_scope=1` look like a program
                 // that had exited.
                 Err(reason) => {
                     eprintln!("elephc monitor: {reason}");
+                    failed = true;
                     break;
                 }
             };
@@ -293,7 +308,7 @@ pub(crate) fn run_live(
         let merged: Vec<(Vec<(String, Kind)>, u64)> = cumulative.into_iter().collect();
         println!("\n=== cumulative ({windows} windows) ===");
         print!("{}", why_table(&merged, 1));
-    } else {
+    } else if target_finished {
         // A program shorter than one window left NOTHING behind: the loop sleeps
         // first and asks second, so it was already gone by the first question,
         // and the exit dump it wrote to its own stderr is filtered out of a live
@@ -304,7 +319,21 @@ pub(crate) fn run_live(
              to sample. Use a longer-running input, or a shorter --duration."
         );
     }
-    LiveOutcome { code: 0, leave_target_running: lost_channel }
+    LiveOutcome { code: i32::from(failed), leave_target_running: lost_channel }
+}
+
+/// Confirms target termination independently of an empty profile or broken socket.
+fn target_has_exited(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        // A zombie still answers kill(pid, 0), but cannot produce another sample.
+        return stat.rsplit_once(')').is_some_and(|(_, tail)| {
+            matches!(tail.split_whitespace().next(), Some("Z" | "X"))
+        });
+    }
+    // SAFETY: signal zero only checks existence; it does not signal the target.
+    let absent = unsafe { libc::kill(pid as libc::pid_t, 0) == -1 };
+    absent && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 /// One window of samples, already named and folded, whichever way it was read.
@@ -767,3 +796,7 @@ pub(crate) fn live_frame(
     *previous = next_previous;
     out
 }
+
+#[cfg(test)]
+#[path = "local_tests.rs"]
+mod review_tests;

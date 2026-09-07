@@ -156,6 +156,31 @@ pub(crate) fn wait_for_stop(tid: u32) -> io::Result<libc::c_int> {
     }
 }
 
+/// Consumes an already pending stop before asking the kernel for another one.
+/// A signal-delivery stop may arrive between sampling ticks. Interrupting that
+/// stop again can keep producing event stops while the tracee makes no progress.
+/// Checking first also handles an interrupt event left pending behind a signal.
+fn stop_for_sample(tid: u32) -> io::Result<libc::c_int> {
+    loop {
+        let mut status = 0;
+        // SAFETY: status is writable and waitpid targets only this seized tid.
+        let waited = unsafe {
+            libc::waitpid(tid as libc::pid_t, &mut status, libc::__WALL | libc::WNOHANG)
+        };
+        if waited > 0 {
+            return Ok(status);
+        }
+        if waited == 0 {
+            interrupt(tid)?;
+            return wait_for_stop(tid);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
 /// The signal a stop was carrying, which the restart has to hand back.
 ///
 /// A seized tracee reports EVERY signal to its tracer and stops until the tracer
@@ -176,8 +201,7 @@ fn pending_signal(status: libc::c_int) -> libc::c_int {
     if !libc::WIFSTOPPED(status) || (status >> 16) != 0 {
         return 0;
     }
-    let signal = libc::WSTOPSIG(status);
-    if signal == libc::SIGTRAP { 0 } else { signal }
+    libc::WSTOPSIG(status)
 }
 
 /// Lets a stopped thread run again, delivering whatever signal it stopped on.
@@ -207,10 +231,9 @@ pub(crate) fn resume(tid: u32, signal: libc::c_int) {
 /// is gone, so the view reported the program had ended while it was still
 /// running — a wrong answer produced by a failure nobody was told about.
 pub(crate) fn detach(tid: u32) {
-    let _ = interrupt(tid);
     // The last stop is the last chance to hand a pending signal back: after the
     // detach there is no tracer left to hold it, and it is gone.
-    let signal = wait_for_stop(tid).map_or(0, pending_signal);
+    let signal = stop_for_sample(tid).map_or(0, pending_signal);
     // SAFETY: no memory operands; ESRCH for a thread that has gone is fine, and
     // a tracer that exits detaches whatever it still holds.
     unsafe {
@@ -362,10 +385,7 @@ pub(crate) fn walk(pid: u32, regs: &Registers) -> Vec<u64> {
 pub(crate) fn sample_thread(pid: u32, tid: u32) -> Option<Vec<u64>> {
     // Below this line the thread is stopped, or on its way to being; above it,
     // nothing has happened to it.
-    if interrupt(tid).is_err() {
-        return None;
-    }
-    let stopped = wait_for_stop(tid);
+    let stopped = stop_for_sample(tid);
     let signal = stopped.as_ref().map_or(0, |status| pending_signal(*status));
     // The walk happens HERE, between the stop and the resume, because it READS
     // THE TARGET'S MEMORY: up to `MAX_DEPTH` frames, a `PEEKDATA` pair each. The
@@ -595,6 +615,7 @@ mod tests {
     fn a_signal_the_program_was_about_to_receive_is_handed_back() {
         assert_eq!(pending_signal(stopped(libc::SIGCHLD, 0)), libc::SIGCHLD);
         assert_eq!(pending_signal(stopped(libc::SIGTERM, 0)), libc::SIGTERM);
+        assert_eq!(pending_signal(stopped(libc::SIGTRAP, 0)), libc::SIGTRAP);
     }
 
     /// A thread that exited between the interrupt and the wait reports an exit,
@@ -719,3 +740,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "ptrace_process_tests.rs"]
+mod process_tests;
