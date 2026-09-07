@@ -188,7 +188,10 @@ mod tests {
     #[test]
     fn every_target_dependent_constant_is_computed() {
         for platform in [Platform::MacOS, Platform::Linux] {
-            let constants = collect_constants(&vec![], platform);
+            let constants = collect_constants(
+                &vec![],
+                Target::new(platform, crate::codegen_support::platform::Arch::AArch64),
+            );
             for constant in registered_constants() {
                 let (_, ty) = constants
                     .get(constant.name)

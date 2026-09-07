@@ -32,9 +32,12 @@ const fn pcntl_contract_with_min_args(
         id: BuiltinId::from_canonical_name(name),
         name,
         area: Area::System,
+        module: crate::PhpModule::Pcntl,
+        since: None,
         kind: BuiltinKind::Function,
         params,
         variadic: None,
+        variadic_by_ref: false,
         min_args,
         max_args: None,
         arity_error: None,
@@ -59,6 +62,18 @@ const fn pcntl_extension_contract(
 ) -> BuiltinContract {
     let mut contract = pcntl_contract(name, params, returns, summary);
     contract.extension = true;
+    contract
+}
+
+/// Attributes the POSIX session helpers implemented by the PCNTL bridge to ext/posix.
+const fn posix_contract(
+    name: &'static str,
+    params: &'static [ParamSpec],
+    returns: TypeSpec,
+    summary: &'static str,
+) -> BuiltinContract {
+    let mut contract = pcntl_contract(name, params, returns, summary);
+    contract.module = crate::PhpModule::Posix;
     contract
 }
 
@@ -573,7 +588,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         TypeSpec::Mixed,
         "Returns the terminating signal encoded in a child wait status.",
     ),
-    pcntl_contract(
+    posix_contract(
         "posix_setpgid",
         &[
             ParamSpec {
@@ -592,7 +607,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         TypeSpec::Bool,
         "Moves a process into a process group for job control.",
     ),
-    pcntl_contract(
+    posix_contract(
         "posix_setsid",
         &[],
         TypeSpec::Int,

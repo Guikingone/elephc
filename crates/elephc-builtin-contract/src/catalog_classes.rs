@@ -16,7 +16,8 @@ use crate::{BuiltinId, ClassContract, ClassKind, ClassRoute, PhpModule, PhpVersi
 macro_rules! class {
     (
         $name:literal, $canonical:literal, $kind:ident, $module:ident, $route:ident
-        $(, since: $since:ident)? $(, extension: $extension:literal)? $(, internal: $internal:literal)? $(,)?
+        $(, since: $since:ident)? $(, extension: $extension:literal)? $(, internal: $internal:literal)?
+        $(, targets: $targets:expr)? $(,)?
     ) => {
         ClassContract {
             id: BuiltinId::from_canonical_name($canonical),
@@ -25,6 +26,7 @@ macro_rules! class {
             module: PhpModule::$module,
             since: class!(@since $($since)?),
             aot: ClassRoute::$route,
+            target_support: class!(@targets $($targets)?),
             extension: class!(@flag $($extension)?),
             internal: class!(@flag $($internal)?),
             php_manual: None,
@@ -34,6 +36,8 @@ macro_rules! class {
     (@since) => { None };
     (@flag $value:literal) => { $value };
     (@flag) => { false };
+    (@targets $targets:expr) => { Some($targets) };
+    (@targets) => { None };
 }
 
 pub(crate) static CLASSES: &[ClassContract] = &[
@@ -80,6 +84,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("CairoSvgSurface", "cairosvgsurface", Class, Cairo, Prelude),
     class!("CairoToyFontFace", "cairotoyfontface", Class, Cairo, Prelude),
     class!("CallbackFilterIterator", "callbackfilteriterator", Class, Spl, CheckerInjected),
+    class!("Closure", "closure", Class, Core, LanguageIntrinsic),
     class!("Countable", "countable", Interface, Core, CheckerInjected),
     class!("CURLFile", "curlfile", Class, Curl, Prelude),
     class!("CurlHandle", "curlhandle", Class, Curl, Prelude),
@@ -156,6 +161,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("OutOfRangeException", "outofrangeexception", Class, Spl, CheckerInjected),
     class!("OverflowException", "overflowexception", Class, Spl, CheckerInjected),
     class!("ParentIterator", "parentiterator", Class, Spl, CheckerInjected),
+    class!("Pcntl\\QosClass", "pcntl\\qosclass", Enum, Pcntl, CheckerInjected, since: Php84, targets: &["macos-aarch64"]),
     class!("PDO", "pdo", Class, Pdo, Prelude),
     class!("Pdo\\Dblib", "pdo\\dblib", Class, PdoDblib, Prelude, since: Php84),
     class!("Pdo\\Firebird", "pdo\\firebird", Class, PdoFirebird, Prelude, since: Php84),

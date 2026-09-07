@@ -352,7 +352,7 @@ fn print_symbol_catalogs() {
     let classes: Vec<Value> = classes()
         .iter()
         .map(|class| {
-            json!({
+            let mut entry = json!({
                 "name": class.name,
                 "kind": class.kind.keyword(),
                 "module": class.module.php_name(),
@@ -363,7 +363,11 @@ fn print_symbol_catalogs() {
                 "extension": class.extension,
                 "internal": class.internal,
                 "php_manual": class.php_manual,
-            })
+            });
+            if let Some(targets) = class.target_support {
+                entry["target_support"] = json!(targets);
+            }
+            entry
         })
         .collect();
     let constants: Vec<Value> = constants()
