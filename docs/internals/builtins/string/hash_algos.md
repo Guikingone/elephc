@@ -2,7 +2,7 @@
 title: "hash_algos() - internals"
 description: "Compiler internals for hash_algos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 770
+  order: 795
 ---
 
 ## `hash_algos()` - internals

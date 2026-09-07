@@ -2,7 +2,7 @@
 title: "iterator_count() - internals"
 description: "Compiler internals for iterator_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 737
+  order: 762
 ---
 
 ## `iterator_count()` - internals

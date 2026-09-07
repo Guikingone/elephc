@@ -38251,7 +38251,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -38400,7 +38400,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -40459,7 +40459,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -48072,7 +48072,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -48173,7 +48173,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -48270,7 +48270,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -48367,7 +48367,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -48464,7 +48464,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -48562,7 +48562,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -48712,7 +48712,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -48954,7 +48954,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -49079,7 +49079,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -49558,7 +49558,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -49686,7 +49686,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -49798,7 +49798,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -49919,7 +49919,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -50031,7 +50031,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -50293,7 +50293,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -50664,7 +50664,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -51032,7 +51032,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -101148,7 +101148,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -101252,7 +101252,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -103920,7 +103920,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -104055,7 +104055,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -121402,7 +121402,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
@@ -123122,7 +123122,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 588,
+      "codegen_line": 645,
       "notes": [
         "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."

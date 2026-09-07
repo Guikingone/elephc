@@ -2,7 +2,7 @@
 title: "var_export()"
 description: "Implemented by the compiler-injected var_export prelude."
 sidebar:
-  order: 881
+  order: 906
 ---
 
 ## var_export()

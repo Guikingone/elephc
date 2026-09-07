@@ -2,7 +2,7 @@
 title: "zend_version()"
 description: "Implemented by the compiler-injected version prelude."
 sidebar:
-  order: 664
+  order: 689
 ---
 
 ## zend_version()

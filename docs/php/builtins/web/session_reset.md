@@ -2,7 +2,7 @@
 title: "session_reset()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 901
+  order: 926
 ---
 
 ## session_reset()

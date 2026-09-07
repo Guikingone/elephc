@@ -2,7 +2,7 @@
 title: "session_encode()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 893
+  order: 918
 ---
 
 ## session_encode()

@@ -2,7 +2,7 @@
 title: "implode() - internals"
 description: "Compiler internals for implode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 791
+  order: 816
 ---
 
 ## `implode()` - internals

@@ -2,7 +2,7 @@
 title: "session_regenerate_id()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 899
+  order: 924
 ---
 
 ## session_regenerate_id()

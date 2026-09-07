@@ -2,7 +2,7 @@
 title: "die() - internals"
 description: "Compiler internals for die(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 719
+  order: 744
 ---
 
 ## `die()` - internals

@@ -2,7 +2,7 @@
 title: "session_gc()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 894
+  order: 919
 ---
 
 ## session_gc()
