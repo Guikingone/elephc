@@ -91326,7 +91326,7 @@
     },
     "area": "Filesystem",
     "canonical_name": "putenv",
-    "description": "Sets an environment variable.",
+    "description": "Sets an environment variable, or removes it when the argument has no equals sign.",
     "eval": {
       "adapter_reason": "runtime-state-or-resource",
       "area": "network_env",

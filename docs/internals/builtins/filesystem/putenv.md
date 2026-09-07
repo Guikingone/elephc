@@ -35,9 +35,6 @@ sidebar:
 
 - **Typed EIR target**: `runtime.putenv`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
-- **Backend semantics**: each target scans the argument for `=`. Assignments are copied to
-  persistent storage before libc `putenv()` because libc may retain the buffer; bare names
-  use libc `unsetenv()` to match PHP's removal form.
 
 ## Signature summary
 

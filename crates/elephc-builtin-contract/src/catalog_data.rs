@@ -26910,7 +26910,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "Sets an environment variable.",
+        summary: "Sets an environment variable, or removes it when the argument has no equals sign.",
         examples: &[
         ],
         php_manual: None,
