@@ -1193,6 +1193,11 @@ const CONTROL_SNAPSHOT_REQUEST: u8 = b'S';
 /// would mean the probe deciding what a window is, which is the caller's
 /// question, and would lose a sample to every reader that ever disconnected.
 fn serve_control_channel() {
+    // The same transition the endpoint runs when a key-holder asks: open the
+    // shared window so `--web` workers that forked before this process was
+    // asked adopt it on their next request and fill the ring this thread reads.
+    // Without this, launched `--live` answered only the master's own samples.
+    begin_sampled();
     // Both for the reasons the endpoint thread blocks them. SIGPIPE: a monitor
     // that exits mid-write must not take the profiled process down with it.
     // SIGPROF: `ITIMER_PROF` is delivered to the PROCESS and the kernel picks
@@ -1629,12 +1634,28 @@ fn control_fd_present() -> bool {
         // socketpair creator, reached and accepted the activation point. The
         // exact monitor uses this to distinguish a valid empty selective window
         // from a clean run whose control channel was never recognised.
-        libc::send(
+        let acked = libc::send(
             CONTROL_FD,
             CONTROL_ACK.as_ptr() as *const libc::c_void,
             CONTROL_ACK.len(),
             libc::MSG_NOSIGNAL,
-        ) == CONTROL_ACK.len() as isize
+        ) == CONTROL_ACK.len() as isize;
+        // The parent cleared CLOEXEC so fd 3 survived exec. Once the marker is
+        // ours, it must not leak into fork/popen children: possession of this
+        // socket is the credential.
+        set_cloexec(CONTROL_FD);
+        acked
+    }
+}
+
+/// Marks `fd` close-on-exec. Best-effort: a failure here does not undo a
+/// handshake that already consumed the marker.
+fn set_cloexec(fd: i32) {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+        }
     }
 }
 
@@ -2457,7 +2478,32 @@ mod tests {
             assert_eq!(ack_len, super::CONTROL_ACK.len() as isize);
             assert_eq!(ack, super::CONTROL_ACK, "activation must be acknowledged");
             assert_eq!(&buf[..left], trailing, "the marker must be consumed, and only it");
+            let flags = libc::fcntl(super::CONTROL_FD, libc::F_GETFD);
+            assert!(flags >= 0, "control fd must still be open after the handshake");
+            assert_ne!(
+                flags & libc::FD_CLOEXEC,
+                0,
+                "the credential socket must not survive into fork/popen children"
+            );
         }
+    }
+
+    /// Launched `--live` has to open the shared ask window, not only the local
+    /// `ASKED` flag. `--web` workers that forked before this process was asked
+    /// adopt `ASK_ACTIVE` on the next request and fill the ring the control
+    /// thread reads; without that call the live table is the idle master.
+    #[test]
+    fn the_control_server_opens_the_shared_window_before_answering() {
+        let source = include_str!("lib.rs");
+        let serve = source
+            .split_once("fn serve_control_channel()")
+            .expect("the control server must exist")
+            .1;
+        let body = serve.split_once("\n}").expect("a function body").0;
+        assert!(
+            body.contains("begin_sampled()"),
+            "the control path must run the same shared-window transition the endpoint does"
+        );
     }
 
     /// A client-supplied timestamp must never be able to abort the process.
