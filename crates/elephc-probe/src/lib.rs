@@ -1164,6 +1164,9 @@ fn start_control_channel(
             libc::shutdown(fd, libc::SHUT_RDWR);
             libc::close(fd);
         }
+        // The descriptor is gone; a later atfork must not close whatever now
+        // occupies fd 3.
+        CONTROL_OWNED.store(false, Ordering::Relaxed);
     }
 }
 
@@ -1357,10 +1360,33 @@ unsafe fn disarm_timer() {
 }
 
 /// `pthread_atfork` child hook: disarm the timer in the child (belt-and-
-/// suspenders — fork already resets it). A `--web` worker re-arms via
-/// `elephc_probe_rearm`.
+/// suspenders — fork already resets it) and drop an inherited control
+/// socket. A `--web` worker re-arms via `elephc_probe_rearm`; it does not
+/// keep the master's credential fd.
 extern "C" fn disarm_after_fork() {
-    unsafe { disarm_timer() };
+    unsafe {
+        disarm_timer();
+        drop_inherited_control_channel();
+    }
+}
+
+/// Closes fd 3 in a `fork` child when this process claimed it as the control
+/// channel.
+///
+/// `close`, not `shutdown`: shutdown would tear down the master's still-live
+/// socket. Only the child's descriptor is dropped. `FD_CLOEXEC` remains the
+/// exec-without-fork defence; this is the fork-without-exec one.
+///
+/// Called only from the atfork child hook. The child's `CONTROL_OWNED` is a
+/// copied word, so clearing it here does not change the parent.
+fn drop_inherited_control_channel() {
+    if CONTROL_OWNED.swap(false, Ordering::Relaxed) {
+        // SAFETY: CONTROL_OWNED is set only after this process consumed the
+        // monitor marker on fd 3. close is async-signal-safe.
+        unsafe {
+            libc::close(CONTROL_FD);
+        }
+    }
 }
 
 /// Disarms the profiling timer. A host that calls `execve` WITHOUT forking (a
@@ -1577,6 +1603,16 @@ const CONTROL_ACK: &[u8] = b"ELEPHC-MONITOR-ACK-1";
 /// carry a distinction only one of them uses.
 static POLLED: AtomicBool = AtomicBool::new(false);
 
+/// Whether this process claimed fd 3 as the live-control socket.
+///
+/// `FD_CLOEXEC` only closes the descriptor on `exec`. A `--web` worker is
+/// `fork` without `exec`, so it would otherwise keep a copy of the credential
+/// socket: the monitor would not see EOF when the master left, and every
+/// worker would hold the private channel. The atfork child hook closes the
+/// inherited fd when this flag is set, and only then — fd 3 is an ordinary
+/// number on an unmonitored binary.
+static CONTROL_OWNED: AtomicBool = AtomicBool::new(false);
+
 /// Whether this process was started by `elephc monitor`.
 ///
 /// The credential is the CHANNEL, not a token: only the parent that forked this
@@ -1641,9 +1677,11 @@ fn control_fd_present() -> bool {
             libc::MSG_NOSIGNAL,
         ) == CONTROL_ACK.len() as isize;
         // The parent cleared CLOEXEC so fd 3 survived exec. Once the marker is
-        // ours, it must not leak into fork/popen children: possession of this
-        // socket is the credential.
+        // ours, it must not leak into children: possession of this socket is
+        // the credential. CLOEXEC covers fork+exec (`popen`); the atfork
+        // child hook closes the fd for fork-only `--web` workers.
         set_cloexec(CONTROL_FD);
+        CONTROL_OWNED.store(true, Ordering::Relaxed);
         acked
     }
 }
@@ -2492,6 +2530,92 @@ mod tests {
                 "the credential socket must not survive into fork/popen children"
             );
         }
+    }
+
+    /// `FD_CLOEXEC` does not close a descriptor on `fork` without `exec`.
+    /// A `--web` worker is exactly that, so the atfork child hook must drop
+    /// a claimed control socket while leaving an unclaimed fd 3 alone.
+    #[test]
+    fn a_fork_child_closes_a_claimed_control_socket() {
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            let mut fds = [0i32; 2];
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()),
+                0
+            );
+            let (ours, theirs) = (fds[0], fds[1]);
+            let saved = libc::dup(super::CONTROL_FD);
+            libc::dup2(theirs, super::CONTROL_FD);
+            let owned = super::CONTROL_OWNED.swap(true, super::Ordering::Relaxed);
+
+            super::drop_inherited_control_channel();
+
+            let gone = libc::fcntl(super::CONTROL_FD, libc::F_GETFD);
+            let parent_still = libc::fcntl(ours, libc::F_GETFD);
+
+            if saved >= 0 {
+                libc::dup2(saved, super::CONTROL_FD);
+                libc::close(saved);
+            }
+            libc::close(ours);
+            libc::close(theirs);
+            super::CONTROL_OWNED.store(owned, super::Ordering::Relaxed);
+
+            assert!(gone < 0, "the child's copy of the credential must be gone");
+            assert!(parent_still >= 0, "close, not shutdown: the other end stays up");
+        }
+    }
+
+    /// An ordinary inherited fd 3 is not the control channel and must survive
+    /// the atfork hook, or every `popen` from an unmonitored `--web` binary
+    /// would lose whatever the program had open there.
+    #[test]
+    fn an_unclaimed_fd_3_survives_the_atfork_hook() {
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            let mut fds = [0i32; 2];
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()),
+                0
+            );
+            let (ours, theirs) = (fds[0], fds[1]);
+            let saved = libc::dup(super::CONTROL_FD);
+            libc::dup2(theirs, super::CONTROL_FD);
+            let owned = super::CONTROL_OWNED.swap(false, super::Ordering::Relaxed);
+
+            super::drop_inherited_control_channel();
+
+            let flags = libc::fcntl(super::CONTROL_FD, libc::F_GETFD);
+
+            if saved >= 0 {
+                libc::dup2(saved, super::CONTROL_FD);
+                libc::close(saved);
+            } else {
+                libc::close(super::CONTROL_FD);
+            }
+            libc::close(ours);
+            libc::close(theirs);
+            super::CONTROL_OWNED.store(owned, super::Ordering::Relaxed);
+
+            assert!(flags >= 0, "an unclaimed fd 3 must not be closed on fork");
+        }
+    }
+
+    /// The child hook is what actually runs after `fork`. A helper that is
+    /// never called from it would leave `--web` workers holding the socket.
+    #[test]
+    fn the_atfork_child_hook_drops_an_inherited_control_socket() {
+        let source = include_str!("lib.rs");
+        let hook = source
+            .split_once("extern \"C\" fn disarm_after_fork()")
+            .expect("the atfork child hook must exist")
+            .1;
+        let body = hook.split_once("\n}").expect("a function body").0;
+        assert!(
+            body.contains("drop_inherited_control_channel()"),
+            "fork-only workers must drop the credential fd, not rely on CLOEXEC"
+        );
     }
 
     /// Launched `--live` has to open the shared ask window, not only the local
