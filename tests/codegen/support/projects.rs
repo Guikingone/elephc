@@ -367,7 +367,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),
@@ -465,7 +465,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),
@@ -687,7 +687,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),
