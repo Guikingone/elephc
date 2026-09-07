@@ -10,6 +10,53 @@
 
 use std::path::{Path, PathBuf};
 
+/// Lowers the PCNTL example for each desktop target without requiring cross-target linking.
+#[test]
+fn lowers_pcntl_example_on_every_desktop_target() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/pcntl/main.php");
+    let source = std::fs::read_to_string(&path).expect("PCNTL example");
+    let parent = path.parent().expect("example directory");
+    for target in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(target).expect("target");
+        let module = super::lower_source_at_for_target(&source, &path, parent, target);
+        assert!(!module.functions.is_empty(), "expected lowered main for {}", target.as_str());
+    }
+}
+
+/// Checks nonliteral polyfill guards through the corpus pipeline on every supported target.
+#[test]
+fn lowers_target_guarded_polyfill_on_every_target() {
+    let source = r#"<?php
+$name = 'pcntl_getcpu';
+if (!function_exists($name)) {
+    function pcntl_getcpu(): int { return -1; }
+}
+echo pcntl_getcpu();
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let target = crate::codegen::platform::Target::parse(target).expect("target");
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            target,
+        );
+        let has_polyfill = module.functions.iter().any(|function| function.name == "pcntl_getcpu");
+        assert_eq!(
+            has_polyfill,
+            target.platform != crate::codegen::platform::Platform::Linux,
+            "polyfill availability on {}",
+            target.as_str(),
+        );
+    }
+}
+
 /// Verifies every checked example program lowers to validated printable EIR.
 ///
 /// The `strict-php` example is lowered with strict-PHP mode enabled, matching
