@@ -136,6 +136,23 @@ fn wait_for_stop_times_out_on_a_running_seized_tracee() {
     );
 }
 
+/// A successful detach must actually release the relationship.
+///
+/// The next window seizes again. If detach issued `PTRACE_DETACH` against a
+/// running tid and ignored the `ESRCH`, the second seize would fail and a
+/// live view would report a refusal about a program it was still tracing.
+#[test]
+fn detach_releases_a_runnable_tracee_so_it_can_be_seized_again() {
+    let mut tracee = Tracee::start();
+    let pid = tracee.child.id();
+    seize(pid).expect("kernel must allow tracing the child for this release");
+    tracee.seized = true;
+    assert!(detach(pid), "a runnable seized thread must stop and detach");
+    tracee.seized = false;
+    seize(pid).expect("a released thread must be seizable again");
+    tracee.seized = true;
+}
+
 /// A pending handled SIGUSR1 cannot stall a process for the capture window.
 #[test]
 fn handled_signal_keeps_running_during_capture() {

@@ -128,6 +128,12 @@ pub(crate) struct Image {
     /// starttime at the same pid is looking at a reused number, not the
     /// program these symbols describe.
     pub(crate) identity: Option<super::process_id::ProcessIdentity>,
+    /// Tids this process is still tracing because the last window could not
+    /// stop them. `PTRACE_DETACH` needs a stopped tracee; a D-state one
+    /// leaves the relationship in place. The next window must reuse it
+    /// rather than seize again — that seize comes back `EPERM` and a live
+    /// view then reports a refusal about a program it is still attached to.
+    pub(crate) held: Vec<u32>,
 }
 
 /// Reads the image behind a running pid, or says which part was not readable.
@@ -209,6 +215,7 @@ pub(crate) fn image_for(pid: u32) -> Result<Image, ImageError> {
         exe: exe.to_string_lossy().into_owned(),
         first_vaddr,
         identity: super::process_id::identity_of(pid),
+        held: Vec::new(),
     })
 }
 

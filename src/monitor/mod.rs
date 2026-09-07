@@ -205,7 +205,7 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     // shortcut here, it is the whole job. macOS has `/usr/bin/sample` for that;
     // on Linux this tool does it itself, with `ptrace`.
     if let Some(pid) = cmd.attach_pid {
-        let image = match attach_image(pid) {
+        let mut image = match attach_image(pid) {
             Ok(image) => image,
             Err(reason) => {
                 eprintln!("elephc monitor: {reason}");
@@ -215,9 +215,9 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
         return if cmd.live {
             // Attach never launched the target, so it never owns its lifetime
             // and there is nothing here to leave alone or reap.
-            run_live(&cmd, pid, None, None, image.as_ref()).code
+            run_live(&cmd, pid, None, None, image.as_mut()).code
         } else {
-            run_once(&cmd, pid, None, None, image.as_ref())
+            run_once(&cmd, pid, None, None, image.as_mut())
         };
     }
     // With `--with-monitoring`, not `--debug-info`. Reaching here with a `.php`

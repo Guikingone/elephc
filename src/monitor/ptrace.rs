@@ -259,14 +259,37 @@ pub(crate) fn resume(tid: u32, signal: libc::c_int) {
 /// cannot be seized again. An empty window is how `--attach` learns its target
 /// is gone, so the view reported the program had ended while it was still
 /// running — a wrong answer produced by a failure nobody was told about.
-pub(crate) fn detach(tid: u32) {
+///
+/// Returns whether the relationship was released. A timeout means the thread
+/// never stopped; this does not issue `PTRACE_DETACH` in that case, and the
+/// caller must keep the tid so the next window can reuse the attach instead
+/// of seizing again.
+pub(crate) fn detach(tid: u32) -> bool {
     // The last stop is the last chance to hand a pending signal back: after the
     // detach there is no tracer left to hold it, and it is gone.
-    let signal = stop_for_sample(tid).map_or(0, pending_signal);
+    let stop = stop_for_sample(tid);
+    let Some(signal) = detach_signal(&stop) else {
+        return false;
+    };
     // SAFETY: no memory operands; ESRCH for a thread that has gone is fine, and
     // a tracer that exits detaches whatever it still holds.
     unsafe {
         libc::ptrace(libc::PTRACE_DETACH, tid as libc::pid_t, 0, libc::c_long::from(signal));
+    }
+    true
+}
+
+/// The signal to hand `PTRACE_DETACH`, or `None` when the tracee is still
+/// running and must not be detached.
+///
+/// A timeout is the D-state case: `PTRACE_DETACH` would fail with `ESRCH` and
+/// the relationship would survive. Anything else is either a real stop or a
+/// thread that is already gone, and both can be detached.
+fn detach_signal(stop: &io::Result<libc::c_int>) -> Option<libc::c_int> {
+    match stop {
+        Ok(status) => Some(pending_signal(*status)),
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => None,
+        Err(_) => Some(0),
     }
 }
 
@@ -523,17 +546,21 @@ const SAMPLE_HZ: u64 = 99;
 pub(crate) fn attach_window(
     pids: &[u32],
     duration_secs: u32,
-    image: &super::attach::Image,
+    image: &mut super::attach::Image,
 ) -> Result<Vec<(Vec<(String, super::Kind)>, u64)>, String> {
     if let Some(identity) = image.identity {
         match process_id::identity_of_pid(identity) {
             Identity::Same => {}
             // The process ended. An empty window is how attach has always learnt
             // that, and a live view closes on it.
-            Identity::Gone => return Ok(Vec::new()),
+            Identity::Gone => {
+                image.held = release_held(std::mem::take(&mut image.held));
+                return Ok(Vec::new());
+            }
             // Same number, different starttime: sampling this against the
             // original symbols would name the wrong program.
             Identity::Replaced => {
+                image.held = release_held(std::mem::take(&mut image.held));
                 return Err(format!(
                     "pid {} is no longer the process this attach started with; \
                      the kernel reused the pid",
@@ -552,10 +579,15 @@ pub(crate) fn attach_window(
     // apart from a window that sampled nothing, and the two used to arrive as
     // the same empty vector.
     let mut refusal: Option<io::Error> = None;
+    let previously_held = std::mem::take(&mut image.held);
     for pid in pids {
         let Some(bias) = super::attach::bias_of(image, *pid) else { continue };
         let mut seized = Vec::new();
         for tid in thread_ids(*pid) {
+            if previously_held.contains(&tid) {
+                seized.push(tid);
+                continue;
+            }
             match seize(tid) {
                 Ok(()) => seized.push(tid),
                 // An `EPERM` outranks whatever else is held: a thread that
@@ -577,6 +609,7 @@ pub(crate) fn attach_window(
         }
     }
     if targets.is_empty() {
+        image.held = release_held(previously_held);
         return match window_refusal(refusal) {
             Some(reason) => Err(reason),
             // Nothing was REFUSED — the target simply is not there any more, and
@@ -623,12 +656,29 @@ pub(crate) fn attach_window(
             std::thread::sleep(rest);
         }
     }
+    let mut still_held = Vec::new();
     for (_, _, seized) in &targets {
         for tid in seized {
-            detach(*tid);
+            if !detach(*tid) {
+                still_held.push(*tid);
+            }
         }
     }
+    for tid in previously_held {
+        if still_held.contains(&tid) || targets.iter().any(|(_, _, seized)| seized.contains(&tid)) {
+            continue;
+        }
+        if !detach(tid) {
+            still_held.push(tid);
+        }
+    }
+    image.held = still_held;
     Ok(super::attach::fold(stacks))
+}
+
+/// Detaches every tid that is still traced, keeping those that will not stop.
+fn release_held(tids: Vec<u32>) -> Vec<u32> {
+    tids.into_iter().filter(|tid| !detach(*tid)).collect()
 }
 
 /// Whether later ticks this window should skip this tid.
@@ -867,12 +917,12 @@ mod tests {
     #[test]
     fn a_target_that_cannot_be_seized_is_an_error_not_an_empty_window() {
         let me = std::process::id();
-        let Ok(image) = super::super::attach::image_for(me) else {
+        let Ok(mut image) = super::super::attach::image_for(me) else {
             // A host whose own `/proc` this cannot read says nothing about the
             // branch under test, and failing here would report the wrong thing.
             return;
         };
-        match attach_window(&[me], 1, &image) {
+        match attach_window(&[me], 1, &mut image) {
             Err(reason) => assert!(
                 reason.starts_with("cannot attach to the target"),
                 "a refusal has to say it could not attach: {reason}"
@@ -883,6 +933,31 @@ mod tests {
                 window.len()
             ),
         }
+    }
+
+    /// `PTRACE_DETACH` is only issued against a stopped (or already gone) tid.
+    ///
+    /// A timeout means the thread is still running. Detaching it then fails
+    /// with `ESRCH`, the relationship survives, and the next window's seize
+    /// is refused as if the kernel had said no.
+    #[test]
+    fn a_running_tracee_is_not_detached() {
+        let timed_out = Err(io::Error::new(io::ErrorKind::TimedOut, "tracee did not stop"));
+        assert_eq!(
+            detach_signal(&timed_out),
+            None,
+            "a D-state tid must stay traced so the next window can reuse it"
+        );
+        assert_eq!(
+            detach_signal(&Ok(stopped(libc::SIGTRAP, 128))),
+            Some(0),
+            "an interrupt stop is a real stop and can be detached"
+        );
+        assert_eq!(
+            detach_signal(&Err(io::Error::from_raw_os_error(libc::ESRCH))),
+            Some(0),
+            "a thread that has gone is already released"
+        );
     }
 
     /// A timed-out tid is skipped for later samples, not dropped from cleanup.
@@ -926,7 +1001,7 @@ mod tests {
             pid: identity.pid,
             starttime: identity.starttime.wrapping_add(1),
         });
-        match attach_window(&[me], 1, &image) {
+        match attach_window(&[me], 1, &mut image) {
             Err(reason) => {
                 assert!(reason.contains("reused the pid"), "{reason}");
                 assert!(
@@ -952,7 +1027,7 @@ mod tests {
             pid: 4294967295,
             starttime: 1,
         });
-        match attach_window(&[4294967295], 1, &image) {
+        match attach_window(&[4294967295], 1, &mut image) {
             Ok(window) => assert!(window.is_empty(), "a gone target is an empty window: {window:?}"),
             Err(reason) => panic!("a gone pid must not be reported as reuse: {reason}"),
         }

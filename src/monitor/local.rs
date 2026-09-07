@@ -22,7 +22,7 @@ pub(crate) fn run_once(
     root: u32,
     binary: Option<&Path>,
     php_source: Option<&Path>,
-    image: Option<&Image>,
+    image: Option<&mut Image>,
 ) -> i32 {
     let pids = discover_pids(root);
     let window = match capture_display(&pids, cmd.duration_secs, binary, php_source, image) {
@@ -118,7 +118,7 @@ pub(crate) fn run_live(
     root: u32,
     mut child: Option<&mut process::Child>,
     channel: Option<&ControlChannel>,
-    image: Option<&Image>,
+    mut image: Option<&mut Image>,
 ) -> LiveOutcome {
     use std::io::IsTerminal;
     let interactive = std::io::stdout().is_terminal();
@@ -257,7 +257,7 @@ pub(crate) fn run_live(
             windows += 1;
             window
         } else {
-            let window = match capture_display(&pids, cmd.duration_secs, None, None, image) {
+            let window = match capture_display(&pids, cmd.duration_secs, None, None, image.as_deref_mut()) {
                 Ok(Some(window)) => window,
                 // An empty window alone cannot establish target termination;
                 // attach mode has no child handle, so check the process itself.
@@ -371,7 +371,7 @@ fn capture_display(
     duration_secs: u32,
     binary: Option<&Path>,
     php_source: Option<&Path>,
-    image: Option<&Image>,
+    image: Option<&mut Image>,
 ) -> Result<Option<Window>, String> {
     #[cfg(target_os = "linux")]
     if let Some(image) = image {

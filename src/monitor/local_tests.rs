@@ -58,9 +58,9 @@ fn live_outcome_child() {
     #[cfg(target_os = "linux")]
     if mode == "refused" {
         let pid = std::process::id();
-        let image = super::super::attach::image_for(pid)
+        let mut image = super::super::attach::image_for(pid)
             .unwrap_or_else(|_| panic!("unstripped test executable must have an image"));
-        let result = run_live(&cmd, pid, None, None, Some(&image));
+        let result = run_live(&cmd, pid, None, None, Some(&mut image));
         assert!(!result.leave_target_running);
         std::process::exit(result.code);
     }
