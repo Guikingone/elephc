@@ -418,7 +418,7 @@ pub(super) fn lower_eval_class_probe(
 /// Returns true when an AOT class already satisfies a native class_exists probe.
 pub(super) fn aot_class_exists_for_eval_probe(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
     let key = php_symbol_key(class_name.trim_start_matches('\\'));
-    ctx.classes
-        .keys()
-        .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+    let is_match = |candidate: &str| php_symbol_key(candidate.trim_start_matches('\\')) == key;
+    ctx.classes.keys().any(|candidate| is_match(candidate))
+        || crate::types::builtin_classes::intrinsic_class_names().any(is_match)
 }

@@ -9,6 +9,8 @@
 //! - Prelude demand detectors (`curl_prelude`, `image_prelude`) and checker gates
 //!   (`builtin_types::datetime::gate`), which look for a module's class names in the program.
 //! - `spl_classes()`, which lists the `ext/spl` module.
+//! - EIR eval probes and codegen existence queries, which also expose intrinsic classes
+//!   without an injected object layout.
 //!
 //! Key details:
 //! - There is no compiler-side class-name list any more: adding a builtin class means adding
@@ -18,11 +20,25 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use elephc_builtin_contract::{classes, lookup_class, PhpModule};
+use elephc_builtin_contract::{classes, lookup_class, ClassKind, ClassRoute, PhpModule};
 
 /// Returns the PHP spellings of every builtin class-like name, internal helpers included.
 pub(crate) fn builtin_class_like_names() -> impl Iterator<Item = &'static str> {
     classes().iter().map(|class| class.name)
+}
+
+/// Returns public, target-independent intrinsic classes, including callable-backed classes.
+/// Target-specific classes remain subject to the checker's target-filtered metadata.
+pub(crate) fn intrinsic_class_names() -> impl Iterator<Item = &'static str> {
+    classes()
+        .iter()
+        .filter(|class| {
+            !class.internal
+                && class.kind == ClassKind::Class
+                && class.aot == ClassRoute::LanguageIntrinsic
+                && class.target_support.is_none()
+        })
+        .map(|class| class.name)
 }
 
 /// Returns the PHP-visible class-like names one PHP module owns, in canonical order.

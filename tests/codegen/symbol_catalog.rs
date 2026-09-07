@@ -7,8 +7,8 @@
 //!
 //! Key details:
 //! - One compiled program probes every checker-provided class-like with the PHP predicate of
-//!   its kind, so the catalog's AOT and eval routes are checked against real behavior rather
-//!   than against another list.
+//!   its kind, so the catalog's AOT and eval routes and target availability are checked
+//!   against real behavior rather than against another list.
 
 use elephc_builtin_contract::{
     classes, eval_class_support, BackendSupport, ClassKind, ClassRoute,
@@ -16,8 +16,34 @@ use elephc_builtin_contract::{
 
 use crate::support::*;
 
-/// Verifies every checker-provided catalogued class-like exists natively, and exists inside
-/// `eval()` exactly when the catalog's eval route says so.
+/// Intrinsic callable classes exist without materializing ordinary object-class metadata.
+#[test]
+fn test_intrinsic_closure_class_exists_with_literal_names() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(class_exists('Closure'), class_exists('\\cLoSuRe', false));
+var_dump(interface_exists('Closure'), enum_exists('Closure'), trait_exists('Closure'));
+var_dump(class_exists('App\\Closure'), class_exists('MissingIntrinsic'));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n");
+}
+
+/// A native Closure probe must not depend on an eval-created ordinary class declaration.
+#[test]
+fn test_intrinsic_closure_class_exists_after_eval_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalProbeClass {}');
+var_dump(class_exists('Closure', false));
+echo eval('$name = "cLoSuRe"; return class_exists($name, false) ? "eval" : "missing";');
+"#,
+    );
+    assert_eq!(out, "bool(true)\neval");
+}
+
+/// Verifies native and eval class probes against catalog routes and target availability,
+/// including negative probes for classes restricted to other targets.
 #[test]
 fn test_checker_provided_classes_exist_natively_and_in_eval_per_catalog() {
     let probed: Vec<_> = classes()
@@ -72,16 +98,22 @@ fn test_checker_provided_classes_exist_natively_and_in_eval_per_catalog() {
     assert_eq!(eval_bits.len(), probed.len(), "one eval probe per class; output was {out:?}");
 
     let mut mismatches = Vec::new();
+    let target_name = target().as_str();
     for (index, class) in probed.iter().enumerate() {
         let native = native_bits.as_bytes()[index] == b'1';
         let in_eval = eval_bits.as_bytes()[index] == b'1';
-        let eval_expected = matches!(eval_class_support(class), BackendSupport::Implemented(_));
-        if !native {
-            mismatches.push(format!("{}: not found natively", class.name));
+        let native_expected = class.target_support.is_none_or(|targets| targets.contains(&target_name));
+        let eval_expected = native_expected
+            && matches!(eval_class_support(class), BackendSupport::Implemented(_));
+        if native != native_expected {
+            mismatches.push(format!(
+                "{}: native says {native}, catalog target availability says {native_expected}",
+                class.name
+            ));
         }
         if in_eval != eval_expected {
             mismatches.push(format!(
-                "{}: eval() says {in_eval}, catalog eval route says {eval_expected}",
+                "{}: eval() says {in_eval}, catalog route and target availability say {eval_expected}",
                 class.name
             ));
         }
