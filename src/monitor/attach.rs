@@ -357,7 +357,7 @@ mod tests {
                 ("Engine::step".to_string(), Kind::Php),
             ]
         );
-        let folded = super::php_folded_stacks(&[(named, 7)]);
+        let folded = super::super::php_folded_stacks(&[(named, 7)]);
         assert_eq!(
             folded,
             vec![(
