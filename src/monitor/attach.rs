@@ -67,15 +67,21 @@ pub(crate) fn display_stack(
 
 /// What kind of time a named frame represents.
 ///
-/// The compiler emits PHP functions under `_php_`/`_fn_` prefixes and its own
-/// helpers under `__rt_`, so the name itself says which is which — and the
-/// distinction is what lets a reader tell their own hot function from the
-/// runtime doing work on its behalf.
+/// The compiler emits PHP functions under `_php_`/`_fn_` prefixes, methods
+/// under `_method_`, and its own helpers under `__rt_`, so the name itself
+/// says which is which — and the distinction is what lets a reader tell their
+/// own hot function from the runtime doing work on its behalf. The prefixes
+/// here must stay aligned with `is_php_symbol` and `demangle`: classifying a
+/// method as native is how an OOP profile becomes a table of `<non-PHP>`.
 fn kind_of(symbol: &str) -> Kind {
     let bare = symbol.strip_prefix('_').unwrap_or(symbol);
     if bare.starts_with("_rt_") || bare.starts_with("rt_") {
         Kind::Helper
-    } else if bare.starts_with("php_") || bare.starts_with("fn_") || bare == "main" {
+    } else if bare.starts_with("php_")
+        || bare.starts_with("fn_")
+        || bare.starts_with("method_")
+        || bare == "main"
+    {
         Kind::Php
     } else {
         Kind::Native
@@ -118,6 +124,10 @@ pub(crate) struct Image {
     /// Deriving a worker's bias needs these two and not the file again.
     pub(crate) exe: String,
     pub(crate) first_vaddr: u64,
+    /// Who this image was built for. A later window that finds a different
+    /// starttime at the same pid is looking at a reused number, not the
+    /// program these symbols describe.
+    pub(crate) identity: Option<super::process_id::ProcessIdentity>,
 }
 
 /// Reads the image behind a running pid, or says which part was not readable.
@@ -194,7 +204,12 @@ pub(crate) fn image_for(pid: u32) -> Result<Image, ImageError> {
             exe.display()
         )));
     }
-    Ok(Image { symbols, exe: exe.to_string_lossy().into_owned(), first_vaddr })
+    Ok(Image {
+        symbols,
+        exe: exe.to_string_lossy().into_owned(),
+        first_vaddr,
+        identity: super::process_id::identity_of(pid),
+    })
 }
 
 /// Where one process of the tree is mapped, for a tree that shares this image.
@@ -224,6 +239,8 @@ mod tests {
             FuncSymbol { value: 0x2000, size: 0x100, name: "_fn_hot_u_leaf".into() },
             FuncSymbol { value: 0x3000, size: 0x100, name: "__rt_mixed_add".into() },
             FuncSymbol { value: 0x4000, size: 0x100, name: "main".into() },
+            FuncSymbol { value: 0x5000, size: 0x100, name: "_method_Engine_step".into() },
+            FuncSymbol { value: 0x6000, size: 0x100, name: "_method_My_u_Class_run".into() },
         ]
     }
 
@@ -322,6 +339,35 @@ mod tests {
         assert!(
             !named.iter().any(|(name, _)| name.contains("_u_") || name.starts_with("_fn_")),
             "a mangled spelling reached the display: {named:?}"
+        );
+    }
+
+    /// Compiler methods are `_method_<class>_<method>`. `is_php_symbol` and
+    /// `demangle` already know that prefix; classification used to miss it, so
+    /// an OOP hot path became `<non-PHP>` after `table_stats` dropped every
+    /// frame that was not `Kind::Php`.
+    #[test]
+    fn a_method_frame_is_php_and_displayed_as_source() {
+        let named = display_stack(&[0x5010, 0x6010, 0x4010], &symbols(), 0);
+        assert_eq!(
+            named,
+            vec![
+                ("{main}".to_string(), Kind::Php),
+                ("My_Class::run".to_string(), Kind::Php),
+                ("Engine::step".to_string(), Kind::Php),
+            ]
+        );
+        let folded = super::php_folded_stacks(&[(named, 7)]);
+        assert_eq!(
+            folded,
+            vec![(
+                vec![
+                    "{main}".to_string(),
+                    "My_Class::run".to_string(),
+                    "Engine::step".to_string(),
+                ],
+                7
+            )]
         );
     }
 

@@ -43,6 +43,10 @@ mod elf;
 // from this so that everything except them stays testable.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod attach;
+// Pid-reuse identity. Parsing only, so it is tested on any host; the `/proc`
+// read is Linux-only and is what `--attach --live` consults each window.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod process_id;
 // The syscalls themselves, and the loop that drives them. Linux only, and the
 // one file here no test on this host reaches — which is why it holds nothing
 // but them.
