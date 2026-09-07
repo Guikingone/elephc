@@ -2,7 +2,7 @@
 title: "curl_share_strerror() — internals"
 description: "Compiler internals for curl_share_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 658
+  order: 693
 ---
 
 ## `curl_share_strerror()` — internals

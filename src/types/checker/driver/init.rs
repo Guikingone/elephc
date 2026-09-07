@@ -12,6 +12,8 @@ use crate::types::predefined_constants::{php_type_of, registered_constants};
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Target;
+use crate::types::pcntl_constants::pcntl_int_constants;
+use crate::types::PhpType;
 
 use super::super::Checker;
 
@@ -26,7 +28,7 @@ impl Checker {
     /// classes, interfaces, enums, etc.) are initialized empty.
     ///
     /// # Arguments
-    /// * `target_platform` - The compilation target platform, stored for use in platform-specific
+    /// * `target` - The full compilation target, stored for platform- and Apple-variant-specific
     ///   type checks and library requirements.
     ///
     /// # Returns
@@ -38,6 +40,9 @@ impl Checker {
         let mut constants = HashMap::new();
         for constant in registered_constants() {
             constants.insert(constant.name.to_string(), php_type_of(constant.value));
+        }
+        for (name, _) in pcntl_int_constants(target) {
+            constants.insert(name.to_string(), PhpType::Int);
         }
 
         Self {

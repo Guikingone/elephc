@@ -44,11 +44,11 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             elseif_clauses,
             else_body,
         } => StmtKind::If {
-            condition: fold_expr(condition),
+            condition: fold_condition_expr(condition),
             then_body: fold_block(then_body),
             elseif_clauses: elseif_clauses
                 .into_iter()
-                .map(|(condition, body)| (fold_expr(condition), fold_block(body)))
+                .map(|(condition, body)| (fold_condition_expr(condition), fold_block(body)))
                 .collect(),
             else_body: else_body.map(fold_block),
         },
@@ -181,16 +181,23 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             variadic_type,
             return_type,
             body,
-        } => StmtKind::FunctionDecl {
-            by_ref_return,
-            name,
-            params: fold_params(params),
-            param_attributes,
-            variadic,
-            variadic_by_ref,
-            variadic_type,
-            return_type,
-            body: fold_block(body),
+        } => {
+            let body = super::super::target_guards::fold_callable_body(
+                body,
+                params.iter().filter(|(_, _, _, by_ref)| *by_ref)
+                    .map(|(name, _, _, _)| name.as_str()),
+            );
+            StmtKind::FunctionDecl {
+                by_ref_return,
+                name,
+                params: fold_params(params),
+                param_attributes,
+                variadic,
+                variadic_by_ref,
+                variadic_type,
+                return_type,
+                body,
+            }
         },
         StmtKind::Return(expr) => StmtKind::Return(expr.map(fold_expr)),
         StmtKind::ConstDecl { name, value } => StmtKind::ConstDecl {
@@ -367,5 +374,149 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
 /// - `body`: A vector of statements representing a block body.
 /// Returns a new `Vec<Stmt>` with each statement folded.
 pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
-    body.into_iter().map(fold_stmt).collect()
+    let mut guard_values = super::super::target_guards::GuardValues::default();
+    body.into_iter()
+        .flat_map(|mut stmt| {
+            if active_fold_target().is_some() {
+                guard_values.prepare(&mut stmt);
+                guard_values.observe(&stmt);
+            }
+            let target_dependent_if = match &stmt.kind {
+                StmtKind::If {
+                    condition,
+                    elseif_clauses,
+                    ..
+                } => {
+                    target_dependent_condition(condition)
+                        || elseif_clauses
+                            .iter()
+                            .any(|(condition, _)| target_dependent_condition(condition))
+                }
+                _ => false,
+            };
+            let stmt = fold_stmt(stmt);
+            if active_fold_target().is_some() && target_dependent_if {
+                prune_target_boolean_if(stmt)
+            } else {
+                vec![stmt]
+            }
+        })
+        .collect()
+}
+
+/// Detects conditions whose compile-time value depends on the selected output target.
+///
+/// Only these conditions may be structurally pruned before type checking. Ordinary constant
+/// conditions remain intact until the regular post-check optimizer so warning analysis still
+/// observes the source control-flow shape.
+pub(in crate::optimize) fn target_dependent_condition(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ConstRef(name) => matches!(
+            name.as_canonical().trim_start_matches('\\'),
+            "PHP_OS" | "PHP_OS_FAMILY"
+        ),
+        ExprKind::FunctionCall { name, args }
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("function_exists") =>
+        {
+            matches!(
+                args.as_slice(),
+                [Expr {
+                    kind: ExprKind::StringLiteral(candidate),
+                    ..
+                }] if crate::builtins::registry::lookup(candidate.trim_start_matches('\\')).is_some()
+                    || crate::name_resolver::is_global_date_procedural_alias(candidate.trim_start_matches('\\'))
+            )
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            target_dependent_condition(left) || target_dependent_condition(right)
+        }
+        ExprKind::Not(inner)
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::ErrorSuppress(inner) => target_dependent_condition(inner),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            target_dependent_condition(condition)
+                || target_dependent_condition(then_expr)
+                || target_dependent_condition(else_expr)
+        }
+        ExprKind::ShortTernary { value, default } => {
+            target_dependent_condition(value) || target_dependent_condition(default)
+        }
+        _ => false,
+    }
+}
+
+/// Removes only `if` arms whose target-dependent condition already folded to a boolean.
+///
+/// This intentionally avoids the global effect and callable analyses used by the normal
+/// post-typecheck pruning pass. Large injected preludes can be deeply recursive, while this
+/// pre-check step only needs to hide statically unavailable target branches from the checker.
+fn prune_target_boolean_if(stmt: Stmt) -> Vec<Stmt> {
+    let Stmt {
+        kind,
+        span,
+        source_mode,
+        strict_types,
+        attributes,
+    } = stmt;
+    let StmtKind::If {
+        condition,
+        then_body,
+        mut elseif_clauses,
+        else_body,
+    } = kind
+    else {
+        return vec![Stmt {
+            kind,
+            span,
+            source_mode,
+            strict_types,
+            attributes,
+        }];
+    };
+    match &condition.kind {
+        ExprKind::BoolLiteral(true) => then_body,
+        ExprKind::BoolLiteral(false) => {
+            while !elseif_clauses.is_empty() {
+                let (condition, body) = elseif_clauses.remove(0);
+                match &condition.kind {
+                    ExprKind::BoolLiteral(false) => continue,
+                    ExprKind::BoolLiteral(true) => return body,
+                    _ => {
+                        return vec![Stmt {
+                            kind: StmtKind::If {
+                                condition,
+                                then_body: body,
+                                elseif_clauses,
+                                else_body,
+                            },
+                            span,
+                            source_mode,
+                            strict_types,
+                            attributes,
+                        }];
+                    }
+                }
+            }
+            else_body.unwrap_or_default()
+        }
+        _ => vec![Stmt {
+            kind: StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            },
+            span,
+            source_mode,
+            strict_types,
+            attributes,
+        }],
+    }
 }

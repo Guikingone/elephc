@@ -128,6 +128,13 @@ pub enum DefaultSpec {
     Constant(&'static str),
     /// Verbatim PHP source of a non-literal default expression a prelude declares.
     Expr(&'static str),
+    /// Class constant or enum case such as `Pcntl\\QosClass::Default`.
+    ClassConstant {
+        /// Fully qualified PHP class or enum name without a leading slash.
+        class: &'static str,
+        /// PHP-visible constant or case name.
+        name: &'static str,
+    },
 }
 
 /// Whether one PHP parameter receives a value or caller-addressable storage.

@@ -247,6 +247,11 @@ fn default_json(default: DefaultSpec) -> Value {
         DefaultSpec::EmptyArray => json!([]),
         DefaultSpec::Constant(name) => json!({ "constant": name }),
         DefaultSpec::Expr(source) => json!({ "expr": source }),
+        DefaultSpec::ClassConstant { class, name } => json!({
+            "kind": "class_constant",
+            "class": class,
+            "name": name,
+        }),
     }
 }
 
@@ -347,7 +352,7 @@ fn print_symbol_catalogs() {
     let classes: Vec<Value> = classes()
         .iter()
         .map(|class| {
-            json!({
+            let mut entry = json!({
                 "name": class.name,
                 "kind": class.kind.keyword(),
                 "module": class.module.php_name(),
@@ -358,7 +363,11 @@ fn print_symbol_catalogs() {
                 "extension": class.extension,
                 "internal": class.internal,
                 "php_manual": class.php_manual,
-            })
+            });
+            if let Some(targets) = class.target_support {
+                entry["target_support"] = json!(targets);
+            }
+            entry
         })
         .collect();
     let constants: Vec<Value> = constants()

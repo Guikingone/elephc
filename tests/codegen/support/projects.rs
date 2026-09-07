@@ -438,7 +438,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
-    let resolved = elephc::optimize::fold_constants(resolved);
+    let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =

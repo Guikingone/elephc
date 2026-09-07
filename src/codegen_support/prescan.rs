@@ -12,9 +12,10 @@ use std::collections::HashMap;
 
 use elephc_builtin_contract::{lookup_constant, ConstValue};
 
-use crate::codegen_support::platform::Platform;
+use crate::codegen_support::platform::{Platform, Target};
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::iconv_constants::{iconv_impl, ICONV_VERSION};
+use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::predefined_constants::{literal_of, php_type_of, registered_constants};
 use crate::types::PhpType;
 
@@ -37,8 +38,9 @@ use crate::types::PhpType;
 /// `collect_constant_decls`; a builtin name always wins over a user declaration of it.
 pub(crate) fn collect_constants(
     program: &Program,
-    target_platform: Platform,
+    target: Target,
 ) -> HashMap<String, (ExprKind, PhpType)> {
+    let target_platform = target.platform;
     let mut constants = HashMap::new();
     for constant in registered_constants() {
         if let Some(literal) = literal_of(constant.value) {
@@ -48,7 +50,6 @@ pub(crate) fn collect_constants(
             );
         }
     }
-
     let php_version = crate::codegen_support::compile_php_version();
     let (fnm_noescape, fnm_pathname) = match target_platform {
         Platform::MacOS => (1, 2),
@@ -59,6 +60,7 @@ pub(crate) fn collect_constants(
     let int_const = |value: i64| (ExprKind::IntLiteral(value), PhpType::Int);
     let computed = [
         ("PHP_OS", str_const(target_platform.php_os_name().to_string())),
+        ("PHP_OS_FAMILY", str_const(target_platform.php_os_family_name().to_string())),
         ("PHP_VERSION", str_const(php_version.version_string().to_string())),
         ("PHP_VERSION_ID", int_const(i64::from(php_version.version_id()))),
         ("PHP_MAJOR_VERSION", int_const(i64::from(php_version.major()))),
@@ -87,6 +89,12 @@ pub(crate) fn collect_constants(
             "{name} is computed by prescan but the catalog does not mark it TargetDependent"
         );
         constants.insert(name.to_string(), value);
+    }
+    for (name, value) in pcntl_int_constants(target) {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
     }
     collect_constant_decls(program, &mut constants);
     constants
@@ -160,13 +168,15 @@ mod tests {
     /// Verifies fnmatch constants follow target platform.
     #[test]
     fn test_fnmatch_constants_follow_target_platform() {
-        let mac = collect_constants(&vec![], Platform::MacOS);
+        use crate::codegen_support::platform::Arch;
+
+        let mac = collect_constants(&vec![], Target::new(Platform::MacOS, Arch::AArch64));
         assert_eq!(int_constant(&mac, "FNM_NOESCAPE"), 1);
         assert_eq!(int_constant(&mac, "FNM_PATHNAME"), 2);
         assert_eq!(int_constant(&mac, "FNM_PERIOD"), 4);
         assert_eq!(int_constant(&mac, "FNM_CASEFOLD"), 16);
 
-        let linux = collect_constants(&vec![], Platform::Linux);
+        let linux = collect_constants(&vec![], Target::new(Platform::Linux, Arch::AArch64));
         assert_eq!(int_constant(&linux, "FNM_NOESCAPE"), 2);
         assert_eq!(int_constant(&linux, "FNM_PATHNAME"), 1);
         assert_eq!(int_constant(&linux, "FNM_PERIOD"), 4);
@@ -178,7 +188,10 @@ mod tests {
     #[test]
     fn every_target_dependent_constant_is_computed() {
         for platform in [Platform::MacOS, Platform::Linux] {
-            let constants = collect_constants(&vec![], platform);
+            let constants = collect_constants(
+                &vec![],
+                Target::new(platform, crate::codegen_support::platform::Arch::AArch64),
+            );
             for constant in registered_constants() {
                 let (_, ty) = constants
                     .get(constant.name)
@@ -186,5 +199,30 @@ mod tests {
                 assert_eq!(*ty, php_type_of(constant.value), "{} type", constant.name);
             }
         }
+    }
+
+    /// Verifies PCNTL constants are seeded with target-specific values and availability.
+    #[test]
+    fn test_pcntl_constants_follow_target_platform() {
+        use crate::codegen_support::platform::{AppleVariant, Arch};
+
+        let mac = collect_constants(&vec![], Target::new(Platform::MacOS, Arch::AArch64));
+        assert_eq!(int_constant(&mac, "SIGCHLD"), 20);
+        assert_eq!(int_constant(&mac, "PCNTL_EAGAIN"), 35);
+        assert!(mac.contains_key("PRIO_DARWIN_BG"));
+        assert!(!mac.contains_key("CLONE_NEWNS"));
+
+        let linux = collect_constants(&vec![], Target::new(Platform::Linux, Arch::AArch64));
+        assert_eq!(int_constant(&linux, "SIGCHLD"), 17);
+        assert_eq!(int_constant(&linux, "PCNTL_EAGAIN"), 11);
+        assert!(linux.contains_key("CLONE_NEWNS"));
+        assert!(!linux.contains_key("PRIO_DARWIN_BG"));
+
+        let ios = collect_constants(
+            &vec![],
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+        );
+        assert!(!ios.contains_key("SIGCHLD"));
+        assert!(!ios.contains_key("PCNTL_EAGAIN"));
     }
 }

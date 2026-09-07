@@ -12,11 +12,13 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
 
 use super::names::{
-    resolve_constant_name, resolve_function_name, resolve_special_or_class_name,
+    resolve_constant_name, resolve_function_name, resolve_function_reference, resolve_special_or_class_name,
     resolve_type_expr, resolved_class_constant_name,
 };
 use super::statements::{resolve_params, resolve_stmt_list};
-use super::{resolved_name, rewrite_callback_literal_args, Imports, Symbols};
+use super::{
+    parse_callback_name, resolved_name, rewrite_callback_literal_args, Imports, Symbols,
+};
 
 /// Recursively resolves names in an expression, returning a new expression with
 /// all name references rewritten according to namespace and import rules.
@@ -71,7 +73,7 @@ pub(super) fn resolve_expr(
             callable: Box::new(resolve_expr(callable, current_namespace, imports, symbols)),
         },
         ExprKind::FunctionCall { name, args } => {
-            let function_name = resolve_function_name(name, current_namespace, imports, symbols);
+            let function_name = resolve_function_reference(name, current_namespace, imports, symbols);
             let resolved_args: Vec<Expr> = rewrite_callback_literal_args(
                 &function_name,
                 args,
@@ -98,7 +100,7 @@ pub(super) fn resolve_expr(
             // user-defined (e.g. namespaced `App\date_diff`) call is never hijacked.
             else if symbols.declares_function(&function_name) {
                 ExprKind::FunctionCall {
-                    name: resolved_name(function_name),
+                    name: function_name,
                     args: resolved_args,
                 }
             } else if let Some(rewritten) =
@@ -107,7 +109,7 @@ pub(super) fn resolve_expr(
                 rewritten
             } else {
                 ExprKind::FunctionCall {
-                    name: resolved_name(function_name),
+                    name: function_name,
                     args: resolved_args,
                 }
             }
@@ -363,6 +365,27 @@ pub(super) fn resolve_expr(
                     name: resolved_name("__elephc_list_identifiers".to_string()),
                     args: resolved_args,
                 }
+            } else if method_key == "fromcallable"
+                && resolved_args.len() == 1
+                && matches!(
+                    &resolved_receiver,
+                    StaticReceiver::Named(name)
+                        if name.last_segment().is_some_and(|segment| segment.eq_ignore_ascii_case("Closure"))
+                            && !symbols.declares_class_like(&name.as_canonical())
+                )
+                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(_))
+            {
+                let ExprKind::StringLiteral(candidate) = &resolved_args[0].kind else {
+                    unreachable!("Closure::fromCallable literal guard must hold")
+                };
+                ExprKind::FirstClassCallable(CallableTarget::Function(resolved_name(
+                    resolve_function_name(
+                        &parse_callback_name(candidate),
+                        current_namespace,
+                        imports,
+                        symbols,
+                    ),
+                )))
             } else {
                 ExprKind::StaticMethodCall {
                     receiver: resolved_receiver,
@@ -372,9 +395,9 @@ pub(super) fn resolve_expr(
             }
         }
         ExprKind::FirstClassCallable(target) => ExprKind::FirstClassCallable(match target {
-            CallableTarget::Function(name) => CallableTarget::Function(resolved_name(
-                resolve_function_name(name, current_namespace, imports, symbols),
-            )),
+            CallableTarget::Function(name) => CallableTarget::Function(
+                resolve_function_reference(name, current_namespace, imports, symbols),
+            ),
             CallableTarget::StaticMethod { receiver, method } => CallableTarget::StaticMethod {
                 receiver: match receiver {
                     StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(

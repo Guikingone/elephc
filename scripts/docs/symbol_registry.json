@@ -776,6 +776,24 @@
     },
     {
       "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "core",
+      "name": "Closure",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },
@@ -2141,6 +2159,27 @@
       "name": "ParentIterator",
       "php_manual": null,
       "since": null
+    },
+    {
+      "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "enum",
+      "module": "pcntl",
+      "name": "Pcntl\\QosClass",
+      "php_manual": null,
+      "since": "8.4",
+      "target_support": [
+        "macos-aarch64"
+      ]
     },
     {
       "aot": {
@@ -20736,6 +20775,26 @@
       "internal": false,
       "module": "core",
       "name": "PHP_OS",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "str"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "core",
+      "name": "PHP_OS_FAMILY",
       "route": "predefined",
       "since": null,
       "value": {

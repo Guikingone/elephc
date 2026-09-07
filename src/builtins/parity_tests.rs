@@ -590,6 +590,14 @@ fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
             declared.split_whitespace().collect::<String>()
                 == source.split_whitespace().collect::<String>()
         }
+        DefaultSpec::ClassConstant { class, name } => declared
+            .rsplit_once("::")
+            .is_some_and(|(declared_class, declared_name)| {
+                declared_class
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case(class)
+                    && declared_name == *name
+            }),
     }
 }
 
@@ -605,6 +613,7 @@ fn default_text(default: &DefaultSpec) -> String {
         DefaultSpec::EmptyArray => "[]".to_string(),
         DefaultSpec::Constant(name) => (*name).to_string(),
         DefaultSpec::Expr(source) => (*source).to_string(),
+        DefaultSpec::ClassConstant { class, name } => format!("{class}::{name}"),
     }
 }
 

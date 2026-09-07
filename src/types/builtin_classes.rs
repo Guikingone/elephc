@@ -9,6 +9,8 @@
 //! - Prelude demand detectors (`curl_prelude`, `image_prelude`) and checker gates
 //!   (`builtin_types::datetime::gate`), which look for a module's class names in the program.
 //! - `spl_classes()`, which lists the `ext/spl` module.
+//! - EIR eval probes and codegen existence queries, which also expose intrinsic classes
+//!   without an injected object layout.
 //!
 //! Key details:
 //! - There is no compiler-side class-name list any more: adding a builtin class means adding
@@ -18,11 +20,25 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use elephc_builtin_contract::{classes, lookup_class, PhpModule};
+use elephc_builtin_contract::{classes, lookup_class, ClassKind, ClassRoute, PhpModule};
 
 /// Returns the PHP spellings of every builtin class-like name, internal helpers included.
 pub(crate) fn builtin_class_like_names() -> impl Iterator<Item = &'static str> {
     classes().iter().map(|class| class.name)
+}
+
+/// Returns public, target-independent intrinsic classes, including callable-backed classes.
+/// Target-specific classes remain subject to the checker's target-filtered metadata.
+pub(crate) fn intrinsic_class_names() -> impl Iterator<Item = &'static str> {
+    classes()
+        .iter()
+        .filter(|class| {
+            !class.internal
+                && class.kind == ClassKind::Class
+                && class.aot == ClassRoute::LanguageIntrinsic
+                && class.target_support.is_none()
+        })
+        .map(|class| class.name)
 }
 
 /// Returns the PHP-visible class-like names one PHP module owns, in canonical order.
@@ -54,21 +70,29 @@ mod tests {
 
     use crate::names::php_symbol_key;
 
-    /// The AOT join for builtin classes: with every registration gate open (`introspects`),
-    /// the checker must inject exactly the class-likes the catalog routes through the checker
-    /// or the language front end — no catalogued name missing, no injected name uncatalogued.
-    /// Prelude-declared classes are audited against their prelude declarations instead.
+    /// Checks catalog/checker parity on every target, excluding intrinsic callable storage.
+    /// Prelude declarations are audited separately against their source declarations.
     #[test]
     fn checker_injects_exactly_the_catalogued_checker_classes() {
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            assert_checker_class_catalog_for_target(target);
+        }
+    }
+
+    /// Compares injected object metadata with the catalog filtered to one target.
+    fn assert_checker_class_catalog_for_target(target: &str) {
         let source = "<?php get_declared_classes();";
         let tokens = crate::lexer::tokenize(source).expect("tokenize");
         let program = crate::parser::parse(&tokens).expect("parse");
         let checked = crate::types::checker::check_types(
             &program,
-            crate::codegen_support::platform::Target::new(
-                crate::codegen_support::platform::Platform::MacOS,
-                crate::codegen_support::platform::Arch::AArch64,
-            ),
+            crate::codegen_support::platform::Target::parse(target).expect("target"),
         )
         .expect("check");
 
@@ -84,6 +108,9 @@ mod tests {
             .iter()
             .filter(|class| {
                 !class.internal
+                    // Closures use callable storage, not a checker-injected object class.
+                    && class.name != "Closure"
+                    && class.target_support.is_none_or(|targets| targets.contains(&target))
                     && matches!(
                         class.aot,
                         ClassRoute::CheckerInjected | ClassRoute::LanguageIntrinsic
@@ -96,10 +123,18 @@ mod tests {
         let uninjected: Vec<&String> = catalogued.difference(&injected).collect();
         assert!(
             uncatalogued.is_empty() && uninjected.is_empty(),
-            "builtin class catalog and checker injections disagree.\n\
+            "builtin class catalog and checker injections disagree on {target}.\n\
              injected by the checker but missing from the catalog: {uncatalogued:?}\n\
              catalogued as checker-provided but never injected: {uninjected:?}"
         );
+    }
+
+    /// Retains the Closure symbol used by callable lowering without an object-class injection.
+    #[test]
+    fn callable_intrinsic_is_in_the_shared_class_catalog() {
+        let closure = elephc_builtin_contract::lookup_class("\\cLoSuRe").expect("Closure");
+        assert_eq!(closure.aot, ClassRoute::LanguageIntrinsic);
+        assert!(super::builtin_class_like_names().any(|name| name == "Closure"));
     }
 
     /// Every module view is non-empty for the modules the compiler detects by class name.

@@ -106,6 +106,61 @@ def run_gen(**kwargs):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_target_specific_symbols_are_not_counted_against_other_targets(self):
+        """Preserve PCNTL target exclusions in both function and class coverage."""
+        entry = public("pcntl_getqos_class", module="pcntl")
+        entry["semantics"] = {"target_support": ["macos-aarch64"]}
+        qos = klass("Pcntl\\QosClass", module="pcntl", kind="enum")
+        qos["target_support"] = ["macos-aarch64"]
+        for target in ["linux-aarch64", "linux-x86_64"]:
+            baseline = dict(BASELINE, target=target, extensions=[*BASELINE["extensions"], "pcntl"])
+            code, out = run_gen(
+                registry=[public("strlen"), entry], baseline=baseline,
+                symbols={"classes": [qos], "constants": []},
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("`pcntl_getqos_class()` (target-specific)", out)
+            self.assertIn("`Pcntl\\QosClass` (target-specific)", out)
+            self.assertIn("1 / 3", out)
+
+    def test_target_exclusion_requires_incompatible_snapshot_evidence(self):
+        """An absent builtin on a supported or unknown target remains an error."""
+        entry = public("pcntl_getqos_class", module="pcntl")
+        entry["semantics"] = {"target_support": ["macos-aarch64"]}
+        for target in [None, "macos-aarch64"]:
+            baseline = dict(BASELINE, target=target, extensions=[*BASELINE["extensions"], "pcntl"])
+            code, _ = run_gen(registry=[entry], baseline=baseline)
+            self.assertEqual(code, 1)
+
+    def test_legacy_snapshot_os_constant_proves_target_exclusion(self):
+        """Old baseline snapshots can prove OS incompatibility without inventing an arch."""
+        entry = public("pcntl_getqos_class", module="pcntl")
+        entry["semantics"] = {"target_support": ["macos-aarch64"]}
+        baseline = dict(
+            BASELINE, extensions=[*BASELINE["extensions"], "pcntl", "core"],
+            constants={
+                **BASELINE["constants"],
+                "PHP_OS_FAMILY": {"value": "Linux", "extension": "core"},
+            },
+        )
+        code, out = run_gen(registry=[entry], baseline=baseline)
+        self.assertEqual(code, 0)
+        self.assertIn("target-specific", out)
+
+    def test_pcntl_build_gated_functions_count_normally_when_present(self):
+        """Configure-gated PHP functions are neither extensions nor silent coverage credit."""
+        for name, (_, guard) in gen.BUILD_GATED_FUNCTIONS.items():
+            baseline = dict(BASELINE, extensions=[*BASELINE["extensions"], "pcntl"])
+            code, out = run_gen(registry=[public(name, module="pcntl")], baseline=baseline)
+            self.assertEqual(code, 0)
+            self.assertIn(f"`{name}()` (PHP build guard {guard})", out)
+            baseline["functions"] = {**BASELINE["functions"], name: "pcntl"}
+            code, out = run_gen(registry=[public(name, module="pcntl")], baseline=baseline)
+            self.assertEqual(code, 0)
+            self.assertNotIn("PHP build guard", out)
+            code, _ = run_gen(registry=[public(name, module="standard")])
+            self.assertEqual(code, 1)
+
     def test_happy_path_writes_page(self):
         code, out = run_gen(registry=[public("strlen")])
         self.assertEqual(code, 0)

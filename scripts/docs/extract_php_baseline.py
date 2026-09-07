@@ -82,12 +82,23 @@ $exts = array_map("strtolower", get_loaded_extensions());
 sort($exts);
 echo json_encode([
     "php_version" => PHP_VERSION,
+    "target_os" => PHP_OS_FAMILY,
+    "target_arch" => php_uname("m"),
     "extensions" => $exts,
     "functions" => $functions,
     "classes" => $classes,
     "constants" => $constants,
 ], JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
 """
+
+
+def normalize_target(os_family: str, architecture: str) -> str:
+    """Map PHP host identity to one public elephc target name."""
+    os_name = {"Darwin": "macos", "Linux": "linux"}.get(os_family, os_family.lower())
+    arch = {"arm64": "aarch64", "aarch64": "aarch64", "x86_64": "x86_64"}.get(
+        architecture.lower(), architecture.lower()
+    )
+    return f"{os_name}-{arch}"
 
 
 def main() -> int:
@@ -131,6 +142,7 @@ def main() -> int:
     data = {
         "php_version": raw["php_version"],
         "generated_at": datetime.date.today().isoformat(),
+        "target": normalize_target(raw["target_os"], raw["target_arch"]),
         "extensions": kept_exts,
         "missing_bundled": missing_bundled,
         "functions": kept_funcs,

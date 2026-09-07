@@ -2,7 +2,7 @@
 title: "trigger_error()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 875
+  order: 910
 ---
 
 ## trigger_error()
