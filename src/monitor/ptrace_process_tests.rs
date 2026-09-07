@@ -95,12 +95,12 @@ fn sampling_preserves_signal_and_progress(signal: libc::c_int, marker: u8) {
     let pid = tracee.child.id();
     seize(pid).expect("kernel must allow tracing the child for this regression");
     tracee.seized = true;
-    assert!(sample_thread(pid, pid).is_some());
+    assert!(matches!(sample_thread(pid, pid), SampleOutcome::Stack(_)));
     tracee.signal_stop(signal);
     let before = tracee.progress().1;
     // Keep tracing throughout. A resume deferred until detach cannot pass this.
     for _ in 0..40 {
-        assert!(sample_thread(pid, pid).is_some());
+        assert!(matches!(sample_thread(pid, pid), SampleOutcome::Stack(_)));
         std::thread::sleep(Duration::from_millis(10));
     }
     let after = tracee.progress().1;
@@ -113,6 +113,27 @@ fn sampling_preserves_signal_and_progress(signal: libc::c_int, marker: u8) {
     assert_eq!(tracee.read_marker(), marker, "detach must deliver the pending signal");
     assert_eq!(unsafe { libc::kill(pid as libc::pid_t, signal) }, 0);
     assert_eq!(tracee.read_marker(), marker, "handlers must also work after detach");
+}
+
+/// A running seized thread that never stops must not park the sampler.
+///
+/// `PTRACE_SEIZE` leaves the tracee running. Waiting for a stop that will not
+/// come is the D-state hang: the bound has to fire, and it has to fire as
+/// `TimedOut` so `sample_thread` can drop the tid for the rest of the window.
+#[test]
+fn wait_for_stop_times_out_on_a_running_seized_tracee() {
+    let mut tracee = Tracee::start();
+    let pid = tracee.child.id();
+    seize(pid).expect("kernel must allow tracing the child for this bound");
+    tracee.seized = true;
+    let started = Instant::now();
+    let error = wait_for_stop(pid).expect_err("a running seized thread has no stop to report");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the wait must fail closed, not block: {:?}",
+        started.elapsed()
+    );
 }
 
 /// A pending handled SIGUSR1 cannot stall a process for the capture window.
