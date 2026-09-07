@@ -713,7 +713,7 @@ pub(crate) fn lower_getenv(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `putenv(assignment)` by copying the environment string into persistent heap storage.
+/// Lowers `putenv(assignment)`, dispatching bare names to `unsetenv` and assignments to `putenv`.
 pub(crate) fn lower_putenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -848,10 +848,49 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Emits the AArch64 persistent-copy path for `putenv()`.
+/// Unsets a bare environment name using an allocated C string, frees the copy,
+/// and preserves libc's status across cleanup on every supported target.
+fn lower_putenv_unset(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let argument_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+
+    // -- keep the full null-terminated name alive until unsetenv returns --
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_cstr");
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_reg_move(ctx.emitter, argument_reg, result_reg);
+    ctx.emitter.bl_c("unsetenv");
+
+    // -- release the temporary copy on both success and failure --
+    abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
+/// Emits AArch64 `putenv()`, using `unsetenv()` when the argument has no equals sign.
 fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
+    let scan_loop = ctx.next_label("putenv_scan");
+    let set_variable = ctx.next_label("putenv_set");
+    let unset_variable = ctx.next_label("putenv_unset");
+    let done = ctx.next_label("putenv_done");
     let copy_loop = ctx.next_label("putenv_copy");
     let copy_done = ctx.next_label("putenv_copy_done");
+    ctx.emitter.instruction("mov x3, #0");                                      // start scanning the argument for PHP's assignment separator
+    ctx.emitter.label(&scan_loop);
+    ctx.emitter.instruction("cmp x3, x2");                                      // a bare name unsets the environment variable
+    ctx.emitter.instruction(&format!("b.ge {}", unset_variable));               // no separator was found, so follow PHP's unset form
+    ctx.emitter.instruction("ldrb w4, [x1, x3]");                               // inspect one argument byte without changing the string result registers
+    ctx.emitter.instruction("cmp w4, #61");                                     // ASCII '=' selects libc putenv()
+    ctx.emitter.instruction(&format!("b.eq {}", set_variable));                 // preserve the assignment string for libc putenv()
+    ctx.emitter.instruction("add x3, x3, #1");                                  // advance to the next argument byte
+    ctx.emitter.instruction(&format!("b {}", scan_loop));                       // continue scanning for the assignment separator
+    ctx.emitter.label(&unset_variable);
+    lower_putenv_unset(ctx);
+    ctx.emitter.instruction("cmp w0, #0");                                      // test the libc int status after releasing the name buffer
+    ctx.emitter.instruction("cset x0, eq");                                     // widen libc's zero status into PHP true
+    ctx.emitter.instruction(&format!("b {}", done));                            // join the assignment and unset result paths
+    ctx.emitter.label(&set_variable);
     ctx.emitter.instruction("add x0, x2, #1");                                  // allocate space for the environment string plus trailing null
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string pointer and length across heap allocation
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
@@ -871,12 +910,33 @@ fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.bl_c("putenv");
     ctx.emitter.instruction("cmp x0, #0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("cset x0, eq");                                     // return true when putenv() accepted the assignment
+    ctx.emitter.label(&done);
 }
 
-/// Emits the x86_64 persistent-copy path for `putenv()`.
+/// Emits x86_64 `putenv()`, using `unsetenv()` when the argument has no equals sign.
 fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
+    let scan_loop = ctx.next_label("putenv_scan");
+    let set_variable = ctx.next_label("putenv_set");
+    let unset_variable = ctx.next_label("putenv_unset");
+    let done = ctx.next_label("putenv_done");
     let copy_loop = ctx.next_label("putenv_copy");
     let copy_done = ctx.next_label("putenv_copy_done");
+    ctx.emitter.instruction("mov rcx, 0");                                      // start scanning the argument for PHP's assignment separator
+    ctx.emitter.label(&scan_loop);
+    ctx.emitter.instruction("cmp rcx, rdx");                                    // a bare name unsets the environment variable
+    ctx.emitter.instruction(&format!("jae {}", unset_variable));                // no separator was found, so follow PHP's unset form
+    ctx.emitter.instruction("mov r8b, BYTE PTR [rax + rcx]");                   // inspect one argument byte without changing the string result registers
+    ctx.emitter.instruction("cmp r8b, 61");                                     // ASCII '=' selects libc putenv()
+    ctx.emitter.instruction(&format!("je {}", set_variable));                   // preserve the assignment string for libc putenv()
+    ctx.emitter.instruction("add rcx, 1");                                      // advance to the next argument byte
+    ctx.emitter.instruction(&format!("jmp {}", scan_loop));                     // continue scanning for the assignment separator
+    ctx.emitter.label(&unset_variable);
+    lower_putenv_unset(ctx);
+    ctx.emitter.instruction("cmp eax, 0");                                      // test the libc int status after releasing the name buffer
+    ctx.emitter.instruction("sete al");                                         // encode libc's zero status as a boolean byte
+    ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // join the assignment and unset result paths
+    ctx.emitter.label(&set_variable);
     ctx.emitter.instruction("sub rsp, 16");                                     // reserve aligned spill space for the source string across heap allocation
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the source environment string pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                    // save the source environment string length
@@ -902,6 +962,7 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("cmp rax, 0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("sete al");                                         // return true when putenv() accepted the assignment
     ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
+    ctx.emitter.label(&done);
 }
 
 /// Lowers a one-argument blocking libc call that receives an integer duration.

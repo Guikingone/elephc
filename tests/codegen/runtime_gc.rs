@@ -17,6 +17,8 @@ mod iconv;
 mod parse_url;
 #[path = "runtime_gc/pcntl.rs"]
 mod pcntl;
+#[path = "runtime_gc/putenv.rs"]
+mod putenv;
 #[path = "runtime_gc/regressions.rs"]
 mod regressions;
 #[path = "runtime_gc/assoc_rebind_release.rs"]
