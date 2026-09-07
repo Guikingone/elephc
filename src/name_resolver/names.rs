@@ -236,6 +236,31 @@ pub(super) fn resolved_class_constant_name(
     name.as_canonical()
 }
 
+/// Resolves a function reference while preserving PHP fallback for conditional namespace symbols.
+/// Qualified names and explicit function imports keep their exact binding even if it is pruned.
+pub(super) fn resolve_function_reference(
+    name: &Name,
+    current_namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Name {
+    let canonical = resolve_function_name(name, current_namespace, imports, symbols);
+    let conditional = symbols.conditional_functions.contains(&php_symbol_key(&canonical));
+    let resolved = resolved_name(canonical);
+    if name.function_fallback().is_some() {
+        return resolved.with_function_fallback();
+    }
+    if conditional && name.is_unqualified()
+        && current_namespace.is_some_and(|namespace| !namespace.is_empty())
+        && !imports.functions.contains_key(&php_symbol_key(name.as_str()))
+    {
+        if super::function_fallbacks::global_candidate(symbols, name.as_str()).is_some() {
+            return resolved.with_function_fallback();
+        }
+    }
+    resolved
+}
+
 /// Resolves a function name to its canonical form using imports, current namespace,
 /// and the symbol table. When unqualified and not imported, falls back to the local
 /// namespace before attempting the global symbol table (PHP-style builtin fallback).

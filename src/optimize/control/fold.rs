@@ -427,6 +427,7 @@ pub(in crate::optimize) fn target_dependent_condition(expr: &Expr) -> bool {
                     kind: ExprKind::StringLiteral(candidate),
                     ..
                 }] if crate::builtins::registry::lookup(candidate.trim_start_matches('\\')).is_some()
+                    || crate::name_resolver::is_global_date_procedural_alias(candidate.trim_start_matches('\\'))
             )
         }
         ExprKind::BinaryOp { left, right, .. } => {

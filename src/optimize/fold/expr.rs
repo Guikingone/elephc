@@ -189,6 +189,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
         ExprKind::FunctionCall { name, args } => {
             let args = args.into_iter().map(fold_expr).collect::<Vec<_>>();
+            if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
+                return fold_expr(rebound);
+            }
             if name
                 .as_canonical()
                 .trim_start_matches('\\')
@@ -198,20 +201,21 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                     (args.as_slice(), active_fold_target())
                 {
                     let candidate = candidate.trim_start_matches('\\');
-                    if crate::builtins::registry::lookup(candidate).is_some() {
+                    let date_alias = crate::name_resolver::is_global_date_procedural_alias(candidate);
+                    if crate::builtins::registry::lookup(candidate).is_some() || date_alias {
                         let user_function = active_fold_user_function_exists(candidate);
                         let profile_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(
                             candidate,
                             crate::strict_php::is_enabled(),
                         );
-                        if user_function || profile_builtin {
+                        if user_function || profile_builtin || date_alias {
                             let target_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_target(
                                 candidate,
                                 crate::strict_php::is_enabled(),
                                 target,
                             );
-                            if user_function || target_builtin || active_target_guard_condition() {
-                                ExprKind::BoolLiteral(user_function || target_builtin)
+                            if user_function || target_builtin || date_alias || active_target_guard_condition() {
+                                ExprKind::BoolLiteral(user_function || target_builtin || date_alias)
                             } else {
                                 ExprKind::FunctionCall { name, args }
                             }
@@ -474,7 +478,7 @@ fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
 /// Folds the target of a first-class callable, recursing into object expressions.
 fn fold_callable_target(target: CallableTarget) -> CallableTarget {
     match target {
-        CallableTarget::Function(name) => CallableTarget::Function(name),
+        CallableTarget::Function(name) => CallableTarget::Function(namespace_fallbacks::resolve_name(name)),
         CallableTarget::StaticMethod { receiver, method } => {
             CallableTarget::StaticMethod { receiver, method }
         }

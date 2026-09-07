@@ -9,6 +9,7 @@
 //! - Builtin fallback and case-insensitive symbol lookup must match PHP visibility rules.
 
 mod expressions;
+mod function_fallbacks;
 mod names;
 mod declarations;
 mod statements;
@@ -19,6 +20,8 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name, NameKind};
 use crate::parser::ast::{Expr, ExprKind, Program};
+
+pub(crate) use function_fallbacks::FunctionFallbacks;
 
 /// Tracks namespace use imports for classes, functions, and constants.
 /// Used during name resolution to map short names to their canonical fully-qualified names.
@@ -34,6 +37,7 @@ struct Imports {
 #[derive(Default)]
 struct Symbols {
     functions: HashMap<String, String>,
+    conditional_functions: HashSet<String>,
     classes: HashMap<String, String>,
     interfaces: HashMap<String, String>,
     traits: HashMap<String, String>,
@@ -185,6 +189,11 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
 /// resolver rewrites.
 pub(crate) fn is_date_procedural_alias(name: &str) -> bool {
     expressions::is_date_procedural_alias(name)
+}
+
+/// Recognizes an exact global date alias without giving explicitly namespaced strings fallback.
+pub(crate) fn is_global_date_procedural_alias(name: &str) -> bool {
+    !name.contains('\\') && is_date_procedural_alias(name)
 }
 
 /// Returns every lowercase procedural date/time alias name, i.e. the exact set

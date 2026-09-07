@@ -216,9 +216,11 @@ fn collect_conditional_function_symbols(
                 }
             }
             StmtKind::FunctionDecl { name, .. } => {
+                let canonical = canonical_name_for_decl(namespace.as_deref(), name);
+                symbols.conditional_functions.insert(php_symbol_key(&canonical));
                 insert_folded_symbol(
                     &mut symbols.functions,
-                    canonical_name_for_decl(namespace.as_deref(), name),
+                    canonical,
                 );
             }
             StmtKind::FunctionVariantGroup { name, .. } => {

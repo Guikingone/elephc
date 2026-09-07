@@ -40,6 +40,14 @@ tracking helpers, isolates callable scopes, and discards uncertain facts at
 control-flow boundaries. Target-dependent branches can then be pruned before
 the checker rejects unavailable builtins.
 
+When pruning removes a namespaced function polyfill, the second target fold
+rechecks unqualified calls and first-class callable targets against the surviving
+declarations. The name resolver records their permitted global fallback before
+canonicalizing names, so an available builtin can be selected without stripping
+namespaces from explicit references. Retained declarations still take precedence;
+qualified calls and `use function` imports never acquire this fallback. Rebound
+calls use the resolver's ordinary builtin alias rewrites.
+
 Alongside those six passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
 
 - does this expression have observable side effects?

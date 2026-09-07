@@ -131,7 +131,9 @@ impl GuardValues {
             {
                 if let [argument] = args.as_mut_slice() {
                     if let Some(candidate) = self.string_value(argument) {
-                        if crate::builtins::registry::lookup(candidate.trim_start_matches('\\')).is_some() {
+                        if crate::builtins::registry::lookup(candidate.trim_start_matches('\\')).is_some()
+                            || crate::name_resolver::is_global_date_procedural_alias(candidate.trim_start_matches('\\'))
+                        {
                             argument.kind = ExprKind::StringLiteral(candidate);
                         }
                     }

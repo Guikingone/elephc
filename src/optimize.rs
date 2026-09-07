@@ -26,6 +26,7 @@ mod effect_analysis;
 mod effects;
 mod exception_flow;
 mod fold;
+mod namespace_fallbacks;
 mod propagate;
 mod target_guards;
 pub mod reachability;
@@ -117,7 +118,7 @@ pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
             let materialized_functions = collect_top_level_user_functions(&folded);
             ACTIVE_FOLD_USER_FUNCTIONS
                 .with(|functions| functions.replace(Some(materialized_functions)));
-            let folded = fold_block(folded);
+            let folded = namespace_fallbacks::fold_after_pruning(folded);
             ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
             slot.replace(previous);
             folded
