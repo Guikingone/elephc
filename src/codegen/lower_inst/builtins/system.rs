@@ -848,12 +848,31 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Unsets a bare environment name using an allocated C string, frees the copy,
+/// and preserves libc's status across cleanup on every supported target.
+fn lower_putenv_unset(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let argument_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+
+    // -- keep the full null-terminated name alive until unsetenv returns --
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_cstr");
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_reg_move(ctx.emitter, argument_reg, result_reg);
+    ctx.emitter.bl_c("unsetenv");
+
+    // -- release the temporary copy on both success and failure --
+    abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
 /// Emits AArch64 `putenv()`, using `unsetenv()` when the argument has no equals sign.
 fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     let scan_loop = ctx.next_label("putenv_scan");
     let set_variable = ctx.next_label("putenv_set");
     let unset_variable = ctx.next_label("putenv_unset");
-    let invalid_name = ctx.next_label("putenv_invalid_name");
     let done = ctx.next_label("putenv_done");
     let copy_loop = ctx.next_label("putenv_copy");
     let copy_done = ctx.next_label("putenv_copy_done");
@@ -867,16 +886,10 @@ fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("add x3, x3, #1");                                  // advance to the next argument byte
     ctx.emitter.instruction(&format!("b {}", scan_loop));                       // continue scanning for the assignment separator
     ctx.emitter.label(&unset_variable);
-    ctx.emitter.instruction("cmp x2, #4095");                                   // __rt_cstr owns a bounded 4096-byte scratch buffer
-    ctx.emitter.instruction(&format!("b.hi {}", invalid_name));                 // fail safely rather than overflow the runtime scratch buffer
-    abi::emit_call_label(ctx.emitter, "__rt_cstr");
-    ctx.emitter.bl_c("unsetenv");
-    ctx.emitter.instruction("cmp x0, #0");                                      // return true only when libc removed the variable
+    lower_putenv_unset(ctx);
+    ctx.emitter.instruction("cmp w0, #0");                                      // test the libc int status after releasing the name buffer
     ctx.emitter.instruction("cset x0, eq");                                     // widen libc's zero status into PHP true
     ctx.emitter.instruction(&format!("b {}", done));                            // join the assignment and unset result paths
-    ctx.emitter.label(&invalid_name);
-    ctx.emitter.instruction("mov x0, #0");                                      // reject names that cannot fit the runtime C-string scratch
-    ctx.emitter.instruction(&format!("b {}", done));                            // return the rejected-name result without calling libc
     ctx.emitter.label(&set_variable);
     ctx.emitter.instruction("add x0, x2, #1");                                  // allocate space for the environment string plus trailing null
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string pointer and length across heap allocation
@@ -905,7 +918,6 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     let scan_loop = ctx.next_label("putenv_scan");
     let set_variable = ctx.next_label("putenv_set");
     let unset_variable = ctx.next_label("putenv_unset");
-    let invalid_name = ctx.next_label("putenv_invalid_name");
     let done = ctx.next_label("putenv_done");
     let copy_loop = ctx.next_label("putenv_copy");
     let copy_done = ctx.next_label("putenv_copy_done");
@@ -919,18 +931,11 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("add rcx, 1");                                      // advance to the next argument byte
     ctx.emitter.instruction(&format!("jmp {}", scan_loop));                     // continue scanning for the assignment separator
     ctx.emitter.label(&unset_variable);
-    ctx.emitter.instruction("cmp rdx, 4095");                                   // __rt_cstr owns a bounded 4096-byte scratch buffer
-    ctx.emitter.instruction(&format!("ja {}", invalid_name));                   // fail safely rather than overflow the runtime scratch buffer
-    abi::emit_call_label(ctx.emitter, "__rt_cstr");
-    ctx.emitter.instruction("mov rdi, rax");                                    // pass the bare variable name to libc unsetenv()
-    ctx.emitter.bl_c("unsetenv");
-    ctx.emitter.instruction("cmp rax, 0");                                      // return true only when libc removed the variable
+    lower_putenv_unset(ctx);
+    ctx.emitter.instruction("cmp eax, 0");                                      // test the libc int status after releasing the name buffer
     ctx.emitter.instruction("sete al");                                         // encode libc's zero status as a boolean byte
     ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
     ctx.emitter.instruction(&format!("jmp {}", done));                          // join the assignment and unset result paths
-    ctx.emitter.label(&invalid_name);
-    ctx.emitter.instruction("mov rax, 0");                                      // reject names that cannot fit the runtime C-string scratch
-    ctx.emitter.instruction(&format!("jmp {}", done));                          // return the rejected-name result without calling libc
     ctx.emitter.label(&set_variable);
     ctx.emitter.instruction("sub rsp, 16");                                     // reserve aligned spill space for the source string across heap allocation
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the source environment string pointer
