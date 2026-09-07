@@ -2395,9 +2395,12 @@ mod tests {
 
             let verdict = super::control_fd_present();
 
+            // Read the claimed descriptor, not `ours`. send(ours) lands on
+            // `theirs`, which is what was dup2'd onto fd 3; recving `ours`
+            // only passed when socketpair itself allocated fd 3.
             let mut buf = [0u8; 256];
             let left = libc::recv(
-                ours,
+                super::CONTROL_FD,
                 buf.as_mut_ptr() as *mut libc::c_void,
                 buf.len(),
                 libc::MSG_DONTWAIT,
@@ -2465,6 +2468,10 @@ mod tests {
             );
             let left = if left < 0 { 0 } else { left as usize };
 
+            // CLOEXEC is a descriptor flag on the fd the handshake just claimed
+            // (fd 3), not on `theirs`. Check before restoring the original fd 3.
+            let flags = libc::fcntl(super::CONTROL_FD, libc::F_GETFD);
+
             if saved >= 0 {
                 libc::dup2(saved, super::CONTROL_FD);
                 libc::close(saved);
@@ -2478,7 +2485,6 @@ mod tests {
             assert_eq!(ack_len, super::CONTROL_ACK.len() as isize);
             assert_eq!(ack, super::CONTROL_ACK, "activation must be acknowledged");
             assert_eq!(&buf[..left], trailing, "the marker must be consumed, and only it");
-            let flags = libc::fcntl(super::CONTROL_FD, libc::F_GETFD);
             assert!(flags >= 0, "control fd must still be open after the handshake");
             assert_ne!(
                 flags & libc::FD_CLOEXEC,
