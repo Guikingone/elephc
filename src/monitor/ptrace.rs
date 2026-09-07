@@ -37,8 +37,9 @@ const MAX_DEPTH: usize = 256;
 /// wait used to be unbounded, so one stuck thread parked the whole sampler —
 /// and a live view that cannot redraw is worse than a short table. Fifty
 /// milliseconds is long enough for a runnable thread to stop and short enough
-/// that a stuck one does not consume the window. After a timeout that tid is
-/// skipped for the rest of the window rather than retried at 99 Hz.
+/// that a stuck one does not consume the window. After a timeout later ticks
+/// skip that tid rather than retrying at 99 Hz, but the tid stays seized so
+/// the window-end detach can still release it.
 const STOP_WAIT: Duration = Duration::from_millis(50);
 
 /// A thread stopped and read.
@@ -429,7 +430,9 @@ pub(crate) enum SampleOutcome {
     Miss,
     /// `PTRACE_INTERRUPT` was delivered and the thread never stopped — a D-state
     /// wait. The interrupt is still in flight; do not resume, and do not ask
-    /// this tid again in this window.
+    /// this tid again in this window. Keep it seized: dropping it here leaves
+    /// nobody to detach, so a late stop stays stopped and the next window
+    /// cannot seize the thread.
     Stuck,
 }
 
@@ -446,8 +449,9 @@ pub(crate) enum SampleOutcome {
 ///
 /// A wait that TIMES OUT is the other direction: the thread was never observed
 /// stopped, so a resume would be `PTRACE_CONT` of a running seized task, and
-/// retrying it at 99 Hz would spend the window on a D-state wait. That tid is
-/// dropped for the rest of the window instead.
+/// retrying it at 99 Hz would spend the window on a D-state wait. Later ticks
+/// skip that tid; the seized set still holds it so detach can wait out the
+/// in-flight interrupt and release the relationship.
 pub(crate) fn sample_thread(pid: u32, tid: u32) -> SampleOutcome {
     // Below this line the thread is stopped, or on its way to being; above it,
     // nothing has happened to it.
@@ -585,6 +589,8 @@ pub(crate) fn attach_window(
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(u64::from(duration_secs.max(1)));
     let mut stacks = Vec::new();
+    // Tids whose interrupt never landed. Sampled once; still detached below.
+    let mut skip_later = Vec::new();
     while std::time::Instant::now() < deadline {
         let started = std::time::Instant::now();
         // Every process every tick, rather than one process for the whole
@@ -592,20 +598,23 @@ pub(crate) fn attach_window(
         // third of the samples, and its share of the table would be a third of
         // the truth.
         for (pid, bias, seized) in &mut targets {
-            seized.retain(|tid| {
-                match sample_thread(*pid, *tid) {
-                    SampleOutcome::Stack(chain) => {
-                        let stack = super::attach::display_stack(&chain, &image.symbols, *bias);
-                        if !stack.is_empty() {
-                            stacks.push(stack);
-                        }
-                        true
-                    }
-                    SampleOutcome::Miss => true,
-                    // Uninterruptible: do not pay STOP_WAIT again this window.
-                    SampleOutcome::Stuck => false,
+            for tid in seized.iter().copied() {
+                if skip_later.contains(&tid) {
+                    continue;
                 }
-            });
+                let outcome = sample_thread(*pid, tid);
+                if let SampleOutcome::Stack(chain) = &outcome {
+                    let stack = super::attach::display_stack(chain, &image.symbols, *bias);
+                    if !stack.is_empty() {
+                        stacks.push(stack);
+                    }
+                }
+                // Uninterruptible: do not pay STOP_WAIT again this window,
+                // but leave the tid in `seized` for the detach pass below.
+                if skip_later_samples(&outcome) {
+                    skip_later.push(tid);
+                }
+            }
         }
         // Sleep the remainder of the interval, not the whole of it: the samples
         // themselves take time, and sleeping a full interval on top of them
@@ -620,6 +629,16 @@ pub(crate) fn attach_window(
         }
     }
     Ok(super::attach::fold(stacks))
+}
+
+/// Whether later ticks this window should skip this tid.
+///
+/// A stuck tid has an interrupt in flight and another `STOP_WAIT` would park
+/// the sampler. It must stay in `seized` so the window-end detach still
+/// releases the ptrace relationship — dropping it is how a late stop arrived
+/// with nobody to resume it, and how the next window's seize was refused.
+fn skip_later_samples(outcome: &SampleOutcome) -> bool {
+    matches!(outcome, SampleOutcome::Stuck)
 }
 
 /// Whether nothing-seized is a refusal worth reporting, and what to say.
@@ -864,6 +883,28 @@ mod tests {
                 window.len()
             ),
         }
+    }
+
+    /// A timed-out tid is skipped for later samples, not dropped from cleanup.
+    ///
+    /// The first version of the bound removed the tid from `seized` on `Stuck`,
+    /// so the window-end detach never ran. The interrupt stayed pending, a late
+    /// stop had nobody to resume it, and the next window could not seize a
+    /// thread that was still traced.
+    #[test]
+    fn a_stuck_tid_is_held_for_detach_not_forgotten() {
+        assert!(
+            skip_later_samples(&SampleOutcome::Stuck),
+            "an uninterruptible tid must not be retried at 99 Hz"
+        );
+        assert!(
+            !skip_later_samples(&SampleOutcome::Miss),
+            "a miss is still sampled next tick — the thread may be walkable again"
+        );
+        assert!(
+            !skip_later_samples(&SampleOutcome::Stack(vec![0x1000])),
+            "a walked stack is the ordinary keep-sampling case"
+        );
     }
 
     /// A recycled pid must not be sampled against the original image.

@@ -119,7 +119,7 @@ fn sampling_preserves_signal_and_progress(signal: libc::c_int, marker: u8) {
 ///
 /// `PTRACE_SEIZE` leaves the tracee running. Waiting for a stop that will not
 /// come is the D-state hang: the bound has to fire, and it has to fire as
-/// `TimedOut` so `sample_thread` can drop the tid for the rest of the window.
+/// `TimedOut` so `sample_thread` can skip the tid for later ticks this window.
 #[test]
 fn wait_for_stop_times_out_on_a_running_seized_tracee() {
     let mut tracee = Tracee::start();
