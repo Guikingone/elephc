@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_zip_password() — internals"
 description: "Compiler internals for __elephc_phar_set_zip_password(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 951
+  order: 986
 ---
 
 ## `__elephc_phar_set_zip_password()` — internals

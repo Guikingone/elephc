@@ -62,6 +62,26 @@ KNOWN_VALUE_DIVERGENCES = {
     "IMAGETYPE_COUNT": "elephc's image-type table stops at PHP 8.4's 20 entries (no HEIC/HEIF)",
 }
 
+# php-src PHP-8.5/ext/pcntl/pcntl.stub.php guards these even on Linux builds.
+# Count them normally when present; otherwise report the build omission separately.
+BUILD_GATED_FUNCTIONS = {
+    "pcntl_getcpu": ("pcntl", "HAVE_SCHED_GETCPU"),
+    "pcntl_setns": ("pcntl", "HAVE_PIDFD_OPEN"),
+}
+
+
+def unavailable_on_baseline_target(symbol: dict, baseline: dict) -> bool:
+    """Exclude only declared target restrictions proven incompatible with this snapshot."""
+    targets = symbol.get("target_support") or []
+    if not targets:
+        return False
+    if target := baseline.get("target"):
+        return target not in targets
+    # Older snapshots record the OS in their actual PHP constants, but no architecture.
+    family = baseline.get("constants", {}).get("PHP_OS_FAMILY", {}).get("value")
+    prefix = {"Darwin": "macos-", "Linux": "linux-"}.get(family)
+    return prefix is not None and not any(target.startswith(prefix) for target in targets)
+
 
 def _load_json(path: Path, required_keys: tuple[str, ...], errors: list[str]):
     if not path.exists():
@@ -190,6 +210,7 @@ def classify(registry: list, symbols: dict, baseline: dict):
     pecl: dict[str, dict[str, list]] = defaultdict(lambda: {"functions": [], "classes": [], "constants": []})
     newer: dict[str, list] = {"functions": [], "classes": [], "constants": []}
     dynamic: list = []
+    unavailable: list = []
     bundled_modules = set(baseline["extensions"]) | set(baseline.get("missing_bundled", []))
 
     def place(kind: str, symbol: dict, coverage: Coverage, present, module_of):
@@ -208,6 +229,13 @@ def classify(registry: list, symbols: dict, baseline: dict):
             newer[kind].append(symbol)
             return
         if not present(name):
+            build_gate = BUILD_GATED_FUNCTIONS.get(name) if kind == "functions" else None
+            if unavailable_on_baseline_target(symbol, baseline):
+                unavailable.append((kind, symbol, "target-specific"))
+                return
+            if build_gate and build_gate[0] == module:
+                unavailable.append((kind, symbol, f"PHP build guard {build_gate[1]}"))
+                return
             errors.append(
                 f"{kind[:-1]} '{name}' is public in elephc's catalog (module '{module}', "
                 f"since {since or 'always'}) but absent from php_baseline.json: fix its module or "
@@ -237,6 +265,7 @@ def classify(registry: list, symbols: dict, baseline: dict):
             "internal": False,
             "area": entry.get("area", ""),
             "description": entry.get("description", ""),
+            "target_support": (entry.get("semantics") or {}).get("target_support"),
             "_aot": bool(aot.get("supported", not entry.get("eval_only", False))),
             "_eval": bool((entry.get("eval") or {}).get("supported")),
         }
@@ -291,7 +320,7 @@ def classify(registry: list, symbols: dict, baseline: dict):
                 f"{php['value']} in PHP {baseline['php_version']}: fix the catalog value or "
                 f"record the divergence in KNOWN_VALUE_DIVERGENCES with its reason"
             )
-    return functions, classes, constants, constructs, beyond, pecl, newer, dynamic, errors
+    return functions, classes, constants, constructs, beyond, pecl, newer, dynamic, unavailable, errors
 
 
 def _pct(part: int, whole: int) -> str:
@@ -341,7 +370,7 @@ def _module_cell(module: str, repo_root: Path) -> str:
 
 
 def render(
-    baseline, functions, classes, constants, constructs, beyond, pecl, newer, dynamic, catalog,
+    baseline, functions, classes, constants, constructs, beyond, pecl, newer, dynamic, unavailable, catalog,
     repo_root: Path = REPO_ROOT,
 ) -> str:
     totals = {
@@ -469,6 +498,16 @@ def render(
             f"elephc also implements {len(newer_all)} symbol(s) that PHP added AFTER this "
             f"baseline release, so they cannot be counted against it: {names}.",
         ]
+    if unavailable:
+        names = ", ".join(
+            f"{_symbol_label(kind, symbol)} ({reason})"
+            for kind, symbol, reason in sorted(unavailable, key=lambda item: item[1]["name"])
+        )
+        lines += [
+            "",
+            "The baseline PHP build does not expose these platform-dependent symbols, "
+            f"so they are excluded from its coverage percentages: {names}.",
+        ]
     if pecl:
         parts = []
         for module in sorted(pecl):
@@ -553,7 +592,7 @@ def run(repo_root: Path = REPO_ROOT) -> int:
         return _fail(errors)
 
     errors.extend(validate_catalog(catalog, repo_root, baseline["extensions"]))
-    functions, classes, constants, constructs, beyond, pecl, newer, dynamic, match_errors = classify(
+    functions, classes, constants, constructs, beyond, pecl, newer, dynamic, unavailable, match_errors = classify(
         registry, symbols, baseline
     )
     errors.extend(match_errors)
@@ -561,7 +600,7 @@ def run(repo_root: Path = REPO_ROOT) -> int:
         return _fail(errors)
 
     page = render(
-        baseline, functions, classes, constants, constructs, beyond, pecl, newer, dynamic, catalog,
+        baseline, functions, classes, constants, constructs, beyond, pecl, newer, dynamic, unavailable, catalog,
         repo_root,
     )
     output = repo_root / "docs" / "php" / "compatibility.md"

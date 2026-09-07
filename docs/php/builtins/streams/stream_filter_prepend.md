@@ -2,7 +2,7 @@
 title: "stream_filter_prepend()"
 description: "Attaches a filter to a stream (prepend)."
 sidebar:
-  order: 717
+  order: 752
 ---
 
 ## stream_filter_prepend()

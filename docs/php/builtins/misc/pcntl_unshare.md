@@ -2,7 +2,7 @@
 title: "pcntl_unshare()"
 description: "Disassociates selected Linux process execution contexts."
 sidebar:
-  order: 349
+  order: 642
 ---
 
 ## pcntl_unshare()

@@ -27229,7 +27229,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 649,
+      "codegen_line": 672,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -27314,7 +27314,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 648,
+      "codegen_line": 671,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -27385,7 +27385,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 652,
+      "codegen_line": 675,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -27470,7 +27470,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 647,
+      "codegen_line": 670,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -35861,7 +35861,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 800,
+      "codegen_line": 823,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -35939,7 +35939,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 627,
+      "codegen_line": 650,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36024,7 +36024,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 629,
+      "codegen_line": 652,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36109,7 +36109,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 628,
+      "codegen_line": 651,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36194,7 +36194,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 632,
+      "codegen_line": 655,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36293,7 +36293,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 808,
+      "codegen_line": 831,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36635,7 +36635,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 797,
+      "codegen_line": 820,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36720,7 +36720,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 799,
+      "codegen_line": 822,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36783,7 +36783,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 744,
+      "codegen_line": 767,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36839,7 +36839,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 794,
+      "codegen_line": 817,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36910,7 +36910,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 814,
+      "codegen_line": 837,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37002,7 +37002,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 809,
+      "codegen_line": 832,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37094,7 +37094,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 802,
+      "codegen_line": 825,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37165,7 +37165,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 807,
+      "codegen_line": 830,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37229,7 +37229,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 638,
+      "codegen_line": 661,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37300,7 +37300,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 635,
+      "codegen_line": 658,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37378,7 +37378,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 801,
+      "codegen_line": 824,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37463,7 +37463,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 639,
+      "codegen_line": 662,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37578,7 +37578,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 730,
+      "codegen_line": 753,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37714,7 +37714,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 730,
+      "codegen_line": 753,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37841,7 +37841,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 811,
+      "codegen_line": 834,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37933,7 +37933,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 803,
+      "codegen_line": 826,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38004,7 +38004,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 804,
+      "codegen_line": 827,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38075,7 +38075,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 805,
+      "codegen_line": 828,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38146,7 +38146,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 806,
+      "codegen_line": 829,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39483,7 +39483,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 693,
+      "codegen_line": 716,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39563,7 +39563,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 693,
+      "codegen_line": 716,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -45908,7 +45908,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 661,
+      "codegen_line": 684,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -50348,7 +50348,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 741,
+      "codegen_line": 764,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -51093,7 +51093,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 750,
+      "codegen_line": 773,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -51303,7 +51303,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 653,
+      "codegen_line": 676,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -56357,7 +56357,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 570,
+      "codegen_line": 593,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -70621,7 +70621,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 667,
+      "codegen_line": 690,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -70699,7 +70699,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 670,
+      "codegen_line": 693,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -70770,7 +70770,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 662,
+      "codegen_line": 685,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -70834,7 +70834,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 656,
+      "codegen_line": 679,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -70912,7 +70912,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 664,
+      "codegen_line": 687,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -70990,7 +70990,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 660,
+      "codegen_line": 683,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -71054,7 +71054,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 671,
+      "codegen_line": 694,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -71132,7 +71132,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 663,
+      "codegen_line": 686,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -72119,7 +72119,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 659,
+      "codegen_line": 682,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -86536,54 +86536,6 @@
   },
   {
     "aot": {
-      "kind": "prelude",
-      "params": [],
-      "required_param_count": 0,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
-    },
-    "area": "Database",
-    "canonical_name": "pdo_drivers",
-    "description": "Implemented by the compiler-injected PDO prelude.",
-    "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
-    },
-    "eval_only": false,
-    "examples": [],
-    "in_catalog": true,
-    "is_extension": false,
-    "is_internal": false,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": "src/pdo_prelude/build.rs",
-      "codegen_function": "pdo_drivers",
-      "codegen_line": 7675,
-      "notes": [
-        "Implemented by the compiler-injected PDO prelude."
-      ],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
-      "sig_line": null
-    },
-    "module": "pdo",
-    "name": "pdo_drivers",
-    "semantics": null,
-    "sig": {
-      "params": [],
-      "return_type": "array",
-      "variadic": null
-    },
-    "since": null,
-    "slug": "pdo_drivers",
-    "sub_area": "PDO"
-  },
-  {
-    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -86648,6 +86600,7 @@
       "sig_file": "src/builtins/system/pcntl_alarm.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_alarm",
     "semantics": {
       "argument_lowering": "standard",
@@ -86708,6 +86661,7 @@
       "return_type": "int",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_alarm",
     "sub_area": "System"
   },
@@ -86777,6 +86731,7 @@
       "sig_file": "src/builtins/system/pcntl_async_signals.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_async_signals",
     "semantics": {
       "argument_lowering": "standard",
@@ -86837,6 +86792,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_async_signals",
     "sub_area": "System"
   },
@@ -86920,6 +86876,7 @@
       "sig_file": "src/builtins/system/pcntl_daemon.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_daemon",
     "semantics": {
       "argument_lowering": "standard",
@@ -86988,6 +86945,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_daemon",
     "sub_area": "System"
   },
@@ -87041,6 +86999,7 @@
       "sig_file": "src/builtins/system/pcntl_errno.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_errno",
     "semantics": {
       "argument_lowering": "standard",
@@ -87091,6 +87050,7 @@
       "return_type": "int",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_errno",
     "sub_area": "System"
   },
@@ -87188,6 +87148,7 @@
       "sig_file": "src/builtins/system/pcntl_exec.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_exec",
     "semantics": {
       "argument_lowering": "pcntl_preserve_omitted",
@@ -87263,6 +87224,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_exec",
     "sub_area": "System"
   },
@@ -87316,6 +87278,7 @@
       "sig_file": "src/builtins/system/pcntl_fork.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_fork",
     "semantics": {
       "argument_lowering": "standard",
@@ -87368,6 +87331,7 @@
       "return_type": "int",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_fork",
     "sub_area": "System"
   },
@@ -87421,6 +87385,7 @@
       "sig_file": "src/builtins/system/pcntl_get_last_error.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_get_last_error",
     "semantics": {
       "argument_lowering": "standard",
@@ -87471,6 +87436,7 @@
       "return_type": "int",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_get_last_error",
     "sub_area": "System"
   },
@@ -87524,6 +87490,7 @@
       "sig_file": "src/builtins/system/pcntl_getcpu.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_getcpu",
     "semantics": {
       "argument_lowering": "standard",
@@ -87573,6 +87540,7 @@
       "return_type": "int",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_getcpu",
     "sub_area": "System"
   },
@@ -87642,6 +87610,7 @@
       "sig_file": "src/builtins/system/pcntl_getcpuaffinity.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_getcpuaffinity",
     "semantics": {
       "argument_lowering": "standard",
@@ -87700,6 +87669,7 @@
       "return_type": "mixed",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_getcpuaffinity",
     "sub_area": "System"
   },
@@ -87783,6 +87753,7 @@
       "sig_file": "src/builtins/system/pcntl_getpriority.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_getpriority",
     "semantics": {
       "argument_lowering": "standard",
@@ -87849,6 +87820,7 @@
       "return_type": "mixed",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_getpriority",
     "sub_area": "System"
   },
@@ -87902,6 +87874,7 @@
       "sig_file": "src/builtins/system/pcntl_getqos_class.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_getqos_class",
     "semantics": {
       "argument_lowering": "standard",
@@ -87952,6 +87925,7 @@
       "return_type": "mixed",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_getqos_class",
     "sub_area": "System"
   },
@@ -88035,6 +88009,7 @@
       "sig_file": "src/builtins/system/pcntl_setcpuaffinity.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_setcpuaffinity",
     "semantics": {
       "argument_lowering": "standard",
@@ -88103,6 +88078,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_setcpuaffinity",
     "sub_area": "System"
   },
@@ -88186,6 +88162,7 @@
       "sig_file": "src/builtins/system/pcntl_setns.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_setns",
     "semantics": {
       "argument_lowering": "standard",
@@ -88253,6 +88230,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_setns",
     "sub_area": "System"
   },
@@ -88350,6 +88328,7 @@
       "sig_file": "src/builtins/system/pcntl_setpriority.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_setpriority",
     "semantics": {
       "argument_lowering": "standard",
@@ -88425,6 +88404,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_setpriority",
     "sub_area": "System"
   },
@@ -88494,6 +88474,7 @@
       "sig_file": "src/builtins/system/pcntl_setqos_class.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_setqos_class",
     "semantics": {
       "argument_lowering": "standard",
@@ -88552,6 +88533,7 @@
       "return_type": "void",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_setqos_class",
     "sub_area": "System"
   },
@@ -88649,6 +88631,7 @@
       "sig_file": "src/builtins/system/pcntl_signal.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_signal",
     "semantics": {
       "argument_lowering": "pcntl_preserve_omitted",
@@ -88725,6 +88708,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_signal",
     "sub_area": "System"
   },
@@ -88778,6 +88762,7 @@
       "sig_file": "src/builtins/system/pcntl_signal_dispatch.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_signal_dispatch",
     "semantics": {
       "argument_lowering": "standard",
@@ -88830,6 +88815,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_signal_dispatch",
     "sub_area": "System"
   },
@@ -88899,6 +88885,7 @@
       "sig_file": "src/builtins/system/pcntl_signal_get_handler.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_signal_get_handler",
     "semantics": {
       "argument_lowering": "standard",
@@ -88958,6 +88945,7 @@
       "return_type": "mixed",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_signal_get_handler",
     "sub_area": "System"
   },
@@ -89055,6 +89043,7 @@
       "sig_file": "src/builtins/system/pcntl_sigprocmask.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_sigprocmask",
     "semantics": {
       "argument_lowering": "pcntl_preserve_omitted",
@@ -89131,6 +89120,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_sigprocmask",
     "sub_area": "System"
   },
@@ -89242,6 +89232,7 @@
       "sig_file": "src/builtins/system/pcntl_sigtimedwait.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_sigtimedwait",
     "semantics": {
       "argument_lowering": "pcntl_preserve_omitted",
@@ -89324,6 +89315,7 @@
       "return_type": "mixed",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_sigtimedwait",
     "sub_area": "System"
   },
@@ -89407,6 +89399,7 @@
       "sig_file": "src/builtins/system/pcntl_sigwaitinfo.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_sigwaitinfo",
     "semantics": {
       "argument_lowering": "pcntl_preserve_omitted",
@@ -89475,6 +89468,7 @@
       "return_type": "mixed",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_sigwaitinfo",
     "sub_area": "System"
   },
@@ -89544,6 +89538,7 @@
       "sig_file": "src/builtins/system/pcntl_strerror.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_strerror",
     "semantics": {
       "argument_lowering": "standard",
@@ -89600,6 +89595,7 @@
       "return_type": "string",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_strerror",
     "sub_area": "System"
   },
@@ -89669,6 +89665,7 @@
       "sig_file": "src/builtins/system/pcntl_unshare.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_unshare",
     "semantics": {
       "argument_lowering": "standard",
@@ -89729,6 +89726,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_unshare",
     "sub_area": "System"
   },
@@ -89826,6 +89824,7 @@
       "sig_file": "src/builtins/system/pcntl_wait.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_wait",
     "semantics": {
       "argument_lowering": "pcntl_preserve_omitted",
@@ -89900,6 +89899,7 @@
       "return_type": "int",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_wait",
     "sub_area": "System"
   },
@@ -90025,6 +90025,7 @@
       "sig_file": "src/builtins/system/pcntl_waitid.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_waitid",
     "semantics": {
       "argument_lowering": "pcntl_preserve_omitted",
@@ -90113,6 +90114,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_waitid",
     "sub_area": "System"
   },
@@ -90224,6 +90226,7 @@
       "sig_file": "src/builtins/system/pcntl_waitpid.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_waitpid",
     "semantics": {
       "argument_lowering": "pcntl_preserve_omitted",
@@ -90305,6 +90308,7 @@
       "return_type": "int",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_waitpid",
     "sub_area": "System"
   },
@@ -90374,6 +90378,7 @@
       "sig_file": "src/builtins/system/pcntl_wexitstatus.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_wexitstatus",
     "semantics": {
       "argument_lowering": "standard",
@@ -90428,6 +90433,7 @@
       "return_type": "mixed",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_wexitstatus",
     "sub_area": "System"
   },
@@ -90497,6 +90503,7 @@
       "sig_file": "src/builtins/system/pcntl_wifcontinued.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_wifcontinued",
     "semantics": {
       "argument_lowering": "standard",
@@ -90551,6 +90558,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_wifcontinued",
     "sub_area": "System"
   },
@@ -90620,6 +90628,7 @@
       "sig_file": "src/builtins/system/pcntl_wifexited.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_wifexited",
     "semantics": {
       "argument_lowering": "standard",
@@ -90674,6 +90683,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_wifexited",
     "sub_area": "System"
   },
@@ -90743,6 +90753,7 @@
       "sig_file": "src/builtins/system/pcntl_wifsignaled.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_wifsignaled",
     "semantics": {
       "argument_lowering": "standard",
@@ -90797,6 +90808,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_wifsignaled",
     "sub_area": "System"
   },
@@ -90866,6 +90878,7 @@
       "sig_file": "src/builtins/system/pcntl_wifstopped.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_wifstopped",
     "semantics": {
       "argument_lowering": "standard",
@@ -90920,6 +90933,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_wifstopped",
     "sub_area": "System"
   },
@@ -90989,6 +91003,7 @@
       "sig_file": "src/builtins/system/pcntl_wstopsig.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_wstopsig",
     "semantics": {
       "argument_lowering": "standard",
@@ -91043,6 +91058,7 @@
       "return_type": "mixed",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_wstopsig",
     "sub_area": "System"
   },
@@ -91112,6 +91128,7 @@
       "sig_file": "src/builtins/system/pcntl_wtermsig.rs",
       "sig_line": null
     },
+    "module": "pcntl",
     "name": "pcntl_wtermsig",
     "semantics": {
       "argument_lowering": "standard",
@@ -91166,8 +91183,57 @@
       "return_type": "mixed",
       "variadic": null
     },
+    "since": null,
     "slug": "pcntl_wtermsig",
     "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "pdo_drivers",
+    "description": "Implemented by the compiler-injected PDO prelude.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/pdo_prelude/build.rs",
+      "codegen_function": "pdo_drivers",
+      "codegen_line": 7675,
+      "notes": [
+        "Implemented by the compiler-injected PDO prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "pdo",
+    "name": "pdo_drivers",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "pdo_drivers",
+    "sub_area": "PDO"
   },
   {
     "aot": {
@@ -92037,6 +92103,7 @@
       "sig_file": "src/builtins/system/posix_setpgid.rs",
       "sig_line": null
     },
+    "module": "posix",
     "name": "posix_setpgid",
     "semantics": {
       "argument_lowering": "standard",
@@ -92105,6 +92172,7 @@
       "return_type": "bool",
       "variadic": null
     },
+    "since": null,
     "slug": "posix_setpgid",
     "sub_area": "System"
   },
@@ -92158,6 +92226,7 @@
       "sig_file": "src/builtins/system/posix_setsid.rs",
       "sig_line": null
     },
+    "module": "posix",
     "name": "posix_setsid",
     "semantics": {
       "argument_lowering": "standard",
@@ -92210,6 +92279,7 @@
       "return_type": "int",
       "variadic": null
     },
+    "since": null,
     "slug": "posix_setsid",
     "sub_area": "System"
   },
@@ -113437,7 +113507,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 750,
+      "codegen_line": 773,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -114360,7 +114430,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 642,
+      "codegen_line": 665,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -117237,7 +117307,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 780,
+      "codegen_line": 803,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -117386,7 +117456,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 643,
+      "codegen_line": 666,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -117464,7 +117534,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 815,
+      "codegen_line": 838,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -117535,7 +117605,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 816,
+      "codegen_line": 839,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -117606,7 +117676,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 774,
+      "codegen_line": 797,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -117756,7 +117826,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 789,
+      "codegen_line": 812,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -119236,7 +119306,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 674,
+      "codegen_line": 697,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],

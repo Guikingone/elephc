@@ -2,7 +2,7 @@
 title: "pcntl_wifcontinued() — internals"
 description: "Compiler internals for pcntl_wifcontinued(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 354
+  order: 647
 ---
 
 ## `pcntl_wifcontinued()` — internals

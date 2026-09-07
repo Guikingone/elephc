@@ -2,7 +2,7 @@
 title: "session_cache_limiter()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 852
+  order: 887
 ---
 
 ## session_cache_limiter()

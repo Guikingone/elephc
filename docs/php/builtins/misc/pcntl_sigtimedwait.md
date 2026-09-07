@@ -2,7 +2,7 @@
 title: "pcntl_sigtimedwait()"
 description: "Waits up to a timeout for one selected Linux signal and returns its number or false."
 sidebar:
-  order: 346
+  order: 639
 ---
 
 ## pcntl_sigtimedwait()

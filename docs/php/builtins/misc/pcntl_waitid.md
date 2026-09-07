@@ -2,7 +2,7 @@
 title: "pcntl_waitid()"
 description: "Waits for a child state change and writes signal information plus optional PHP 8.5 resource usage."
 sidebar:
-  order: 351
+  order: 644
 ---
 
 ## pcntl_waitid()
