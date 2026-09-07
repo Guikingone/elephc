@@ -248,6 +248,10 @@ mod tests {
         );
         assert_eq!(transform_c_call("bl __rt_itoa"), None);
         assert_eq!(transform_c_call("bl _sin"), Some("bl sin".to_string()));
+        assert_eq!(
+            transform_c_call("bl _unsetenv"),
+            Some("bl unsetenv".to_string())
+        );
     }
 
     #[test]
