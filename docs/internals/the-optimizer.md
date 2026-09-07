@@ -14,7 +14,7 @@ AST layer.
 
 Today the AST optimizer is split into six passes:
 
-1. `fold_constants(program)` runs before type checking
+1. `fold_constants_for_target(program, target)` runs before type checking
 2. `propagate_constants(program, mixed_storage_locals)` runs after successful type checking
 3. `prune_constant_control_flow(program, binding_decision_spans)` runs after propagation and warning collection
 4. `normalize_control_flow(program, binding_decision_spans)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
@@ -31,6 +31,22 @@ synthesized `if`). `propagate_constants` takes the mixed-storage local NAMES for
 it must not substitute a literal for a read of a local the checker boxed as `mixed`.
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
+
+The pre-check target fold resolves `function_exists()` guards using known string
+assignments, constants, and concatenations. Its narrow string-fact environment
+substitutes only availability arguments, leaving ordinary variable reads intact
+for the checker. It shares the propagation write-invalidation and reference
+tracking helpers, isolates callable scopes, and discards uncertain facts at
+control-flow boundaries. Target-dependent branches can then be pruned before
+the checker rejects unavailable builtins.
+
+When pruning removes a namespaced function polyfill, the second target fold
+rechecks unqualified calls and first-class callable targets against the surviving
+declarations. The name resolver records their permitted global fallback before
+canonicalizing names, so an available builtin can be selected without stripping
+namespaces from explicit references. Retained declarations still take precedence;
+qualified calls and `use function` imports never acquire this fallback. Rebound
+calls use the resolver's ordinary builtin alias rewrites.
 
 Alongside those six passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
 

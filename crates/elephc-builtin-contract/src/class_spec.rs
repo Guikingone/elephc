@@ -69,6 +69,9 @@ pub struct ClassContract {
     pub since: Option<PhpVersion>,
     /// How the compiler provides the declaration.
     pub aot: ClassRoute,
+    /// Supported compiler targets when the PHP class exists only on some platforms.
+    /// `None` means the declaration is available on every supported target.
+    pub target_support: Option<&'static [&'static str]>,
     /// Whether strict-PHP hides this elephc-only surface.
     pub extension: bool,
     /// Whether this is a compiler/runtime-internal helper class, never PHP-visible.

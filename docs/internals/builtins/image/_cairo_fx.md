@@ -2,7 +2,7 @@
 title: "_cairo_fx() — internals"
 description: "Compiler internals for _cairo_fx(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 960
+  order: 995
 ---
 
 ## `_cairo_fx()` — internals

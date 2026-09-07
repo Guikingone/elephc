@@ -59,6 +59,11 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
 
 /// Folds default expressions and block body in a class method declaration.
 pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
+    let body = super::super::target_guards::fold_callable_body(
+        method.body,
+        method.params.iter().filter(|(_, _, _, by_ref)| *by_ref)
+            .map(|(name, _, _, _)| name.as_str()),
+    );
     ClassMethod {
         name: method.name,
         visibility: method.visibility,
@@ -73,7 +78,7 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
         variadic_type: method.variadic_type,
         return_type: method.return_type,
         by_ref_return: method.by_ref_return,
-        body: fold_block(method.body),
+        body,
         span: method.span,
         attributes: method.attributes,
     }
@@ -182,10 +187,51 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::PostIncrement(name) => ExprKind::PostIncrement(name),
         ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
-        ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
-            name,
-            args: args.into_iter().map(fold_expr).collect(),
-        },
+        ExprKind::FunctionCall { name, args } => {
+            let args = args.into_iter().map(fold_expr).collect::<Vec<_>>();
+            if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
+                return fold_expr(rebound);
+            }
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("function_exists")
+            {
+                if let ([Expr { kind: ExprKind::StringLiteral(candidate), .. }], Some(target)) =
+                    (args.as_slice(), active_fold_target())
+                {
+                    let candidate = candidate.trim_start_matches('\\');
+                    let date_alias = crate::name_resolver::is_global_date_procedural_alias(candidate);
+                    if crate::builtins::registry::lookup(candidate).is_some() || date_alias {
+                        let user_function = active_fold_user_function_exists(candidate);
+                        let profile_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(
+                            candidate,
+                            crate::strict_php::is_enabled(),
+                        );
+                        if user_function || profile_builtin || date_alias {
+                            let target_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_target(
+                                candidate,
+                                crate::strict_php::is_enabled(),
+                                target,
+                            );
+                            if user_function || target_builtin || date_alias || active_target_guard_condition() {
+                                ExprKind::BoolLiteral(user_function || target_builtin || date_alias)
+                            } else {
+                                ExprKind::FunctionCall { name, args }
+                            }
+                        } else {
+                            ExprKind::FunctionCall { name, args }
+                        }
+                    } else {
+                        ExprKind::FunctionCall { name, args }
+                    }
+                } else {
+                    ExprKind::FunctionCall { name, args }
+                }
+            } else {
+                ExprKind::FunctionCall { name, args }
+            }
+        }
         ExprKind::ArrayLiteral(items) => {
             ExprKind::ArrayLiteral(items.into_iter().map(fold_expr).collect())
         }
@@ -264,18 +310,26 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             captures,
             capture_refs,
             by_ref_return,
-        } => ExprKind::Closure {
-            params: fold_params(params),
-            variadic,
-            variadic_by_ref,
-            variadic_type,
-            return_type,
-            body: fold_block(body),
-            is_arrow,
-            is_static,
-            captures,
-            capture_refs,
-            by_ref_return,
+        } => {
+            let body = super::super::target_guards::fold_callable_body(
+                body,
+                params.iter().filter(|(_, _, _, by_ref)| *by_ref)
+                    .map(|(name, _, _, _)| name.as_str())
+                    .chain(capture_refs.iter().map(String::as_str)),
+            );
+            ExprKind::Closure {
+                params: fold_params(params),
+                variadic,
+                variadic_by_ref,
+                variadic_type,
+                return_type,
+                body,
+                is_arrow,
+                is_static,
+                captures,
+                capture_refs,
+                by_ref_return,
+            }
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
             name,
@@ -290,7 +344,18 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             callee: Box::new(fold_expr(*callee)),
             args: args.into_iter().map(fold_expr).collect(),
         },
-        ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
+        ExprKind::ConstRef(name) => match (
+            name.trim_start_matches('\\'),
+            active_fold_target(),
+        ) {
+            ("PHP_OS", Some(target)) => {
+                ExprKind::StringLiteral(target.platform.php_os_name().to_string())
+            }
+            ("PHP_OS_FAMILY", Some(target)) => {
+                ExprKind::StringLiteral(target.platform.php_os_family_name().to_string())
+            }
+            _ => ExprKind::ConstRef(name),
+        },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,
             args: args.into_iter().map(fold_expr).collect(),
@@ -413,7 +478,7 @@ fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
 /// Folds the target of a first-class callable, recursing into object expressions.
 fn fold_callable_target(target: CallableTarget) -> CallableTarget {
     match target {
-        CallableTarget::Function(name) => CallableTarget::Function(name),
+        CallableTarget::Function(name) => CallableTarget::Function(namespace_fallbacks::resolve_name(name)),
         CallableTarget::StaticMethod { receiver, method } => {
             CallableTarget::StaticMethod { receiver, method }
         }

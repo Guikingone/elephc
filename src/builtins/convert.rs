@@ -13,7 +13,8 @@
 //! - This module is intentionally private (`mod convert;` without `pub`).
 
 use crate::builtins::spec::{DefaultSpec, TypeSpec};
-use crate::parser::ast::{Expr, ExprKind};
+use crate::names::{Name, NameKind};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 use crate::types::PhpType;
 
@@ -63,6 +64,16 @@ pub fn default_spec_to_expr(d: &DefaultSpec) -> Expr {
         DefaultSpec::Expr(source) => panic!(
             "DefaultSpec::Expr({source:?}) reached an AOT registry binding; only \
              prelude-provided contracts may declare a non-literal default"
+        ),
+        DefaultSpec::ClassConstant { class, name } => Expr::new(
+            ExprKind::ScopedConstantAccess {
+                receiver: StaticReceiver::Named(Name::from_parts(
+                    NameKind::FullyQualified,
+                    class.split('\\').map(str::to_string).collect(),
+                )),
+                name: (*name).to_string(),
+            },
+            Span::dummy(),
         ),
     }
 }

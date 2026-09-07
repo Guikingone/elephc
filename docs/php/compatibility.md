@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **789 / 2169** (36%), classes **138 / 329** (42%), constants **1065 / 3180** (33%).
+Overall coverage: functions **819 / 2169** (38%), classes **140 / 329** (43%), constants **1066 / 3180** (34%).
 
 ## Coverage by PHP module
 
@@ -21,7 +21,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | — |
 | `bz2` | 0 / 10 · 0% | — | — |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | — | 21 / 21 · 100% |
-| `core` | 29 / 62 · 47% | 20 / 40 · 50% | 33 / 89 · 37% |
+| `core` | 29 / 62 · 47% | 21 / 40 · 52% | 34 / 89 · 38% |
 | `ctype` | 4 / 11 · 36% | — | — |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
@@ -46,7 +46,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`mysqli`](./mysqli.md#functions) | 84 / 106 · 79% | 4 / 6 · 67% | 52 / 110 · 47% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
 | `openssl` | 4 / 64 · 6% | 0 / 3 · 0% | 3 / 70 · 4% |
-| `pcntl` | 0 / 28 · 0% | 0 / 1 · 0% | 0 / 129 · 0% |
+| [`pcntl`](./pcntl.md#functions) | 28 / 28 · 100% | 1 / 1 · 100% | 0 / 129 · 0% |
 | [`pcre`](./regex.md#functions) | 5 / 11 · 45% | — | 7 / 19 · 37% |
 | [`pdo`](./pdo.md#functions) | 1 / 1 · 100% | 4 / 4 · 100% | — |
 | [`pdo_dblib`](./pdo.md#functions) | — | 1 / 1 · 100% | — |
@@ -57,7 +57,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`pdo_sqlite`](./pdo.md#functions) | — | 1 / 1 · 100% | — |
 | `pgsql` | 0 / 123 · 0% | 0 / 3 · 0% | 0 / 76 · 0% |
 | `phar` | — | 3 / 4 · 75% | — |
-| `posix` | 0 / 41 · 0% | — | 0 / 43 · 0% |
+| [`posix`](./pcntl.md#functions) | 2 / 41 · 5% | — | 0 / 43 · 0% |
 | `random` | 3 / 9 · 33% | 0 / 11 · 0% | 0 / 2 · 0% |
 | `readline` | 1 / 13 · 8% | — | 0 / 1 · 0% |
 | `reflection` | — | 16 / 26 · 62% | — |
@@ -88,7 +88,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 The counts above are what a compiled program has. Code run through `eval()` sees a different set in these modules (compiled / eval()):
 
 - `core` functions: 29 / 28
-- `core` constants: 33 / 30
+- `core` constants: 34 / 31
 - `exif` functions: 4 / 0
 - `exif` constants: 1 / 0
 - `gd` functions: 83 / 0
@@ -110,6 +110,8 @@ In addition, elephc implements 5 PHP language constructs that PHP does not count
 elephc also defines 1 constant(s) at runtime that PHP registers only in specific states and never lists statically: `SID`.
 
 elephc also implements 1 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `SortDirection` (PHP 8.6).
+
+The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
 
 elephc also provides 91 symbols from PECL extensions php-src does not bundle, which the baseline cannot measure: `cairo` (48 functions, 26 classes), `gmagick` (6 classes), `imagick` (10 classes), `pdo_ibm` (1 classes).
 
@@ -153,6 +155,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [Calendar](./calendar.md) ([PHP](https://www.php.net/manual/en/book.calendar.php)) | ✅ Supported |  |
 | [iconv](./iconv.md) ([PHP](https://www.php.net/manual/en/book.iconv.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
+| [PCNTL](./pcntl.md) ([PHP](https://www.php.net/manual/en/book.pcntl.php)) | ✅ Supported | Target-aware Unix process control; auto-linked or forced with --with-pcntl |
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |
@@ -171,6 +174,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `read_exif_data()` | Image | Implemented by the compiler-injected image prelude. |
 | `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |
+| `pcntl_daemon()` | Misc | Detaches the surviving child into a background daemon process. |
 | `buffer_new()` | Pointer | Allocates a raw byte buffer. |
 | `ptr()` | Pointer | Returns a raw pointer to the given variable. |
 | `ptr_get()` | Pointer | Reads one machine word through a raw pointer and returns it as an integer. |
