@@ -49168,7 +49168,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "getenv"
       ],
@@ -49203,7 +49203,7 @@
           "type": "bool"
         }
       ],
-      "return_type": "string|false",
+      "return_type": "string|array|false",
       "variadic": null
     },
     "since": null,

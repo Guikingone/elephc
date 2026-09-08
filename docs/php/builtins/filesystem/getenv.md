@@ -8,7 +8,7 @@ sidebar:
 ## getenv()
 
 ```php
-function getenv(string $name = null, bool $local_only = false): mixed
+function getenv(string $name = null, bool $local_only = false): string|array|false
 ```
 
 Gets the value of an environment variable, or the whole environment.
@@ -17,7 +17,7 @@ Gets the value of an environment variable, or the whole environment.
 - `$name` (`string`), default `null`, optional
 - `$local_only` (`bool`), default `false`, optional
 
-**Returns**: `string|false`
+**Returns**: `string|array|false`
 
 ## Availability
 
