@@ -7557,12 +7557,12 @@ echo call_user_func("getenv", "ELEPHC_EVAL_ENV_TEST") . ":";
 echo call_user_func_array("putenv", ["assignment" => "ELEPHC_EVAL_ENV_TEST=spread"]) ? "set" : "bad";
 echo ":" . getenv("ELEPHC_EVAL_ENV_TEST") . ":";
 putenv("ELEPHC_EVAL_ENV_TEST");
-echo getenv("ELEPHC_EVAL_ENV_TEST") === "" ? "empty" : "bad";
+echo getenv("ELEPHC_EVAL_ENV_TEST") === false ? "missing" : "bad";
 echo ":"; echo function_exists("getenv");
 echo function_exists("putenv");');
 "#,
     );
-    assert_eq!(out, "direct:named:named:set:spread:empty:11");
+    assert_eq!(out, "direct:named:named:set:spread:missing:11");
 }
 
 /// Verifies eval `getenv()` with zero arguments and a null name answers the environment.
@@ -7578,6 +7578,31 @@ echo is_array(call_user_func("getenv")) ? "c" : "x";');
 "#,
     );
     assert_eq!(out, "antpresentc");
+}
+
+/// Verifies eval preserves environment bytes and distinguishes absent names from empty values.
+#[test]
+fn test_eval_getenv_preserves_non_utf8_environment() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let out = compile_and_run_with_env(
+        r#"<?php
+putenv("ELEPHC_EVAL_RAW_KEY_" . chr(255) . "=raw");
+eval('$key = "ELEPHC_EVAL_RAW_ENV";
+$all = getenv();
+echo bin2hex($all[$key]), ":", bin2hex(getenv($key, true));
+echo ":", bin2hex(call_user_func("getenv", $key));
+echo ":", bin2hex(getenv()["ELEPHC_EVAL_RAW_KEY_" . chr(255)]);
+echo ":", bin2hex(getenv("ELEPHC_EVAL_RAW_KEY_" . chr(255)));
+putenv("ELEPHC_EVAL_RAW_ENV_EMPTY=");
+echo ":", getenv("ELEPHC_EVAL_RAW_ENV_EMPTY") === "" ? "empty" : "bad";
+putenv("ELEPHC_EVAL_RAW_ENV_MISSING");
+echo ":", getenv("ELEPHC_EVAL_RAW_ENV_MISSING", true) === false ? "missing" : "bad";
+echo ":", call_user_func("getenv", "ELEPHC_EVAL_RAW_ENV_MISSING") === false ? "missing" : "bad";');
+"#,
+        &[("ELEPHC_EVAL_RAW_ENV", std::ffi::OsStr::from_bytes(b"a\xff=b"))],
+    );
+    assert_eq!(out, "61ff3d62:61ff3d62:61ff3d62:726177:726177:empty:missing:missing");
 }
 
 /// Verifies eval sleep builtins dispatch through direct, named, and callable paths.
