@@ -1907,9 +1907,10 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
-                // `getenv()` boxes `false` or an owned copy made by `__rt_str_persist` in a
-                // fresh Mixed cell. Neither result can alias the variable-name argument, so
-                // retaining an owned name temporary leaks one block per call.
+                // `getenv($name)` boxes `false` or an owned copy made by `__rt_str_persist`
+                // in a fresh Mixed cell. `getenv()` boxes a newly built environment hash.
+                // Neither result can alias an argument, so the default `MayAliasArguments`
+                // bucket would keep an owned name temporary — and skip releasing the hash.
                 | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
                 | RuntimeFnId::IteratorToArray

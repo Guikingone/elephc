@@ -15,6 +15,8 @@ mod nullable_string_return;
 mod iconv;
 #[path = "runtime_gc/parse_url.rs"]
 mod parse_url;
+#[path = "runtime_gc/getenv.rs"]
+mod getenv;
 #[path = "runtime_gc/pcntl.rs"]
 mod pcntl;
 #[path = "runtime_gc/putenv.rs"]

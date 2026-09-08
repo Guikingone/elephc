@@ -311,7 +311,7 @@ fn test_error_usleep_wrong_args() {
     expect_error("<?php usleep();", "usleep() takes exactly 1 argument");
 }
 
-/// Verifies that `getenv()` with no arguments yields a wrong-args diagnostic.
+/// Verifies that `getenv()` with more than two arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_getenv_wrong_args() {
     // `getenv()` with no argument is VALID PHP — it answers the whole

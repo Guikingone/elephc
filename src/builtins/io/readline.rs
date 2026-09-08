@@ -5,7 +5,7 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` returns `Union(Str, Bool)` to match PHP's false-on-failure pattern for
+//! - `check` returns `Union(Str, False)` to match PHP's false-on-failure pattern for
 //!   end-of-input. The `prompt` argument is optional and pre-inferred by the registry.
 //! - `arity_error` is overridden to "readline() takes 0 or 1 arguments" because the
 //!   registry's default message for min0/max1 ("takes at most 1 argument") does not

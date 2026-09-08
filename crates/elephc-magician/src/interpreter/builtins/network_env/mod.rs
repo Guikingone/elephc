@@ -168,12 +168,12 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
             };
             eval_get_loaded_extensions_result(zend_extensions, values)
         }
-        "getenv" => {
-            let [name] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_getenv_result(*name, values)
-        }
+        "getenv" => match evaluated_args {
+            [] => eval_getenv_all_result(values),
+            [name] => eval_getenv_name_result(*name, values),
+            [name, _local_only] => eval_getenv_name_result(*name, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
         "exec" => {
             let [command] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);

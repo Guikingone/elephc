@@ -7565,6 +7565,21 @@ echo function_exists("putenv");');
     assert_eq!(out, "direct:named:named:set:spread:empty:11");
 }
 
+/// Verifies eval `getenv()` with zero arguments and a null name answers the environment.
+#[test]
+fn test_eval_getenv_whole_environment() {
+    let out = compile_and_run(
+        r#"<?php
+eval('putenv("ELEPHC_EVAL_ENV_ALL=present");
+echo is_array(getenv()) ? "a" : "x";
+echo is_array(getenv(null, true)) ? "nt" : "x";
+echo getenv("ELEPHC_EVAL_ENV_ALL", true);
+echo is_array(call_user_func("getenv")) ? "c" : "x";');
+"#,
+    );
+    assert_eq!(out, "antpresentc");
+}
+
 /// Verifies eval sleep builtins dispatch through direct, named, and callable paths.
 #[test]
 fn test_eval_dispatches_sleep_builtin_calls() {

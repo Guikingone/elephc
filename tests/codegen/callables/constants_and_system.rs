@@ -2412,6 +2412,26 @@ echo ":", getenv()["ELEPHC_EQUALS_PROBE"] ?? "missing";
     assert_eq!(out, "array:present:many:a=b=c");
 }
 
+/// Verifies a null name, including the named-only `local_only` form, is the whole environment.
+///
+/// PHP's signature is `getenv(?string $name = null, bool $local_only = false)`. Selecting
+/// the array form only when the instruction has zero operands rejected `getenv(null)`,
+/// `getenv(null, true)`, and `getenv(local_only: true)` as a string lookup of Void.
+#[test]
+fn test_getenv_null_name_is_the_whole_environment() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("ELEPHC_NULL_ENV_PROBE=present");
+echo is_array(getenv(null)) ? "n" : "x";
+echo is_array(getenv(null, true)) ? "nt" : "x";
+echo is_array(getenv(local_only: true)) ? "lo" : "x";
+echo ":", getenv(null)["ELEPHC_NULL_ENV_PROBE"] ?? "missing";
+echo ":", getenv("ELEPHC_NULL_ENV_PROBE", true);
+"#,
+    );
+    assert_eq!(out, "nntlo:present:present");
+}
+
 // Tests that `$_ENV` and `$_SERVER` carry what PHP's CLI SAPI puts in them, and
 // that a later `putenv` does NOT reach them.
 /// Verifies a CLI program finds its environment in both superglobals.

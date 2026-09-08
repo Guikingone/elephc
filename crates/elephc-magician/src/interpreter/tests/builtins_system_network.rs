@@ -541,6 +541,27 @@ return function_exists("putenv");"#,
     assert_eq!(values.output, "direct:named:named:set:spread:empty:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval `getenv()` with no name, a null name, and `local_only` answers the environment.
+#[test]
+fn execute_program_dispatches_getenv_whole_environment() {
+    let program = parse_fragment(
+        br#"putenv("ELEPHC_EVAL_ENV_ALL=present");
+echo is_array(getenv()) ? "a" : "x";
+echo is_array(getenv(null)) ? "n" : "x";
+echo is_array(getenv(null, true)) ? "nt" : "x";
+echo is_array(getenv(local_only: true)) ? "lo" : "x";
+echo getenv("ELEPHC_EVAL_ENV_ALL", true);
+return is_array(call_user_func("getenv"));"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "anntlopresent");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval shell process builtins capture or echo stdout across all call paths.
 #[test]
 fn execute_program_dispatches_process_builtins() {
