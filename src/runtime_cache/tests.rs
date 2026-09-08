@@ -79,6 +79,19 @@ use super::*;
             b"same-emitter",
         );
         assert!(keys.insert(pic), "PIC mode collided with a runtime-feature identity");
+
+        let static_library_boundary = identity::runtime_cache_key_with_build_identity_and_boundary(
+            8 * 1024 * 1024,
+            target,
+            RuntimeFeatures::none(),
+            false,
+            true,
+            b"same-emitter",
+        );
+        assert!(
+            keys.insert(static_library_boundary),
+            "non-PIC library-boundary mode collided with another runtime identity"
+        );
     }
 
     /// Verifies Cargo reruns the identity builder when a runtime source file is
@@ -213,7 +226,7 @@ use super::*;
             .find("cache_path.exists()")
             .expect("runtime cache lookup remains explicit");
         let generation = source
-            .find("generate_runtime_with_features_pic")
+            .find("generate_runtime_with_features_mode")
             .expect("runtime assembly generator remains explicit");
 
         assert!(

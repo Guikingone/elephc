@@ -638,6 +638,7 @@ pub fn parse_switch(
             }
             cases.push((values, body));
         } else if tokens[*pos].0 == Token::Default {
+            let default_span = tokens[*pos].1.span;
             *pos += 1;
             expect_case_separator(tokens, pos, "Expected ':' after 'default'")?;
             let mut body = Vec::new();
@@ -647,6 +648,14 @@ pub fn parse_switch(
                 && tokens[*pos].0 != Token::Eof
             {
                 body.push(crate::parser::stmt::parse_stmt(tokens, pos)?);
+            }
+            // The AST keeps `default` apart from the cases, and its source position is later
+            // recovered from the span of its first statement. A `default:` with no statements
+            // written BEFORE another case (`default: case 2: ...`) falls through into that case,
+            // so it needs a position too: an empty synthetic no-op carrying the label's span
+            // keeps the body non-empty and orderable without adding any behavior.
+            if body.is_empty() && *pos < tokens.len() && tokens[*pos].0 == Token::Case {
+                body.push(Stmt::new(StmtKind::Synthetic(Vec::new()), default_span));
             }
             default = Some(body);
         } else {

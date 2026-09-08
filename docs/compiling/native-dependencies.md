@@ -10,12 +10,22 @@ as **curated native packages**: the project declares an exact version, the lock
 records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
-The catalog contains PCRE2 10.47 and zlib 1.3.2. Programs using `preg_*`,
-`mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator` require PCRE2 at
-final link time. zlib is the second pure-C recipe and proves the manager is not
-PCRE2-specific; declaring it makes its verified static artifact available for
-future runtime/builtin integrations but does not by itself add `libz.a` to every
-program.
+The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
+libssh2 1.11.1, and curl 8.21.0.
+Programs using `preg_*`, `mb_ereg_match()`, `RegexIterator`, or
+`RecursiveRegexIterator` require PCRE2 at final link time. zlib is the second
+pure-C recipe and proves the manager is not PCRE2-specific; declaring it makes
+its verified static artifact available for future runtime/builtin integrations
+but does not by itself add `libz.a` to every program. curl has the largest
+dependency closure in the catalog: `elephc native add curl` also declares
+libssh2 (SCP/SFTP), nghttp2 (HTTP/2), OpenSSL (curl's TLS backend, and
+libssh2's crypto backend) and zlib, and `--with-curl` or ordinary detected
+`curl_*` usage requires all six archives at final link time.
+Dependency declaration order is link order: the resolver walks it depth-first
+and splices each package's own dependencies in behind it, so `libssh2.a`
+precedes the OpenSSL and zlib archives that satisfy it. See
+[Linking and conditional compilation](linking-and-conditional-compilation.md)
+for the `--with-curl` flag itself.
 
 ## Quick start
 
@@ -80,10 +90,10 @@ elephc native prune
 | `doctor` | Read-only project, lock, cache-size, stale-staging, toolchain, and receipt diagnostics. |
 | `prune` | Explicitly remove abandoned staging, catalog-orphan artifacts, and old toolchain fingerprints for the selected target/ABI. |
 
-`--target` accepts the normal supported targets: `macos-aarch64`,
-`linux-aarch64`, and `linux-x86_64`. It defaults to the host. GNU and musl are
-cache ABI variants derived from the selected C compiler, not additional public
-Elephc targets.
+`--target` accepts the normal supported targets: `macos-aarch64`, `ios-arm64`,
+`ios-sim-arm64`, `linux-aarch64`, and `linux-x86_64`. It defaults to the host.
+GNU and musl are cache ABI variants derived from the selected C compiler, not
+additional public Elephc targets.
 
 `--manifest-path` must name an `elephc.toml` file and disables ancestor
 discovery. `--offline` guarantees that no downloader is invoked. `--locked` is
@@ -123,29 +133,33 @@ SHA-256, exact source size, recipe revision, provides set, dependencies, and
 ordered link outputs for all supported targets. It contains no absolute cache
 or compiler paths and is safe to commit. Do not edit it by hand.
 
-The installer currently materializes manifest declarations. If a future catalog
-package has native dependencies, every dependency must also be declared in the
-manifest; lock generation fails closed with `elephc native add <dependency>`
-instead of silently producing an incomplete transitive installation.
+`native add` and `native update` declare a package's catalogued transitive
+dependencies directly in the manifest before locking and materializing them.
+Lock generation still fails closed with `elephc native add <dependency>` when a
+hand-edited manifest omits a required dependency, instead of producing an
+incomplete installation.
 
 ## Multi-target locks and caches
 
-One committed lock describes **all three supported targets**, but installed
+One committed lock describes **all five supported targets**, but installed
 artifacts are keyed and cached **per target, ABI, and toolchain fingerprint**.
-Installing on the developer's macOS host therefore does not install either
-Linux artifact. A Linux compile with only the macOS artifact cached fails
-without downloading and prints the exact target recovery command.
+Installing on the developer's macOS host therefore does not install either iOS
+or either Linux artifact. A compile with only the macOS artifact cached fails
+for any of those targets and prints the exact target recovery command.
 
-Install each CI matrix entry explicitly:
+Install each target artifact explicitly:
 
 ```bash
 elephc native install --locked --target macos-aarch64
+elephc native install --locked --target ios-arm64
+elephc native install --locked --target ios-sim-arm64
 elephc native install --locked --target linux-aarch64
 elephc native install --locked --target linux-x86_64
 ```
 
 On a non-host target, set all three target C-tool overrides before the command.
-A minimal GitHub Actions shape is:
+The iOS entries require SDK-aware compiler and archive-tool wrappers on a macOS
+runner. A minimal GitHub Actions shape for the native-runner subset is:
 
 ```yaml
 strategy:
@@ -161,8 +175,10 @@ steps:
   - run: elephc --target "${{ matrix.target }}" main.php
 ```
 
-This example uses a native runner for each target. If one runner cross-installs
-another target, configure `ELEPHC_NATIVE_CC_<TARGET_ENV>`,
+This example deliberately shows the three targets with native CI runners. Add
+the two iOS rows on a macOS runner after providing wrappers for the selected
+Xcode device or Simulator SDK. Whenever one runner cross-installs another
+target, configure `ELEPHC_NATIVE_CC_<TARGET_ENV>`,
 `ELEPHC_NATIVE_AR_<TARGET_ENV>`, and
 `ELEPHC_NATIVE_RANLIB_<TARGET_ENV>` first.
 

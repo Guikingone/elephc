@@ -2,7 +2,7 @@
 title: "getenv()"
 description: "Gets the value of an environment variable, or the whole environment."
 sidebar:
-  order: 133
+  order: 275
 ---
 
 ## getenv()
@@ -17,7 +17,7 @@ Gets the value of an environment variable, or the whole environment.
 - `$name` (`string`), default `null`, optional
 - `$local_only` (`bool`), default `false`, optional
 
-**Returns**: `mixed`
+**Returns**: `string|false`
 
 ## Availability
 

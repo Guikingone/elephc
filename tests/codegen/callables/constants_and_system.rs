@@ -2404,7 +2404,7 @@ $all = getenv();
 echo is_array($all) ? "array" : "not-array";
 echo ":", $all["ELEPHC_WHOLE_ENV_PROBE"] ?? "missing";
 echo ":", count($all) > 1 ? "many" : "few";
-// The FIRST `=` separates name from value; a value may hold more of them.
+// The FIRST `=` separates name from value; a value may contain more of them.
 putenv("ELEPHC_EQUALS_PROBE=a=b=c");
 echo ":", getenv()["ELEPHC_EQUALS_PROBE"] ?? "missing";
 "#,
@@ -2454,6 +2454,28 @@ echo ":", count($_GET) + count($_POST) + count($_COOKIE) + count($_FILES);
     );
 }
 
+/// Verifies `getenv` releases an owned temporary used as the variable name.
+#[test]
+fn test_getenv_releases_owned_temporary_name() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$missing = 0;
+for ($i = 0; $i < 8; $i++) {
+    $value = getenv(strtr("ELEPHC_GETENV_TEMP_REGRESSI0N_801", "0", "O"));
+    if ($value === false) { $missing = $missing + 1; }
+}
+echo $missing;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "8");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 // Tests `putenv("ELEPHC_TEST_VAR=hello")` followed by `getenv("ELEPHC_TEST_VAR")`
 // returns "hello". Verifies environment variable set/get round-trip.
 /// Verifies that putenv.
@@ -2466,6 +2488,41 @@ echo getenv("ELEPHC_TEST_VAR");
 "#,
     );
     assert_eq!(out, "hello");
+}
+
+/// Verifies that `putenv("NAME")` without an equals sign removes the variable,
+/// matching PHP rather than leaving the previous value in the environment.
+#[test]
+fn test_putenv_without_equals_unsets_variable() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("ELEPHC_TEST_UNSET=before");
+echo getenv("ELEPHC_TEST_UNSET") === "before" ? "set:" : "bad:";
+echo putenv("ELEPHC_TEST_UNSET") ? "unset:" : "failed:";
+echo getenv("ELEPHC_TEST_UNSET") === false ? "missing" : "present";
+"#,
+    );
+    assert_eq!(out, "set:unset:missing");
+}
+
+/// Verifies long environment names can be removed around and beyond the C-string scratch limit.
+/// Uses libc getenv through FFI so lookup uses an allocated C string for the full name.
+#[test]
+fn test_putenv_without_equals_unsets_long_names() {
+    let out = compile_and_run(
+        r#"<?php
+extern function getenv(string $name): ptr;
+foreach ([4095, 4096, 4097, 8192] as $length) {
+    $name = str_repeat("X", $length);
+    echo putenv($name . "=before") ? "set:" : "bad:";
+    echo ptr_is_null(getenv($name)) ? "bad:" : "present:";
+    echo \PUTENV(assignment: $name) ? "unset:" : "failed:";
+    echo ptr_is_null(getenv($name)) ? "missing:" : "bad:";
+    echo putenv($name) ? "absent;" : "failed;";
+}
+"#,
+    );
+    assert_eq!(out, "set:present:unset:missing:absent;".repeat(4));
 }
 
 // -- v0.8 phpversion / php_uname --

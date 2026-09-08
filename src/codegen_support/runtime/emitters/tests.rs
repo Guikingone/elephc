@@ -9,6 +9,7 @@
 
 use super::*;
 use crate::codegen_support::platform::{Arch, Platform, Target};
+use crate::codegen_support::runtime::{arrays, buffers, pointers};
 
 /// Verifies that AArch64 runtime emits fiber routines.
 #[test]
@@ -91,6 +92,44 @@ fn test_linux_x86_64_runtime_uses_shared_surface() {
             "linux x86_64 shared runtime missing global symbol {}",
             sym
         );
+    }
+}
+
+/// Every process-fatal buffer, pointer-null, and container-capacity helper named by
+/// cdylib safety review must unwind an active boundary on all supported targets.
+#[test]
+fn test_remaining_runtime_fatals_escape_cdylib_boundaries() {
+    let fatal_emitters: [(&str, fn(&mut Emitter)); 7] = [
+        ("buffer bounds", buffers::emit_buffer_bounds_fail),
+        ("buffer allocation size", buffers::emit_buffer_new),
+        ("buffer registry exhaustion", buffers::emit_buffer_registry_fail),
+        ("buffer use-after-free", buffers::emit_buffer_use_after_free),
+        ("pointer null", pointers::emit_ptr_check_nonnull),
+        ("array capacity", arrays::emit_array_new),
+        ("hash capacity", arrays::emit_hash_new),
+    ];
+    for target in [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ] {
+        for (name, emit) in fatal_emitters {
+            let mut emitter = Emitter::new_cdylib(target);
+            emit(&mut emitter);
+            let asm = emitter.output();
+            assert!(
+                asm.contains(crate::codegen_support::cdylib::BOUNDARY_ACTIVE),
+                "{name} omits the active-boundary check on {target:?}:\n{asm}"
+            );
+            assert!(
+                asm.contains(crate::codegen_support::cdylib::BOUNDARY_STATUS),
+                "{name} omits runtime-failure status on {target:?}:\n{asm}"
+            );
+            assert!(
+                asm.contains("__rt_throw_current"),
+                "{name} cannot unwind to the host boundary on {target:?}:\n{asm}"
+            );
+        }
     }
 }
 

@@ -61,6 +61,22 @@ pub(crate) const OB_NTC_G_END_FLUSH: &str =
 pub(crate) const OB_NTC_G_GET_FLUSH: &str =
     "Notice: ob_get_flush(): Failed to send buffer of ";
 /// ob_start() invalid-callback warning prefix (completed with the name + suffix).
+/// `curl_setopt()`'s unsupported-option warning, split around the decimal option number.
+///
+/// An unsupported option must answer
+/// `false` AND say so, rather than returning an inert `true`. The wording follows PHP's
+/// own `php_error_docref(..., E_WARNING, ...)` rendering (`Warning: <fn>(): <message>`),
+/// and the split lets `__rt_curl_warn_unsupported_option` format the option number
+/// between the two halves through the shared `__rt_itoa`.
+pub(crate) const CURL_SETOPT_UNSUPPORTED_PREFIX: &str = "Warning: curl_setopt(): Option ";
+/// The `curl_multi_setopt()` half of the same warning. A SEPARATE STRING because PHP names
+/// the function that refused the option, and the multi interface is a different function.
+pub(crate) const CURL_MULTI_SETOPT_UNSUPPORTED_PREFIX: &str =
+    "Warning: curl_multi_setopt(): Option ";
+/// The half after the option number. See [`CURL_SETOPT_UNSUPPORTED_PREFIX`].
+pub(crate) const CURL_SETOPT_UNSUPPORTED_SUFFIX: &str =
+    " is not supported by this build\n";
+
 pub(crate) const OB_WARN_BAD_CALLBACK_PREFIX: &str = "Warning: ob_start(): function \"";
 /// ob_start() invalid-callback warning suffix.
 pub(crate) const OB_WARN_BAD_CALLBACK_SUFFIX: &str =
@@ -176,6 +192,9 @@ pub(crate) const SPRINTF_ARGCOUNT_MSG: &str =
 /// `snprintf` (that would expose `%n` and friends), so it reports PHP's `ValueError` instead.
 pub(crate) const SPRINTF_UNKNOWN_SPEC_MSG: &str =
     "Fatal error: Uncaught ValueError: Unknown format specifier\n";
+/// Catchable `\ValueError` message when `iconv_strpos()` receives an out-of-range offset.
+pub(crate) const ICONV_STRPOS_OFFSET_MSG: &str =
+    "iconv_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)";
 /// Catchable `\ValueError` message when `hash()` receives an unknown algorithm name.
 pub(crate) const HASH_UNKNOWN_ALGO_MSG: &str =
     "hash(): Argument #1 ($algo) must be a valid hashing algorithm";

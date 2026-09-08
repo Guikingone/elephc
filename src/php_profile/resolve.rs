@@ -8,14 +8,11 @@
 //!
 //! Key details:
 //!
-//! - ONLY EXACT PINS ARE READ. `composer.lock`'s `platform-overrides.php` and
-//!   `composer.json`'s `config.platform.php` exist precisely to say "resolve as if PHP were
-//!   exactly this", and `.php-version` is the phpenv/asdf convention for the same statement.
-//!   Each is an ANSWER, not a guess. A `require.php` CONSTRAINT (`"^8.2"`) is deliberately
-//!   NOT read here: it is a range, choosing a point in it is a judgement call, and Composer's
-//!   range syntax differs from Cargo's in ways that make the `semver` crate unusable
-//!   (Composer's `~8.2` is `>=8.2 <9.0`; Cargo's is `>=8.2 <8.3`), so it needs a parser of
-//!   its own before it can be honest.
+//! - EXACT PINS WIN. `composer.lock`'s `platform-overrides.php`,
+//!   `composer.json`'s `config.platform.php`, and `.php-version` directly select a profile.
+//!   A `require.php` constraint is consulted only when it excludes the newest maintained
+//!   profile, in which case the newest admitted profile is selected. The local constraint
+//!   parser follows Composer's range semantics instead of Cargo's.
 //!
 //! - NOTHING IS REQUIRED. Every source is optional at every level, and a project with no
 //!   `composer.json` at all resolves to the default exactly as before. Compiling a lone

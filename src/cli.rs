@@ -97,8 +97,19 @@ fn wants_version(args: &[String]) -> bool {
     args.iter().any(|a| a == "-V" || a == "--version")
 }
 
+/// Returns true if `--print-capabilities` appears anywhere in the argument list.
+fn wants_capabilities(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--print-capabilities")
+}
+
 /// Full `--help` reference text, categorized by section. Printed to stdout
 /// with exit code 0 — this is a successful, requested action, not an error.
+///
+/// `{CAPABILITIES}` is substituted by `help_text()` from the capability tables
+/// rather than written out here. The list used to be literal, and it was wrong:
+/// it never gained `iconv`, so `--help` advertised a smaller compiler than the
+/// one the user had, while the typo error beside it — derived from the table —
+/// listed it correctly. Print this const directly and that comes back.
 pub(crate) const HELP: &str = concat!("Usage: elephc [OPTIONS] <source-file>
 
 A PHP-to-native AOT compiler
@@ -123,11 +134,13 @@ Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
   --emit-asm              Emit assembly (.s) instead of linking
-  --emit KIND             Output kind: executable (default) | cdylib
+  --emit KIND             Output kind: executable (default) | cdylib | staticlib
+                          Aliases: exe/bin | dylib/shared | static/lib (`lib` is staticlib)
 
 Target:
-  --target TARGET         macos-aarch64 | linux-aarch64 | linux-x86_64 (default: host)
-  --php-version VERSION   8.2 | 8.3 | 8.4 | 8.5 (default: 8.5)
+  --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
+                          linux-aarch64 | linux-x86_64 (default: host)
+  --php-version VERSION   8.0 through 8.6 (detected; fallback: 8.5)
 
 Codegen:
   --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
@@ -139,8 +152,9 @@ Codegen:
                           counts to stderr at exit
   --with-monitoring       Embed the profiling capability, dormant until `elephc monitor`
                           asks. Local/--exact captures report exact wall time,
-                          allocations, retained objects, DB queries/wait and calls,
-                          rooted at {main}; file I/O is not measured. A service's
+                          allocations, retained objects, DB queries/wait, outgoing
+                          network operations/wait and calls, rooted at {main}; file
+                          I/O is not measured. A service's
                           default answer is sampled CPU time. Inlined functions
                           fold into their caller (as with --counters).
   --with-monitoring=NAMES Embed it for the named functions only (comma list; trailing
@@ -155,7 +169,7 @@ Linking:
   --link LIB, -l LIB      Extra library to link
   --link-path DIR, -L DIR Extra library search path
   --framework NAME        macOS framework to link
-  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex, mysqli, monitoring)
+  --with-NAME             Force an optional capability ({CAPABILITIES})
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
@@ -167,6 +181,8 @@ Diagnostics:
 Other:
   -h, --help              Print this help and exit
   -V, --version           Print version and exit
+  --print-capabilities    List the optional capabilities this binary can link, and
+                          the bridge archives each needs, as tab-separated lines
   --mascotte              Print an ASCII mascot and a random quote before output
 ");
 
@@ -285,11 +301,15 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         fail("no source file given");
     }
     if wants_help(args) {
-        println!("{HELP}");
+        println!("{}", help_text());
         process::exit(0);
     }
     if wants_version(args) {
         println!("elephc {VERSION}");
+        process::exit(0);
+    }
+    if wants_capabilities(args) {
+        print!("{}", capability_report());
         process::exit(0);
     }
 
@@ -531,20 +551,25 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if output_modes > 1 {
         fail("--emit-ir, --emit-asm, and --check are mutually exclusive");
     }
+    if let Err(message) = validate_target_output(target, emit, check_only, emit_ir) {
+        fail(message);
+    }
     if web && check_only {
         fail("--web cannot be combined with --check");
     }
-    if web && matches!(emit, Emit::Cdylib) {
-        fail("--web cannot be combined with --emit cdylib");
+    // --web restructures the process entry point, which a library artifact does
+    // not have: both library kinds are incompatible with it for the same reason.
+    if web && emit.is_library() {
+        fail("--web cannot be combined with a library --emit kind (cdylib, staticlib)");
     }
-    // A cdylib has no `main`, and `main` is where the profiling runtimes are
+    // A library has no `main`, and `main` is where the profiling runtimes are
     // initialized. Accepting this produced a library carrying an enter/exit hook
     // at every call site with nothing able to arm them — the cost of the
     // capability without the capability. Turning a library on would need an
     // initialization ABI the host calls, which does not exist.
-    if matches!(emit, Emit::Cdylib) && !matches!(instrument, crate::codegen::Instrumentation::Off) {
+    if emit.is_library() && !matches!(instrument, crate::codegen::Instrumentation::Off) {
         fail(
-            "--with-monitoring cannot be combined with --emit cdylib: a library has no \
+            "--with-monitoring cannot be combined with a library --emit kind: a library has no \
              main, so the profiling runtime is never initialized and the hooks it \
              embeds can never be activated",
         );
@@ -632,6 +657,55 @@ fn with_flag_names() -> Vec<&'static str> {
         .collect()
 }
 
+/// Renders `HELP` with the accepted `--with-<name>` list substituted in.
+pub(crate) fn help_text() -> String {
+    HELP.replace("{CAPABILITIES}", &with_flag_names().join(", "))
+}
+
+/// Reports every optional capability this binary accepts, and the bridge
+/// archives each one needs, as tab-separated lines on stdout.
+///
+/// This exists so an INSTALLED compiler can be asked what it can do, rather
+/// than the question being answered by a list kept somewhere else. A bridge is
+/// resolved from the directory the binary lives in (or its sibling `lib/`), so
+/// a compiler can advertise a capability whose archive was never packed beside
+/// it — which is how released tarballs shipped without `libelephc_magician.a`
+/// from 0.26.3 to 0.26.5, refusing `--with-eval` and any `eval()` the compiler
+/// could not fold. Nothing inside a checkout can see that, because `target/`
+/// always holds every archive; only the shipped artifact is short.
+///
+/// The release probe unpacks a tarball, asks the binary inside it this
+/// question, and holds it to the answer. Every field is a projection of
+/// `BRIDGES`, `RUNTIME_CAPABILITY_FLAGS` and `MONITORING_BRIDGES`, so a
+/// thirteenth bridge is carried into that check by the edit that declares it
+/// and there is no second list for anyone to forget.
+///
+/// Each line is `<kind>\t<name>[\t<archive>...]`: `bridge` for a capability
+/// backed by one archive of its own, `capability` for one that is not — either
+/// because it needs no archive (`regex`, whose provider is a managed native
+/// package) or because it is built out of several (`monitoring`). A capability
+/// listed with no archive is still a capability the binary must be able to
+/// link; the archives are what can be checked without compiling anything.
+pub(crate) fn capability_report() -> String {
+    let mut report = String::new();
+    for name in with_flag_names() {
+        if let Some(archive) = crate::linker::archive_filename_for_flag(name) {
+            report.push_str(&format!("bridge\t{name}\t{archive}\n"));
+            continue;
+        }
+        report.push_str(&format!("capability\t{name}"));
+        if name == "monitoring" {
+            for mechanism in MONITORING_BRIDGES {
+                if let Some(archive) = crate::linker::archive_filename_for_flag(mechanism) {
+                    report.push_str(&format!("\t{archive}"));
+                }
+            }
+        }
+        report.push('\n');
+    }
+    report
+}
+
 /// Parses a single `--ini KEY=VALUE` assignment into a `(key, value)` pair, splitting on the
 /// FIRST `=` so an INI value that itself contains `=` is preserved intact. The key is trimmed
 /// (a stray CLI space is not part of a directive name) and must be non-empty; the value is taken
@@ -676,7 +750,7 @@ fn parse_required_emit(args: &[String], index: usize) -> Emit {
     if index < args.len() {
         parse_emit(&args[index])
     } else {
-        fail("Missing emit kind after --emit (expected: executable, cdylib)")
+        fail("Missing emit kind after --emit (expected: executable, cdylib, staticlib)")
     }
 }
 
@@ -685,8 +759,9 @@ fn parse_emit(value: &str) -> Emit {
     match value {
         "executable" | "exe" | "bin" => Emit::Executable,
         "cdylib" | "dylib" | "shared" => Emit::Cdylib,
+        "staticlib" | "static" | "lib" => Emit::Staticlib,
         other => fail(&format!(
-            "Invalid --emit kind '{}': expected one of: executable, cdylib",
+            "Invalid --emit kind '{}': expected one of: executable, cdylib, staticlib",
             other
         )),
     }
@@ -755,6 +830,26 @@ fn parse_target(value: &str) -> Target {
         Ok(target) => target,
         Err(err) => fail(&err),
     }
+}
+
+/// Validates artifact kinds that depend on the selected target.
+///
+/// iOS source can still be checked or lowered to EIR with the default emit kind,
+/// but actual code generation must use a library boundary: an Elephc executable
+/// is a CLI process, not a complete signed iOS application bundle.
+fn validate_target_output(
+    target: Target,
+    emit: Emit,
+    check_only: bool,
+    emit_ir: bool,
+) -> Result<(), &'static str> {
+    if target.is_ios() && emit == Emit::Executable && !check_only && !emit_ir {
+        return Err(
+            "iOS targets do not emit standalone executables; use --emit staticlib (or --emit \
+             cdylib) and link the library into an iOS app host",
+        );
+    }
+    Ok(())
 }
 
 /// Retrieve a required argument at index, or fail with the given message.
@@ -827,6 +922,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::codegen::platform::{AppleVariant, Arch, Platform};
 
     /// Extracts the compile configuration returned for a legacy invocation.
     fn compile_config(args: &[String]) -> CliConfig {
@@ -904,6 +1000,7 @@ mod tests {
     fn emit_kind_parses_canonical_spellings() {
         assert_eq!(parse_emit("executable"), Emit::Executable);
         assert_eq!(parse_emit("cdylib"), Emit::Cdylib);
+        assert_eq!(parse_emit("staticlib"), Emit::Staticlib);
     }
 
     /// Verifies the accepted aliases map to their canonical variants so users coming
@@ -914,6 +1011,40 @@ mod tests {
         assert_eq!(parse_emit("bin"), Emit::Executable);
         assert_eq!(parse_emit("dylib"), Emit::Cdylib);
         assert_eq!(parse_emit("shared"), Emit::Cdylib);
+        assert_eq!(parse_emit("static"), Emit::Staticlib);
+        assert_eq!(parse_emit("lib"), Emit::Staticlib);
+    }
+
+    /// Verifies `lib` is advertised as a static-library alias rather than being
+    /// mistaken for the dynamic-library family.
+    #[test]
+    fn help_identifies_lib_as_a_staticlib_alias() {
+        assert!(HELP.contains("static/lib (`lib` is staticlib)"));
+    }
+
+    /// Verifies iOS code generation produces host-consumable libraries rather
+    /// than a CLI executable that cannot be installed as an iOS application.
+    #[test]
+    fn ios_rejects_executable_artifacts_but_allows_analysis_and_libraries() {
+        for target in [
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+        ] {
+            assert!(validate_target_output(target, Emit::Executable, false, false).is_err());
+            assert!(validate_target_output(target, Emit::Staticlib, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Cdylib, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Executable, true, false).is_ok());
+            assert!(validate_target_output(target, Emit::Executable, false, true).is_ok());
+        }
+        assert!(
+            validate_target_output(
+                Target::new(Platform::MacOS, Arch::AArch64),
+                Emit::Executable,
+                false,
+                false,
+            )
+            .is_ok()
+        );
     }
 
     /// Verifies the canonical `--ir-opt=` spellings toggle the EIR optimization
@@ -1028,6 +1159,15 @@ mod tests {
         assert!(!config.web);
     }
 
+    /// Verifies `--with-iconv` records the charset bridge for force-linking.
+    #[test]
+    fn with_iconv_records_forced_crate() {
+        let args = vec!["elephc".into(), "--with-iconv".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("iconv"));
+        assert!(!config.web);
+    }
+
     /// Verifies `--with-regex` records the dynamic-code regex capability without web mode.
     #[test]
     fn with_regex_records_runtime_capability() {
@@ -1063,11 +1203,13 @@ mod tests {
             "elephc".into(),
             "--with-pdo".into(),
             "--with-tls".into(),
+            "--with-pcntl".into(),
             "app.php".into(),
         ];
         let config = compile_config(&args);
         assert!(config.with_crates.contains("pdo"));
         assert!(config.with_crates.contains("tls"));
+        assert!(config.with_crates.contains("pcntl"));
     }
 
     /// Verifies `--with-web` aliases `--web` (full web mode) instead of being
@@ -1255,6 +1397,64 @@ mod tests {
     fn wants_version_false_without_version_flag() {
         let args = vec!["elephc".into(), "app.php".into()];
         assert!(!wants_version(&args));
+    }
+
+    /// The report a release probe reads must name every bridge in the table.
+    ///
+    /// This is the whole mechanism: the probe unpacks a tarball and asks the
+    /// binary inside it which archives it needs, so a bridge the report omits
+    /// is a bridge the probe cannot check was packed — silently, and only in
+    /// the shipped artifact, which is the one place no in-repo test can look.
+    /// Derived from `crate_flag_names()` so the next bridge is covered by the
+    /// edit that declares it rather than by anyone remembering this test.
+    #[test]
+    fn the_capability_report_names_every_bridge_archive() {
+        let report = super::capability_report();
+        for flag in crate::linker::crate_flag_names() {
+            let archive = crate::linker::archive_filename_for_flag(flag)
+                .expect("every bridge flag resolves to an archive");
+            assert!(
+                report.contains(&archive),
+                "--print-capabilities never names `{archive}`, so the release \
+                 probe cannot check that it was packed beside the binary"
+            );
+        }
+    }
+
+    /// Every accepted `--with-<name>` must be advertised on the `--help` line.
+    ///
+    /// The list was literal once and drifted: `iconv` was accepted by the
+    /// parser and absent from `--help`, so the reference text described a
+    /// smaller compiler than the binary printing it.
+    #[test]
+    fn help_advertises_every_accepted_capability() {
+        let help = super::help_text();
+        assert!(
+            !help.contains("{CAPABILITIES}"),
+            "the capability placeholder reached the user unsubstituted"
+        );
+        let line = help
+            .lines()
+            .find(|line| line.contains("--with-NAME"))
+            .expect("--help documents --with-NAME");
+        for name in super::with_flag_names() {
+            assert!(
+                line.contains(name),
+                "--help never advertises --with-{name}, which the parser accepts"
+            );
+        }
+    }
+
+    /// Verifies `--print-capabilities` is detected anywhere in the argument list.
+    #[test]
+    fn wants_capabilities_detects_the_flag_anywhere() {
+        let args = vec![
+            "elephc".into(),
+            "app.php".into(),
+            "--print-capabilities".into(),
+        ];
+        assert!(super::wants_capabilities(&args));
+        assert!(!super::wants_capabilities(&["elephc".into(), "app.php".into()]));
     }
 
     /// Verifies help exposes both the current compiler version and its version flags.

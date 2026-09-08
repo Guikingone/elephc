@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_buffer_use_after_free` runtime helper for buffer use-after-free diagnostics.
 /// Dispatches to the platform-specific variant based on `emitter.target.arch`.
-/// Terminates the process with exit code 70 after emitting the error message.
+/// Escapes an active cdylib boundary, otherwise terminates with exit code 70.
 pub fn emit_buffer_use_after_free(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_buffer_use_after_free_linux_x86_64(emitter);
@@ -28,6 +28,7 @@ pub fn emit_buffer_use_after_free(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #47");                                         // byte length of the use-after-free error message
     emitter.instruction("mov x0, #2");                                          // write diagnostics to stderr
     emitter.syscall(4);
+    abi::emit_cdylib_exit_escape(emitter);
     emitter.instruction("mov x0, #70");                                         // use EX_SOFTWARE as the process exit status
     emitter.syscall(1);
 }
@@ -44,6 +45,7 @@ fn emit_buffer_use_after_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, 47");                                         // byte length of the fixed buffer use-after-free error message
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // emit the fatal buffer use-after-free diagnostic to stderr
+    abi::emit_cdylib_exit_escape(emitter);
     emitter.instruction("mov edi, 70");                                         // use EX_SOFTWARE as the process exit status for consistency with the ARM runtime
     emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process immediately after the fatal buffer use-after-free diagnostic

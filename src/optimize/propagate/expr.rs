@@ -459,66 +459,116 @@ pub(crate) fn propagate_args(
         .collect()
 }
 
+/// Takes the single statement out of `body` when it is exactly one `if` without `elseif`
+/// clauses, leaving the body empty; any other shape is left untouched and `None` is returned.
+fn take_lone_plain_if_from_vec(body: &mut Vec<Stmt>) -> Option<Stmt> {
+    let is_lone_plain_if = matches!(
+        body.as_slice(),
+        [Stmt {
+            kind: StmtKind::If { elseif_clauses, .. },
+            ..
+        }] if elseif_clauses.is_empty()
+    );
+    if is_lone_plain_if {
+        body.pop()
+    } else {
+        None
+    }
+}
+
+/// Like `take_lone_plain_if` on an optional body: a `None` or non-matching body stays as it is.
+fn take_lone_plain_if(body: &mut Option<Vec<Stmt>>) -> Option<Stmt> {
+    body.as_mut().and_then(take_lone_plain_if_from_vec)
+}
+
+/// Destructures a plain `if` statement into its condition, bodies, and a closure that rebuilds
+/// the same statement — same span, source mode, strict-types flag, and attributes — when the
+/// caller decides not to merge it after all.
+fn split_plain_if(
+    stmt: Stmt,
+) -> (
+    Expr,
+    Vec<Stmt>,
+    Option<Vec<Stmt>>,
+    impl FnOnce(Expr, Vec<Stmt>, Option<Vec<Stmt>>) -> Stmt,
+) {
+    let Stmt {
+        kind,
+        span,
+        source_mode,
+        strict_types,
+        attributes,
+    } = stmt;
+    let StmtKind::If {
+        condition,
+        then_body,
+        else_body,
+        ..
+    } = kind
+    else {
+        unreachable!("split_plain_if is only reached through take_lone_plain_if");
+    };
+    let rebuild = move |condition: Expr, then_body: Vec<Stmt>, else_body: Option<Vec<Stmt>>| Stmt {
+        kind: StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses: Vec::new(),
+            else_body,
+        },
+        span,
+        source_mode,
+        strict_types,
+        attributes,
+    };
+    (condition, then_body, else_body, rebuild)
+}
+
 /// Constructs an if/elseif/else statement from its components, performing local
 /// restructuring optimizations: collapses adjacent else-if chains when the else body
 /// contains only a single if statement, and simplifies consecutive ternary-like
 /// conditions into combined conditions using `combine_if_conditions` or `combine_if_chain_conditions`.
 pub(crate) fn build_if_stmt(
     condition: Expr,
-    then_body: Vec<Stmt>,
+    mut then_body: Vec<Stmt>,
     elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
-    else_body: Option<Vec<Stmt>>,
+    mut else_body: Option<Vec<Stmt>>,
     span: crate::span::Span,
 ) -> Stmt {
+    // Every merge below MOVES the pieces of the nested `if` into the merged statement: the lone
+    // inner statement is taken out of its branch, destructured, and either consumed or put back
+    // unchanged. No node is duplicated, so span-keyed checker decisions stay singular.
     if elseif_clauses.is_empty() {
-        if let Some(else_body_ref) = else_body.as_ref() {
-            if else_body_ref.len() == 1 {
-                if let StmtKind::If {
-                    condition: inner_condition,
-                    then_body: inner_then_body,
-                    elseif_clauses: inner_elseifs,
-                    else_body: inner_else,
-                } = &else_body_ref[0].kind
-                {
-                    if inner_elseifs.is_empty() && *inner_then_body == then_body {
-                        return build_if_stmt(
-                            combine_if_chain_conditions(condition, inner_condition.clone()),
-                            then_body,
-                            Vec::new(),
-                            inner_else.clone(),
-                            span,
-                        );
-                    }
-
-                    if inner_elseifs.is_empty() && inner_else.as_ref() == Some(&then_body) {
-                        return build_if_stmt(
-                            combine_if_conditions(
-                                invert_condition(condition),
-                                inner_condition.clone(),
-                            ),
-                            inner_then_body.clone(),
-                            Vec::new(),
-                            Some(then_body),
-                            span,
-                        );
-                    }
-                }
+        if let Some(inner) = take_lone_plain_if(&mut else_body) {
+            let (inner_condition, inner_then_body, inner_else, rebuild) = split_plain_if(inner);
+            if inner_then_body == then_body {
+                return build_if_stmt(
+                    combine_if_chain_conditions(condition, inner_condition),
+                    then_body,
+                    Vec::new(),
+                    inner_else,
+                    span,
+                );
             }
+            if inner_else.as_ref() == Some(&then_body) {
+                return build_if_stmt(
+                    combine_if_conditions(invert_condition(condition), inner_condition),
+                    inner_then_body,
+                    Vec::new(),
+                    Some(then_body),
+                    span,
+                );
+            }
+            else_body = Some(vec![rebuild(inner_condition, inner_then_body, inner_else)]);
         }
 
-        if else_body.is_none() && then_body.len() == 1 {
-            if let StmtKind::If {
-                condition: inner_condition,
-                then_body: inner_then_body,
-                elseif_clauses: inner_elseifs,
-                else_body: inner_else,
-            } = &then_body[0].kind
-            {
-                if inner_elseifs.is_empty() && inner_else.is_none() {
+        if else_body.is_none() {
+            if let Some(inner) = take_lone_plain_if_from_vec(&mut then_body) {
+                let (inner_condition, inner_then_body, inner_else, rebuild) = split_plain_if(inner);
+                if inner_else.is_none() {
                     return Stmt {
                         kind: StmtKind::If {
-                            condition: combine_if_conditions(condition, inner_condition.clone()),
-                            then_body: inner_then_body.clone(),
+                            condition: combine_if_conditions(condition, inner_condition),
+                            then_body: inner_then_body,
                             elseif_clauses: Vec::new(),
                             else_body: None,
                         },
@@ -528,6 +578,7 @@ pub(crate) fn build_if_stmt(
                         attributes: Vec::new(),
                     };
                 }
+                then_body = vec![rebuild(inner_condition, inner_then_body, inner_else)];
             }
         }
     }

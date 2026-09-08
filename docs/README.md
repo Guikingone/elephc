@@ -1,15 +1,15 @@
 ---
 title: "elephc Documentation"
-description: "A PHP-to-native compiler. Compiles a static subset of PHP to native assembly and produces standalone binaries for supported targets."
+description: "A PHP-to-native compiler producing standalone host binaries and cross-compiled iOS libraries."
 sidebar:
   order: 0
 ---
 
-elephc compiles PHP to standalone native binaries for the supported targets — currently macOS ARM64, Linux ARM64, and Linux x86_64 — without PHP, the Zend Engine, or an external VM. Ordinary source is AOT-compiled; experimental `eval()` may embed an optional interpreter bridge when a fragment requires runtime parsing. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
+elephc compiles PHP to native code for five supported targets without PHP, the Zend Engine, or an external VM. macOS ARM64, Linux ARM64, and Linux x86_64 are standalone-executable targets and the host triples for compiler release archives; from macOS, the compiler also cross-compiles libraries for iOS ARM64 devices and the iOS ARM64 Simulator. Ordinary source is AOT-compiled; experimental `eval()` may embed an optional interpreter bridge when a fragment requires runtime parsing. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
 
 ## Getting Started
 
-- [Installation](getting-started/installation.md) — install and manage elephc versions with elvm, or use Homebrew, a source build, or a release download
+- [Installation](getting-started/installation.md) — install and manage elephc versions with elvm, or use Homebrew, a source build, a release download, or an unsupported nightly
 - [Your First Program](getting-started/your-first-program.md) — write, compile, and run your first PHP binary
 - [Benchmark Suite](https://github.com/illegalstudio/elephc/blob/main/benchmarks/README.md) — compare elephc against PHP and equivalent C fixtures
 
@@ -49,6 +49,8 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions
 - [Math](php/math.md) — abs, floor, ceil, round, trigonometry, logarithms, random, constants
 - [BCMath](php/bcmath.md) — exact arbitrary-precision decimal arithmetic, scale, rounding, and errors
+- [iconv](php/iconv.md) — character-set conversion, `//TRANSLIT`/`//IGNORE`, character-oriented string functions, RFC 2047 MIME headers, and the encoding trio
+- [PCNTL](php/pcntl.md) — forking, child waits, signals, process replacement, process groups, sessions, daemonization, and target-specific controls
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals
@@ -64,6 +66,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Date and Time](php/datetime.md) — `DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`: construct, format, setters, `add`/`sub`, `diff`
 - [Calendar](php/calendar.md) — `ext/calendar`: Julian Day conversions for the Gregorian, Julian, French Republican and Jewish calendars, Easter, day/month names, `cal_*` dispatch
 - [Images](php/image.md) — GD image creation, I/O, color, drawing, text, transforms/filters, Exif/IPTC metadata, the Imagick (`Imagick`/`ImagickDraw`/`ImagickPixel`/`ImagickPixelIterator`/`ImagickKernel`) and Gmagick (`Gmagick`/`GmagickDraw`/`GmagickPixel`) object APIs, and Cairo 2D vector drawing (`CairoImageSurface`/`CairoContext`/`CairoMatrix`/patterns/gradients), plus `getimagesize`/`image_type_to_*`, backed by a pure-Rust codec/raster bridge (no system GD/ImageMagick/GraphicsMagick/cairo/libpng/libjpeg/libexif)
+- [cURL](php/curl.md) — `ext/curl`'s complete function, class, and constant surface (easy, multi, share, `CURLFile`/`CURLStringFile` uploads, six libcurl callbacks) on a statically pinned libcurl 8.21.0 with OpenSSL 3.5.8 as its TLS backend and native Apple SecTrust verification on iOS, plus the protocol matrix, the option-rejection table, and every documented difference from PHP
 
 ## Beyond PHP
 
@@ -78,7 +81,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
 - [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone HTTP server with worker, pool, or per-request process isolation
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
-- [Profiling](beyond-php/profiling.md) — PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database wait, SQL queries and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `.elephc` performance budgets, W3C distributed traces, and a self-contained interactive call-graph page
+- [Profiling](beyond-php/profiling.md) - PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database and outgoing-network wait, SQL queries, network operations and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `.elephc` performance budgets, automatic curl trace propagation, W3C distributed traces, and a self-contained interactive call-graph page
 
 ## Compiler Internals
 

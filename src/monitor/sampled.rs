@@ -1,15 +1,19 @@
 //! Purpose:
-//! The sampled path: `--live` and `--attach`, which read a process from the
-//! outside through `/usr/bin/sample`, and the folded-stack parsing shared with
-//! the endpoint's sampled answer.
+//! The macOS sampled path: `--attach` reading a process from the outside through
+//! `/usr/bin/sample`, and the folded-stack parsing shared with the endpoint's
+//! sampled answer.
 //!
 //! Called from:
-//! - `monitor::main` for `--live`/`--attach`.
+//! - `monitor::main` for `--attach` on macOS. NOT for `--live`, which launches
+//!   its target and asks it over a socketpair instead.
 //! - `remote::run`, to parse what a service's ring returned.
 //!
 //! Key details:
-//! - macOS-only, because no equivalent external sampler ships on Linux; the
-//!   Linux answer is the endpoint.
+//! - macOS-only, because no equivalent external sampler ships on Linux. That is
+//!   no longer the whole story for the modes that used it: `--live` asks the
+//!   child it launched, and Linux `--attach` reads the process itself through
+//!   `ptrace`. This file is what remains of reading one from the outside on
+//!   macOS.
 //! - Sampled shares sharpen as samples accumulate and carry real noise; time
 //!   spent blocked on I/O is not attributed on the CPU-time timer.
 
@@ -51,6 +55,10 @@ pub(crate) fn build_call_graph(display: &[(Vec<(String, Kind)>, u64)]) -> crate:
                 retained_exclusive: 0,
                 wait_inclusive: 0,
                 wait_exclusive: 0,
+                network_inclusive: 0,
+                network_exclusive: 0,
+                network_wait_inclusive: 0,
+                network_wait_exclusive: 0,
                 causes,
             }
         })
@@ -89,7 +97,7 @@ pub(crate) fn build_call_graph(display: &[(Vec<(String, Kind)>, u64)]) -> crate:
     }
 }
 
-/// Renders the probe's per-route database counters, when the capture carries any.
+/// Renders the probe's exact database, allocation and network side summaries.
 ///
 /// Printed apart from the cause table and labelled, because these numbers are a
 /// different KIND from everything around them: the table's shares are sampled at
@@ -116,21 +124,56 @@ pub(crate) fn probe_io_summary(text: &str) -> String {
             _ => continue,
         }
     }
-    if rows.is_empty() {
-        return String::new();
-    }
     rows.sort_by(|a, b| b.1.cmp(&a.1));
     let total_ops: u64 = rows.iter().map(|r| r.1).sum();
     let total_wait: u64 = rows.iter().map(|r| r.2).sum();
+    let mut out = if rows.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nDatabase - {total_ops} query operation(s), {} driver wait. Exact, not sampled: a driver call \
+             reports itself,\nso these counts do not depend on how often the profiler looked.\n\n",
+            fmt_ns(total_wait)
+        )
+    };
+    for (route, ops, wait) in rows {
+        out.push_str(&format!("{route:<40}{ops:>8} ops{:>12}\n", fmt_ns(wait)));
+    }
+    out.push_str(&probe_alloc_summary(text));
+    out.push_str(&probe_network_summary(text));
+    out
+}
+
+/// Renders exact per-route outgoing-network events carried by a sampled capture.
+pub(crate) fn probe_network_summary(text: &str) -> String {
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("elephc-probe-network: ") else {
+            continue;
+        };
+        let Some((route, tail)) = rest.rsplit_once(" ops=") else {
+            continue;
+        };
+        let Some((ops, wait)) = tail.split_once(" wait_ns=") else {
+            continue;
+        };
+        if let (Ok(ops), Ok(wait)) = (ops.trim().parse::<u64>(), wait.trim().parse::<u64>()) {
+            rows.push((route.to_string(), ops, wait));
+        }
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    rows.sort_by(|left, right| right.1.cmp(&left.1));
+    let total_ops: u64 = rows.iter().map(|row| row.1).sum();
+    let total_wait: u64 = rows.iter().map(|row| row.2).sum();
     let mut out = format!(
-        "\nDatabase — {total_ops} query operation(s), {} driver wait. Exact, not sampled: a driver call \
-         reports itself,\nso these counts do not depend on how often the profiler looked.\n\n",
+        "\nNetwork - {total_ops} outgoing operation(s), {} wait. Exact, not sampled.\n\n",
         fmt_ns(total_wait)
     );
     for (route, ops, wait) in rows {
         out.push_str(&format!("{route:<40}{ops:>8} ops{:>12}\n", fmt_ns(wait)));
     }
-    out.push_str(&probe_alloc_summary(text));
     out
 }
 
@@ -163,7 +206,7 @@ pub(crate) fn probe_alloc_summary(text: &str) -> String {
     rows.sort_by(|a, b| b.1.cmp(&a.1));
     let total: u64 = rows.iter().map(|r| r.1).sum();
     let mut out = format!(
-        "\nallocations — {total} observed between samples; attribution is sampled, so it says\n\
+        "\nAllocations - {total} observed between samples; attribution is sampled, so it says\n\
          WHERE allocation happens rather than how much each function allocated. The first\n\
          baseline and allocations after the final sample are outside this total.\n\n"
     );

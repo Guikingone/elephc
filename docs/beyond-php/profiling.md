@@ -29,8 +29,9 @@ program or connects to one already running.
 
 A target this command **launches** — a source or a binary — is measured for its
 whole run and reports the full table: per-function calls, inclusive and self
-wall time, allocations, retained objects, DB queries and DB-driver wait. File
-I/O is not yet counted or timed. Every export follows:
+wall time, allocations, retained objects, DB queries, DB-driver wait, outgoing
+network operations and network wait. File I/O is not yet counted or timed.
+Every export follows:
 [Speedscope](https://www.speedscope.app), [pprof](https://github.com/google/pprof),
 Graphviz, the HTML call graph.
 
@@ -53,18 +54,18 @@ end of this page). Ask for those with `--exact`, or with a signed
 
 The capability matrix is explicit about each dimension:
 
-| Capture | CPU | Wall time | Calls | Allocations / retained | DB queries | File I/O | Wait | Routes |
-|---|---|---|---|---|---|---|---|---|
-| local `monitor` | not measured as an OS CPU clock; the UI can show wall minus recorded DB wait | exact enter/exit time, rooted at `{main}` | exact | exact / exact | exact | not available | exact DB-driver wait only | untagged local run |
-| service default | sampled CPU-time ring | unavailable; blocked time is invisible | unavailable | exact deltas only between samples, with sampled attribution; no retained count | unavailable in combined `--with-monitoring` | unavailable | unavailable in combined `--with-monitoring` | sampled stacks carry the exact route tag |
-| service `--exact` or signed request | not measured separately; wall minus recorded DB wait is only a derived remainder | exact for one completed request, rooted at `{main}` | exact | exact / exact | exact | not available | exact DB-driver wait only | exact request route/trace context |
-| `--live` | sampled externally | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
-| `--attach` | sampled externally | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
+| Capture | CPU | Wall time | Calls | Allocations / retained | DB queries | Network | File I/O | Wait | Routes |
+|---|---|---|---|---|---|---|---|---|---|
+| local `monitor` | not measured as an OS CPU clock; the UI can show wall minus recorded waits | exact enter/exit time, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | untagged local run |
+| service default | sampled CPU-time ring | unavailable; blocked time is invisible | unavailable | exact deltas only between samples, with sampled attribution; no retained count | unavailable in combined `--with-monitoring` | unavailable in combined `--with-monitoring` | unavailable | unavailable in combined `--with-monitoring` | sampled stacks carry the exact route tag |
+| service `--exact` or signed request | not measured separately; wall minus recorded waits is only a derived remainder | exact for one completed request, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | exact request route/trace context |
+| `--live` | sampled CPU, asked over the channel | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
+| `--attach` | sampled from the outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
 
-A probe-only binary can emit exact per-route DB-operation and DB-wait counters
-beside its sampled stacks. `--with-monitoring` links both runtimes, and the exact
-runtime owns those callbacks, so the combined service-default row above is the
-one users of the public flag receive.
+A probe-only binary can emit exact per-route DB and outgoing-network operation
+and wait counters beside its sampled stacks. `--with-monitoring` links both
+runtimes, and the exact runtime owns those callbacks, so the combined
+service-default row above is the one users of the public flag receive.
 
 What *is* the same across all four is the mechanism. Profiling in production is
 normally a *different tool* answering a *smaller question*, an approximation you
@@ -202,12 +203,33 @@ elephc monitor hot.php --live          # top-style, refreshed each window
 elephc monitor --attach <pid> --live   # profile a process already running
 ```
 
-These two are the exception to *exact by default*, and the only place the
-distinction still surfaces. They read a process from the **outside**, once per
-millisecond of CPU time, because that is the only way to look at a program that
-is already running under someone else's control. So their numbers are sampled
-estimates, they cannot see time spent blocked on I/O, and they need
-`/usr/bin/sample` — which ships on macOS only.
+These two are the exception to *exact by default*. Both answer from the sampled
+ring rather than the instrumented table, once per millisecond of CPU time, so
+their numbers are estimates that sharpen as samples accumulate and neither can
+see time spent blocked on I/O.
+
+Where they differ is who is being asked. `--live` **launches** the program, so it
+hands it a socketpair and asks it directly — the same channel the exact path has
+always used, and the reason a live table needs no external tool and works
+wherever elephc does. `--attach` is given a pid that is already running under
+someone else's control, with no channel in, so reading it means reading a process
+from the **outside**: `/usr/bin/sample` on macOS, and on Linux elephc does it
+itself, stopping each thread with `ptrace` and walking its frame chain.
+
+Reading from the outside asks two things of the target that asking it does not:
+
+- **Its symbols.** An address is not a name. elephc strips the symbol table by
+  default, because nothing *inside* a program reads it — so build a program you
+  intend to attach to with `--keep-symbols` (or `--debug-info`). Attaching to a
+  stripped binary says so rather than reporting a profile of `<native>`.
+- **Permission to trace it.** On Linux, `yama/ptrace_scope` commonly restricts
+  attaching to descendants; the refusal names the setting when it is what stopped
+  you. In a container, `--cap-add=SYS_PTRACE` and a seccomp profile that permits
+  `ptrace`.
+
+Neither applies to the endpoint, which is why it stays the answer for a program
+you cannot rebuild or are not allowed to trace: start it with
+`ELEPHC_PROBE_ADDR` and read it with `elephc monitor <addr>`.
 
 `--live` refreshes a top-style table once per window (`--duration`, default 3s in
 live mode) with trend arrows against the previous window and a cumulative share.
@@ -343,8 +365,9 @@ card rather than a glaring white one, while the hot end stays gold → magenta.
 
 ### Per-line source view
 
-A **sampled** capture (`--live`, `--attach`) can place every sample on a *source
-line*, because a sample is an address and the dSYM says which line owns it. Open
+A **sampled** capture can place every sample on a *source line*, because a sample
+is an address and the dSYM says which line owns it — so this view needs a macOS
+build with its `.dSYM` beside the binary. Open
 the call graph and hit **📄 Source** (or `s`):
 
 ```text
@@ -509,9 +532,10 @@ that samples itself from boot whether or not anyone ever looks.
 
 The **exact** answer is the same measurement a local run gives:
 per-function calls, self and inclusive time, allocations, retained objects,
-DB queries and DB-driver wait, for one request, rooted at `{main}`. It does not
-count or time file I/O. It exists only once a request completes, so `--exact`
-waits up to thirty seconds for the next one.
+DB queries, DB-driver wait, outgoing network operations and network wait, for
+one request, rooted at `{main}`. It does not count or time file I/O. It exists
+only once a request completes, so `--exact` waits up to thirty seconds for the
+next one.
 
 One exact capture runs at a time. The rendezvous the worker leaves its slice in
 is a single slot, so a second `--exact` while one is in flight is told so rather
@@ -658,7 +682,7 @@ every call from a real enter/exit shadow stack, and writes the result to stderr
 at exit.
 
 ```text
-elephc-instr: {fn} calls=<n> incl_ns=<ns> excl_ns=<ns> incl_allocs=<n> excl_allocs=<n> incl_io=<n> excl_io=<n> incl_ret=<n> excl_ret=<n> incl_wait=<ns> excl_wait=<ns>
+elephc-instr: {fn} calls=<n> incl_ns=<ns> excl_ns=<ns> incl_allocs=<n> excl_allocs=<n> incl_io=<n> excl_io=<n> incl_ret=<n> excl_ret=<n> incl_wait=<ns> excl_wait=<ns> incl_network=<n> excl_network=<n> incl_network_wait=<ns> excl_network_wait=<ns>
 elephc-instr-edge: {caller} -> {callee} count=<n> ns=<callee ns under caller>
 elephc-instr-query: <count> <normalized SQL text>   (one per distinct statement, if any DB ran)
 ```
@@ -671,14 +695,15 @@ its callees'). Across a run the exclusive times sum to the root's inclusive — 
 real partition of the program's time.
 
 A **sampled** view exists alongside it in three paths. A running service's
-default endpoint answer comes from the in-process CPU-time ring;
-`--live` and `--attach` read a process from the outside with `/usr/bin/sample`.
-All three report estimates that sharpen as samples accumulate, carry noise
-(around ±0.3 points at ~1,500 samples), and cannot see time spent blocked on I/O
-because their CPU-time clocks do not tick while a program waits. Only the
-in-process ring carries sampled allocation deltas and route tags; external
-`--live`/`--attach` do not. Where a page or table shows sampled numbers it says
-so.
+default endpoint answer comes from the in-process CPU-time ring, and so does
+`--live`, which launches its target and asks it over a socketpair. Only
+`--attach` reads a process from the outside, because it is handed a pid and has
+no channel in. All three report estimates that sharpen as samples accumulate,
+carry noise (around ±0.3 points at ~1,500 samples), and cannot see time spent
+blocked on I/O because their CPU-time clocks do not tick while a program waits.
+An outside reading carries no sampled allocation deltas or route tags — those
+come from the in-process ring, which `--attach` is not talking to. Where a page
+or table shows sampled numbers it says so.
 
 ### Narrowing it to a few functions
 
@@ -785,7 +810,11 @@ where a figure would otherwise be trusted further than it should be:
   case that is exact.
 - **At most 4,096 coroutines can be suspended at once.** Past that a suspension
   is refused and the frame is left where it was, which is the old attribution
-  rather than a new one; the report says how many.
+  rather than a new one; the report says how many. A suspension also releases
+  whatever was still parked under its own coroutine: a fiber address is handed to
+  the next fiber once the first is freed, so a group still standing under it
+  belongs to a coroutine that is gone and will never be resumed. Abandoned
+  generators therefore cost a slot only until their address is reused.
 
 **Memory too.** `incl_allocs` / `excl_allocs` are the exact number of heap
 allocations attributed to each function — the same shadow-stack math applied to
@@ -802,8 +831,17 @@ callee many times and that callee issues one query each, the recommendation says
 so outright — "*N+1: `list_all` calls `get_user` 200 times and `get_user`
 issues 200 DB queries — batch them into one query*". `monitor`
 shows a `queries` column and per-function query counts in the graph tooltips.
-(HTTP has no client bridge in elephc yet; filesystem I/O can be added on the same
-runtime hook, but is not counted today.)
+
+**And outgoing network work.** `incl_network` / `excl_network` count curl
+transfers with the same inclusive/exclusive attribution as DB queries, while
+`incl_network_wait` / `excl_network_wait` record blocking curl transfer,
+connection-upkeep, or multi-wait time. `curl_upkeep()` contributes maintenance
+wait but not a transfer operation, and PHP callback execution nested inside
+`curl_exec()` is subtracted from network wait. These counters are separate from
+the PDO dimensions, so an HTTP-heavy request cannot inflate query budgets or
+trigger a false N+1 diagnosis. The stdout table, interactive graph, distributed
+trace waterfall, OTLP and Prometheus exports, and performance assertions all
+carry the network dimensions. Filesystem I/O is still not counted.
 
 **And what stays behind.** `incl_ret` / `excl_ret` are **retained** objects —
 allocated minus freed — attributed per function the same exact way, by reading
@@ -828,9 +866,9 @@ spent **blocked inside a driver call** rather than running PHP. The PDO bridge
 times the database work — statement execution and `PDO::exec`, across every
 driver — and reports the elapsed time through the same pay-for-use slot
 mechanism, so the profiler can split every function's self time into recorded DB
-wait and a non-DB remainder. Note the scope: *database* work. File and network
-I/O outside PDO are not timed, so `wall - DB wait` is not an OS measurement of
-actual on-CPU time.
+wait and a non-DB remainder. Network wait is reported in its own curl-backed
+dimension, while file I/O remains unmeasured. Neither remainder is an OS
+measurement of actual on-CPU time.
 
 ```
 PDO::exec              self 1.8 ms   wait 1.4 ms   non-DB 363.7 µs
@@ -923,8 +961,10 @@ an island only elephc tooling can read. When a request arrives with a valid
 starts a new one. A malformed header always starts a fresh trace, so a caller
 cannot inject text into your profile output.
 
-To carry the trace onward, read the value the profiler publishes for the
-current request and pass it on:
+Curl carries the trace onward automatically while a monitoring capture is
+active. It injects the value the profiler publishes for the current request
+unless the program already supplied a `traceparent` header. Explicit user
+headers always win. The same value remains available for other HTTP clients:
 
 ```php
 $ctx = stream_context_create(['http' => [
@@ -933,7 +973,7 @@ $ctx = stream_context_create(['http' => [
 $fh = fopen('http://inventory.internal/stock', 'r', false, $ctx);
 ```
 
-`ELEPHC_TRACEPARENT` is refreshed at the start of every request and already
+`ELEPHC_TRACEPARENT` is refreshed at the start of every captured request and already
 carries *this* slice's span id, so the callee records it as its parent. Nothing
 else is needed — no extra flag, no new builtin, and non-instrument binaries
 carry none of this machinery (the runtime slot stays zero).
@@ -946,10 +986,10 @@ caller (any OTel service)  trace=1111…8888  span=aaaabbbbccccdddd
     service B              trace=1111…8888  span=13b8fb9994026a78  parent=604e39a69a8d26e2
 ```
 
-Propagation currently reaches the HTTP stream layer (`fopen("http://…")` with a
-stream context). elephc has no `curl` yet, so an application that calls out
-through curl cannot propagate; that is the practical limit today, not the
-mechanism.
+Propagation reaches curl automatically and the HTTP stream layer manually
+(`fopen("http://…")` with a stream context). Automatic curl propagation is
+dormant outside an active capture and removes a previously injected header when
+the handle is reused later.
 
 #### Correlating the services
 
@@ -1032,8 +1072,8 @@ elephc monitor --stitch gateway.log --stitch inventory.log \
 `--otlp` posts the slices as **OpenTelemetry spans**. elephc already carried the
 W3C trace identity — the service belonged to its caller's trace whether or not
 anything was exported — so what this adds is that the hop stops being a *gap* in
-that trace and starts being a span with its own duration, route, query count and
-time spent waiting.
+that trace and starts being a span with its own duration, route, query count,
+network-operation count and time spent waiting.
 
 Plain HTTP to a local agent is the intended deployment, so an https endpoint is
 refused with that advice rather than a socket error: a remote or authenticated
@@ -1063,7 +1103,9 @@ service:
 textfile collector. A file rather than an endpoint, because `monitor` runs and
 exits and leaves nothing to poll; percentiles are a `summary` rather than a
 histogram, because we hold exact per-request values and buckets would invent a
-resolution the capture does not have.
+resolution the capture does not have. Network data is exported as the
+`elephc_network_operations_per_request` and
+`elephc_network_wait_seconds_per_request` gauges.
 
 ### Timeline (Perfetto)
 
@@ -1082,6 +1124,12 @@ so any Perfetto/`chrome://tracing`-compatible viewer opens it. Standalone, set
 `ELEPHC_INSTR_TRACE=<path>` (and optionally `ELEPHC_INSTR_TRACE_MAX=<n>`) when
 running a monitored binary. The trace is bounded (500k calls by default)
 so a hot program's trace stays openable; the overflow count is reported.
+
+A coroutine is the one thing that produces more than one slice per call. A
+suspension ends a span exactly as a return does, so a generator resumed three
+times appears as three slices on its own row, with the consumer's work between
+them where it belongs — and an abandoned generator still gets the slice it ran
+for, even though its exit never arrives.
 
 ### Recommendations and assertions
 
@@ -1106,7 +1154,8 @@ elephc monitor app.php \
 ```
 
 Every measured dimension is assertable — `calls`, `allocs`, `retained`,
-`queries`, `self_ms`, `incl_ms`, `wait_ms`, `time_pct` — with the operators
+`queries`, `self_ms`, `incl_ms`, `wait_ms`, `network`, `network_wait_ms`,
+`time_pct` - with the operators
 `<= >= == < >`. Use `*` as the function to assert on the **whole run**:
 
 ```bash
@@ -1248,13 +1297,24 @@ sampled function makes inlining visible by difference.
   self-restart) keeps the armed sampling timer, which would kill the new image.
   Call the exported `elephc_probe_disarm` before such an exec. Ordinary
   `exec()`/`proc_open`/`popen` (which fork first) are already safe.
-- **`--live` and `--attach` are macOS-only.** They read a process from the
-  outside, which needs `/usr/bin/sample`; no equivalent ships on Linux. The
-  Linux answer needs no external tool: run the program with `ELEPHC_PROBE_ADDR`
-  set and read it with `elephc monitor <addr>`, which reaches a live process and
-  answers from the sample ring, or with `--exact` returns the measured
-  per-function table for one completed request. Everything else — profiling a
-  source, a binary, a service, the assertions, the exports, `--stitch` — is
+- **`--attach` needs symbols, permission, and frame pointers.** It is handed a
+  pid already running under someone else's control, so there is no channel in and
+  it has to read the process from the outside — `/usr/bin/sample` on macOS,
+  `ptrace` on Linux. That costs three things asking does not: the target must
+  keep its symbol table (`--keep-symbols`), the kernel must permit tracing it
+  (`yama/ptrace_scope`, `CAP_SYS_PTRACE` in a container), and its stacks are
+  walked through the frame pointer, so a chain that loses one ends there rather
+  than being guessed past. Where any of the three is missing, the endpoint needs
+  none of them: run the program with `ELEPHC_PROBE_ADDR` set and read it with
+  `elephc monitor <addr>`, which reaches a live process and answers from the
+  sample ring, or with `--exact` returns the measured per-function table for one
+  completed request.
+
+  `--live` used to be listed here beside it and did not belong: it LAUNCHES the
+  target, so it can hand it a socketpair and ask, exactly as the exact path
+  always has. It simply never opened one, and reading its own child from the
+  outside was the consequence. Everything else — profiling a source, a binary, a
+  service, the assertions, the exports, `--stitch` — was already
   platform-independent.
 - **A service answers from the ring by default; `--exact` measures one request.**
   `elephc monitor <addr>` returns folded sampled stacks — shares that sharpen as

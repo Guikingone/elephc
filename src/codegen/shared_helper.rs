@@ -57,7 +57,9 @@ pub(super) fn emit_shared_helper(
     body: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
 ) -> Result<()> {
     let function = helper_function(label, return_php_type);
-    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear);
+    // Shared helpers own no cleanup-tracked locals, so an exception can skip
+    // their synthetic frame and unwind through the caller's activation record.
+    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear, false);
     let mut ctx = FunctionContext::new(
         module, &function, emitter, data, shared, layout, false, false, false, None,
     );
@@ -105,8 +107,8 @@ fn emit_helper_entry(ctx: &mut FunctionContext<'_>) {
     let nested = abi::nested_call_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("stp x29, x30, [sp, #-16]!");              // save frame pointer and return address
-            ctx.emitter.instruction("mov x29, sp");                            // establish the helper frame pointer
+            ctx.emitter.instruction("stp x29, x30, [sp, #-16]!");               // save frame pointer and return address
+            ctx.emitter.instruction("mov x29, sp");                             // establish the helper frame pointer
             ctx.emitter.instruction(&format!("str {}, [sp, #-16]!", nested));   // preserve the caller's nested-call register
         }
         Arch::X86_64 => {
@@ -123,15 +125,15 @@ fn emit_helper_exit(ctx: &mut FunctionContext<'_>) {
     let nested = abi::nested_call_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [sp], #16", nested));      // restore the caller's nested-call register
+            ctx.emitter.instruction(&format!("ldr {}, [sp], #16", nested));     // restore the caller's nested-call register
             ctx.emitter.instruction("ldp x29, x30, [sp], #16");                 // restore frame pointer and return address
             ctx.emitter.instruction("ret");                                     // return whatever the body left in the result registers
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("add rsp, 8");                               // release the alignment padding
-            ctx.emitter.instruction(&format!("pop {}", nested));                 // restore the caller's nested-call register
-            ctx.emitter.instruction("pop rbp");                                  // restore the caller frame pointer
-            ctx.emitter.instruction("ret");                                      // return whatever the body left in the result registers
+            ctx.emitter.instruction("add rsp, 8");                              // release the alignment padding
+            ctx.emitter.instruction(&format!("pop {}", nested));                // restore the caller's nested-call register
+            ctx.emitter.instruction("pop rbp");                                 // restore the caller frame pointer
+            ctx.emitter.instruction("ret");                                     // return whatever the body left in the result registers
         }
     }
 }

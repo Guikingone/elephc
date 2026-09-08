@@ -9,9 +9,21 @@
 //! - Pure-data builtin: return type (`Str`) is fully determined by the declaration.
 
 
+use crate::builtins::spec::BuiltinCheckCtx;
+use crate::errors::CompileError;
+use crate::types::PhpType;
+
 builtin! {
     contract: "shell_exec",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    check: check,
+    semantics: crate::builtins::semantics::host_only_runtime_fn_semantics(
         crate::ir::RuntimeFnId::ShellExec,
     ),
+}
+
+/// Refuses the call on targets whose sandbox forbids spawning a process; the
+/// return type is otherwise exactly the declaration's.
+fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    crate::builtins::spec::reject_if_process_spawn_forbidden(cx)?;
+    Ok(PhpType::Str)
 }

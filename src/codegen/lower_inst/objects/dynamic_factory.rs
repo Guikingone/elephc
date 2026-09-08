@@ -98,7 +98,13 @@ pub(super) fn dynamic_new_candidate(
     }
     let constructor_key = php_symbol_key("__construct");
     let mut padding_thunk = None;
-    let constructor_impl = if let Some(constructor) = class_info.methods.get(&constructor_key) {
+    // Same reason as the fixed-class path: a runtime-selected descendant of a class with a
+    // private constructor carries no `__construct` entry of its own, and PHP still runs the
+    // ancestor's. The owner is the candidate itself for every other constructor.
+    let constructor_owner = crate::types::constructor_owner(&ctx.module.class_infos, class_name);
+    let constructor_impl = if let Some((owner_name, constructor)) = constructor_owner
+        .and_then(|(name, info)| info.methods.get(&constructor_key).map(|sig| (name, sig)))
+    {
         // A site that passes FEWER arguments than the constructor declares is still a candidate
         // when every omitted parameter has a default and `ir_lower` emitted the padding thunk for
         // this (class, argc) pair. `new $c(…)` cannot be padded by the checker — it does not know
@@ -126,11 +132,9 @@ pub(super) fn dynamic_new_candidate(
                 padding_thunk = Some(thunk);
             }
         }
-        let impl_class = class_info
-            .method_impl_classes
-            .get(&constructor_key)
-            .cloned()
-            .unwrap_or_else(|| class_name.to_string());
+        let impl_class = constructor_owner
+            .and_then(|(_, info)| info.method_impl_classes.get(&constructor_key).cloned())
+            .unwrap_or_else(|| owner_name.to_string());
         if !class_method_already_emitted(ctx, &impl_class, &constructor_key, false) {
             return Ok(None);
         }

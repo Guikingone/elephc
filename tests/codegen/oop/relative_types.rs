@@ -86,6 +86,107 @@ fn test_static_return_type() {
     assert_eq!(out, "made");
 }
 
+/// Verifies `new static()` runs an ancestor's private constructor for a selected descendant.
+///
+/// A private method is not inherited, so the descendant's own method map carries no
+/// `__construct`; resolving only there allocated the object and ran nothing at all.
+#[test]
+fn test_new_static_runs_inherited_private_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class Connection {
+    private function __construct() { echo "connecting "; }
+    public static function make(): static { return new static(); }
+    public function ok(): string { return "ok"; }
+}
+class PooledConnection extends Connection {}
+echo PooledConnection::make()->ok();
+"#,
+    );
+    assert_eq!(out, "connecting ok");
+}
+
+/// Verifies the whole constructor chain runs when the private constructor calls `parent::`.
+#[test]
+fn test_new_static_private_constructor_runs_parent_chain() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __construct() { echo "base "; }
+}
+class Middle extends Base {
+    private function __construct() { parent::__construct(); echo "middle "; }
+    public static function make(): static { return new static(); }
+    public function ok(): string { return "ok"; }
+}
+class Leaf extends Middle {}
+echo Leaf::make()->ok();
+"#,
+    );
+    assert_eq!(out, "base middle ok");
+}
+
+/// Verifies an inherited private constructor still receives its arguments.
+///
+/// With arguments the same missing lookup surfaced as a checker arity error claiming the
+/// descendant takes none, rather than as a silently skipped call.
+#[test]
+fn test_new_static_inherited_private_constructor_takes_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class Tagged {
+    private function __construct(private int $tag) {}
+    public static function make(int $tag): static { return new static($tag); }
+    public function tag(): int { return $this->tag; }
+}
+class SubTagged extends Tagged {}
+echo SubTagged::make(7)->tag();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies naming the descendant directly from the declaring scope also runs the constructor.
+#[test]
+fn test_fixed_new_of_descendant_runs_declaring_private_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class Owner {
+    private function __construct() { echo "built "; }
+    public static function makeChild(): Owner { return new OwnedChild(); }
+}
+class OwnedChild extends Owner {}
+echo Owner::makeChild() instanceof OwnedChild ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "built yes");
+}
+
+/// Verifies the singleton shape this defect actually reached: private constructor, static
+/// accessor, one subclass, and a call through the base type.
+#[test]
+fn test_singleton_subclass_runs_private_constructor_and_dispatches() {
+    let out = compile_and_run(
+        r#"<?php
+class Root {
+    public function __construct() {}
+    public function alpha(): string { return "root-alpha"; }
+    public function beta(): string { return "root-beta"; }
+}
+class Single extends Root {
+    private static ?Single $instance = null;
+    private function __construct() { parent::__construct(); echo "init "; }
+    public static function get(): Single { return self::$instance ??= new self(); }
+    public function alpha(): string { return "single-alpha"; }
+}
+function through_root(Root $value): string { return $value->beta(); }
+$single = Single::get();
+echo $single->alpha(), "|", through_root($single);
+"#,
+    );
+    assert_eq!(out, "init single-alpha|root-beta");
+}
+
 /// Verifies an inherited static factory returning `static` exposes subclass-only methods.
 #[test]
 fn test_inherited_static_factory_return_binds_to_called_class() {

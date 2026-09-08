@@ -64,18 +64,58 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
 
 /// Frees a process-level eval context handle allocated by the eval bridge.
 ///
+/// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP
+/// before the context (and, transitively, its `EvalStreamResources`) actually drops — see
+/// `EvalStreamResources::release_curl_easy_private_values`'s own doc for why that release
+/// cannot happen inside `Drop` itself and has to live here instead.
+/// `ElephcRuntimeOps::new()` needs no live eval call or
+/// context to construct — it is a stateless adapter over generated runtime C-ABI symbols —
+/// so it is safe to build one ad hoc for this one release pass even though this function
+/// itself receives no `RuntimeValueOps` parameter.
+///
+/// ORDER IS LOAD-BEARING: the curl-private release runs BEFORE
+/// `context.unregister_dynamic_object_context()` below, not after. A retained
+/// `CURLOPT_PRIVATE` value can be (or transitively reference, through an array/object
+/// graph) an eval-declared object with a `__destruct()` method; releasing it to a
+/// zero refcount runs that destructor, and dispatching it correctly depends on this
+/// context still being registered as the object's owner
+/// (`crate::ffi::dynamic_destructors::dynamic_object_owner_context`). Releasing AFTER
+/// unregistering would let that lookup fail for exactly this one teardown-time release,
+/// silently skipping (or misrouting) a `__destruct()` call every other release path in
+/// this crate correctly triggers.
+///
 /// # Safety
 /// `ctx` must be null or a pointer returned by `__elephc_eval_context_new`
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
-    if !ctx.is_null() {
-        if let Some(context) = unsafe { ctx.as_ref() } {
-            context.unregister_dynamic_object_context();
-        }
-        crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
-        drop(Box::from_raw(ctx));
+    if ctx.is_null() || crate::context::pcntl_runtime::defer_context_free(ctx) {
+        return;
     }
+    unsafe { drop_eval_context_now(ctx) };
+}
+
+/// Unregisters every process-global callback into one context, then drops it immediately.
+///
+/// PCNTL calls this only after the last retained signal handler stops referencing
+/// a context whose normal ABI teardown was deferred.
+///
+/// # Safety
+/// `ctx` must point to a live context allocated by `__elephc_eval_context_new`
+/// and no process-global PCNTL handler may still reference it.
+pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
+    #[cfg(all(feature = "curl", not(test)))]
+    if let Some(context) = unsafe { ctx.as_mut() } {
+        let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
+        context
+            .stream_resources_mut()
+            .release_curl_easy_private_values(&mut values);
+    }
+    if let Some(context) = unsafe { ctx.as_ref() } {
+        context.unregister_dynamic_object_context();
+    }
+    crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
+    unsafe { drop(Box::from_raw(ctx)) };
 }
 
 /// Records source metadata for the next eval fragment executed in this context.

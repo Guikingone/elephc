@@ -117,17 +117,24 @@ Literal `eval()` calls reach EIR as `EvalLiteralCall`. The shared planner in
 
 The lowerer preserves PHP source evaluation order before ABI materialization,
 boxes values into the shared `Mixed` cell representation, and uses the normal
-target-aware call helpers on macOS ARM64, Linux ARM64, and Linux x86_64. See
-[Eval Runtime Architecture](eval-runtime.md) for the complete boundary.
+target-aware call helpers on the three executable hosts: macOS ARM64, Linux
+ARM64, and Linux x86_64. See [Eval Runtime Architecture](eval-runtime.md) for the
+complete boundary.
 
 ## Emit Modes
 
 `--emit executable` is the default and emits a process entry point. `--emit
-cdylib` emits a PIC user object with `#[Export]` trampolines and lifecycle
-symbols for embedding hosts. Cdylib output also hides internal runtime
-symbols — `.hidden` on ELF, so separate loaded elephc modules do not preempt
-each other's state, and `.private_extern` on Mach-O, so `-dead_strip` has real
-roots to collect against.
+cdylib` emits a PIC user object with `#[Export]` trampolines, ABI/error/memory
+helpers, and lifecycle symbols for embedding hosts. Every export uses a native
+exception boundary; scalar exports preserve their C signatures and publish
+status through `elephc_last_status()`, while string-return exports preserve
+their fixed scalar/string inputs, append output pointer/length parameters,
+return status directly, and copy the PHP byte string into caller-owned heap
+storage. Boundary nesting is explicit and concat scratch state is saved and
+restored around each entry. Internal symbols are hidden on ELF (including
+driver-supplied `_init`/`_fini`) and private externs on Mach-O, so separate
+loaded Elephc modules do not preempt each other's runtime state and Mach-O
+`-dead_strip` has real roots to collect against.
 
 ## Key Mechanisms
 
@@ -187,8 +194,10 @@ The check never writes memory, so it is safe to run when the remaining stack is 
 single page. A zero `_stack_limit` makes it always pass, which is the state
 before `__rt_stack_limit_init` runs and whenever the stack bounds could not be
 determined — the guard is inert rather than wrong. `main` is not guarded: it is
-the root of every call chain and runs before the floor exists. See
-[The runtime](the-runtime.md) for the floor measurement and the fiber handoff.
+the root of every process-entry call chain and runs before the floor exists.
+Cdylibs publish the floor from `elephc_init()` because they have no process
+entry point. See [The runtime](the-runtime.md) for the floor measurement and
+the fiber handoff.
 
 ### Sentinels and null representation
 

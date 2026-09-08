@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::platform::{Platform, Target};
+use crate::codegen::platform::Target;
 use crate::errors::{CompileError, CompileWarning};
 use crate::parser::ast::Program;
 use crate::span::Span;
@@ -211,7 +211,7 @@ pub fn check_with_options(
     program: &Program,
     options: checker::CheckOptions,
 ) -> Result<CheckResult, CompileError> {
-    checker::check_types_with_options(program, Platform::detect_host(), options)
+    checker::check_types_with_options(program, Target::detect_host(), options)
 }
 
 /// Runs type checking targeting a specific platform (e.g., Linux instead of the host macOS).
@@ -234,12 +234,13 @@ pub fn check_with_target_and_options(
     target: Target,
     options: checker::CheckOptions,
 ) -> Result<CheckResult, CompileError> {
-    checker::check_types_with_options(program, target.platform, options)
+    checker::check_types_with_options(program, target, options)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen_support::platform::Platform;
     use crate::codegen::platform::{Arch, Target};
 
     /// Parses PHP source text into an AST for use in tests.

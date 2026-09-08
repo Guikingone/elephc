@@ -154,79 +154,13 @@ fn exclude_eval_literal_read_slots(
 /// codegen resolves the argument value back to its defining `load_local` and
 /// passes the slot's address, so the callee can read or mutate the slot through
 /// the alias. That makes every store to the slot observable, which this pass's
-/// forward `load_local`-only liveness cannot see. Because the callee signature
-/// (which parameters are by-reference) is not available to a single-function
-/// pass, any `load_local` result consumed by an instruction that is not a proven
-/// value-only consumer is treated as a potential address escape and the slot is
-/// excluded. Terminator uses never alias, so they are ignored.
+/// forward `load_local`-only liveness cannot see. The judgement itself lives in
+/// `super::by_ref_alias`, shared with `super::immutable_local_loads`, which needs
+/// exactly the same exclusion for its own (otherwise unsound) immutability proof.
 fn exclude_address_escaping_slots(function: &Function, eligible: &mut HashSet<LocalSlotId>) {
-    let mut load_result_slot: HashMap<crate::ir::ValueId, LocalSlotId> = HashMap::new();
-    for inst in &function.instructions {
-        if inst.op != Op::LoadLocal {
-            continue;
-        }
-        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
-            continue;
-        };
-        if !eligible.contains(&slot) {
-            continue;
-        }
-        if let Some(result) = inst.result {
-            load_result_slot.insert(result, slot);
-        }
+    for slot in super::by_ref_alias::address_escaping_slots(function) {
+        eligible.remove(&slot);
     }
-    if load_result_slot.is_empty() {
-        return;
-    }
-
-    for inst in &function.instructions {
-        if op_is_value_only_consumer(inst.op) {
-            continue;
-        }
-        for operand in &inst.operands {
-            if let Some(slot) = load_result_slot.get(operand) {
-                eligible.remove(slot);
-            }
-        }
-    }
-}
-
-/// Returns true when an opcode consumes all its operands purely as values, so a
-/// `load_local` result reaching it cannot alias the source slot.
-///
-/// This is an intentionally conservative allowlist (default deny): only opcodes
-/// known to read operands by value are listed. Anything else — calls, object
-/// construction, closure capture, ref-arg materialization, property/array/iterator
-/// access, and any future opcode — is treated as a possible by-reference escape so
-/// the owning slot is left out of dead store elimination.
-fn op_is_value_only_consumer(op: Op) -> bool {
-    use Op::*;
-    matches!(
-        op,
-        // Integer/float arithmetic and bitwise operators.
-        IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
-            | ICheckedSubToInt | ICheckedMulToInt | ICheckedPow | IDiv | ISDiv | ISMod
-            | IPow | INeg | IBitAnd | IBitOr | IBitXor
-            | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop
-            // Comparisons.
-            | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq
-            | LooseNotEq | PhpRelCmp | Spaceship
-            // Scalar predicates and type queries.
-            | IsNull | IsTruthy | IsEmpty | MixedTagOf
-            // Numeric/string/mixed conversions.
-            | IToF | FToI | IToStr | FToStr | BoolToStr | StrToI | StrToF | StrToNumber
-            | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
-            | MixedCastFloat | MixedCastString
-            // String value operations.
-            | StrConcat | StrLen | StrPersist | StrCharAt | StrInterpolate
-            // Output operations consume their operand by value.
-            | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | Warn
-            // Stores copy the value into other storage; they never alias the source slot.
-            | StoreLocal | StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal
-            | StoreRefCell | ExternGlobalStore
-            // Value-level ownership/refcount bookkeeping.
-            | Acquire | Release | Move | Borrow | EnsureOwned
-    )
 }
 
 /// Returns the local slots named by an instruction immediate, covering both the
@@ -258,47 +192,19 @@ fn instruction_slot(
     }
 }
 
-/// Computes per-block slot live-in sets via backward dataflow to a fixed point.
+/// Whether an instruction can transfer control to a catch handler in this function.
 ///
-/// A slot is live entering a block when it may be read before the next store on
-/// some path. Block live-out is the union of successor live-in sets; the backward
-/// walk over a block then gens a slot at each `load_local` and kills it at each
-/// `store_local`. The CFG is small, so repeated full sweeps converge without an
-/// explicit worklist.
-/// Whether an instruction can transfer control to a catch handler in THIS
-/// function, which makes every eligible slot observable at that point.
-///
-/// The CFG this pass walks has no exception edges: `successors` is built from
-/// terminators, and a `may_throw` instruction is not a terminator. So a block
-/// that throws out of the middle of a `try` appears to reach only the block its
-/// `br` names, and the liveness that follows is the liveness of the path where
-/// nothing threw.
-///
-/// ```text
-/// $t = 0;
-/// try { $t = 5; boom(); $t = 9; }   // boom() throws
-/// catch (RuntimeException $e) { }
-/// return $t;                        // PHP says 5
-/// ```
-///
-/// `$t = 9` looked like it overwrote `$t = 5` on the only path there was, so
-/// both earlier stores were neutralized — and the catch fell through to a
-/// `load_local` of a slot nothing had written. It returned a different value on
-/// every run, being whatever the frame's stack held: not 0, not 5, not 9.
-///
-/// Everything eligible goes live rather than a computed subset, because what a
-/// handler observes is decided by the code after it, in blocks this walk has
-/// already passed. A throw with no handler in this function cannot make any of
-/// them observable — the frame is gone, and a slot whose address escapes was
-/// already ruled out of `eligible` — so the whole rule is skipped in a function
-/// that pushes no handler, which is nearly all of them.
+/// The CFG walk sees terminator successors only, so a `may_throw` instruction inside a
+/// `try` must conservatively make every eligible slot live at that point. Otherwise a
+/// later store on the normal path can incorrectly make the value observed by the catch
+/// handler look dead.
 fn instruction_may_reach_a_handler(function: &Function, inst_id: InstId) -> bool {
     function
         .instruction(inst_id)
         .is_some_and(|inst| inst.effects.contains(crate::ir::Effects::MAY_THROW))
 }
 
-/// Whether this function installs a catch handler at all.
+/// Returns whether this function installs a catch handler.
 fn function_has_handler(function: &Function) -> bool {
     function
         .instructions
@@ -306,6 +212,14 @@ fn function_has_handler(function: &Function) -> bool {
         .any(|inst| inst.op == Op::TryPushHandler)
 }
 
+/// Computes per-block slot live-in sets via backward dataflow to a fixed point.
+///
+/// A slot is live entering a block when it may be read before the next store on
+/// some path. Block live-out is the union of successor live-in sets; the backward
+/// walk over a block then gens a slot at each `load_local` and kills it at each
+/// `store_local`. The CFG is small, so repeated full sweeps converge without an
+/// explicit worklist. Throwing instructions inside a handled function also make
+/// every eligible slot live because the handler can observe the current value.
 fn compute_slot_live_in(
     function: &Function,
     eligible: &HashSet<LocalSlotId>,
@@ -346,25 +260,11 @@ fn compute_slot_live_in(
     live_in
 }
 
-/// Returns the slots live on exit from a block: the union of every successor's
-/// live-in set. Terminators carry no slot uses, so only successors contribute.
+/// Returns the slots live on exit from a block.
 ///
-/// Except one. `Throw` is listed with `Return` and `Unreachable` as having no
-/// successors, and inside a `try` that is wrong: it goes to the handler, which
-/// can read anything the block wrote. Left as an exit, a block ending in a
-/// literal `throw` had NOTHING live on the way out, so every store before it was
-/// dead by construction:
-///
-/// ```text
-/// $t = 0;
-/// try { $t = 5; throw new RuntimeException('x'); }
-/// catch (RuntimeException $e) { }
-/// return $t;                        // PHP says 5
-/// ```
-///
-/// This is the terminator half of what `instruction_may_reach_a_handler` covers
-/// for a throwing CALL; the same program is wrong in a different way depending
-/// on which of the two raised, which is what said one rule could not be enough.
+/// This is normally the union of successor live-in sets. A literal `throw` inside a
+/// handled function also makes every eligible slot live because the terminator's catch
+/// edge is implicit and therefore absent from [`successors`].
 fn block_live_out(
     block: &crate::ir::BasicBlock,
     live_in: &HashMap<crate::ir::BlockId, HashSet<LocalSlotId>>,

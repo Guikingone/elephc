@@ -189,9 +189,9 @@ fn no_env_reports_the_compile_time_values() {
     assert_eq!(line(&out, "status_is_array"), "false");
 }
 
-/// An empty environment variable is treated as UNSET: `getenv` cannot distinguish "set to the
-/// empty string" from "missing" (elephc's `__rt_getenv` returns an empty string for a libc NULL),
-/// so the compile-time value survives. Documented floor, asserted so it cannot regress silently.
+/// An empty environment variable is treated as UNSET by the OPcache override helper, which casts
+/// `getenv` to string and uses the dotted spelling as a fallback when the result is empty. This is
+/// an override-policy choice; `getenv` itself distinguishes an empty value from a missing name.
 #[test]
 fn empty_env_value_is_treated_as_unset() {
     let (_dir, binary) = probe_binary("opcache_env_empty", &[]);

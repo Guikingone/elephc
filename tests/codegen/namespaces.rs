@@ -9,6 +9,8 @@
 
 use crate::support::*;
 
+mod polyfills;
+
 /// Verifies `use function` aliasing and global builtin resolution inside a namespaced file.
 /// Uses a two-namespace fixture: `Demo\Util\render` aliased as `paint` and global `strlen`.
 /// Checks that the alias resolves correctly and global builtins are accessible without prefix.

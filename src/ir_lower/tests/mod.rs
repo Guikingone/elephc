@@ -34,7 +34,16 @@ fn lower_file(path: &Path) -> crate::ir::Module {
 
 /// Runs the `--emit-ir` frontend ordering for a source string and base path.
 fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate::ir::Module {
-    let target = Target::detect_host();
+    lower_source_at_for_target(source, main_file_path, parent, Target::detect_host())
+}
+
+/// Runs the corpus frontend for a selected target, including precheck availability folding.
+fn lower_source_at_for_target(
+    source: &str,
+    main_file_path: &Path,
+    parent: &Path,
+    target: Target,
+) -> crate::ir::Module {
     let source_mode = crate::source::SourceMode::from_path(main_file_path);
     let tokens =
         crate::lexer::tokenize_with_mode(source, source_mode).expect("tokenize failed");
@@ -69,6 +78,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(
         ast,
@@ -81,7 +91,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
     let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
-    let ast = crate::optimize::fold_constants(ast);
+    let ast = crate::optimize::fold_constants_for_target(ast, target);
     let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
     let ast = crate::optimize::prune_constant_control_flow(

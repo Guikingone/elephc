@@ -18,7 +18,8 @@ use crate::ir::{Immediate, Instruction, Op, PhpTypePredicate, ValueDef, ValueId}
 use crate::names::{define_seen_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
 use crate::types::checker::builtins::{
-    is_php_visible_builtin_function_for_profile, supported_builtin_function_names_for_profile,
+    is_php_visible_builtin_function_for_profile, is_php_visible_builtin_function_for_target,
+    supported_builtin_function_names_for_target,
 };
 use crate::types::{ClassInfo, PhpType};
 
@@ -37,9 +38,11 @@ pub(crate) mod bcmath;
 pub(crate) mod buffers;
 pub(crate) mod class_relations;
 pub(crate) mod ctype;
+pub(crate) mod curl;
 pub(crate) mod debug;
 mod eval;
 mod eval_facade;
+pub(crate) mod iconv;
 pub(crate) mod io;
 mod isset;
 mod count_empty;
@@ -54,6 +57,11 @@ pub(crate) mod math;
 pub(crate) mod object_props;
 pub(crate) mod openssl;
 pub(crate) mod output_buffering;
+pub(crate) mod pcntl;
+pub(crate) mod pcntl_exec;
+pub(crate) mod pcntl_signal_values;
+pub(crate) mod pcntl_signals;
+pub(crate) mod pcntl_handlers;
 pub(crate) mod pointers;
 pub(crate) mod regex;
 pub(crate) mod round_mode;

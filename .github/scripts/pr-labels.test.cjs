@@ -111,6 +111,25 @@ test('a generic x86_64 backend fix maps to the supported Linux target', () => {
   );
 });
 
+test('iOS device and Simulator spellings map to distinct target labels', () => {
+  assert.deepEqual(
+    inferTargets({
+      title: 'fix(platform): pin ios-arm64 Mach-O metadata',
+      headBranch: 'fix/ios-device-macho',
+      files: ['src/codegen_support/platform/target.rs'],
+    }),
+    ['target:ios-arm64'],
+  );
+  assert.deepEqual(
+    inferTargets({
+      title: 'fix(platform): pin aarch64-apple-ios-simulator metadata',
+      headBranch: 'fix/ios-simulator-macho',
+      files: ['src/codegen_support/platform/target.rs'],
+    }),
+    ['target:ios-sim-arm64'],
+  );
+});
+
 test('a target-specific PR keeps platform among its primary areas', () => {
   const result = classifyPullRequest({
     title: 'feat(platform): add Windows x86_64 PE32+ support',

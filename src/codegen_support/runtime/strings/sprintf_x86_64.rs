@@ -454,8 +454,8 @@ fn emit_string_conversion(emitter: &mut Emitter) {
 /// Branches when an x86_64 sprintf record tag denotes deferred non-scalar coercion.
 fn emit_branch_if_deferred_tag(emitter: &mut Emitter, tag_reg: &str, label: &str) {
     for tag in [4, 5, 6, 7, 9, 10, 11] {
-        emitter.instruction(&format!("cmp {tag_reg}, {tag}"));
-        emitter.instruction(&format!("je {label}"));
+        emitter.instruction(&format!("cmp {tag_reg}, {tag}"));                  // compare against one deferred non-scalar tag
+        emitter.instruction(&format!("je {label}"));                            // defer coercion when this tag matches
     }
 }
 
@@ -887,7 +887,7 @@ fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_emit_lpad_x64");                      // keep padding
     emitter.label("__rt_sprintf_emit_done_x64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 688]");                      // formatter-owned string produced by __toString, if any
-    emitter.instruction("test rax, rax");
+    emitter.instruction("test rax, rax");                                       // was an owned coercion result recorded?
     emitter.instruction("jz __rt_sprintf_loop_x64");                            // borrowed/numeric bodies need no cleanup
     emitter.instruction("mov QWORD PTR [rbp - 688], 0");                        // prevent stale ownership from crossing conversions
     emitter.instruction("call __rt_heap_free_safe");                            // release only after every output byte was copied

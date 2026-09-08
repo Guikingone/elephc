@@ -14,6 +14,7 @@ use crate::parser::ast::{
     InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
 use crate::span::Span;
+use crate::codegen_support::platform::Target;
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -23,8 +24,11 @@ mod binding_decisions;
 mod control;
 mod effect_analysis;
 mod effects;
+mod exception_flow;
 mod fold;
+mod namespace_fallbacks;
 mod propagate;
+mod target_guards;
 pub mod reachability;
 
 use binding_decisions::{with_local_binding_decision_spans, with_mixed_storage_locals};
@@ -33,6 +37,7 @@ use effect_analysis::{
     collect_instance_dispatch_metadata, compute_program_callable_effects, method_effect_key,
 };
 use effects::*;
+use exception_flow::{with_exception_flow_analysis, ExceptionFlowAnalysis};
 use fold::*;
 use propagate::*;
 
@@ -48,6 +53,9 @@ thread_local! {
     static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<Rc<InstanceDispatchMetadata>>> = const { RefCell::new(None) };
     static ACTIVE_CLASS_EFFECT_CONTEXT: RefCell<Option<ClassEffectContext>> = const { RefCell::new(None) };
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    static ACTIVE_FOLD_TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
+    static ACTIVE_FOLD_USER_FUNCTIONS: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
+    static ACTIVE_TARGET_GUARD_CONDITION: RefCell<bool> = const { RefCell::new(false) };
 }
 
 /// Borrows the active function-effect summary without cloning its whole map.
@@ -88,7 +96,94 @@ pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
 /// prepends folds like any other.
 pub fn fold_constants(program: Program) -> Program {
     let program = crate::superglobals::seed_cli_populated_superglobals(program);
-    program.into_iter().map(fold_stmt).collect()
+    fold_block(program)
+}
+
+/// Folds constants whose values or builtin availability depend on the compile target.
+///
+/// This variant is used before type checking so portable `PHP_OS[_FAMILY]` and
+/// `function_exists()` guards can remove branches containing target-unavailable builtins.
+pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
+    let signatures = collect_by_ref_signatures(&program);
+    with_fresh_reference_volatile(|| {
+        with_by_ref_signatures(signatures, || ACTIVE_FOLD_TARGET.with(|slot| {
+            let previous = slot.replace(Some(target));
+            let user_functions = collect_top_level_user_functions(&program);
+            let previous_functions =
+                ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
+            let folded = fold_constants(program);
+            // A target guard can turn a conditional polyfill declaration into an unconditional
+            // declaration. Refresh the inventory so later probes see the retained function.
+            // Avoid `fold_constants` here, which would seed CLI superglobals twice.
+            let materialized_functions = collect_top_level_user_functions(&folded);
+            ACTIVE_FOLD_USER_FUNCTIONS
+                .with(|functions| functions.replace(Some(materialized_functions)));
+            let folded = namespace_fallbacks::fold_after_pruning(folded);
+            ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
+            slot.replace(previous);
+            folded
+        }))
+    })
+}
+
+/// Borrows the target selected for the current constant-folding pass.
+pub(in crate::optimize) fn active_fold_target() -> Option<Target> {
+    ACTIVE_FOLD_TARGET.with(|slot| *slot.borrow())
+}
+
+/// Returns whether the target-folding program declares a top-level function with this name.
+pub(in crate::optimize) fn active_fold_user_function_exists(name: &str) -> bool {
+    let key = php_symbol_key(name);
+    ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|functions| functions.contains(&key))
+    })
+}
+
+/// Returns whether constant folding is currently evaluating a target-dependent guard condition.
+pub(in crate::optimize) fn active_target_guard_condition() -> bool {
+    ACTIVE_TARGET_GUARD_CONDITION.with(|slot| *slot.borrow())
+}
+
+/// Folds an `if` condition while marking literal target guards as safe for eager availability folds.
+pub(in crate::optimize) fn fold_condition_expr(expr: Expr) -> Expr {
+    if active_fold_target().is_none() || !target_dependent_condition(&expr) {
+        return fold_expr(expr);
+    }
+    ACTIVE_TARGET_GUARD_CONDITION.with(|slot| {
+        let previous = slot.replace(true);
+        let folded = fold_expr(expr);
+        slot.replace(previous);
+        folded
+    })
+}
+
+/// Collects unconditional user functions that can shadow a builtin during `function_exists()`.
+fn collect_top_level_user_functions(program: &[Stmt]) -> HashSet<String> {
+    let mut functions = HashSet::new();
+    collect_top_level_user_functions_from_block(program, &mut functions);
+    functions
+}
+
+/// Walks declaration-transparent compiler wrappers without treating conditional PHP blocks as eager.
+fn collect_top_level_user_functions_from_block(
+    program: &[Stmt],
+    functions: &mut HashSet<String>,
+) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, .. } | StmtKind::FunctionVariantGroup { name, .. } => {
+                functions.insert(php_symbol_key(name));
+            }
+            StmtKind::Synthetic(body)
+            | StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_top_level_user_functions_from_block(body, functions);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Propagates scalar constants across statements and control flow.
@@ -204,14 +299,42 @@ type ConstantEnv = HashMap<String, PropagatedValue>;
 pub struct PostTypecheckOptimizer {
     callable_effects: CallableEffectAnalysis,
     by_ref_signatures: ByRefSignatures,
+    exception_flow: Rc<ExceptionFlowAnalysis>,
 }
 
 impl PostTypecheckOptimizer {
     /// Builds the reusable analysis from the program entering post-typecheck optimization.
     pub fn new(program: &Program) -> Self {
+        Self::new_with_optional_type_metadata(program, None)
+    }
+
+    /// Builds reusable analyses with checker function signatures and canonical type hierarchy.
+    pub fn new_with_type_metadata(
+        program: &Program,
+        functions: &HashMap<String, crate::types::FunctionSig>,
+        classes: &HashMap<String, crate::types::ClassInfo>,
+        interfaces: &HashMap<String, crate::types::InterfaceInfo>,
+    ) -> Self {
+        Self::new_with_optional_type_metadata(program, Some((functions, classes, interfaces)))
+    }
+
+    /// Builds callable and exception analyses, optionally using authoritative checker metadata.
+    fn new_with_optional_type_metadata(
+        program: &Program,
+        type_metadata: Option<(
+            &HashMap<String, crate::types::FunctionSig>,
+            &HashMap<String, crate::types::ClassInfo>,
+            &HashMap<String, crate::types::InterfaceInfo>,
+        )>,
+    ) -> Self {
+        let callable_effects = CallableEffectAnalysis::from_program(program);
+        let exception_flow = with_callable_effect_analysis(&callable_effects, || {
+            Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
+        });
         Self {
-            callable_effects: CallableEffectAnalysis::from_program(program),
+            callable_effects,
             by_ref_signatures: collect_by_ref_signatures(program),
+            exception_flow,
         }
     }
 
@@ -282,7 +405,9 @@ impl PostTypecheckOptimizer {
     ) -> Program {
         with_local_binding_decision_spans(binding_decision_spans, || {
             with_callable_effect_analysis(&self.callable_effects, || {
-                with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+                with_exception_flow_analysis(&self.exception_flow, || {
+                    with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+                })
             })
         })
     }
