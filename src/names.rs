@@ -33,6 +33,10 @@ pub struct Name {
     pub kind: NameKind,
     pub parts: Vec<String>,
     text: String,
+    /// Whether an unqualified call bound to a conditional declaration may try its global basename.
+    /// Explicitly qualified names and imported function aliases never carry this fallback.
+    /// Keep this flag in the existing alignment padding: names are embedded in large AST builders.
+    function_fallback: bool,
 }
 
 impl Name {
@@ -44,6 +48,7 @@ impl Name {
             kind: NameKind::Unqualified,
             parts: vec![name.into()],
             text: String::new(),
+            function_fallback: false,
         }
         .with_text()
     }
@@ -61,6 +66,7 @@ impl Name {
             kind,
             parts,
             text: String::new(),
+            function_fallback: false,
         }
         .with_text()
     }
@@ -78,6 +84,7 @@ impl Name {
             kind,
             parts,
             text: String::new(),
+            function_fallback: false,
         }
         .with_text()
     }
@@ -100,6 +107,17 @@ impl Name {
     /// Returns a borrowed slice of the canonical text representation.
     pub fn as_str(&self) -> &str {
         &self.text
+    }
+
+    /// Records the PHP global fallback without changing this name's canonical local binding.
+    pub(crate) fn with_function_fallback(mut self) -> Self {
+        self.function_fallback = true;
+        self
+    }
+
+    /// Returns the global candidate retained for rebinding after a polyfill is pruned.
+    pub(crate) fn function_fallback(&self) -> Option<&str> {
+        self.function_fallback.then(|| self.last_segment()).flatten()
     }
 
     /// Returns `true` if the name is `NameKind::Unqualified`.

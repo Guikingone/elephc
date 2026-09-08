@@ -27,6 +27,7 @@ env:
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
+    -p elephc-pcntl
     -p elephc-magician
     -p elephc-web
     -p elephc-instr
@@ -83,8 +84,9 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), libelephc_web.a, and
+        # libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
         # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
         # managed-native-smoke). Build
@@ -178,8 +180,9 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), libelephc_web.a, and
+        # libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
         # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
         # managed-native-smoke). Build
@@ -268,8 +271,9 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), libelephc_web.a, and
+        # libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
         # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
         # managed-native-smoke). Build
@@ -1224,19 +1228,25 @@ jobs:
       - name: Run PHP comparison generator tests
         run: python3 -m unittest discover -s scripts/docs -p "test_*.py" -v
 
+      - name: Regenerate the module symbol sections
+        # Writes the generated "Functions" block (functions, classes, constants per
+        # PHP module from the shared catalogs) into each hand-written module page.
+        run: python3 scripts/docs/gen_module_sections.py
+
       - name: Regenerate the PHP comparison page
-        # Joins the freshly regenerated builtin registry with the vendored
-        # php_baseline.json snapshot and the curated comparison_catalog.toml.
-        # Validates catalog evidence and baseline consistency; the committed
-        # page must come back byte-identical.
+        # Joins the freshly regenerated builtin and symbol registries with the
+        # vendored php_baseline.json snapshot and the curated
+        # comparison_catalog.toml. Validates catalog evidence and baseline
+        # consistency; the committed page must come back byte-identical.
         run: python3 scripts/docs/gen_php_comparison.py
 
       - name: Fail if generated docs are out of sync
         run: |
-          changes=$(git status --porcelain -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json docs/php/compatibility.md)
+          changes=$(git status --porcelain -- docs/php docs/internals/builtins scripts/docs/builtin_registry.json scripts/docs/symbol_registry.json)
           if [ -n "$changes" ]; then
             echo "Generated docs are out of sync."
-            echo "Run 'python3 scripts/docs/extract_builtins.py --render --force' and"
+            echo "Run 'python3 scripts/docs/extract_builtins.py --render --force',"
+            echo "'python3 scripts/docs/gen_module_sections.py' and"
             echo "'python3 scripts/docs/gen_php_comparison.py', then commit the result."
             echo "$changes"
             exit 1

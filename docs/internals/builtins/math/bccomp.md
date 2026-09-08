@@ -2,7 +2,7 @@
 title: "bccomp() — internals"
 description: "Compiler internals for bccomp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 269
+  order: 553
 ---
 
 ## `bccomp()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bccomp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bccomp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bccomp(string $num1, string $num2, int $scale = null): int
+function bccomp(string $num1, string $num2, ?int $scale = null): int
 ```
 
 ## What the type checker enforces

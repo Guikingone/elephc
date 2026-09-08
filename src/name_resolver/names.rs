@@ -236,6 +236,31 @@ pub(super) fn resolved_class_constant_name(
     name.as_canonical()
 }
 
+/// Resolves a function reference while preserving PHP fallback for conditional namespace symbols.
+/// Qualified names and explicit function imports keep their exact binding even if it is pruned.
+pub(super) fn resolve_function_reference(
+    name: &Name,
+    current_namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Name {
+    let canonical = resolve_function_name(name, current_namespace, imports, symbols);
+    let conditional = symbols.conditional_functions.contains(&php_symbol_key(&canonical));
+    let resolved = resolved_name(canonical);
+    if name.function_fallback().is_some() {
+        return resolved.with_function_fallback();
+    }
+    if conditional && name.is_unqualified()
+        && current_namespace.is_some_and(|namespace| !namespace.is_empty())
+        && !imports.functions.contains_key(&php_symbol_key(name.as_str()))
+    {
+        if super::function_fallbacks::global_candidate(symbols, name.as_str()).is_some() {
+            return resolved.with_function_fallback();
+        }
+    }
+    resolved
+}
+
 /// Resolves a function name to its canonical form using imports, current namespace,
 /// and the symbol table. When unqualified and not imported, falls back to the local
 /// namespace before attempting the global symbol table (PHP-style builtin fallback).
@@ -306,7 +331,7 @@ pub(super) fn resolve_constant_name(
         return name.as_canonical();
     }
     if name.is_unqualified() {
-        if matches!(name.as_str(), "PHP_OS" | "SID") {
+        if matches!(name.as_str(), "PHP_OS" | "PHP_OS_FAMILY" | "SID") {
             return name.as_canonical();
         }
         if let Some(alias) = name
@@ -347,82 +372,10 @@ pub(super) fn resolve_constant_name(
 }
 
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
-/// resolution (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
+/// resolution: every constant the shared catalog registers unconditionally (`PHP_OS`, `SID`,
+/// `STDIN`, `JSON_*`, `CURLOPT_*`, ...), so a bare mention resolves to the global even inside
+/// a namespace, with or without the owning bridge or prelude being linked.
 fn is_builtin_global_constant(name: &str) -> bool {
-        if matches!(
-            name,
-            "PHP_OS"
-                // The PHP version surface, baked per compilation from `--php-version` / `--web`
-                // by `codegen::prescan::collect_constants` — same mechanism as `PHP_OS`.
-                | "PHP_VERSION"
-                | "PHP_VERSION_ID"
-                | "PHP_MAJOR_VERSION"
-                | "PHP_MINOR_VERSION"
-                | "PHP_RELEASE_VERSION"
-                | "PHP_EXTRA_VERSION"
-                | "PHP_SAPI"
-                | "SID"
-                | "PATHINFO_DIRNAME"
-                | "PATHINFO_BASENAME"
-                | "PATHINFO_EXTENSION"
-                | "PATHINFO_FILENAME"
-                | "PATHINFO_ALL"
-                | "PHP_URL_SCHEME"
-                | "PHP_URL_HOST"
-                | "PHP_URL_PORT"
-                | "PHP_URL_USER"
-                | "PHP_URL_PASS"
-                | "PHP_URL_PATH"
-                | "PHP_URL_QUERY"
-                | "PHP_URL_FRAGMENT"
-                | "FNM_NOESCAPE"
-                | "FNM_PATHNAME"
-                | "FNM_PERIOD"
-                | "FNM_CASEFOLD"
-                | "ARRAY_FILTER_USE_VALUE"
-                | "ARRAY_FILTER_USE_BOTH"
-                | "ARRAY_FILTER_USE_KEY"
-                | "STR_PAD_LEFT"
-                | "STR_PAD_RIGHT"
-                | "STR_PAD_BOTH"
-                | "STDIN"
-                | "STDOUT"
-                | "STDERR"
-                | "PHP_INT_MAX"
-                | "PHP_INT_MIN"
-                | "PHP_FLOAT_MAX"
-                | "PHP_FLOAT_MIN"
-                | "PHP_FLOAT_EPSILON"
-                | "INF"
-                | "NAN"
-                | "M_PI"
-                | "M_E"
-                | "M_SQRT2"
-                | "M_PI_2"
-                | "M_PI_4"
-                | "M_LOG2E"
-                | "M_LOG10E"
-                | "PHP_EOL"
-                | "DIRECTORY_SEPARATOR"
-                | "ICONV_IMPL"
-                | "ICONV_VERSION"
-        ) {
-            return true;
-        }
-    // Shared source-of-truth slices for JSON, stream/socket, session, array, math, iconv,
-    // and curl
-    // constants. CURL_INT_CONSTANTS is always in this chain (like JSON_INT_CONSTANTS) so a
-    // bare `CURLOPT_URL` mention resolves to the global constant even inside a namespace,
-    // with or without the curl prelude/bridge being linked.
-    crate::types::json_constants::JSON_INT_CONSTANTS
-        .iter()
-        .chain(crate::types::openssl_constants::OPENSSL_INT_CONSTANTS.iter())
-        .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
-        .chain(crate::types::session_constants::SESSION_INT_CONSTANTS.iter())
-        .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())
-        .chain(crate::types::array_constants::ARRAY_INT_CONSTANTS.iter())
-        .chain(crate::types::math_constants::MATH_INT_CONSTANTS.iter())
-        .chain(crate::types::iconv_constants::ICONV_INT_CONSTANTS.iter())
-        .chain(crate::types::curl_constants::CURL_INT_CONSTANTS.iter())
-        .any(|(constant_name, _)| *constant_name == name)
+    crate::types::predefined_constants::is_registered_constant(name)
+        || crate::types::pcntl_constants::is_pcntl_int_constant(name)
 }

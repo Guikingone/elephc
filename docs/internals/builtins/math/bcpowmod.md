@@ -2,7 +2,7 @@
 title: "bcpowmod() — internals"
 description: "Compiler internals for bcpowmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 276
+  order: 560
 ---
 
 ## `bcpowmod()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bcpowmod.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bcpowmod.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcpowmod(string $num, string $exponent, string $modulus, int $scale = null): string
+function bcpowmod(string $num, string $exponent, string $modulus, ?int $scale = null): string
 ```
 
 ## What the type checker enforces

@@ -2422,6 +2422,41 @@ echo getenv("ELEPHC_TEST_VAR");
     assert_eq!(out, "hello");
 }
 
+/// Verifies that `putenv("NAME")` without an equals sign removes the variable,
+/// matching PHP rather than leaving the previous value in the environment.
+#[test]
+fn test_putenv_without_equals_unsets_variable() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("ELEPHC_TEST_UNSET=before");
+echo getenv("ELEPHC_TEST_UNSET") === "before" ? "set:" : "bad:";
+echo putenv("ELEPHC_TEST_UNSET") ? "unset:" : "failed:";
+echo getenv("ELEPHC_TEST_UNSET") === false ? "missing" : "present";
+"#,
+    );
+    assert_eq!(out, "set:unset:missing");
+}
+
+/// Verifies long environment names can be removed around and beyond the C-string scratch limit.
+/// Uses libc getenv through FFI so lookup uses an allocated C string for the full name.
+#[test]
+fn test_putenv_without_equals_unsets_long_names() {
+    let out = compile_and_run(
+        r#"<?php
+extern function getenv(string $name): ptr;
+foreach ([4095, 4096, 4097, 8192] as $length) {
+    $name = str_repeat("X", $length);
+    echo putenv($name . "=before") ? "set:" : "bad:";
+    echo ptr_is_null(getenv($name)) ? "bad:" : "present:";
+    echo \PUTENV(assignment: $name) ? "unset:" : "failed:";
+    echo ptr_is_null(getenv($name)) ? "missing:" : "bad:";
+    echo putenv($name) ? "absent;" : "failed;";
+}
+"#,
+    );
+    assert_eq!(out, "set:present:unset:missing:absent;".repeat(4));
+}
+
 // -- v0.8 phpversion / php_uname --
 
 // Tests `phpversion()` returns the PHP LANGUAGE version of the compile target, not elephc's

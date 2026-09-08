@@ -18,7 +18,6 @@ mod builtins;
 mod constant_eval;
 mod constants;
 mod control;
-mod curl_constants;
 mod dynamic_functions;
 mod expressions;
 mod include_exec;
@@ -31,6 +30,8 @@ mod scope_cells;
 mod statements;
 #[cfg(not(test))]
 mod output_handlers;
+#[cfg(not(test))]
+mod pcntl_escape;
 mod throwables;
 
 use crate::context::{
@@ -71,6 +72,8 @@ use return_type_compat::*;
 use return_values::*;
 pub use runtime_ops::RuntimeValueOps;
 use runtime_ops::*;
+#[cfg(not(test))]
+pub(crate) use pcntl_escape::value_contains_foreign_pcntl_callable;
 use scope_cells::*;
 #[cfg(not(test))]
 pub(crate) use statements::eval_dynamic_destructor_for_object_cell;

@@ -2,7 +2,7 @@
 title: "stream_context_set_option() — internals"
 description: "Compiler internals for stream_context_set_option(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 222
+  order: 364
 ---
 
 ## `stream_context_set_option()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_context_set_option.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_set_option.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_context_set_option(resource $context, string $wrapper_or_options, string $option_name = null, mixed $value = null): bool
+function stream_context_set_option(resource $context, string $wrapper_or_options, ?string $option_name = null, mixed $value = null): bool
 ```
 
 ## What the type checker enforces

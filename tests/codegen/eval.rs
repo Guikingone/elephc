@@ -6626,17 +6626,18 @@ echo function_exists("rand"); echo function_exists("mt_rand"); echo function_exi
     );
 }
 
-/// Verifies eval `spl_classes()` exposes the same static SPL class list as native code.
+/// Verifies eval `spl_classes()` exposes the same `ext/spl` class list as native code (the
+/// shared catalog's SPL module: `Exception` is SPL's `LogicException` parent but is Core).
 #[test]
 fn test_eval_dispatches_spl_classes_builtin_calls() {
     let out = compile_and_run(
         r#"<?php
 eval('$names = spl_classes();
-echo count($names) . ":" . $names[0] . ":" . $names[55] . ":";
-echo (in_array("Exception", $names) ? "exception" : "bad") . ":";
+echo count($names) . ":" . $names[0] . ":" . $names[53] . ":";
+echo (in_array("LogicException", $names) ? "exception" : "bad") . ":";
 echo (in_array("SplDoublyLinkedList", $names) ? "list" : "bad") . ":";
 $call = call_user_func("spl_classes");
-echo (in_array("Throwable", $call) ? "call" : "bad") . ":";
+echo (in_array("SplStack", $call) ? "call" : "bad") . ":";
 $spread = call_user_func_array("spl_classes", []);
 echo (count($spread) === count($names) ? "spread" : "bad") . ":";
 echo function_exists("spl_classes"); echo is_callable("spl_classes");');
@@ -6644,7 +6645,7 @@ echo function_exists("spl_classes"); echo is_callable("spl_classes");');
     );
     assert_eq!(
         out,
-        "61:AppendIterator:Throwable:exception:list:call:spread:11"
+        "54:AppendIterator:UnexpectedValueException:exception:list:call:spread:11"
     );
 }
 
@@ -16995,8 +16996,12 @@ echo $box->value;');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "Ada");
+}
 
-    for source in [
+/// Verifies eval rejects an explicit untyped set-hook parameter.
+#[test]
+fn test_eval_declared_property_set_hook_rejects_untyped_explicit_parameter() {
+    let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalUntypedExplicitSetHookParam {
     public string $value {
@@ -17004,6 +17009,17 @@ eval('class EvalUntypedExplicitSetHookParam {
     }
 }');
 "#,
+    );
+    assert!(
+        err.contains("Fatal error: eval()"),
+        "stderr did not contain eval fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval rejects a set-hook parameter narrower than its property type.
+#[test]
+fn test_eval_declared_property_set_hook_rejects_narrow_parameter() {
+    let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalNarrowSetHookParam {
     public mixed $value {
@@ -17011,13 +17027,11 @@ eval('class EvalNarrowSetHookParam {
     }
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval()"),
-            "stderr did not contain eval fatal diagnostic: {err}"
-        );
-    }
+    );
+    assert!(
+        err.contains("Fatal error: eval()"),
+        "stderr did not contain eval fatal diagnostic: {err}"
+    );
 }
 
 /// Verifies eval-declared nullsafe and mixed-case property hook reads stay routed.
@@ -29355,4 +29369,26 @@ echo ":"; echo intval("42");');
 "#,
     );
     assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
+}
+
+/// Decodes NUL escapes and warns only for observable undefined-variable reads in eval.
+#[test]
+fn test_eval_nul_escapes_and_undefined_variable_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo eval('echo strlen("\0") . ":" . strlen("\x00") . ":";
+echo $missing;
+return ":" . ($quiet ?? "fallback");');
+"#,
+    );
+    assert_eq!(out.stdout, "1:1::fallback");
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Undefined variable $missing")
+            .count(),
+        1,
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains("$quiet"), "{}", out.stderr);
 }

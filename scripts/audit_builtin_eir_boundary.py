@@ -33,6 +33,11 @@ SUPPORTED_TARGETS = [
     "linux-aarch64",
     "linux-x86_64",
 ]
+
+# Compiler-resident AOT routes a shared contract may declare instead of a `builtin!`
+# registry home: language constructs, dedicated syntax, injected-prelude declarations,
+# and the date/calendar procedural families the name resolver rewrites.
+NON_REGISTRY_ROUTES = {"language-construct", "dedicated-syntax", "prelude", "name-resolver-rewrite"}
 HOST_ONLY_TARGETS = ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
 SOURCE_SUFFIXES = {".php", ".rs", ".snap"}
 
@@ -237,6 +242,8 @@ def build_inventory() -> dict[str, Any]:
         required_target_support = {
             "all": SUPPORTED_TARGETS,
             "host_only": HOST_ONLY_TARGETS,
+            "linux": ["linux-aarch64", "linux-x86_64"],
+            "macos": ["macos-aarch64"],
         }.get(target_support_kind, [])
         strategy = semantics.get("target_strategy")
         category = {
@@ -313,6 +320,7 @@ def build_inventory() -> dict[str, Any]:
             "language-construct": 5,
             "dedicated-syntax": 5,
             "prelude": 4,
+            "name-resolver-rewrite": 5,
         }.get(route, 0)
         compiler_resident.append(
             {
@@ -344,7 +352,7 @@ def build_inventory() -> dict[str, Any]:
             "invalid_non_registry_routes": sorted(
                 record["name"]
                 for record in compiler_resident
-                if record["kind"] not in {"language-construct", "dedicated-syntax", "prelude"}
+                if record["kind"] not in NON_REGISTRY_ROUTES
             ),
             "inconsistent_eval_only_flags": sorted(
                 record["name"]
@@ -424,7 +432,7 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
             )
 
     for record in inventory["compiler_resident"]:
-        if record["kind"] not in {"language-construct", "dedicated-syntax", "prelude"}:
+        if record["kind"] not in NON_REGISTRY_ROUTES:
             errors.append(f"{record['name']}: undeclared non-registry AOT route")
 
     # The optional `{` matches a BLOCK-BODIED match arm. rustfmt wraps an arm whose
@@ -450,6 +458,14 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
     )
     unary_variant_by_name = {name: variant for variant, name in unary_variants.items()}
     unary_backend_source = read(REPO / "src" / "codegen" / "lower_inst" / "runtime_calls.rs")
+    pcntl_source = read(REPO / "src" / "ir" / "pcntl_runtime.rs")
+    pcntl_variants = dict(
+        re.findall(r'Self::([A-Za-z0-9_]+)\s*=>\s*"([^"]+)"', function_body(pcntl_source, "as_eir"))
+    )
+    pcntl_variant_by_name = {name: variant for variant, name in pcntl_variants.items()}
+    pcntl_backend_source = read(
+        REPO / "src" / "codegen" / "lower_inst" / "builtins" / "pcntl.rs"
+    )
     builtin_semantics_source = "\n".join(
         read(path) for path in sorted((REPO / "src" / "builtins").rglob("*.rs"))
     )
@@ -476,6 +492,10 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
             variant = unary_variant_by_name[target]
             if f"UnaryStringRuntime::{variant}" not in unary_backend_source:
                 errors.append(f"{record['name']}: unary runtime target {target} has no backend arm")
+        elif target in pcntl_variant_by_name:
+            variant = pcntl_variant_by_name[target]
+            if f"PcntlRuntime::{variant}" not in pcntl_backend_source:
+                errors.append(f"{record['name']}: PCNTL runtime target {target} has no backend arm")
         else:
             errors.append(f"{record['name']}: unknown typed runtime target {target}")
     return errors

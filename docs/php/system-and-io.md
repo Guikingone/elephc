@@ -17,7 +17,7 @@ sidebar:
 | `sleep()` | `sleep($seconds): int` | Sleep for seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
 | `getenv()` | `getenv($name): string\|false` | Get an environment variable; a missing name returns `false`, while a present empty value returns `""` |
-| `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
+| `putenv()` | `putenv($assignment): bool` | Set an environment variable (`KEY=VALUE`), or remove it when the argument has no `=` |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
 | `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |
 | `constant()` | `constant($name): mixed` | Value of a global constant named by a string literal. AOT has no runtime constant table, so a dynamic name, a `Foo::BAR` class constant, and an unknown name are compile errors |
