@@ -77,12 +77,7 @@ fn kind_of(symbol: &str) -> Kind {
     let bare = symbol.strip_prefix('_').unwrap_or(symbol);
     if bare.starts_with("_rt_") || bare.starts_with("rt_") {
         Kind::Helper
-    } else if bare.starts_with("php_")
-        || bare.starts_with("fn_")
-        || bare.starts_with("method_")
-        || bare.starts_with("static_")
-        || bare == "main"
-    {
+    } else if bare.starts_with("php_") || super::is_php_symbol(symbol) {
         Kind::Php
     } else {
         Kind::Native
@@ -178,6 +173,15 @@ impl ImageError {
 /// Loads symbols only after identifying the target, then rechecks its identity.
 #[cfg(target_os = "linux")]
 pub(crate) fn image_for(pid: u32) -> Result<Image, ImageError> {
+    image_for_checked(pid, super::process_id::identity_of_pid)
+}
+
+/// Loads the target image with a final identity read that tests can synchronize.
+#[cfg(target_os = "linux")]
+fn image_for_checked(
+    pid: u32,
+    check_identity: impl FnOnce(super::process_id::ProcessIdentity) -> super::process_id::Identity,
+) -> Result<Image, ImageError> {
     use super::elf;
     use super::ptrace;
 
@@ -214,8 +218,16 @@ pub(crate) fn image_for(pid: u32) -> Result<Image, ImageError> {
             exe.display()
         )));
     }
-    if super::process_id::identity_of_pid(identity) != super::process_id::Identity::Same {
-        return Err(ImageError::plain(format!("pid {pid} changed while reading its image")));
+    match check_identity(identity) {
+        super::process_id::Identity::Same => {}
+        super::process_id::Identity::Gone => {
+            return Err(ImageError::plain(format!("pid {pid} disappeared while reading its image")));
+        }
+        super::process_id::Identity::Replaced => {
+            return Err(ImageError::plain(format!(
+                "pid {pid} changed while reading its image: the kernel reused the pid"
+            )));
+        }
     }
     Ok(Image {
         symbols,
@@ -243,6 +255,71 @@ pub(crate) fn bias_of(image: &Image, pid: u32) -> Option<u64> {
 mod tests {
     use super::*;
 
+    /// A target reaped after its image loads is reported as gone, without a reuse claim.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn image_loading_reports_a_target_that_disappears_during_the_load() {
+        let mut tracee = super::super::ptrace::process_tests::Tracee::start();
+        let pid = tracee.child.id();
+        let result = image_for_checked(pid, |identity| {
+            tracee.child.kill().unwrap();
+            tracee.child.wait().unwrap();
+            super::super::process_id::identity_of_pid(identity)
+        });
+        let error = result.err().expect("the vanished target must be rejected");
+        assert_eq!(error.reason, format!("pid {pid} disappeared while reading its image"));
+        assert!(!error.denied);
+    }
+
+    /// A different starttime at the final check keeps an explicit pid-reuse diagnostic.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn image_loading_distinguishes_a_replaced_target_from_a_vanished_one() {
+        let pid = std::process::id();
+        let result = image_for_checked(pid, |mut identity| {
+            identity.starttime = identity.starttime.wrapping_add(1);
+            super::super::process_id::identity_of_pid(identity)
+        });
+        let error = result.err().expect("the replaced target must be rejected");
+        assert_eq!(error.reason, format!(
+            "pid {pid} changed while reading its image: the kernel reused the pid"
+        ));
+        assert!(!error.denied);
+    }
+
+    /// Static storage stays native even when classification receives an untyped name.
+    #[test]
+    fn static_storage_symbols_are_not_php_methods() {
+        for (owner, member) in [
+            ("Engine", "count"), ("My_Class", "hot_count"), ("prop", "local"), ("u", "u"),
+        ] {
+            for symbol in [
+                elephc::names::static_property_symbol(owner, member),
+                elephc::names::static_local_symbol(owner, member),
+                elephc::names::static_local_init_symbol(owner, member),
+            ] {
+                assert!(!super::super::is_php_symbol(&symbol), "{symbol}");
+                assert_eq!(kind_of(&symbol), Kind::Native, "{symbol}");
+                assert_eq!(super::super::render::demangle(&symbol), symbol);
+            }
+        }
+    }
+
+    /// Classes named prop or local and escaped names remain valid static methods.
+    #[test]
+    fn static_method_classification_accepts_compiler_symbol_shapes() {
+        for (class, method) in [
+            ("Engine", "step"), ("prop", "count"), ("local", "count"),
+            ("prop", "hot_count"), ("local", "hot_count"), ("My_Class", "_run_"),
+            ("App\\Éngine", "run"), ("local", "init"), ("local", "init_u_a"), ("_", "_"),
+        ] {
+            let symbol = elephc::names::static_method_symbol(class, method);
+            assert!(super::super::is_php_symbol(&symbol), "{symbol}");
+            assert_eq!(kind_of(&symbol), Kind::Php, "{symbol}");
+        }
+    }
+
+    /// Supplies sorted PHP function, helper and method symbols for stack fixtures.
     fn symbols() -> Vec<FuncSymbol> {
         // Sorted by address, which is what `symbolize` binary-searches, and
         // spelled the way the compiler actually emits them: `fn_`-prefixed with

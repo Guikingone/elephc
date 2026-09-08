@@ -52,6 +52,18 @@ fn registered_fork_hook_preserves_a_reused_descriptor() {
     run_fixture("reused");
 }
 
+/// A disconnected control server clears both its claim and socket identity.
+#[test]
+fn control_server_disconnect_forgets_the_socket_identity() {
+    run_fixture("disconnected");
+}
+
+/// Failure to start the control server clears the authenticated socket identity.
+#[test]
+fn control_server_spawn_failure_forgets_the_socket_identity() {
+    run_fixture("spawn-failed");
+}
+
 /// A pre-existing worker observes the control server's ask and publishes a tagged reply.
 #[test]
 fn control_server_activates_the_shared_window_and_reads_a_forked_worker() {
@@ -125,13 +137,32 @@ fn fork_ownership(mode: &str, table: &[SymtabEntry]) {
         let file = std::fs::File::open("/dev/null").unwrap();
         assert_eq!(unsafe { libc::dup2(file.as_raw_fd(), CONTROL_FD) }, CONTROL_FD);
     }
+    if mode == "disconnected" || mode == "spawn-failed" {
+        if mode == "disconnected" {
+            peer.shutdown(std::net::Shutdown::Both).unwrap();
+            serve_control_channel();
+        } else {
+            start_control_channel(CONTROL_FD, || Err(std::io::Error::other("fixture spawn failure")));
+            let file = std::fs::File::open("/dev/null").unwrap();
+            let replacement = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 10) };
+            assert!(replacement >= 10);
+            drop(file);
+            assert_eq!(unsafe { libc::dup2(replacement, CONTROL_FD) }, CONTROL_FD);
+            unsafe { libc::close(replacement) };
+        }
+        assert!(!CONTROL_OWNED.load(Ordering::Relaxed));
+        assert_eq!(CONTROL_DEV.load(Ordering::Relaxed), 0);
+        assert_eq!(CONTROL_INO.load(Ordering::Relaxed), 0);
+    }
     let should_close = mode == "claimed";
     let pid = unsafe { libc::fork() };
     assert!(pid >= 0);
     if pid == 0 {
         // No allocator, locks, assertions or unwinding after fork.
         let closed = unsafe { libc::fcntl(CONTROL_FD, libc::F_GETFD) } < 0;
-        let forgotten = !CONTROL_OWNED.load(Ordering::Relaxed);
+        let forgotten = !CONTROL_OWNED.load(Ordering::Relaxed)
+            && CONTROL_DEV.load(Ordering::Relaxed) == 0
+            && CONTROL_INO.load(Ordering::Relaxed) == 0;
         unsafe { libc::_exit(if closed == should_close && forgotten { 0 } else { 1 }) };
     }
     ForkChild(pid).finish();

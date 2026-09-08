@@ -1388,13 +1388,11 @@ extern "C" fn disarm_after_fork() {
 /// drop an unrelated descriptor in every later fork child. The recorded
 /// device and inode have to still match.
 fn drop_inherited_control_channel() {
-    if !CONTROL_OWNED.swap(false, Ordering::Relaxed) {
-        return;
-    }
-    let Some((dev, ino)) = control_identity(CONTROL_FD) else {
-        return;
-    };
-    if !same_control_identity(dev, ino) {
+    let owned = CONTROL_OWNED.swap(false, Ordering::Relaxed);
+    let should_close = owned && control_identity(CONTROL_FD)
+        .is_some_and(|(dev, ino)| same_control_identity(dev, ino));
+    forget_control_fd();
+    if !should_close {
         return;
     }
     // SAFETY: fstat says this is still the socket we claimed. close is
@@ -1429,9 +1427,11 @@ fn remember_control_fd() {
     }
 }
 
-/// Forgets a control-socket claim so a later atfork will not close fd 3.
+/// Clears the claim and its identity so a later atfork will not close fd 3.
 fn forget_control_fd() {
     CONTROL_OWNED.store(false, Ordering::Relaxed);
+    CONTROL_DEV.store(0, Ordering::Relaxed);
+    CONTROL_INO.store(0, Ordering::Relaxed);
 }
 
 /// Disarms the profiling timer. A host that calls `execve` WITHOUT forking (a
