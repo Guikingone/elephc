@@ -14,7 +14,7 @@
 //!   putenv, http_response_code, header, phpversion, exec, shell_exec, system, passthru,
 //!   json_last_error, json_last_error_msg, serialize, preg_match_all, preg_replace.
 //! - Check-hook builtins: microtime (literal-dependent return type), strtotime
-//!   (returns Union(Int, Bool)), getenv (returns Union(Str, Bool)), php_uname (validates
+//!   (returns Union(Int, Bool)), getenv (returns Union(Str, False) or Mixed), php_uname (validates
 //!   arg type), define (side-effect: registers constant type), defined (validates literal),
 //!   extension_loaded (validates literal; const-folds extension membership),
 //!   get_loaded_extensions (validates optional literal flag; const-folds the extension list),

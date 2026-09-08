@@ -13,9 +13,7 @@
 use std::fmt;
 
 use crate::errors::CompileError;
-use crate::ir::{
-    Effects, Immediate, Op, PhpTypePredicate, RuntimeCallTarget, RuntimeFnId, ValueId,
-};
+use crate::ir::{Effects, Immediate, Op, PhpTypePredicate, RuntimeCallTarget, RuntimeFnId, ValueId};
 use crate::parser::ast::Expr;
 use crate::span::Span;
 use crate::types::PhpType;
@@ -161,6 +159,8 @@ pub enum BuiltinArgumentLowering {
     Date,
     /// Preserve JSON decode's source-sensitive option handling.
     JsonDecode,
+    /// Preserve getenv's nullable name until runtime selects lookup or enumeration.
+    Getenv,
     /// Keep source-sensitive omitted PCNTL defaults absent after named/spread planning.
     PcntlPreserveOmitted,
     /// Lower a statically known callback descriptor before its subject.

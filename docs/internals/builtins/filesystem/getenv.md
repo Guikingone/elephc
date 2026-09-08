@@ -24,9 +24,9 @@ sidebar:
 
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
-- **Result type source**: `checked`
+- **Result type source**: `shared`
 - **Result ownership**: `fresh`
-- **Effects**: `static (2 declared effects)`
+- **Effects**: `shared`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function getenv(string $name): string|false
+function getenv(?string $name = null, bool $local_only = false): string|array|false
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 0–2 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

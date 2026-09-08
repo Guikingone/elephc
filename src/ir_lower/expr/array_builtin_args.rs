@@ -88,6 +88,9 @@ pub(super) fn lower_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
             lower_json_decode_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::Getenv => {
+            lower_getenv_args(ctx, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted => {
             lower_args_with_signature_trimming_trailing_defaults(ctx, sig, args)
         }
@@ -272,6 +275,23 @@ pub(super) fn lower_positional_builtin_args_with_signature(
             }
         })
         .collect()
+}
+
+/// Preserves a boxed nullable name while reusing shared named and spread argument planning.
+fn lower_getenv_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let mut sig = sig.cloned();
+    if let Some(sig) = sig.as_mut() {
+        crate::ir::RuntimeFnId::Getenv.refine_first_class_callable_sig(sig);
+    }
+    if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
+        lower_positional_builtin_args_with_signature(ctx, sig.as_ref(), args)
+    } else {
+        lower_args_with_signature(ctx, sig.as_ref(), args)
+    }
 }
 
 /// Promotes a packed local before `krsort()` so descending iteration can preserve integer keys.

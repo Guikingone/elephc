@@ -5,7 +5,14 @@
 //! - `crate::interpreter::builtins::network_env` direct and by-value dispatch.
 //!
 //! Key details:
-//! - Unset variables return an empty string to match current eval semantics.
+//! - Accepts 0–2 arguments, matching the shared catalogue. An omitted or null
+//!   name answers the whole live environment as an associative array.
+//! - `local_only` is evaluated for side effects and ignored: eval has no
+//!   environment separate from the process's, same as AOT CLI.
+//! - Missing names return false; present names and environment arrays preserve raw bytes.
+
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 
 use super::*;
 
@@ -16,29 +23,61 @@ eval_builtin! {
     values: NetworkEnv,
 }
 
-/// Evaluates PHP `getenv($name)` over one eval expression.
+/// Evaluates PHP `getenv()`, `getenv($name)`, and `getenv($name, $local_only)`.
 pub(in crate::interpreter) fn eval_builtin_getenv(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [name] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let name = eval_expr(name, context, scope, values)?;
+    match args {
+        [] => eval_getenv_all_result(values),
+        [name] => {
+            let name = eval_expr(name, context, scope, values)?;
+            eval_getenv_name_result(name, values)
+        }
+        [name, local_only] => {
+            let name = eval_expr(name, context, scope, values)?;
+            let _local_only = eval_expr(local_only, context, scope, values)?;
+            eval_getenv_name_result(name, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Reads one environment variable, or the whole environment when `$name` is null.
+pub(in crate::interpreter) fn eval_getenv_name_result(
+    name: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.is_null(name)? {
+        return eval_getenv_all_result(values);
+    }
     eval_getenv_result(name, values)
 }
 
-/// Reads one environment variable and returns an empty string when it is unset.
+/// Reads one environment variable without Unicode conversion, returning false when absent.
 pub(in crate::interpreter) fn eval_getenv_result(
     name: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let name = values.string_bytes(name)?;
-    let name = String::from_utf8_lossy(&name);
-    let value = std::env::var_os(name.as_ref())
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    values.string(&value)
+    match std::env::var_os(OsStr::from_bytes(&name)) {
+        Some(value) => values.string_bytes_value(value.as_bytes()),
+        None => values.bool_value(false),
+    }
+}
+
+/// Builds the live process environment as a string-keyed associative array.
+pub(in crate::interpreter) fn eval_getenv_all_result(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let entries: Vec<_> = std::env::vars_os().collect();
+    let mut result = values.assoc_new(entries.len())?;
+    for (key, value) in entries {
+        let key = values.string_bytes_value(key.as_bytes())?;
+        let value = values.string_bytes_value(value.as_bytes())?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }

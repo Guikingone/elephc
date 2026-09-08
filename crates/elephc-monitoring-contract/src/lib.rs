@@ -196,9 +196,12 @@ pub fn valid_traceparent(value: &str) -> bool {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
 
+    // C ABI fixture callbacks share counters when the test harness runs in parallel.
+    static HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
     static OPERATIONS: AtomicU64 = AtomicU64::new(0);
-    static WAIT: AtomicU64 = AtomicU64::new(0);
+    static WAIT_CALLS: AtomicU64 = AtomicU64::new(0);
     static EXCLUDED_WAIT: AtomicU64 = AtomicU64::new(0);
     static WINDOW_ACTIVE: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
@@ -213,9 +216,9 @@ mod tests {
         OPERATIONS.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Records one fixture wait duration through the runtime slot shape.
-    unsafe extern "C" fn wait(ns: u64) {
-        WAIT.fetch_add(ns, Ordering::Relaxed);
+    /// Counts timed callbacks, including valid zero-duration spans below the clock resolution.
+    unsafe extern "C" fn wait(_ns: u64) {
+        WAIT_CALLS.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Records wait for the callback-exclusion fixture without sharing test state.
@@ -226,8 +229,9 @@ mod tests {
     /// Verifies inactive hooks still forward events but avoid timed callbacks.
     #[test]
     fn dormant_hooks_leave_window_gating_to_the_event_consumer() {
+        let _guard = HOOK_TEST_LOCK.lock().unwrap();
         OPERATIONS.store(0, Ordering::Relaxed);
-        WAIT.store(0, Ordering::Relaxed);
+        WAIT_CALLS.store(0, Ordering::Relaxed);
         let hooks = EventHooks::new(
             false,
             0,
@@ -237,14 +241,15 @@ mod tests {
         hooks.note_operation();
         assert_eq!(hooks.timed(|| 7), 7);
         assert_eq!(OPERATIONS.load(Ordering::Relaxed), 1);
-        assert_eq!(WAIT.load(Ordering::Relaxed), 0);
+        assert_eq!(WAIT_CALLS.load(Ordering::Relaxed), 0);
     }
 
-    /// Verifies active hooks report one operation and one nonzero timed span.
+    /// Verifies active hooks report one operation and exactly one timed callback.
     #[test]
     fn active_hooks_report_operation_and_wait() {
+        let _guard = HOOK_TEST_LOCK.lock().unwrap();
         OPERATIONS.store(0, Ordering::Relaxed);
-        WAIT.store(0, Ordering::Relaxed);
+        WAIT_CALLS.store(0, Ordering::Relaxed);
         let hooks = EventHooks::new(
             true,
             0,
@@ -254,14 +259,15 @@ mod tests {
         hooks.note_operation();
         assert_eq!(hooks.timed(|| 11), 11);
         assert_eq!(OPERATIONS.load(Ordering::Relaxed), 1);
-        assert!(WAIT.load(Ordering::Relaxed) > 0);
+        assert_eq!(WAIT_CALLS.load(Ordering::Relaxed), 1);
     }
 
-    /// Verifies a consumer-owned window enables timing without the exact-capture flag.
+    /// Verifies a consumer-owned window gates each call without the exact-capture flag.
     #[test]
     fn consumer_window_enables_timing() {
-        WAIT.store(0, Ordering::Relaxed);
-        WINDOW_ACTIVE.store(true, Ordering::Relaxed);
+        let _guard = HOOK_TEST_LOCK.lock().unwrap();
+        WAIT_CALLS.store(0, Ordering::Relaxed);
+        WINDOW_ACTIVE.store(false, Ordering::Relaxed);
         let hooks = EventHooks::new(
             false,
             window_active as *const () as usize,
@@ -269,8 +275,13 @@ mod tests {
             wait as *const () as usize,
         );
         assert_eq!(hooks.timed(|| 13), 13);
-        assert!(WAIT.load(Ordering::Relaxed) > 0);
+        assert_eq!(WAIT_CALLS.load(Ordering::Relaxed), 0);
+        WINDOW_ACTIVE.store(true, Ordering::Relaxed);
+        assert_eq!(hooks.timed(|| 13), 13);
+        assert_eq!(WAIT_CALLS.load(Ordering::Relaxed), 1);
         WINDOW_ACTIVE.store(false, Ordering::Relaxed);
+        assert_eq!(hooks.timed(|| 13), 13);
+        assert_eq!(WAIT_CALLS.load(Ordering::Relaxed), 1);
     }
 
     /// User callback time is removed without allowing an oversized value to wrap.

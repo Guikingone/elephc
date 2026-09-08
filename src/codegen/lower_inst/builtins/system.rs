@@ -193,7 +193,15 @@ pub(crate) fn lower_getdate(
 
 /// Boxes the raw associative-array hash pointer in the integer result register into a `Mixed` cell
 /// (runtime tag 5), the representation `getdate`/`localtime` results use — mirroring `stat`.
+///
+/// `__rt_mixed_from_value` increfs a tag-5 payload so the box can share a hash the
+/// caller still holds. These helpers return a freshly allocated hash and then drop
+/// the raw pointer, so the caller's ref has to be released after boxing or the
+/// hash, its keys, and its values stay live after the Mixed cell is freed.
 fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
+    let result = abi::int_result_reg(ctx.emitter);
+    emit_scratch_reserve(ctx, 16);
+    emit_store_result_to_scratch(ctx, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // Mixed payload low word = hash pointer
@@ -208,6 +216,17 @@ fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
     }
+    emit_store_result_to_scratch(ctx, 8);
+    emit_load_scratch_to_reg(ctx, result, 0);
+    abi::emit_decref_if_refcounted(
+        ctx.emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Str),
+        },
+    );
+    emit_load_scratch_to_reg(ctx, result, 8);
+    emit_scratch_release(ctx, 16);
 }
 
 /// Lowers `localtime([$timestamp[, $associative]])` through the shared decomposition runtime helper.
@@ -705,11 +724,76 @@ pub(crate) fn lower_getenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "getenv", 1)?;
+    ensure_arg_count_between(inst, "getenv", 0, 2)?;
+    // No name — including an omitted default, a null literal, and
+    // `getenv(local_only: true)` which materializes that default — means "the
+    // whole environment": a different runtime answer, and a different type.
+    if inst.operands.is_empty() {
+        return emit_getenv_all_result(ctx, inst);
+    }
+    // `local_only` is accepted and evaluated, then ignored. Measured against
+    // `php -n` in the CLI SAPI: `getenv($n)` and `getenv($n, true)` agree for a
+    // shell variable, a `putenv` one and `PATH`, and `getenv() == getenv(null,
+    // true)`. There is no environment here separate from the process's, so the
+    // flag selects between two identical sources. It is still evaluated, because
+    // an argument PHP would evaluate must not be skipped for its side effects.
+    if let Some(local_only) = inst.operands.get(1).copied() {
+        ctx.load_value_to_result(local_only)?;
+    }
     let name = expect_operand(inst, 0)?;
-    require_string(ctx.load_value_to_result(name)?.codegen_repr(), "getenv name")?;
+    let name_ty = ctx.value_php_type(name)?;
+    if matches!(name_ty.codegen_repr(), PhpType::Void) {
+        return emit_getenv_all_result(ctx, inst);
+    }
+    if matches!(name_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar) {
+        let all = ctx.next_label("getenv_all");
+        let done = ctx.next_label("getenv_done");
+        super::super::predicates::emit_is_null_result(ctx, name)?;
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &all);
+        emit_getenv_named_result(ctx, inst)?;
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&all);
+        emit_getenv_all_result(ctx, inst)?;
+        ctx.emitter.label(&done);
+        return Ok(());
+    }
+    emit_getenv_named_result(ctx, inst)
+}
+
+/// Converts a non-null name, releases any conversion result, and boxes the owned lookup result.
+fn emit_getenv_named_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let name = expect_operand(inst, 0)?;
+    let converted = matches!(ctx.value_php_type(name)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    if converted {
+        super::super::conversions::emit_mixed_string_context_result(ctx, name)?;
+        // String casts can allocate or invoke __toString; keep the returned storage until lookup ends.
+        abi::emit_push_reg(ctx.emitter, ptr);
+    } else {
+        super::strings::load_string_arg_to_regs(ctx, inst, 0, "getenv", ptr, len)?;
+    }
     abi::emit_call_label(ctx.emitter, "__rt_getenv");
     super::io::box_owned_string_or_false_result(ctx, "getenv");
+    if converted {
+        let result = abi::int_result_reg(ctx.emitter);
+        emit_store_result_to_scratch(ctx, 8);
+        emit_load_scratch_to_reg(ctx, result, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        emit_load_scratch_to_reg(ctx, result, 8);
+        emit_scratch_release(ctx, 16);
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits `__rt_getenv_all` and boxes the returned hash as a Mixed associative array.
+fn emit_getenv_all_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_getenv_all");
+    // A raw hash pointer is not yet a PHP value: it has to be boxed as a
+    // Mixed cell, exactly as `getdate` and `stat` do with theirs.
+    emit_box_hash_pointer_as_assoc_mixed(ctx);
     store_if_result(ctx, inst)
 }
 

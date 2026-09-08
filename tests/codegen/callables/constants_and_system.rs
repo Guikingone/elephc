@@ -2386,6 +2386,119 @@ echo $missing === false ? " unset" : " set";
     );
 }
 
+// Tests `getenv()` with no argument: the whole environment as an array.
+/// Verifies the no-argument form answers an array holding every variable.
+///
+/// Written around `putenv` rather than a variable the test runner happens to
+/// export, so the assertion holds under any environment — and because reading a
+/// variable set AFTER the program started is the case that separates a live
+/// lookup from a snapshot. libc may reallocate the entry vector when a variable
+/// is added, so the `envp` handed to `main` goes stale; `php -n` reports the
+/// addition and so must this.
+#[test]
+fn test_getenv_with_no_argument_is_the_whole_environment() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("ELEPHC_WHOLE_ENV_PROBE=present");
+$all = getenv();
+echo is_array($all) ? "array" : "not-array";
+echo ":", $all["ELEPHC_WHOLE_ENV_PROBE"] ?? "missing";
+echo ":", count($all) > 1 ? "many" : "few";
+// The FIRST `=` separates name from value; a value may contain more of them.
+putenv("ELEPHC_EQUALS_PROBE=a=b=c");
+echo ":", getenv()["ELEPHC_EQUALS_PROBE"] ?? "missing";
+"#,
+    );
+    assert_eq!(out, "array:present:many:a=b=c");
+}
+
+/// Verifies a null name, including the named-only `local_only` form, is the whole environment.
+///
+/// PHP's signature is `getenv(?string $name = null, bool $local_only = false)`. Selecting
+/// the array form only when the instruction has zero operands rejected `getenv(null)`,
+/// `getenv(null, true)`, and `getenv(local_only: true)` as a string lookup of Void.
+#[test]
+fn test_getenv_null_name_is_the_whole_environment() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("ELEPHC_NULL_ENV_PROBE=present");
+echo is_array(getenv(null)) ? "n" : "x";
+echo is_array(getenv(null, true)) ? "nt" : "x";
+echo is_array(getenv(local_only: true)) ? "lo" : "x";
+echo ":", getenv(null)["ELEPHC_NULL_ENV_PROBE"] ?? "missing";
+echo ":", getenv("ELEPHC_NULL_ENV_PROBE", true);
+"#,
+    );
+    assert_eq!(out, "nntlo:present:present");
+}
+
+/// Verifies runtime nullable names survive direct, named, spread, and callable argument lowering.
+#[test]
+fn test_getenv_runtime_nullable_names() {
+    let out = compile_and_run(
+        r#"<?php
+function read_env(?string $name): mixed { return getenv($name); }
+function read_named(?string $name): mixed { return getenv(local_only: true, name: $name); }
+function read_spread(?string $name): mixed { return getenv(...["name" => $name]); }
+function read_callable(callable $fn, ?string $name): mixed { return $fn($name); }
+putenv("ELEPHC_NULLABLE_ENV=present");
+foreach ([null, "ELEPHC_NULLABLE_ENV", "ELEPHC_NULLABLE_ENV_MISSING"] as $name) {
+    $direct = read_env($name);
+    $named = read_named($name);
+    $spread = read_spread($name);
+    $callable = read_callable(getenv(...), $name);
+    foreach ([$direct, $named, $spread, $callable] as $value) {
+        echo is_array($value) ? $value["ELEPHC_NULLABLE_ENV"] : ($value === false ? "missing" : $value);
+        echo ":";
+    }
+}
+"#,
+    );
+    assert_eq!(out, "present:present:present:present:present:present:present:present:missing:missing:missing:missing:");
+}
+
+// Tests that `$_ENV` and `$_SERVER` carry what PHP's CLI SAPI puts in them, and
+// that a later `putenv` does NOT reach them.
+/// Verifies a CLI program finds its environment in both superglobals.
+///
+/// Measured against `php -n` on a script file: `$_ENV` equals `getenv()`, and
+/// `$_SERVER` holds the same environment plus nine keys of its own. They were
+/// seeded EMPTY before, which read as "not set" to any program that looked.
+///
+/// The `putenv` half is the asymmetry PHP actually has, and it is easy to get
+/// wrong in either direction: `getenv()` reads the live environment and reports
+/// the addition, while `$_ENV` and `$_SERVER` are SNAPSHOTS taken before the
+/// program ran and do not. Measured, not assumed — `php -n` answers
+/// `absent-de-ENV` and `seen` to the same pair.
+///
+/// `$_SERVER['argv']` is asserted because it has no substitute in a CLI program,
+/// and `DOCUMENT_ROOT` because PHP leaves it EMPTY off-web rather than absent —
+/// those are different answers to `array_key_exists`.
+#[test]
+fn test_cli_superglobals_carry_the_environment() {
+    let out = compile_and_run(
+        r#"<?php
+echo count($_ENV) > 0 ? "env-filled" : "env-empty";
+echo ":", count($_SERVER) > count($_ENV) ? "server-has-more" : "server-not-more";
+putenv("ELEPHC_SUPERGLOBAL_PROBE=seen");
+echo ":", $_ENV["ELEPHC_SUPERGLOBAL_PROBE"] ?? "not-in-env";
+echo ":", $_SERVER["ELEPHC_SUPERGLOBAL_PROBE"] ?? "not-in-server";
+echo ":", getenv("ELEPHC_SUPERGLOBAL_PROBE");
+echo ":", array_key_exists("argv", $_SERVER) ? "argv" : "no-argv";
+echo ":", array_key_exists("argc", $_SERVER) ? "argc" : "no-argc";
+echo ":", array_key_exists("DOCUMENT_ROOT", $_SERVER) ? "root" : "no-root";
+echo ":", $_SERVER["DOCUMENT_ROOT"];
+echo ":", is_int($_SERVER["REQUEST_TIME"]) ? "int-time" : "not-int";
+// The request superglobals stay empty in CLI, as they are in PHP.
+echo ":", count($_GET) + count($_POST) + count($_COOKIE) + count($_FILES);
+"#,
+    );
+    assert_eq!(
+        out,
+        "env-filled:server-has-more:not-in-env:not-in-server:seen:argv:argc:root::int-time:0"
+    );
+}
+
 /// Verifies `getenv` releases an owned temporary used as the variable name.
 #[test]
 fn test_getenv_releases_owned_temporary_name() {
