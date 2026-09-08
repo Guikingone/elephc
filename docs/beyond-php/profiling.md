@@ -59,7 +59,7 @@ The capability matrix is explicit about each dimension:
 | local `monitor` | not measured as an OS CPU clock; the UI can show wall minus recorded waits | exact enter/exit time, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | untagged local run |
 | service default | sampled CPU-time ring | unavailable; blocked time is invisible | unavailable | exact deltas only between samples, with sampled attribution; no retained count | unavailable in combined `--with-monitoring` | unavailable in combined `--with-monitoring` | unavailable | unavailable in combined `--with-monitoring` | sampled stacks carry the exact route tag |
 | service `--exact` or signed request | not measured separately; wall minus recorded waits is only a derived remainder | exact for one completed request, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | exact request route/trace context |
-| `--live` | sampled CPU, asked over the channel | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
+| `--live` | sampled CPU, asked over the channel | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | request route tags for `--web`; otherwise untagged |
 | `--attach` | sampled from the outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
 
 A probe-only binary can emit exact per-route DB and outgoing-network operation
@@ -235,7 +235,15 @@ you cannot rebuild or are not allowed to trace: start it with
 live mode) with trend arrows against the previous window and a cumulative share.
 `--attach` monitors a process that is already running, and discovers and merges
 its worker children — so a `--web` prefork server is measured across all its
-workers. When the target is a `.php` source and its `.dSYM` is present, calls the
+workers. A launched `--live` of a `--web` binary asks the master over the
+control channel; workers write into the same shared ring that answer reads, so
+the table includes worker samples with request route tags (`METHOD /path`).
+The header counts discovered processes, which can differ from the ring contributors.
+For Linux attach, a thread that cannot stop stays attached across windows; a
+live window with only such threads retries instead of ending the view. Each
+stop wait is bounded to 50ms per thread, including cleanup; the initial delay
+can therefore grow with the number of blocked threads.
+When the target is a `.php` source and its `.dSYM` is present, calls the
 inliner erased reappear as virtual `name (inlined)` frames, recovered from the
 source spans the inliner preserved.
 

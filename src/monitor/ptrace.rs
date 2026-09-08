@@ -19,6 +19,13 @@
 //!   walked this way, and the walk stops rather than inventing frames.
 
 use std::io;
+use std::time::{Duration, Instant};
+
+use super::process_id::{self, Identity};
+
+#[path = "ptrace_pac.rs"]
+mod pac;
+use pac::strip_pointer_auth;
 
 /// How deep a single frame walk may go.
 ///
@@ -28,12 +35,25 @@ use std::io;
 /// is the cost every sample charges to the program being profiled.
 const MAX_DEPTH: usize = 256;
 
+/// How long one interrupt may wait for the kernel to deliver the stop.
+///
+/// A D-state / uninterruptible tracee never answers `PTRACE_INTERRUPT`. The
+/// wait used to be unbounded, so one stuck thread parked the whole sampler —
+/// and a live view that cannot redraw is worse than a short table. Fifty
+/// milliseconds is long enough for a runnable thread to stop and short enough
+/// that a stuck one does not consume the window. After a timeout later ticks
+/// skip that tid rather than retrying at 99 Hz, but the tid stays seized so
+/// the window-end detach can still release it.
+const STOP_WAIT: Duration = Duration::from_millis(50);
+
 /// A thread stopped and read.
 pub(crate) struct Registers {
     /// Where the thread was interrupted.
     pub(crate) pc: u64,
     /// The frame pointer, which is where the chain walk starts.
     pub(crate) fp: u64,
+    /// Instruction PAC bits reported by the stopped target, zero without PAC.
+    pub(crate) instruction_pac_mask: u64,
 }
 
 /// Every thread of a process, as the kernel lists them.
@@ -121,6 +141,10 @@ pub(crate) fn seize(tid: u32) -> io::Result<()> {
 /// about to be, and from that moment every exit owes it a resume — so the split
 /// is what lets the caller put the resume where nothing can step around it.
 pub(crate) fn interrupt(tid: u32) -> io::Result<()> {
+    #[cfg(test)]
+    if test_faults::withhold_interrupt(tid) {
+        return Ok(());
+    }
     // SAFETY: a ptrace request with no memory operands.
     let result = unsafe { libc::ptrace(libc::PTRACE_INTERRUPT, tid as libc::pid_t, 0, 0) };
     if result == -1 {
@@ -141,18 +165,33 @@ pub(crate) fn interrupt(tid: u32) -> io::Result<()> {
 /// about the thread; treating it as a failure would abandon a thread that is
 /// stopped and waiting to be read.
 pub(crate) fn wait_for_stop(tid: u32) -> io::Result<libc::c_int> {
+    let deadline = Instant::now() + STOP_WAIT;
     loop {
         let mut status: libc::c_int = 0;
         // SAFETY: `status` is a live local for the duration of the call. __WALL
         // is required for threads, which are not children in the waitpid sense.
-        let waited = unsafe { libc::waitpid(tid as libc::pid_t, &mut status, libc::__WALL) };
-        if waited != -1 {
+        // WNOHANG turns the wait into a poll so a D-state tracee cannot hold
+        // this thread forever: the deadline below is the fail-closed bound.
+        let waited = unsafe {
+            libc::waitpid(tid as libc::pid_t, &mut status, libc::__WALL | libc::WNOHANG)
+        };
+        if waited > 0 {
             return Ok(status);
         }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
-            return Err(error);
+        if waited < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+            continue;
         }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "tracee did not stop",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -230,14 +269,39 @@ pub(crate) fn resume(tid: u32, signal: libc::c_int) {
 /// cannot be seized again. An empty window is how `--attach` learns its target
 /// is gone, so the view reported the program had ended while it was still
 /// running — a wrong answer produced by a failure nobody was told about.
-pub(crate) fn detach(tid: u32) {
+///
+/// Returns whether the relationship was released. A timeout means the thread
+/// never stopped; this does not issue `PTRACE_DETACH` in that case, and the
+/// caller must keep the tid so the next window can reuse the attach instead
+/// of seizing again.
+pub(crate) fn detach(tid: u32) -> bool {
     // The last stop is the last chance to hand a pending signal back: after the
     // detach there is no tracer left to hold it, and it is gone.
-    let signal = stop_for_sample(tid).map_or(0, pending_signal);
+    let stop = stop_for_sample(tid);
+    let Some(signal) = detach_signal(&stop) else {
+        return false;
+    };
+    #[cfg(test)]
+    test_faults::record_detach(tid);
     // SAFETY: no memory operands; ESRCH for a thread that has gone is fine, and
     // a tracer that exits detaches whatever it still holds.
     unsafe {
         libc::ptrace(libc::PTRACE_DETACH, tid as libc::pid_t, 0, libc::c_long::from(signal));
+    }
+    true
+}
+
+/// The signal to hand `PTRACE_DETACH`, or `None` when the tracee is still
+/// running and must not be detached.
+///
+/// A timeout is the D-state case: `PTRACE_DETACH` would fail with `ESRCH` and
+/// the relationship would survive. Anything else is either a real stop or a
+/// thread that is already gone, and both can be detached.
+fn detach_signal(stop: &io::Result<libc::c_int>) -> Option<libc::c_int> {
+    match stop {
+        Ok(status) => Some(pending_signal(*status)),
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => None,
+        Err(_) => Some(0),
     }
 }
 
@@ -291,7 +355,11 @@ pub(crate) fn registers(tid: u32) -> io::Result<Registers> {
     if result == -1 {
         return Err(io::Error::last_os_error());
     }
-    Ok(Registers { pc: regs[PROGRAM_COUNTER_INDEX], fp: regs[FRAME_POINTER_INDEX] })
+    Ok(Registers {
+        pc: regs[PROGRAM_COUNTER_INDEX],
+        fp: regs[FRAME_POINTER_INDEX],
+        instruction_pac_mask: pac::instruction_mask(tid)?,
+    })
 }
 
 /// Reads a run of bytes out of the target's address space.
@@ -326,10 +394,10 @@ pub(crate) fn read_memory(pid: u32, address: u64, into: &mut [u8]) -> io::Result
 ///
 /// Split from the walk so the walk's stopping rules can be read — and tested —
 /// without a process to read from.
-pub(crate) fn decode_frame(bytes: [u8; 16]) -> (u64, u64) {
+pub(crate) fn decode_frame(bytes: [u8; 16], instruction_pac_mask: u64) -> (u64, u64) {
     let next = u64::from_le_bytes(bytes[0..8].try_into().unwrap_or([0; 8]));
     let return_address = u64::from_le_bytes(bytes[8..16].try_into().unwrap_or([0; 8]));
-    (next, return_address)
+    (next, strip_pointer_auth(return_address, instruction_pac_mask))
 }
 
 /// Whether a frame pointer can be followed at all.
@@ -349,7 +417,7 @@ pub(crate) fn can_follow(fp: u64, previous: u64) -> bool {
 /// the address to return to. The walk stops at the first read that fails, at a
 /// pointer `can_follow` rejects, and at `MAX_DEPTH`.
 pub(crate) fn walk(pid: u32, regs: &Registers) -> Vec<u64> {
-    let mut chain = vec![regs.pc];
+    let mut chain = vec![strip_pointer_auth(regs.pc, regs.instruction_pac_mask)];
     let mut fp = regs.fp;
     for _ in 0..MAX_DEPTH {
         if !can_follow(fp, 0) {
@@ -359,7 +427,7 @@ pub(crate) fn walk(pid: u32, regs: &Registers) -> Vec<u64> {
         if read_memory(pid, fp, &mut frame).is_err() {
             break;
         }
-        let (next, return_address) = decode_frame(frame);
+        let (next, return_address) = decode_frame(frame, regs.instruction_pac_mask);
         if return_address == 0 {
             break;
         }
@@ -372,9 +440,23 @@ pub(crate) fn walk(pid: u32, regs: &Registers) -> Vec<u64> {
     chain
 }
 
+/// What stopping and reading one thread produced.
+pub(crate) enum SampleOutcome {
+    /// A walked frame chain, innermost first.
+    Stack(Vec<u64>),
+    /// The thread exited, could not be walked, or the seize was already gone.
+    Miss,
+    /// `PTRACE_INTERRUPT` was delivered and the thread never stopped — a D-state
+    /// wait. The interrupt is still in flight; do not resume, and do not ask
+    /// this tid again in this window. Keep it seized: dropping it here leaves
+    /// nobody to detach, so a late stop stays stopped and the next window
+    /// cannot seize the thread.
+    Stuck,
+}
+
 /// Stops one thread, reads its stack, and lets it go again.
 ///
-/// The resume is unconditional past the interrupt, which is the point of the
+/// The resume is unconditional past a successful stop, which is the point of the
 /// wrapper: every failure between the stop and the read still has to give the
 /// thread back. It was not always so: the interrupt and the wait were one call,
 /// so a wait that failed returned before any resume and left the thread stopped
@@ -382,10 +464,19 @@ pub(crate) fn walk(pid: u32, regs: &Registers) -> Vec<u64> {
 /// enough, and the symptom would have been a program that stalls for as long as
 /// it is being profiled — which reads as the profiler being slow, not as the
 /// profiler having stopped it.
-pub(crate) fn sample_thread(pid: u32, tid: u32) -> Option<Vec<u64>> {
+///
+/// A wait that TIMES OUT is the other direction: the thread was never observed
+/// stopped, so a resume would be `PTRACE_CONT` of a running seized task, and
+/// retrying it at 99 Hz would spend the window on a D-state wait. Later ticks
+/// skip that tid; the seized set still holds it so detach can wait out the
+/// in-flight interrupt and release the relationship.
+pub(crate) fn sample_thread(pid: u32, tid: u32) -> SampleOutcome {
     // Below this line the thread is stopped, or on its way to being; above it,
     // nothing has happened to it.
     let stopped = stop_for_sample(tid);
+    if stopped.as_ref().is_err_and(|error| error.kind() == io::ErrorKind::TimedOut) {
+        return SampleOutcome::Stuck;
+    }
     let signal = stopped.as_ref().map_or(0, |status| pending_signal(*status));
     // The walk happens HERE, between the stop and the resume, because it READS
     // THE TARGET'S MEMORY: up to `MAX_DEPTH` frames, a `PEEKDATA` pair each. The
@@ -398,7 +489,10 @@ pub(crate) fn sample_thread(pid: u32, tid: u32) -> Option<Vec<u64>> {
     // frame from a real one.
     let walked = stopped.and_then(|_| registers(tid)).map(|regs| walk(pid, &regs));
     resume(tid, signal);
-    walked.ok()
+    match walked {
+        Ok(chain) => SampleOutcome::Stack(chain),
+        Err(_) => SampleOutcome::Miss,
+    }
 }
 
 /// How often a thread is stopped and read, per second.
@@ -447,8 +541,28 @@ const SAMPLE_HZ: u64 = 99;
 pub(crate) fn attach_window(
     pids: &[u32],
     duration_secs: u32,
-    image: &super::attach::Image,
+    image: &mut super::attach::Image,
 ) -> Result<Vec<(Vec<(String, super::Kind)>, u64)>, String> {
+    let identity = image.identity;
+    match process_id::identity_of_pid(identity) {
+        Identity::Same => {}
+        // The process ended. An empty window is how attach has always learnt
+        // that, and a live view closes on it.
+        Identity::Gone => {
+            image.held = release_held(std::mem::take(&mut image.held));
+            return Ok(Vec::new());
+        }
+        // Same number, different starttime: sampling this against the
+        // original symbols would name the wrong program.
+        Identity::Replaced => {
+            image.held = release_held(std::mem::take(&mut image.held));
+            return Err(format!(
+                "pid {} is no longer the process this attach started with; \
+                 the kernel reused the pid",
+                identity.pid
+            ));
+        }
+    }
     // Each process brings its own bias and its own threads; they share the
     // symbol table, because a prefork server's workers are forks of one image.
     // A process whose bias cannot be read is dropped rather than resolved
@@ -459,23 +573,29 @@ pub(crate) fn attach_window(
     // apart from a window that sampled nothing, and the two used to arrive as
     // the same empty vector.
     let mut refusal: Option<io::Error> = None;
+    let previously_held = std::mem::take(&mut image.held);
     for pid in pids {
         let Some(bias) = super::attach::bias_of(image, *pid) else { continue };
         let mut seized = Vec::new();
         for tid in thread_ids(*pid) {
-            match seize(tid) {
-                Ok(()) => seized.push(tid),
+            // Seize first. A held number is not an identity: the old thread
+            // can exit and the kernel can hand the tid to a new one. That
+            // seize usually succeeds. A still-held D-state tid fails because
+            // we are already the tracer — adopt only when TracerPid says so.
+            // A replacement whose seize fails for another reason is not ours.
+            let seized_ok = seize(tid);
+            if keep_after_seize(seized_ok.is_ok(), || still_traced_by_us(tid)) {
+                seized.push(tid);
+            } else if let Err(error) = seized_ok {
                 // An `EPERM` outranks whatever else is held: a thread that
                 // exited between the `/proc` read and the seize is ordinary and
                 // says nothing, a refusal is the whole diagnosis.
-                Err(error) => {
-                    let held_is_refusal = matches!(
-                        &refusal,
-                        Some(held) if held.kind() == io::ErrorKind::PermissionDenied
-                    );
-                    if !held_is_refusal {
-                        refusal = Some(error);
-                    }
+                let held_is_refusal = matches!(
+                    &refusal,
+                    Some(held) if held.kind() == io::ErrorKind::PermissionDenied
+                );
+                if !held_is_refusal {
+                    refusal = Some(error);
                 }
             }
         }
@@ -484,6 +604,7 @@ pub(crate) fn attach_window(
         }
     }
     if targets.is_empty() {
+        image.held = release_held(previously_held);
         return match window_refusal(refusal) {
             Some(reason) => Err(reason),
             // Nothing was REFUSED — the target simply is not there any more, and
@@ -496,18 +617,30 @@ pub(crate) fn attach_window(
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(u64::from(duration_secs.max(1)));
     let mut stacks = Vec::new();
+    // Tids whose interrupt never landed. Sampled once; still detached below.
+    let mut skip_later = Vec::new();
     while std::time::Instant::now() < deadline {
         let started = std::time::Instant::now();
         // Every process every tick, rather than one process for the whole
         // window each: a worker sampled for a third of the window contributes a
         // third of the samples, and its share of the table would be a third of
         // the truth.
-        for (pid, bias, seized) in &targets {
-            for tid in seized {
-                let Some(chain) = sample_thread(*pid, *tid) else { continue };
-                let stack = super::attach::display_stack(&chain, &image.symbols, *bias);
-                if !stack.is_empty() {
-                    stacks.push(stack);
+        for (pid, bias, seized) in &mut targets {
+            for tid in seized.iter().copied() {
+                if skip_later.contains(&tid) {
+                    continue;
+                }
+                let outcome = sample_thread(*pid, tid);
+                if let SampleOutcome::Stack(chain) = &outcome {
+                    let stack = super::attach::display_stack(chain, &image.symbols, *bias);
+                    if !stack.is_empty() {
+                        stacks.push(stack);
+                    }
+                }
+                // Uninterruptible: do not pay STOP_WAIT again this window,
+                // but leave the tid in `seized` for the detach pass below.
+                if skip_later_samples(&outcome) {
+                    skip_later.push(tid);
                 }
             }
         }
@@ -518,12 +651,67 @@ pub(crate) fn attach_window(
             std::thread::sleep(rest);
         }
     }
+    let mut still_held = Vec::new();
     for (_, _, seized) in &targets {
         for tid in seized {
-            detach(*tid);
+            if !detach(*tid) {
+                still_held.push(*tid);
+            }
         }
     }
+    for tid in previously_held {
+        if still_held.contains(&tid) || targets.iter().any(|(_, _, seized)| seized.contains(&tid)) {
+            continue;
+        }
+        if !detach(tid) {
+            still_held.push(tid);
+        }
+    }
+    image.held = still_held;
     Ok(super::attach::fold(stacks))
+}
+
+/// Detaches every tid that is still traced, keeping those that will not stop.
+fn release_held(tids: Vec<u32>) -> Vec<u32> {
+    tids.into_iter().filter(|tid| !detach(*tid)).collect()
+}
+
+/// Whether this tid belongs in the seized set after one `PTRACE_SEIZE`.
+///
+/// A successful seize is a new relationship. A failed seize is ours only
+/// when `TracerPid` is this process — the D-state case. A recycled tid
+/// whose seize failed for another reason is not adopted just because the
+/// number sat in `held`.
+fn keep_after_seize(seize_ok: bool, still_ours: impl FnOnce() -> bool) -> bool {
+    seize_ok || still_ours()
+}
+
+/// Whether `/proc/<tid>/status` names the current thread as the tracer.
+fn still_traced_by_us(tid: u32) -> bool {
+    // ptrace relationships belong to the tracer thread, which may not be main.
+    tracer_pid(tid) == Some(unsafe { libc::syscall(libc::SYS_gettid) } as u32)
+}
+
+/// Reads `TracerPid` for a live tid, or `None` when `/proc` has no such task.
+fn tracer_pid(tid: u32) -> Option<u32> {
+    let status = std::fs::read_to_string(format!("/proc/{tid}/status")).ok()?;
+    tracer_pid_from_status(&status)
+}
+
+/// `TracerPid` from a `/proc/<tid>/status` body. Split out so the adopt
+/// rule is testable on a host that is not tracing anything.
+fn tracer_pid_from_status(status: &str) -> Option<u32> {
+    status.lines().find_map(|line| line.strip_prefix("TracerPid:")?.trim().parse().ok())
+}
+
+/// Whether later ticks this window should skip this tid.
+///
+/// A stuck tid has an interrupt in flight and another `STOP_WAIT` would park
+/// the sampler. It must stay in `seized` so the window-end detach still
+/// releases the ptrace relationship — dropping it is how a late stop arrived
+/// with nobody to resume it, and how the next window's seize was refused.
+fn skip_later_samples(outcome: &SampleOutcome) -> bool {
+    matches!(outcome, SampleOutcome::Stuck)
 }
 
 /// Whether nothing-seized is a refusal worth reporting, and what to say.
@@ -722,12 +910,9 @@ mod tests {
     #[test]
     fn a_target_that_cannot_be_seized_is_an_error_not_an_empty_window() {
         let me = std::process::id();
-        let Ok(image) = super::super::attach::image_for(me) else {
-            // A host whose own `/proc` this cannot read says nothing about the
-            // branch under test, and failing here would report the wrong thing.
-            return;
-        };
-        match attach_window(&[me], 1, &image) {
+        let mut image = super::super::attach::image_for(me)
+            .unwrap_or_else(|error| panic!("{}", error.reason));
+        match attach_window(&[me], 1, &mut image) {
             Err(reason) => assert!(
                 reason.starts_with("cannot attach to the target"),
                 "a refusal has to say it could not attach: {reason}"
@@ -739,8 +924,138 @@ mod tests {
             ),
         }
     }
+
+    /// `PTRACE_DETACH` is only issued against a stopped (or already gone) tid.
+    ///
+    /// A timeout means the thread is still running. Detaching it then fails
+    /// with `ESRCH`, the relationship survives, and the next window's seize
+    /// is refused as if the kernel had said no.
+    #[test]
+    fn a_running_tracee_is_not_detached() {
+        let timed_out = Err(io::Error::new(io::ErrorKind::TimedOut, "tracee did not stop"));
+        assert_eq!(
+            detach_signal(&timed_out),
+            None,
+            "a D-state tid must stay traced so the next window can reuse it"
+        );
+        assert_eq!(
+            detach_signal(&Ok(stopped(libc::SIGTRAP, 128))),
+            Some(0),
+            "an interrupt stop is a real stop and can be detached"
+        );
+        assert_eq!(
+            detach_signal(&Err(io::Error::from_raw_os_error(libc::ESRCH))),
+            Some(0),
+            "a thread that has gone is already released"
+        );
+    }
+
+    /// A held number is not enough to adopt after a failed seize.
+    ///
+    /// The first version of `Image.held` skipped seize on a matching tid.
+    /// The second adopted whenever seize failed and the number was held.
+    /// Both are wrong once the kernel reuses the tid: the replacement is
+    /// not ours unless TracerPid says so.
+    #[test]
+    fn a_failed_seize_adopts_only_when_we_are_still_the_tracer() {
+        assert!(
+            keep_after_seize(true, || false),
+            "a successful seize is ours whether or not the number was held"
+        );
+        assert!(
+            keep_after_seize(false, || true),
+            "a failed seize of a tid we still trace is the D-state adopt"
+        );
+        assert!(
+            !keep_after_seize(false, || false),
+            "a failed seize of a replacement we do not trace must not be adopted"
+        );
+        assert_eq!(
+            tracer_pid_from_status("Name:\tworker\nTracerPid:\t0\n"),
+            Some(0),
+            "an untraced replacement is TracerPid 0"
+        );
+        assert_eq!(
+            tracer_pid_from_status("Name:\tstuck\nTracerPid:\t42\n"),
+            Some(42)
+        );
+        assert_eq!(tracer_pid_from_status("Name:\tgone\n"), None);
+    }
+
+    /// A timed-out tid is skipped for later samples, not dropped from cleanup.
+    ///
+    /// The first version of the bound removed the tid from `seized` on `Stuck`,
+    /// so the window-end detach never ran. The interrupt stayed pending, a late
+    /// stop had nobody to resume it, and the next window could not seize a
+    /// thread that was still traced.
+    #[test]
+    fn a_stuck_tid_is_held_for_detach_not_forgotten() {
+        assert!(
+            skip_later_samples(&SampleOutcome::Stuck),
+            "an uninterruptible tid must not be retried at 99 Hz"
+        );
+        assert!(
+            !skip_later_samples(&SampleOutcome::Miss),
+            "a miss is still sampled next tick — the thread may be walkable again"
+        );
+        assert!(
+            !skip_later_samples(&SampleOutcome::Stack(vec![0x1000])),
+            "a walked stack is the ordinary keep-sampling case"
+        );
+    }
+
+    /// A recycled pid must not be sampled against the original image.
+    ///
+    /// `--attach --live` keeps the image for the whole view. If the target dies
+    /// and the kernel hands the number to someone else, `/proc` still answers
+    /// and a seize would succeed — against the wrong symbol table. The
+    /// starttime is what says it is a different process.
+    #[test]
+    fn a_reused_pid_is_refused_instead_of_profiled() {
+        let me = std::process::id();
+        let mut image = super::super::attach::image_for(me)
+            .unwrap_or_else(|error| panic!("{}", error.reason));
+        let identity = image.identity;
+        image.identity = super::super::process_id::ProcessIdentity {
+            pid: identity.pid,
+            starttime: identity.starttime.wrapping_add(1),
+        };
+        match attach_window(&[me], 1, &mut image) {
+            Err(reason) => {
+                assert!(reason.contains("reused the pid"), "{reason}");
+                assert!(
+                    !reason.contains("cannot attach to the target"),
+                    "pid reuse is not a ptrace refusal: {reason}"
+                );
+            }
+            Ok(window) => panic!(
+                "a recycled pid came back as {} stacks against the original image",
+                window.len()
+            ),
+        }
+    }
+
+    /// A pid that has gone is still an empty window, not a reuse error.
+    #[test]
+    fn a_vanished_pid_is_an_empty_window_not_reuse() {
+        let me = std::process::id();
+        let mut image = super::super::attach::image_for(me)
+            .unwrap_or_else(|error| panic!("{}", error.reason));
+        image.identity = super::super::process_id::ProcessIdentity {
+            pid: 4294967295,
+            starttime: 1,
+        };
+        match attach_window(&[4294967295], 1, &mut image) {
+            Ok(window) => assert!(window.is_empty(), "a gone target is an empty window: {window:?}"),
+            Err(reason) => panic!("a gone pid must not be reported as reuse: {reason}"),
+        }
+    }
 }
 
 #[cfg(test)]
 #[path = "ptrace_process_tests.rs"]
-mod process_tests;
+pub(crate) mod process_tests;
+
+#[cfg(test)]
+#[path = "ptrace_test_faults.rs"]
+pub(crate) mod test_faults;

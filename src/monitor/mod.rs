@@ -43,6 +43,10 @@ mod elf;
 // from this so that everything except them stays testable.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod attach;
+// Pid-reuse identity. Parsing only, so it is tested on any host; the `/proc`
+// read is Linux-only and is what `--attach --live` consults each window.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod process_id;
 // The syscalls themselves, and the loop that drives them. Linux only, and the
 // one file here no test on this host reaches — which is why it holds nothing
 // but them.
@@ -201,7 +205,7 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     // shortcut here, it is the whole job. macOS has `/usr/bin/sample` for that;
     // on Linux this tool does it itself, with `ptrace`.
     if let Some(pid) = cmd.attach_pid {
-        let image = match attach_image(pid) {
+        let mut image = match attach_image(pid) {
             Ok(image) => image,
             Err(reason) => {
                 eprintln!("elephc monitor: {reason}");
@@ -211,9 +215,9 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
         return if cmd.live {
             // Attach never launched the target, so it never owns its lifetime
             // and there is nothing here to leave alone or reap.
-            run_live(&cmd, pid, None, None, image.as_ref()).code
+            run_live(&cmd, pid, None, None, image.as_mut()).code
         } else {
-            run_once(&cmd, pid, None, None, image.as_ref())
+            run_once(&cmd, pid, None, None, image.as_mut())
         };
     }
     // With `--with-monitoring`, not `--debug-info`. Reaching here with a `.php`
@@ -755,6 +759,19 @@ pub(crate) struct Frame {
 pub(crate) fn is_php_symbol(symbol: &str) -> bool {
     let stem = symbol.trim_start_matches('_');
     stem == "main" || stem.starts_with("fn_") || stem.starts_with("method_")
+        || is_static_method_symbol(stem)
+}
+
+/// Recognizes static methods without accepting property or local storage symbols.
+/// A compact method of class `prop` or `local` has only its method name after that
+/// prefix; storage adds an owner and member. Escaped method names instead start
+/// with `static___`, as emitted by `names::static_method_symbol`.
+fn is_static_method_symbol(stem: &str) -> bool {
+    let Some(rest) = stem.strip_prefix("static_") else { return false };
+    match rest.strip_prefix("prop_").or_else(|| rest.strip_prefix("local_")) {
+        Some(method) => !method.is_empty() && !method.contains('_'),
+        None => !rest.is_empty(),
+    }
 }
 
 /// What a runtime helper is doing, in words a PHP developer can act on.

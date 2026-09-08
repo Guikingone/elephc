@@ -1164,6 +1164,9 @@ fn start_control_channel(
             libc::shutdown(fd, libc::SHUT_RDWR);
             libc::close(fd);
         }
+        // The descriptor is gone; a later atfork must not close whatever now
+        // occupies fd 3.
+        forget_control_fd();
     }
 }
 
@@ -1193,6 +1196,11 @@ const CONTROL_SNAPSHOT_REQUEST: u8 = b'S';
 /// would mean the probe deciding what a window is, which is the caller's
 /// question, and would lose a sample to every reader that ever disconnected.
 fn serve_control_channel() {
+    // The same transition the endpoint runs when a key-holder asks: open the
+    // shared window so `--web` workers that forked before this process was
+    // asked adopt it on their next request and fill the ring this thread reads.
+    // Without this, launched `--live` answered only the master's own samples.
+    begin_sampled();
     // Both for the reasons the endpoint thread blocks them. SIGPIPE: a monitor
     // that exits mid-write must not take the profiled process down with it.
     // SIGPROF: `ITIMER_PROF` is delivered to the PROCESS and the kernel picks
@@ -1226,12 +1234,12 @@ fn serve_control_channel() {
             if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
-            return;
+            break;
         }
         if read == 0 {
             // A real EOF: the monitor is gone, which is the end of the reason
             // this thread exists.
-            return;
+            break;
         }
         if request[0] != CONTROL_SNAPSHOT_REQUEST {
             continue;
@@ -1240,9 +1248,12 @@ fn serve_control_channel() {
         let bytes = profile.as_bytes();
         let header = (bytes.len() as u32).to_le_bytes();
         if !control_send_all(&header) || !control_send_all(bytes) {
-            return;
+            break;
         }
     }
+    // The monitor is gone. Forget so a later close of fd 3 cannot leave a
+    // stale claim that would close whatever the process opens there next.
+    forget_control_fd();
 }
 
 /// Writes every byte of `data` to the control channel, or reports that it could
@@ -1352,10 +1363,75 @@ unsafe fn disarm_timer() {
 }
 
 /// `pthread_atfork` child hook: disarm the timer in the child (belt-and-
-/// suspenders — fork already resets it). A `--web` worker re-arms via
-/// `elephc_probe_rearm`.
+/// suspenders — fork already resets it) and drop an inherited control
+/// socket. A `--web` worker re-arms via `elephc_probe_rearm`; it does not
+/// keep the master's credential fd.
 extern "C" fn disarm_after_fork() {
-    unsafe { disarm_timer() };
+    unsafe {
+        disarm_timer();
+        drop_inherited_control_channel();
+    }
+}
+
+/// Closes fd 3 in a `fork` child when this process claimed it as the control
+/// channel.
+///
+/// `close`, not `shutdown`: shutdown would tear down the master's still-live
+/// socket. Only the child's descriptor is dropped. `FD_CLOEXEC` remains the
+/// exec-without-fork defence; this is the fork-without-exec one.
+///
+/// Called only from the atfork child hook. The child's `CONTROL_OWNED` is a
+/// copied word, so clearing it here does not change the parent.
+///
+/// The flag is not enough: a long-lived process can lose the channel, close
+/// fd 3, and reuse that number for a file or socket. Closing then would
+/// drop an unrelated descriptor in every later fork child. The recorded
+/// device and inode have to still match.
+fn drop_inherited_control_channel() {
+    let owned = CONTROL_OWNED.swap(false, Ordering::Relaxed);
+    let should_close = owned && control_identity(CONTROL_FD)
+        .is_some_and(|(dev, ino)| same_control_identity(dev, ino));
+    forget_control_fd();
+    if !should_close {
+        return;
+    }
+    // SAFETY: fstat says this is still the socket we claimed. close is
+    // async-signal-safe.
+    unsafe {
+        libc::close(CONTROL_FD);
+    }
+}
+
+/// Device and inode of an open descriptor, or `None` if it is already closed.
+fn control_identity(fd: i32) -> Option<(u64, u64)> {
+    unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut st) != 0 {
+            return None;
+        }
+        Some((st.st_dev as u64, st.st_ino as u64))
+    }
+}
+
+/// Whether `dev`/`ino` are the control socket this process claimed.
+fn same_control_identity(dev: u64, ino: u64) -> bool {
+    dev == CONTROL_DEV.load(Ordering::Relaxed) && ino == CONTROL_INO.load(Ordering::Relaxed)
+}
+
+/// Records that fd 3 is the live-control socket, by its current inode.
+fn remember_control_fd() {
+    if let Some((dev, ino)) = control_identity(CONTROL_FD) {
+        CONTROL_DEV.store(dev, Ordering::Relaxed);
+        CONTROL_INO.store(ino, Ordering::Relaxed);
+        CONTROL_OWNED.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Clears the claim and its identity so a later atfork will not close fd 3.
+fn forget_control_fd() {
+    CONTROL_OWNED.store(false, Ordering::Relaxed);
+    CONTROL_DEV.store(0, Ordering::Relaxed);
+    CONTROL_INO.store(0, Ordering::Relaxed);
 }
 
 /// Disarms the profiling timer. A host that calls `execve` WITHOUT forking (a
@@ -1572,6 +1648,21 @@ const CONTROL_ACK: &[u8] = b"ELEPHC-MONITOR-ACK-1";
 /// carry a distinction only one of them uses.
 static POLLED: AtomicBool = AtomicBool::new(false);
 
+/// Whether this process claimed fd 3 as the live-control socket.
+///
+/// `FD_CLOEXEC` only closes the descriptor on `exec`. A `--web` worker is
+/// `fork` without `exec`, so it would otherwise keep a copy of the credential
+/// socket: the monitor would not see EOF when the master left, and every
+/// worker would hold the private channel. The atfork child hook closes the
+/// inherited fd when this flag is set, and only then — fd 3 is an ordinary
+/// number on an unmonitored binary.
+static CONTROL_OWNED: AtomicBool = AtomicBool::new(false);
+/// Device of the claimed control socket. Compared at fork so a reused fd 3
+/// is not closed.
+static CONTROL_DEV: AtomicU64 = AtomicU64::new(0);
+/// Inode of the claimed control socket. Paired with `CONTROL_DEV`.
+static CONTROL_INO: AtomicU64 = AtomicU64::new(0);
+
 /// Whether this process was started by `elephc monitor`.
 ///
 /// The credential is the CHANNEL, not a token: only the parent that forked this
@@ -1629,12 +1720,30 @@ fn control_fd_present() -> bool {
         // socketpair creator, reached and accepted the activation point. The
         // exact monitor uses this to distinguish a valid empty selective window
         // from a clean run whose control channel was never recognised.
-        libc::send(
+        let acked = libc::send(
             CONTROL_FD,
             CONTROL_ACK.as_ptr() as *const libc::c_void,
             CONTROL_ACK.len(),
             libc::MSG_NOSIGNAL,
-        ) == CONTROL_ACK.len() as isize
+        ) == CONTROL_ACK.len() as isize;
+        // The parent cleared CLOEXEC so fd 3 survived exec. Once the marker is
+        // ours, it must not leak into children: possession of this socket is
+        // the credential. CLOEXEC covers fork+exec (`popen`); the atfork
+        // child hook closes the fd for fork-only `--web` workers.
+        set_cloexec(CONTROL_FD);
+        remember_control_fd();
+        acked
+    }
+}
+
+/// Marks `fd` close-on-exec. Best-effort: a failure here does not undo a
+/// handshake that already consumed the marker.
+fn set_cloexec(fd: i32) {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+        }
     }
 }
 
@@ -2374,9 +2483,12 @@ mod tests {
 
             let verdict = super::control_fd_present();
 
+            // Read the claimed descriptor, not `ours`. send(ours) lands on
+            // `theirs`, which is what was dup2'd onto fd 3; recving `ours`
+            // only passed when socketpair itself allocated fd 3.
             let mut buf = [0u8; 256];
             let left = libc::recv(
-                ours,
+                super::CONTROL_FD,
                 buf.as_mut_ptr() as *mut libc::c_void,
                 buf.len(),
                 libc::MSG_DONTWAIT,
@@ -2444,6 +2556,10 @@ mod tests {
             );
             let left = if left < 0 { 0 } else { left as usize };
 
+            // CLOEXEC is a descriptor flag on the fd the handshake just claimed
+            // (fd 3), not on `theirs`. Check before restoring the original fd 3.
+            let flags = libc::fcntl(super::CONTROL_FD, libc::F_GETFD);
+
             if saved >= 0 {
                 libc::dup2(saved, super::CONTROL_FD);
                 libc::close(saved);
@@ -2457,6 +2573,12 @@ mod tests {
             assert_eq!(ack_len, super::CONTROL_ACK.len() as isize);
             assert_eq!(ack, super::CONTROL_ACK, "activation must be acknowledged");
             assert_eq!(&buf[..left], trailing, "the marker must be consumed, and only it");
+            assert!(flags >= 0, "control fd must still be open after the handshake");
+            assert_ne!(
+                flags & libc::FD_CLOEXEC,
+                0,
+                "the credential socket must not survive into fork/popen children"
+            );
         }
     }
 
@@ -4018,3 +4140,6 @@ mod tests {
         REGION.store(0, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod process_tests;

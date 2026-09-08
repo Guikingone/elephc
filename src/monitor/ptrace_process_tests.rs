@@ -14,15 +14,15 @@ use std::os::fd::AsRawFd;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-struct Tracee {
-    child: Child,
+pub(crate) struct Tracee {
+    pub(crate) child: Child,
     directory: std::path::PathBuf,
-    seized: bool,
+    pub(crate) seized: bool,
 }
 
 impl Tracee {
     /// Builds and starts a traceable process, waiting for its handlers to be ready.
-    fn start() -> Self {
+    pub(crate) fn start() -> Self {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let directory = std::env::temp_dir().join(format!("elephc-signal-{}-{id}", std::process::id()));
@@ -95,12 +95,12 @@ fn sampling_preserves_signal_and_progress(signal: libc::c_int, marker: u8) {
     let pid = tracee.child.id();
     seize(pid).expect("kernel must allow tracing the child for this regression");
     tracee.seized = true;
-    assert!(sample_thread(pid, pid).is_some());
+    assert!(matches!(sample_thread(pid, pid), SampleOutcome::Stack(_)));
     tracee.signal_stop(signal);
     let before = tracee.progress().1;
     // Keep tracing throughout. A resume deferred until detach cannot pass this.
     for _ in 0..40 {
-        assert!(sample_thread(pid, pid).is_some());
+        assert!(matches!(sample_thread(pid, pid), SampleOutcome::Stack(_)));
         std::thread::sleep(Duration::from_millis(10));
     }
     let after = tracee.progress().1;
@@ -113,6 +113,88 @@ fn sampling_preserves_signal_and_progress(signal: libc::c_int, marker: u8) {
     assert_eq!(tracee.read_marker(), marker, "detach must deliver the pending signal");
     assert_eq!(unsafe { libc::kill(pid as libc::pid_t, signal) }, 0);
     assert_eq!(tracee.read_marker(), marker, "handlers must also work after detach");
+}
+
+/// A running seized thread that never stops must not park the sampler.
+///
+/// `PTRACE_SEIZE` leaves the tracee running. Waiting for a stop that will not
+/// come is the D-state hang: the bound has to fire, and it has to fire as
+/// `TimedOut` so `sample_thread` can skip the tid for later ticks this window.
+#[test]
+fn wait_for_stop_times_out_on_a_running_seized_tracee() {
+    let mut tracee = Tracee::start();
+    let pid = tracee.child.id();
+    seize(pid).expect("kernel must allow tracing the child for this bound");
+    tracee.seized = true;
+    let started = Instant::now();
+    let error = wait_for_stop(pid).expect_err("a running seized thread has no stop to report");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the wait must fail closed, not block: {:?}",
+        started.elapsed()
+    );
+}
+
+/// A successful detach must actually release the relationship.
+///
+/// The next window seizes again. If detach issued `PTRACE_DETACH` against a
+/// running tid and ignored the `ESRCH`, the second seize would fail and a
+/// live view would report a refusal about a program it was still tracing.
+#[test]
+fn detach_releases_a_runnable_tracee_so_it_can_be_seized_again() {
+    let mut tracee = Tracee::start();
+    let pid = tracee.child.id();
+    seize(pid).expect("kernel must allow tracing the child for this release");
+    tracee.seized = true;
+    assert!(detach(pid), "a runnable seized thread must stop and detach");
+    tracee.seized = false;
+    seize(pid).expect("a released thread must be seizable again");
+    tracee.seized = true;
+}
+
+/// Exercises all-stuck cleanup and adoption through two real attach windows.
+#[test]
+fn a_stuck_window_retains_the_tracee_until_the_next_window_can_detach() {
+    let mut tracee = Tracee::start();
+    let pid = tracee.child.id();
+    let mut image = super::super::attach::image_for(pid)
+        .unwrap_or_else(|error| panic!("{}", error.reason));
+    tracee.seized = true;
+    // One sample stop and the cleanup stop time out. Later ticks must skip it.
+    let delayed = test_faults::DelayedStops::new(pid, 2);
+    let first = attach_window(&[pid], 1, &mut image).unwrap();
+    assert!(first.is_empty(), "a withheld stop cannot produce a sample");
+    assert_eq!(image.held, vec![pid], "cleanup must retain the seized task");
+    assert!(still_traced_by_us(pid), "the kernel relationship must survive");
+    assert_eq!(delayed.detach_attempts(), 0, "no DETACH against a running task");
+
+    let second = attach_window(&[pid], 1, &mut image).unwrap();
+    assert!(!second.is_empty(), "a held tracee must be sampled next window");
+    assert!(image.held.is_empty());
+    assert_eq!(delayed.detach_attempts(), 1, "the stopped tracee must be released");
+    assert_eq!(tracer_pid(pid), Some(0));
+    seize(pid).expect("the recovered window must leave the target seizable");
+}
+
+/// A real stopped target supplies the register mask used by both PC and LR walks.
+#[test]
+fn frame_decoding_uses_the_registers_instruction_mask() {
+    let mut tracee = Tracee::start();
+    let pid = tracee.child.id();
+    seize(pid).unwrap();
+    tracee.seized = true;
+    stop_for_sample(pid).unwrap();
+    let regs = registers(pid).unwrap();
+    assert!(!walk(pid, &regs).is_empty());
+    let mut bytes = [0u8; 16];
+    let signed = 0xAA7F_0010_0000_1234u64;
+    bytes[..8].copy_from_slice(&0x1000u64.to_le_bytes());
+    bytes[8..].copy_from_slice(&signed.to_le_bytes());
+    let (fp, lr) = decode_frame(bytes, 0x007f_0000_0000_0000);
+    assert_eq!(fp, 0x1000);
+    assert_eq!(lr, if cfg!(target_arch = "aarch64") { 0x0010_0000_1234 } else { signed });
+    resume(pid, 0);
 }
 
 /// A pending handled SIGUSR1 cannot stall a process for the capture window.

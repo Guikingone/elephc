@@ -87,7 +87,8 @@ because a degraded profile that looks like the real one is worse than none.
 | launched default | exact wall; recorded waits are derived dimensions, not OS CPU | exact | exact plus exact retained | exact DB queries and curl operations; no file-I/O metrics; exact DB and network wait | untagged |
 | service default | sampled CPU; no blocked wall time | none | exact inter-sample deltas with sampled attribution; no retained | none in combined `--with-monitoring`; no file-I/O metrics | sampled stacks carry route tags |
 | service `--exact` / signed request | exact request wall; no separate OS CPU | exact | exact plus exact retained | exact DB queries and curl operations; no file-I/O metrics; exact DB and network wait | exact request route/trace |
-| `--live` / `--attach` | sampled CPU only — `--live` asks the child it launched, `--attach` reads the process from the outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | none | none | none | none |
+| launched `--live` | sampled CPU from the shared ring | none | none | none | request route tags for `--web`; otherwise untagged |
+| `--attach` | sampled CPU from outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | none | none | none | none |
 
 Reading a running service (`monitor <address>`) needs the build key: from
 `--key <file>`, the `ELEPHC_PROBE_KEY` hex environment variable, or a `.key`
@@ -148,10 +149,14 @@ a final cumulative table on exit. `--attach <pid>` monitors a process that is
 already running — Ctrl-C stops monitoring and leaves it running. `--attach`
 discovers the target's direct children each window and merges them, so a
 `--web` prefork server is measured across all its workers, not just the master.
-A launched `--live` asks the program it started, over the channel it handed it,
-so its answer is that process's own. Live mode skips inlined-frame recovery to keep the refresh light. When
-the sampler refuses (it will not read a process it did not spawn without
-elevation), the command says so rather than reporting an empty capture.
+A launched `--live` asks the program it started, over the channel it handed it.
+A `--web` binary fills one shared ring from its workers, so the answer includes
+worker samples and request route tags (`METHOD /path`), as the endpoint does.
+The header counts discovered processes, which can differ from the ring's sample
+contributors. Live mode skips inlined-frame recovery to keep the refresh light.
+For `--attach`, an external-sampling permission refusal is reported as an error.
+A Linux tracee that cannot stop within the deadline remains attached; even an
+empty live window retries it on the next redraw.
 
 When the target is a `.php` source and its `.dSYM` bundle is present, calls
 erased by the inliner reappear as virtual `name (inlined)` frames: the inliner
