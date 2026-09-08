@@ -1,27 +1,19 @@
 //! Purpose:
-//! Home of the PHP `getenv` builtin: its single-source registry declaration and semantic target.
+//! Declares getenv semantics and its argument-dependent boxed result type.
 //!
 //! Called from:
-//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through the builtin registry.
 //!
 //! Key details:
-//! - `check` returns `Union(Str, False)` when a name is present, matching PHP's
-//!   string-or-false lookup. An omitted or null name answers the whole environment
-//!   as a boxed Mixed hash — including `getenv(null)`, `getenv(null, true)`, and
-//!   `getenv(local_only: true)`.
-//! - The named-lookup EIR result carries that union too. It used to be overridden
-//!   to plain `Str` "for present and missing variables alike", which is where the
-//!   two answers were collapsed: an unset variable came back as `""`, so
-//!   `getenv($x) !== false` — the idiom for "is this set" — was true for every
-//!   name, silently.
+//! - Omitted and null names return an environment array; non-null names return string|false.
+//! - Nullable or erased operands retain a Mixed result because their runtime value selects the mode.
 
 use crate::builtins::semantics::{
-    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+    runtime_fn_semantics, BuiltinArgumentLowering, BuiltinEffects, BuiltinResultType, BuiltinSemanticInput,
+    BuiltinSemantics,
 };
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 builtin! {
@@ -30,91 +22,56 @@ builtin! {
     semantics: getenv_semantics(),
 }
 
-/// Builds semantics whose EIR result type follows the name, not the physical arity.
+/// Preserves nullable names and shares result typing between direct and callable EIR lowering.
 const fn getenv_semantics() -> BuiltinSemantics {
     let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::Getenv);
+    semantics.argument_lowering = BuiltinArgumentLowering::Getenv;
     semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics.effects = BuiltinEffects::Shared(effects);
     semantics
 }
 
-/// Returns Mixed for the whole-environment form and `string|false` for a named lookup.
-///
-/// ARITY IS READ FROM `arg_types`, NOT `args`: `semantics::lower_registry_call` re-resolves
-/// this hook with `args: &[]` while `ir_lower` resolves it with the real AST args.
-/// `arg_types` is derived from the lowered operands in both paths. A null name is still
-/// an operand, so keying off `args.is_empty()` would type `getenv(null)` as a string
-/// lookup — the same mistake as selecting `__rt_getenv` from a non-empty operand list.
-fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
-    if getenv_arg_types_select_whole_environment(input.arg_types) {
-        PhpType::Mixed
+/// Includes string-conversion effects when an erased name may invoke user code or allocate scratch.
+fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
+    let intrinsic = crate::ir::RuntimeFnId::Getenv.intrinsic_effects();
+    if input.arg_types.is_empty() || input.arg_types.first() == Some(&PhpType::Void) {
+        intrinsic
     } else {
-        PhpType::Union(vec![PhpType::Str, PhpType::False])
+        // AST callable analysis can supply the declared string type for an unknown argument.
+        // Keep that case conservative too. Nested user I/O publishes its own monitoring events.
+        crate::ir::Op::Call.default_effects().difference(
+            crate::ir::Effects::BLOCKING_IO | crate::ir::Effects::NETWORK_IO,
+        )
     }
 }
 
-/// True when there is no name, or the name is the null default.
-fn getenv_arg_types_select_whole_environment(arg_types: &[PhpType]) -> bool {
-    match arg_types.first() {
-        None => true,
-        Some(ty) => matches!(ty, PhpType::Void),
+/// Resolves from operand types, which remain available when the AST arguments are absent.
+fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
+    result_type(input.arg_types.first())
+}
+
+/// Keeps the array alternative whenever the name may hold null at runtime.
+fn result_type(name: Option<&PhpType>) -> PhpType {
+    match name {
+        None => PhpType::Mixed,
+        Some(ty) if may_be_null(ty) => PhpType::Mixed,
+        Some(_) => PhpType::Union(vec![PhpType::Str, PhpType::False]),
     }
 }
 
-/// Returns the type PHP's signature declares, which depends on the NAME, not just arity.
-///
-/// `getenv($name)` answers `string|false`. `getenv()`, `getenv(null)`, `getenv(null, true)`,
-/// and `getenv(local_only: true)` answer the whole environment as a string-keyed array,
-/// and cannot fail — there is no name to miss. Returning the union for those would make
-/// every caller handle a `false` that cannot occur, and `foreach (getenv() as ...)` would
-/// not type-check.
+/// Recognizes statically null and dynamically nullable operand representations.
+fn may_be_null(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Void | PhpType::Mixed | PhpType::TaggedScalar => true,
+        PhpType::Union(types) => types.iter().any(may_be_null),
+        _ => false,
+    }
+}
+
+/// Types the name already normalized by the shared named/positional/spread planner.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    for arg in cx.args.iter() {
-        cx.checker.infer_type(arg, cx.env)?;
-    }
-    if getenv_ast_selects_whole_environment(cx)? {
-        // `Mixed`, not `AssocArray`: the result is a hash pointer BOXED in a Mixed
-        // cell, exactly as `getdate` and `stat` return theirs, and those declare
-        // `Mixed` for that reason. Declaring the array type instead tells every
-        // consumer the value IS the hash, so `count()` reads the cell's tag as
-        // the entry count and answers 5 for a 65-entry environment.
-        //
-        // The type is the REPRESENTATION, and losing `array<string,string>` here
-        // is the price of the box.
-        return Ok(PhpType::Mixed);
-    }
-    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
-}
-
-/// True when the call names no variable, or names null.
-fn getenv_ast_selects_whole_environment(
-    cx: &mut BuiltinCheckCtx<'_>,
-) -> Result<bool, CompileError> {
-    match getenv_name_argument(cx.args) {
-        None => Ok(true),
-        Some(name) => {
-            let ty = cx.checker.infer_type(name, cx.env)?;
-            Ok(matches!(ty, PhpType::Void))
-        }
-    }
-}
-
-/// Returns the `$name` expression, or `None` when the name was omitted.
-///
-/// `getenv(local_only: true)` supplies only the flag; the name stays at its null
-/// default and must still select the whole-environment form.
-fn getenv_name_argument(args: &[Expr]) -> Option<&Expr> {
-    let mut named_name = None;
-    let mut first_positional = None;
-    for arg in args {
-        match &arg.kind {
-            ExprKind::NamedArg { name, value } => {
-                if php_symbol_key(name) == "name" {
-                    named_name = Some(value.as_ref());
-                }
-            }
-            _ if first_positional.is_none() => first_positional = Some(arg),
-            _ => {}
-        }
-    }
-    named_name.or(first_positional)
+    let name = cx.args.first()
+        .map(|arg| cx.checker.infer_type(arg, cx.env))
+        .transpose()?;
+    Ok(result_type(name.as_ref()))
 }

@@ -745,9 +745,43 @@ pub(crate) fn lower_getenv(
     if matches!(name_ty.codegen_repr(), PhpType::Void) {
         return emit_getenv_all_result(ctx, inst);
     }
-    require_string(ctx.load_value_to_result(name)?.codegen_repr(), "getenv name")?;
+    if matches!(name_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar) {
+        let all = ctx.next_label("getenv_all");
+        let done = ctx.next_label("getenv_done");
+        super::super::predicates::emit_is_null_result(ctx, name)?;
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &all);
+        emit_getenv_named_result(ctx, inst)?;
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&all);
+        emit_getenv_all_result(ctx, inst)?;
+        ctx.emitter.label(&done);
+        return Ok(());
+    }
+    emit_getenv_named_result(ctx, inst)
+}
+
+/// Converts a non-null name, releases any conversion result, and boxes the owned lookup result.
+fn emit_getenv_named_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let name = expect_operand(inst, 0)?;
+    let converted = matches!(ctx.value_php_type(name)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    if converted {
+        super::super::conversions::emit_mixed_string_context_result(ctx, name)?;
+        // String casts can allocate or invoke __toString; keep the returned storage until lookup ends.
+        abi::emit_push_reg(ctx.emitter, ptr);
+    } else {
+        super::strings::load_string_arg_to_regs(ctx, inst, 0, "getenv", ptr, len)?;
+    }
     abi::emit_call_label(ctx.emitter, "__rt_getenv");
     super::io::box_owned_string_or_false_result(ctx, "getenv");
+    if converted {
+        let result = abi::int_result_reg(ctx.emitter);
+        emit_store_result_to_scratch(ctx, 8);
+        emit_load_scratch_to_reg(ctx, result, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        emit_load_scratch_to_reg(ctx, result, 8);
+        emit_scratch_release(ctx, 16);
+    }
     store_if_result(ctx, inst)
 }
 

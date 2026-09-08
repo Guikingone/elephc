@@ -35,6 +35,12 @@ $env = getenv();
 echo "getenv() entries: " . (count($env) > 0 ? "many" : "none") . PHP_EOL;
 echo "  HOME is among them: " . (array_key_exists("HOME", $env) ? "yes" : "no") . PHP_EOL;
 
+// A nullable name can select the whole environment at runtime too.
+function readEnvironment(?string $name = null): mixed {
+    return getenv($name, true);
+}
+echo "nullable name returns an array: " . (is_array(readEnvironment()) ? "yes" : "no") . PHP_EOL;
+
 // The CLI superglobals carry the same environment. $_SERVER adds the keys PHP's
 // CLI SAPI puts there — argv, argc, PHP_SELF, SCRIPT_NAME, REQUEST_TIME and the
 // rest — so it holds strictly more than $_ENV.

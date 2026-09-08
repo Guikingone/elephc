@@ -924,6 +924,7 @@ mod tests {
             ("count", BuiltinArgumentLowering::Count),
             ("date", BuiltinArgumentLowering::Date),
             ("json_decode", BuiltinArgumentLowering::JsonDecode),
+            ("getenv", BuiltinArgumentLowering::Getenv),
             ("pcntl_exec", BuiltinArgumentLowering::PcntlPreserveOmitted),
             ("pcntl_signal", BuiltinArgumentLowering::PcntlPreserveOmitted),
             ("pcntl_wait", BuiltinArgumentLowering::PcntlPreserveOmitted),

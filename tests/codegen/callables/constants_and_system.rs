@@ -2432,6 +2432,31 @@ echo ":", getenv("ELEPHC_NULL_ENV_PROBE", true);
     assert_eq!(out, "nntlo:present:present");
 }
 
+/// Verifies runtime nullable names survive direct, named, spread, and callable argument lowering.
+#[test]
+fn test_getenv_runtime_nullable_names() {
+    let out = compile_and_run(
+        r#"<?php
+function read_env(?string $name): mixed { return getenv($name); }
+function read_named(?string $name): mixed { return getenv(local_only: true, name: $name); }
+function read_spread(?string $name): mixed { return getenv(...["name" => $name]); }
+function read_callable(callable $fn, ?string $name): mixed { return $fn($name); }
+putenv("ELEPHC_NULLABLE_ENV=present");
+foreach ([null, "ELEPHC_NULLABLE_ENV", "ELEPHC_NULLABLE_ENV_MISSING"] as $name) {
+    $direct = read_env($name);
+    $named = read_named($name);
+    $spread = read_spread($name);
+    $callable = read_callable(getenv(...), $name);
+    foreach ([$direct, $named, $spread, $callable] as $value) {
+        echo is_array($value) ? $value["ELEPHC_NULLABLE_ENV"] : ($value === false ? "missing" : $value);
+        echo ":";
+    }
+}
+"#,
+    );
+    assert_eq!(out, "present:present:present:present:present:present:present:present:missing:missing:missing:missing:");
+}
+
 // Tests that `$_ENV` and `$_SERVER` carry what PHP's CLI SAPI puts in them, and
 // that a later `putenv` does NOT reach them.
 /// Verifies a CLI program finds its environment in both superglobals.

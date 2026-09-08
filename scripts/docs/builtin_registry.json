@@ -49070,7 +49070,7 @@
           "default": null,
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -49104,7 +49104,7 @@
           "default": "null",
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -49144,17 +49144,13 @@
     "module": "standard",
     "name": "getenv",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "getenv",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
-        "kind": "static",
-        "names": [
-          "reads_process",
-          "alloc_heap"
-        ]
+        "kind": "shared"
       },
       "lowering": {
         "kind": "runtime_call",
@@ -49193,7 +49189,7 @@
           "default": "null",
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,

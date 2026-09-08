@@ -13173,7 +13173,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "name",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },

@@ -850,6 +850,12 @@ impl RuntimeFnId {
     pub fn refine_first_class_callable_sig(self, sig: &mut crate::types::FunctionSig) {
         use crate::types::PhpType;
         match self {
+            RuntimeFnId::Getenv => {
+                // Preserve null in both direct operands and generated callable wrappers.
+                if let Some((_, name_ty)) = sig.params.get_mut(0) {
+                    *name_ty = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
+                }
+            }
             RuntimeFnId::PregReplaceCallback => {
                 if let Some((_, callback_ty)) = sig.params.get_mut(1) {
                     *callback_ty = PhpType::Callable;
