@@ -586,11 +586,11 @@ pub(crate) fn attach_window(
         for tid in thread_ids(*pid) {
             // Seize first. A held number is not an identity: the old thread
             // can exit and the kernel can hand the tid to a new one. That
-            // seize succeeds, and skipping it would sample a thread we do
-            // not trace. A still-held D-state tid fails the seize because
-            // we are already the tracer; that is the one case we adopt.
+            // seize usually succeeds. A still-held D-state tid fails because
+            // we are already the tracer — adopt only when TracerPid says so.
+            // A replacement whose seize fails for another reason is not ours.
             let seized_ok = seize(tid);
-            if keep_after_seize(seized_ok.is_ok(), previously_held.contains(&tid)) {
+            if keep_after_seize(seized_ok.is_ok(), || still_traced_by_us(tid)) {
                 seized.push(tid);
             } else if let Err(error) = seized_ok {
                 // An `EPERM` outranks whatever else is held: a thread that
@@ -684,11 +684,29 @@ fn release_held(tids: Vec<u32>) -> Vec<u32> {
 
 /// Whether this tid belongs in the seized set after one `PTRACE_SEIZE`.
 ///
-/// A successful seize is a new relationship, including a recycled tid that
-/// only shares a number with last window's stuck thread. A failed seize of
-/// a tid we still hold is the D-state case: we are already the tracer.
-fn keep_after_seize(seize_ok: bool, was_held: bool) -> bool {
-    seize_ok || was_held
+/// A successful seize is a new relationship. A failed seize is ours only
+/// when `TracerPid` is this process — the D-state case. A recycled tid
+/// whose seize failed for another reason is not adopted just because the
+/// number sat in `held`.
+fn keep_after_seize(seize_ok: bool, still_ours: impl FnOnce() -> bool) -> bool {
+    seize_ok || still_ours()
+}
+
+/// Whether `/proc/<tid>/status` names this process as the tracer.
+fn still_traced_by_us(tid: u32) -> bool {
+    tracer_pid(tid) == Some(std::process::id())
+}
+
+/// Reads `TracerPid` for a live tid, or `None` when `/proc` has no such task.
+fn tracer_pid(tid: u32) -> Option<u32> {
+    let status = std::fs::read_to_string(format!("/proc/{tid}/status")).ok()?;
+    tracer_pid_from_status(&status)
+}
+
+/// `TracerPid` from a `/proc/<tid>/status` body. Split out so the adopt
+/// rule is testable on a host that is not tracing anything.
+fn tracer_pid_from_status(status: &str) -> Option<u32> {
+    status.lines().find_map(|line| line.strip_prefix("TracerPid:")?.trim().parse().ok())
 }
 
 /// Whether later ticks this window should skip this tid.
@@ -970,31 +988,36 @@ mod tests {
         );
     }
 
-    /// A held number is not enough to skip seize.
+    /// A held number is not enough to adopt after a failed seize.
     ///
-    /// The first version of `Image.held` treated a matching tid as still
-    /// ours. After that thread exits the kernel can reuse the number, and
-    /// skipping seize then interrupts a thread this process does not trace.
-    /// Seize first: success is a new thread, failure on a held tid is the
-    /// D-state case we still own.
+    /// The first version of `Image.held` skipped seize on a matching tid.
+    /// The second adopted whenever seize failed and the number was held.
+    /// Both are wrong once the kernel reuses the tid: the replacement is
+    /// not ours unless TracerPid says so.
     #[test]
-    fn a_recycled_held_tid_is_seized_not_adopted() {
+    fn a_failed_seize_adopts_only_when_we_are_still_the_tracer() {
         assert!(
-            keep_after_seize(true, true),
-            "seize succeeding on a held number is a new thread, already ours"
+            keep_after_seize(true, || false),
+            "a successful seize is ours whether or not the number was held"
         );
         assert!(
-            keep_after_seize(false, true),
-            "seize failing on a held tid means we are still the tracer"
+            keep_after_seize(false, || true),
+            "a failed seize of a tid we still trace is the D-state adopt"
         );
         assert!(
-            keep_after_seize(true, false),
-            "a fresh tid that seized is the ordinary case"
+            !keep_after_seize(false, || false),
+            "a failed seize of a replacement we do not trace must not be adopted"
         );
-        assert!(
-            !keep_after_seize(false, false),
-            "a fresh tid the kernel refused is a refusal, not an adopt"
+        assert_eq!(
+            tracer_pid_from_status("Name:\tworker\nTracerPid:\t0\n"),
+            Some(0),
+            "an untraced replacement is TracerPid 0"
         );
+        assert_eq!(
+            tracer_pid_from_status("Name:\tstuck\nTracerPid:\t42\n"),
+            Some(42)
+        );
+        assert_eq!(tracer_pid_from_status("Name:\tgone\n"), None);
     }
 
     /// A timed-out tid is skipped for later samples, not dropped from cleanup.
