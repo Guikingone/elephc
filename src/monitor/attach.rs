@@ -130,9 +130,10 @@ pub(crate) struct Image {
     pub(crate) identity: Option<super::process_id::ProcessIdentity>,
     /// Tids this process is still tracing because the last window could not
     /// stop them. `PTRACE_DETACH` needs a stopped tracee; a D-state one
-    /// leaves the relationship in place. The next window must reuse it
-    /// rather than seize again — that seize comes back `EPERM` and a live
-    /// view then reports a refusal about a program it is still attached to.
+    /// leaves the relationship in place. The next window still tries to
+    /// seize: success means the kernel reused the tid for a new thread,
+    /// failure means we are still the tracer and should adopt. Skipping
+    /// seize on the number alone would miss the replacement thread.
     pub(crate) held: Vec<u32>,
 }
 

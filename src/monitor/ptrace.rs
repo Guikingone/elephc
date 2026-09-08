@@ -584,23 +584,24 @@ pub(crate) fn attach_window(
         let Some(bias) = super::attach::bias_of(image, *pid) else { continue };
         let mut seized = Vec::new();
         for tid in thread_ids(*pid) {
-            if previously_held.contains(&tid) {
+            // Seize first. A held number is not an identity: the old thread
+            // can exit and the kernel can hand the tid to a new one. That
+            // seize succeeds, and skipping it would sample a thread we do
+            // not trace. A still-held D-state tid fails the seize because
+            // we are already the tracer; that is the one case we adopt.
+            let seized_ok = seize(tid);
+            if keep_after_seize(seized_ok.is_ok(), previously_held.contains(&tid)) {
                 seized.push(tid);
-                continue;
-            }
-            match seize(tid) {
-                Ok(()) => seized.push(tid),
+            } else if let Err(error) = seized_ok {
                 // An `EPERM` outranks whatever else is held: a thread that
                 // exited between the `/proc` read and the seize is ordinary and
                 // says nothing, a refusal is the whole diagnosis.
-                Err(error) => {
-                    let held_is_refusal = matches!(
-                        &refusal,
-                        Some(held) if held.kind() == io::ErrorKind::PermissionDenied
-                    );
-                    if !held_is_refusal {
-                        refusal = Some(error);
-                    }
+                let held_is_refusal = matches!(
+                    &refusal,
+                    Some(held) if held.kind() == io::ErrorKind::PermissionDenied
+                );
+                if !held_is_refusal {
+                    refusal = Some(error);
                 }
             }
         }
@@ -679,6 +680,15 @@ pub(crate) fn attach_window(
 /// Detaches every tid that is still traced, keeping those that will not stop.
 fn release_held(tids: Vec<u32>) -> Vec<u32> {
     tids.into_iter().filter(|tid| !detach(*tid)).collect()
+}
+
+/// Whether this tid belongs in the seized set after one `PTRACE_SEIZE`.
+///
+/// A successful seize is a new relationship, including a recycled tid that
+/// only shares a number with last window's stuck thread. A failed seize of
+/// a tid we still hold is the D-state case: we are already the tracer.
+fn keep_after_seize(seize_ok: bool, was_held: bool) -> bool {
+    seize_ok || was_held
 }
 
 /// Whether later ticks this window should skip this tid.
@@ -957,6 +967,33 @@ mod tests {
             detach_signal(&Err(io::Error::from_raw_os_error(libc::ESRCH))),
             Some(0),
             "a thread that has gone is already released"
+        );
+    }
+
+    /// A held number is not enough to skip seize.
+    ///
+    /// The first version of `Image.held` treated a matching tid as still
+    /// ours. After that thread exits the kernel can reuse the number, and
+    /// skipping seize then interrupts a thread this process does not trace.
+    /// Seize first: success is a new thread, failure on a held tid is the
+    /// D-state case we still own.
+    #[test]
+    fn a_recycled_held_tid_is_seized_not_adopted() {
+        assert!(
+            keep_after_seize(true, true),
+            "seize succeeding on a held number is a new thread, already ours"
+        );
+        assert!(
+            keep_after_seize(false, true),
+            "seize failing on a held tid means we are still the tracer"
+        );
+        assert!(
+            keep_after_seize(true, false),
+            "a fresh tid that seized is the ordinary case"
+        );
+        assert!(
+            !keep_after_seize(false, false),
+            "a fresh tid the kernel refused is a refusal, not an adopt"
         );
     }
 
