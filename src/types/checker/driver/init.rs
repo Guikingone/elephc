@@ -106,7 +106,7 @@ impl Checker {
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
             loop_storage_types: HashMap::new(),
-            string_incdec_locals: HashSet::new(),
+            boxed_string_locals: HashSet::new(),
             strict_locals: false,
             local_conditional_depth: 0,
             local_binding_depth: HashMap::new(),

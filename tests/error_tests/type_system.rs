@@ -2862,7 +2862,7 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
 ///   `codegen::locals_retype::test_string_incdec_local_retyped_to_int_still_increments_as_int`'s
 ///   `$s = "a" . $argc; $s++; echo $s; $s = 5; $s++; echo $s;` was probed and neither warns nor
 ///   records a retype site (even under `--strict-locals`, where it still compiles clean) — the
-///   `++` target marking (`CheckResult::string_incdec_locals`) makes the later `int` store a
+///   `++` target marking (`CheckResult::boxed_string_locals`) makes the later `int` store a
 ///   plain compatible merge rather than an incompatible retype, so it would itself be a vacuous
 ///   entry here.
 #[test]

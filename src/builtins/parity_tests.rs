@@ -82,10 +82,9 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("opcache_prelude(api)", opcache_api_program()),
         (
             "opcache_prelude(cli-ini)",
-            vec![
-                crate::opcache_prelude::build::cli_ini_get_decl(),
-                crate::opcache_prelude::build::cli_ini_set_decl(),
-            ],
+            std::iter::once(crate::opcache_prelude::build::cli_ini_get_decl())
+                .chain(crate::opcache_prelude::build::cli_ini_set_decls())
+                .collect(),
         ),
         (
             "web_prelude",
@@ -551,6 +550,12 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Float => "float",
         TypeSpec::Str => "string",
         TypeSpec::Bool => "bool",
+        TypeSpec::False => "false",
+        TypeSpec::Union(members) => {
+            let declared = declared.split('|').collect::<Vec<_>>();
+            return members.len() == declared.len()
+                && members.iter().all(|member| declared.iter().any(|ty| php_type_matches(*member, ty)));
+        }
         TypeSpec::Void => "void",
         // Neither is a PHP scalar, and neither is `Mixed`'s open surface: `Ptr` is elephc's
         // own `ptr` type and `Callable` is the owned descriptor `callable` lowers to. Both

@@ -450,8 +450,9 @@ mod tests {
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
-        assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 501 + curl_surface);
+        // intval, round, and the two timezone-context adapters retain eval-specific work.
+        assert_eq!(hybrid_adapter, 4);
+        assert_eq!(interpreter_adapter, 499 + curl_surface);
         assert_eq!(unsupported, 466);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),

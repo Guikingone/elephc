@@ -1295,17 +1295,24 @@ if (strlen($format) !== 1) {
     return false;
 }
 $valid = [
-    "B", "d", "G", "g", "H", "h", "I", "i", "L", "m", "N",
-    "n", "s", "t", "U", "W", "w", "Y", "y", "z", "Z",
+    "B", "d", "j", "G", "g", "H", "h", "I", "i", "L", "m", "N",
+    "n", "o", "s", "t", "U", "W", "w", "Y", "y", "z", "Z",
 ];
 if (!in_array($format, $valid, true)) {
     __elephc_diag_warning("\nWarning: idate(): Unrecognized date format token", $sourceLine, E_WARNING);
     return false;
 }
-if ($timestamp === null) {
-    return intval(date($format));
+$numericFormat = $format === "y" ? "Y" : $format;
+$value = intval(date($numericFormat, $timestamp));
+if ($format === "y") { $value = $value % 100; }
+$value = $value % 4294967296;
+if ($value >= 2147483648) { $value = $value - 4294967296; }
+if ($value < -2147483648) { $value = $value + 4294967296; }
+if ($value === -1) {
+    __elephc_diag_warning("\nWarning: idate(): Unrecognized date format token", $sourceLine, E_WARNING);
+    return false;
 }
-return intval(date($format, intval($timestamp)));
+return $value;
 "#;
 
 /// Builds the internal `DateTime::__elephc_idate()` procedural-alias helper.

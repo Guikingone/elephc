@@ -7,9 +7,6 @@
 //! Key details:
 //! - `gmdate` calls this file for shared formatting and UTC/local timestamp conversion.
 
-use std::os::unix::ffi::OsStrExt;
-use std::sync::Mutex;
-
 use super::super::*;
 use super::*;
 
@@ -18,13 +15,6 @@ eval_builtin! {
     area: Time,
     direct: Time,
     values: Time,
-}
-
-static EVAL_TZ_MUTEX: Mutex<()> = Mutex::new(());
-
-unsafe extern "C" {
-    /// Re-reads libc's process-global timezone environment.
-    fn tzset();
 }
 
 /// Evaluates PHP `date($format, $timestamp = time())` for the eval subset.
@@ -74,92 +64,70 @@ pub(in crate::interpreter) fn eval_date_result(
         Some(_) => eval_current_unix_timestamp()?,
     };
     let (timezone, localtime) = match name {
-        "date" => (context.default_timezone(), true),
-        "gmdate" => ("UTC", false),
+        "date" => (eval_request_timezone(context, values)?, true),
+        "gmdate" => ("UTC".to_owned(), false),
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
-    let output = elephc_tz::format_timestamp_php(timestamp, timezone, &format, localtime)
+    let output = elephc_tz::format_timestamp_php(timestamp, &timezone, &format, localtime)
         .ok_or(EvalStatus::RuntimeFatal)?;
     values.string_bytes_value(&output)
 }
 
-/// Converts one Unix timestamp to eval-timezone broken-down time through libc.
+/// Wide broken-down date fields derived from vendored timelib, not libc's c_int year.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::interpreter) struct EvalBrokenDownTime {
+    pub tm_sec: i64,
+    pub tm_min: i64,
+    pub tm_hour: i64,
+    pub tm_mday: i64,
+    pub tm_mon: i64,
+    pub tm_year: i64,
+    pub tm_wday: i64,
+    pub tm_yday: i64,
+    pub tm_isdst: i64,
+}
+
+/// Decomposes one timestamp with the authoritative request timezone and frozen timelib data.
 pub(in crate::interpreter) fn eval_context_localtime(
     timestamp: i64,
     context: &ElephcEvalContext,
-) -> Result<libc::tm, EvalStatus> {
-    eval_with_timezone(context.default_timezone(), || eval_localtime(timestamp))
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalBrokenDownTime, EvalStatus> {
+    let timezone = eval_request_timezone(context, values)?;
+    eval_timezone_broken_down_time(timestamp, &timezone)
 }
 
-/// Converts one Unix timestamp to process-local broken-down time through libc.
-pub(in crate::interpreter) fn eval_localtime(timestamp: i64) -> Result<libc::tm, EvalStatus> {
-    let raw = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
-    let mut tm = MaybeUninit::<libc::tm>::uninit();
-    let result = unsafe { libc::localtime_r(&raw, tm.as_mut_ptr()) };
-    if result.is_null() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    Ok(unsafe { tm.assume_init() })
-}
-
-/// Runs one libc timezone-sensitive operation under the eval context timezone.
-pub(in crate::interpreter) fn eval_with_timezone<T>(
+/// Decomposes a timestamp in an explicit zone without reading the clock or request state.
+pub(in crate::interpreter) fn eval_timezone_broken_down_time(
+    timestamp: i64,
     timezone: &str,
-    operation: impl FnOnce() -> Result<T, EvalStatus>,
-) -> Result<T, EvalStatus> {
-    let _guard = EVAL_TZ_MUTEX
-        .lock()
-        .map_err(|_| EvalStatus::RuntimeFatal)?;
-    let previous = std::env::var_os("TZ")
-        .map(|value| CString::new(value.as_bytes()).map_err(|_| EvalStatus::RuntimeFatal))
-        .transpose()?;
-    eval_apply_process_timezone(timezone)?;
-    let result = operation();
-    eval_restore_process_timezone(previous.as_ref())?;
-    result
+) -> Result<EvalBrokenDownTime, EvalStatus> {
+    let bytes = elephc_tz::format_timestamp_php(
+        timestamp, timezone, b"Y\tn\tj\tG\ti\ts\tw\tz\tI", true,
+    ).ok_or(EvalStatus::RuntimeFatal)?;
+    let fields = bytes.split(|byte| *byte == b'\t').map(|field| {
+        std::str::from_utf8(field).map_err(|_| EvalStatus::RuntimeFatal)?
+            .parse::<i64>().map_err(|_| EvalStatus::RuntimeFatal)
+    }).collect::<Result<Vec<_>, _>>()?;
+    let [year, month, day, hour, minute, second, weekday, yearday, isdst]: [i64; 9] =
+        fields.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok(EvalBrokenDownTime {
+        tm_sec: second, tm_min: minute, tm_hour: hour, tm_mday: day,
+        tm_mon: month - 1, tm_year: year - 1900, tm_wday: weekday,
+        tm_yday: yearday, tm_isdst: isdst,
+    })
 }
 
-/// Applies one timezone identifier to libc's process-global timezone state.
-fn eval_apply_process_timezone(timezone: &str) -> Result<(), EvalStatus> {
-    let key = CString::new("TZ").map_err(|_| EvalStatus::RuntimeFatal)?;
-    let value = CString::new(timezone).map_err(|_| EvalStatus::RuntimeFatal)?;
-    let status = unsafe { libc::setenv(key.as_ptr(), value.as_ptr(), 1) };
-    if status != 0 {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    unsafe { tzset() };
-    Ok(())
-}
-
-/// Restores the process timezone that was active before an eval-local conversion.
-fn eval_restore_process_timezone(previous: Option<&CString>) -> Result<(), EvalStatus> {
-    let key = CString::new("TZ").map_err(|_| EvalStatus::RuntimeFatal)?;
-    let status = if let Some(value) = previous {
-        unsafe { libc::setenv(key.as_ptr(), value.as_ptr(), 1) }
-    } else {
-        unsafe { libc::unsetenv(key.as_ptr()) }
-    };
-    if status != 0 {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    unsafe { tzset() };
-    Ok(())
-}
-
-/// Returns a checked month index for PHP `date()` name tables.
-pub(in crate::interpreter) fn eval_tm_month_index(tm: &libc::tm) -> Result<usize, EvalStatus> {
+/// Returns a checked month index for PHP's English date-name table.
+pub(in crate::interpreter) fn eval_tm_month_index(tm: &EvalBrokenDownTime) -> Result<usize, EvalStatus> {
     let index = usize::try_from(tm.tm_mon).map_err(|_| EvalStatus::RuntimeFatal)?;
-    if index >= EVAL_MONTH_NAMES.len() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    if index >= EVAL_MONTH_NAMES.len() { return Err(EvalStatus::RuntimeFatal); }
     Ok(index)
 }
 
-/// Returns a checked weekday index for PHP `date()` name tables.
-pub(in crate::interpreter) fn eval_tm_weekday_index(tm: &libc::tm) -> Result<usize, EvalStatus> {
+/// Returns a checked weekday index for PHP's English date-name table.
+pub(in crate::interpreter) fn eval_tm_weekday_index(tm: &EvalBrokenDownTime) -> Result<usize, EvalStatus> {
     let index = usize::try_from(tm.tm_wday).map_err(|_| EvalStatus::RuntimeFatal)?;
-    if index >= EVAL_WEEKDAY_NAMES.len() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    if index >= EVAL_WEEKDAY_NAMES.len() { return Err(EvalStatus::RuntimeFatal); }
     Ok(index)
 }

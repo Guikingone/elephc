@@ -181,7 +181,7 @@ fn eval_date_alias_builtin_datetime_methods(module: &Module) -> Vec<(String, Str
         methods.push(("DateTime".to_string(), php_method_key(method_name)));
         methods.push(("DateTimeImmutable".to_string(), php_method_key(method_name)));
     }
-    for method_name in ["createFromDateString", "format"] {
+    for method_name in ["createFromDateString", "__elephc_create_from_date_string", "format"] {
         methods.push(("DateInterval".to_string(), php_method_key(method_name)));
     }
     for method_name in DATE_TIMEZONE_ALIAS_METHOD_NAMES {
@@ -201,6 +201,14 @@ fn eval_date_alias_builtin_datetime_methods(module: &Module) -> Vec<(String, Str
 /// checks and the failure lands at run time as `Cannot call abstract method` — there is no
 /// diagnostic pointing back here.
 const EVAL_DATE_ALIAS_METHOD_NAMES: &[&str] = &[
+    "__elephc_debug_properties",
+    "__elephc_date_diff",
+    "__elephc_date_format",
+    "__elephc_date_timestamp_get",
+    "__elephc_date_time_set",
+    "__elephc_date_offset_get",
+    "__elephc_date_timezone_get",
+    "__elephc_date_modify",
     "createFromFormat",
     // The other three static factories. `createFromFormat` was here alone, so a computed name
     // reaching any of these answered `Cannot call abstract method` — the declaration is visible to
@@ -263,6 +271,7 @@ const EVAL_DATE_ALIAS_METHOD_NAMES: &[&str] = &[
 
 /// The `DateTimeZone` methods an eval alias can dispatch to. Same reason as above.
 const DATE_TIMEZONE_ALIAS_METHOD_NAMES: &[&str] = &[
+    "__elephc_timezone_open",
     "getName",
     "getOffset",
     "listIdentifiers",

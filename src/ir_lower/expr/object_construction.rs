@@ -852,17 +852,19 @@ pub(super) fn emit_exception(
     message: &str,
     span: Span,
 ) {
-    let error_expr = Expr::new(
-        ExprKind::NewObject {
-            class_name: Name::unqualified(class_name),
-            args: vec![Expr::new(
-                ExprKind::StringLiteral(message.to_string()),
-                span,
-            )],
-        },
-        span,
+    emit_exception_from_expr(
+        ctx, class_name, Expr::new(ExprKind::StringLiteral(message.to_string()), span), span,
     );
-    let error = lower_expr(ctx, &error_expr);
+}
+
+/// Constructs a catchable exception from an AST message that may contain runtime values.
+pub(super) fn emit_exception_from_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    message: Expr,
+    span: Span,
+) {
+    let error = build_exception_from_expr(ctx, class_name, message, span);
     ctx.emit_void(
         Op::ThrowException,
         vec![error.value],
@@ -870,6 +872,23 @@ pub(super) fn emit_exception(
         Op::ThrowException.default_effects(),
         Some(span),
     );
+}
+
+/// Builds an exception before caller-owned temporaries are released and the throw is emitted.
+pub(super) fn build_exception_from_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    message: Expr,
+    span: Span,
+) -> LoweredValue {
+    let error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified(class_name),
+            args: vec![message],
+        },
+        span,
+    );
+    lower_expr(ctx, &error_expr)
 }
 
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.

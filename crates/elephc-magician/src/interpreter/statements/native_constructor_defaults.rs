@@ -63,6 +63,7 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         return eval_throw_error(&message, context, values);
     }
     context.push_function(format!("{}::__construct", class_name.trim_start_matches('\\')));
+    let mut default_owners = Vec::new();
     let outcome = (|| {
         let bridge_scope = eval_native_constructor_bridge_scope(class_name, context, values)?;
         let signature = context.native_constructor_signature(class_name);
@@ -72,6 +73,7 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
             by_ref_mode,
             context,
             values,
+            &mut default_owners,
         )?;
         let result = if let Some(scope) = bridge_scope.as_deref() {
             eval_with_native_bridge_scope(scope, context, || {
@@ -86,6 +88,7 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
             (Ok(()), Ok(())) => Ok(()),
         }
     })();
+    let outcome = finish_native_default_owners(outcome, default_owners, None, context, values);
     context.pop_function();
     outcome
 }

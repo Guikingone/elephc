@@ -1613,6 +1613,10 @@ impl RuntimeFnId {
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Date
             | RuntimeFnId::DateDefaultTimezoneSet
+            | RuntimeFnId::Mktime
+            | RuntimeFnId::Gmmktime
+            | RuntimeFnId::ElephcMktimeRaw
+            | RuntimeFnId::ElephcGmmktimeRaw
             | RuntimeFnId::ElephcStrtotimeRaw
             | RuntimeFnId::Gmdate
             | RuntimeFnId::Strtotime => &[BuiltinRequirement::Bridge("elephc_tz")],
@@ -1626,6 +1630,8 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::Mktime
+                | RuntimeFnId::Gmmktime
                 | RuntimeFnId::ElephcGmmktimeRaw
                 | RuntimeFnId::ElephcMktimeRaw
                 | RuntimeFnId::Gettype
@@ -1638,7 +1644,8 @@ impl RuntimeFnId {
         use crate::types::PhpType;
         let source = source.map(PhpType::codegen_repr);
         match self {
-            RuntimeFnId::ElephcGmmktimeRaw | RuntimeFnId::ElephcMktimeRaw => true,
+            RuntimeFnId::Mktime | RuntimeFnId::Gmmktime
+            | RuntimeFnId::ElephcGmmktimeRaw | RuntimeFnId::ElephcMktimeRaw => true,
             RuntimeFnId::Abs => source.is_none_or(|ty| {
                 matches!(
                     ty,
@@ -1765,6 +1772,9 @@ impl RuntimeFnId {
         self,
     ) -> crate::builtins::semantics::BuiltinResultOwnership {
         use crate::builtins::semantics::BuiltinResultOwnership;
+        if matches!(self, RuntimeFnId::Mktime | RuntimeFnId::Gmmktime) {
+            return BuiltinResultOwnership::Fresh;
+        }
         // `intval($value, $base)` hands back a raw machine integer, never storage. Leaving it
         // in the default `MayAliasArguments` bucket would keep an owned subject temporary
         // alive for the integer's whole lifetime, which is the leak shape already documented

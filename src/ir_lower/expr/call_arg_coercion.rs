@@ -265,16 +265,28 @@ pub(super) fn lower_args_with_signature_and_spread_overflow(
     args: &[Expr],
     spread_overflow_error: Option<&str>,
 ) -> Vec<crate::ir::ValueId> {
+    lower_args_with_signature_and_spread_bounds(
+        ctx, sig, args, spread_overflow_error.map(SpreadOverflowError::Overload),
+    )
+}
+
+/// Uses the shared planner with the caller's PHP overflow exception contract.
+pub(super) fn lower_args_with_signature_and_spread_bounds(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    spread_overflow_error: Option<SpreadOverflowError<'_>>,
+) -> Vec<crate::ir::ValueId> {
     lower_args_with_signature_options(ctx, sig, args, false, spread_overflow_error)
 }
 
-/// Applies shared planning with independent omission and spread-overflow policies.
+/// Combines trailing-default omission with the selected spread-overflow diagnostic.
 fn lower_args_with_signature_options(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
     trim_trailing_defaults: bool,
-    spread_overflow_error: Option<&str>,
+    spread_overflow_error: Option<SpreadOverflowError<'_>>,
 ) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);

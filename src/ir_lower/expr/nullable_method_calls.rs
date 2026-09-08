@@ -136,6 +136,11 @@ pub(super) fn lower_method_call_with_receiver(
             ctx, None, object, args, expr,
         );
     }
+    if let Some(call) = super::date_interface_calls::lower_date_interface_call(
+        ctx, object, method, args, op, expr,
+    ) {
+        return call;
+    }
     let magic_args;
     let (dispatch_method, args) =
         if let Some(args) = magic_call_dispatch_args(ctx, object.value, method, args, expr.span) {
@@ -312,7 +317,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
             let conditionally_releasable = result.is_some_and(|result| {
                 let arg_repr = ctx.builder.value_php_type(*value).codegen_repr();
                 let result_repr = ctx.builder.value_php_type(result).codegen_repr();
-                call_alias_pointers_are_comparable(arg_repr, result_repr)
+                call_alias_cleanup_is_supported(arg_repr, result_repr)
             });
             let result_reuses_arg = result.is_some_and(|result| {
                 (return_alias.may_alias_parameter(parameter_index)
@@ -348,7 +353,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
                 if let Some(result) = result {
                     let arg_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
                     let result_repr = ctx.builder.value_php_type(result).codegen_repr();
-                    let comparable = call_alias_pointers_are_comparable(arg_repr, result_repr);
+                    let comparable = call_alias_cleanup_is_supported(arg_repr, result_repr);
                     if comparable {
                         ctx.emit_void(
                             Op::ReleaseUnlessAliases,
@@ -367,13 +372,14 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
     ctx.clear_call_arg_temp_cleanups(args, Some(span));
 }
 
-/// Selects shapes whose ownership aliases can be distinguished by the runtime lowerer.
-fn call_alias_pointers_are_comparable(argument: PhpType, result: PhpType) -> bool {
+/// Selects shapes handled by runtime identity checks or a proven callee ownership contract.
+fn call_alias_cleanup_is_supported(argument: PhpType, result: PhpType) -> bool {
     matches!(
         (argument, result),
         (PhpType::Mixed | PhpType::Union(_), PhpType::Mixed | PhpType::Union(_))
             | (PhpType::Object(_), PhpType::Object(_))
             | (PhpType::Mixed | PhpType::Union(_), PhpType::Object(_))
+            | (PhpType::Object(_), PhpType::Mixed)
     )
 }
 

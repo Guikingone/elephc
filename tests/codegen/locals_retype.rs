@@ -456,7 +456,7 @@ fn test_compound_assign_retype_leaves_a_clean_heap() {
 
 /// A `string` local that is a `++` target, retyped to `int`, then incremented again.
 ///
-/// `CheckResult::string_incdec_locals` is keyed by (scope, name) with no binding identity, so
+/// `CheckResult::boxed_string_locals` is keyed by (scope, name) with no binding identity, so
 /// the entry the FIRST binding needs is still present at the retyped one. This pins that the
 /// int binding increments as an int (`5` -> `6`) while the string binding still increments as
 /// PHP's string increment (`"a1"` -> `"a2"`).

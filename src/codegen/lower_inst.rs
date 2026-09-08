@@ -49,6 +49,7 @@ mod hashes;
 mod iterators;
 mod objects;
 mod ownership;
+pub(super) mod object_return_ownership;
 mod pointers;
 mod predicates;
 mod property_values;

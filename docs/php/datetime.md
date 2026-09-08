@@ -453,11 +453,11 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`date_timezone_set()`](./builtins/date/date_timezone_set.md) | `(mixed $object, mixed $timezone): mixed` | `mixed` | ✓ | ✓ |
 | [`getdate()`](./builtins/date/getdate.md) | `(?int $timestamp = null): array` | `array` | ✓ | ✓ |
 | [`gmdate()`](./builtins/date/gmdate.md) | `(string $format, ?int $timestamp = null): string` | `string` | ✓ | ✓ |
-| [`gmmktime()`](./builtins/date/gmmktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
+| [`gmmktime()`](./builtins/date/gmmktime.md) | `(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): mixed` | `mixed` | ✓ | ✓ |
 | [`gmstrftime()`](./builtins/date/gmstrftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`idate()`](./builtins/date/idate.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`localtime()`](./builtins/date/localtime.md) | `(int $timestamp = -1, bool $associative = false): array` | `array` | ✓ | ✓ |
-| [`mktime()`](./builtins/date/mktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
+| [`mktime()`](./builtins/date/mktime.md) | `(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): mixed` | `mixed` | ✓ | ✓ |
 | [`strftime()`](./builtins/date/strftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`strtotime()`](./builtins/date/strtotime.md) | `(string $datetime, ?int $baseTimestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`time()`](./builtins/date/time.md) | `(): int` | `int` | ✓ | ✓ |
@@ -473,6 +473,6 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 Classes: `DateError`, `DateException`, `DateInterval`, `DateInvalidOperationException`, `DateInvalidTimeZoneException`, `DateMalformedIntervalStringException`, `DateMalformedPeriodStringException`, `DateMalformedStringException`, `DateObjectError`, `DatePeriod`, `DateRangeError`, `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`.
 
-Constants: `SUNFUNCS_RET_DOUBLE`, `SUNFUNCS_RET_STRING`, `SUNFUNCS_RET_TIMESTAMP`.
+Constants: `DATE_ATOM`, `DATE_COOKIE`, `DATE_ISO8601`, `DATE_ISO8601_EXPANDED`, `DATE_RFC1036`, `DATE_RFC1123`, `DATE_RFC2822`, `DATE_RFC3339`, `DATE_RFC3339_EXTENDED`, `DATE_RFC7231`, `DATE_RFC822`, `DATE_RFC850`, `DATE_RSS`, `DATE_W3C`, `SUNFUNCS_RET_DOUBLE`, `SUNFUNCS_RET_STRING`, `SUNFUNCS_RET_TIMESTAMP`.
 
 <!-- elephc:generated:symbols:end -->

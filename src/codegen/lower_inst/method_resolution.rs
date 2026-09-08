@@ -249,9 +249,9 @@ pub(super) fn store_mixed_method_call_result(
     let return_ty = target.return_ty.codegen_repr();
     if matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
         && return_ty != PhpType::Mixed
-        && return_ty.is_refcounted()
+        && (return_ty.is_refcounted() || return_ty == PhpType::Str)
     {
-        // Generated methods return an owned refcounted result (including acquired `$this`
+        // Generated methods return an owned string pair or refcounted result (including acquired `$this`
         // aliases). Move that owner into the fresh Mixed cell. The ordinary boxer retains its
         // input and is reserved for borrowed results; using it here leaks one callee acquisition
         // per dynamic call.

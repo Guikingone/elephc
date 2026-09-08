@@ -267,14 +267,14 @@ pub(crate) struct Checker {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
-    /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
+    /// `(scope, local)` pairs for strings requiring stable boxed storage.
     ///
-    /// PHP's string increment can change the value's type (`"9"++` is `int(10)`), so EIR
+    /// String increment or a null-storing unset can change the value's type, so EIR
     /// lowering must give those locals boxed `Mixed` frame storage from their FIRST store
-    /// instead of widening the slot at the increment. Recorded here because the checker
+    /// instead of widening the slot at a later operation. Recorded here because the checker
     /// already visits every expression with a typed environment, so no second AST walk is
-    /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
-    pub string_incdec_locals: HashSet<(String, String)>,
+    /// needed. See `crate::ir_lower::context::LoweringContext::boxed_string_storage_type`.
+    pub boxed_string_locals: HashSet<(String, String)>,
     /// Mirrors `CheckOptions::strict_locals` for the duration of the check. When set, the
     /// permissive local-retype path in `merge_local_assignment_type` and the branch-divergent
     /// `Mixed`-storage marking in `mixed_storage_scan::run_mixed_storage_scan` both step aside
@@ -832,7 +832,7 @@ pub fn check_types_with_options(
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
-        string_incdec_locals: checker.string_incdec_locals,
+        boxed_string_locals: checker.boxed_string_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,

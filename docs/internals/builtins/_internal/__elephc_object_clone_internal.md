@@ -2,7 +2,7 @@
 title: "__elephc_object_clone_internal() — internals"
 description: "Compiler internals for __elephc_object_clone_internal(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 613
+  order: 974
 ---
 
 ## `__elephc_object_clone_internal()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/__elephc_object_clone_internal.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/__elephc_object_clone_internal.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

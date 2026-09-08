@@ -48,6 +48,33 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
             self.runtime_warning(message)
         }
     }
+    /// Records compile warnings only when their distinct PHP mask bit is enabled.
+    fn compile_warning(&mut self, message: &str) -> Result<(), EvalStatus> {
+        if self.error_reporting.unwrap_or(30719) & 128 == 0 {
+            Ok(())
+        } else { self.runtime_warning(message) }
+    }
+    /// Records notices only when E_NOTICE is enabled in the fake runtime.
+    fn notice(&mut self, message: &[u8]) -> Result<(), EvalStatus> {
+        if self.error_reporting.unwrap_or(30719) & 8 == 0 {
+            Ok(())
+        } else {
+            self.runtime_warning(&String::from_utf8_lossy(message))
+        }
+    }
+    /// Applies the PHP fatal-only silence mask and saves the previous fake mask.
+    fn begin_error_suppression(&mut self) -> Result<i64, EvalStatus> {
+        let previous = self.error_reporting.unwrap_or(30719);
+        self.error_reporting = Some(previous & 4437);
+        Ok(previous)
+    }
+    /// Preserves explicit nonfatal mask changes made inside a silence scope.
+    fn end_error_suppression(&mut self, previous: i64) -> Result<(), EvalStatus> {
+        if self.error_reporting.unwrap_or(30719) & !4437 == 0 {
+            self.error_reporting = Some(previous);
+        }
+        Ok(())
+    }
     /// Records fake PHP deprecations under the active E_DEPRECATED mask.
     fn deprecated(&mut self, message: &str) -> Result<(), EvalStatus> {
         if self.error_reporting.unwrap_or(30719) & 8192 == 0 {

@@ -30,7 +30,11 @@ pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let signature = function_signature_from_eir_with_param_count(closure, visible_param_count);
     let captures = closure_capture_params_from_eir(closure, inst.operands.len());
     let static_bindings = static_debug_bindings(closure);
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &signature, &captures);
+    let owned_object_return = super::object_return_ownership::object_return_ownership(closure)
+        == super::object_return_ownership::ObjectReturnOwnership::Owned;
+    let invoker_label = super::runtime_wrappers::emit_runtime_callable_invoker_with_ownership(
+        ctx, &signature, &captures, owned_object_return,
+    );
     let debug_source_path = ctx.module.source_path.clone();
     let debug_source_line = inst.span.map_or(0, |span| span.line);
     let debug_primary_name = format!(

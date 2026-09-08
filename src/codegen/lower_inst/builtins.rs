@@ -55,6 +55,7 @@ mod type_predicates;
 pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
+mod mktime;
 pub(crate) mod object_props;
 pub(crate) mod openssl;
 pub(crate) mod output_buffering;

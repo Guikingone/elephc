@@ -928,6 +928,1496 @@ echo get_class($end), ":", $end->format("Y-m-d"), ":", $modified->format("Y-m-d"
     assert_eq!(out, "DateTime:2024-01-04:2024-01-04");
 }
 
+/// Opaque eval preserves procedural failure returns while equivalent OOP calls throw.
+#[test]
+fn test_datetime_opaque_eval_procedural_failures_differ_from_methods() {
+    let out = compile_and_run_capture(r#"<?php
+date_default_timezone_set("UTC");
+$code = 'var_dump(timezone_open("Definitely/Not_A_Zone"));
+$date = new DateTime("@0");
+var_dump(date_modify($date, "nonsense"));
+var_dump(date_interval_create_from_date_string("nonsense"));
+try { new DateTimeZone("Definitely/Not_A_Zone"); } catch (DateInvalidTimeZoneException $e) { echo "zone-throws|"; }
+try { $date->modify("nonsense"); } catch (DateMalformedStringException $e) { echo "modify-throws|"; }
+try { DateInterval::createFromDateString("nonsense"); } catch (DateMalformedIntervalStringException $e) { echo "interval-throws|"; }
+echo "done";';
+eval(substr($code, $argc - 1));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\nzone-throws|modify-throws|interval-throws|done");
+    for name in ["timezone_open", "date_modify", "date_interval_create_from_date_string"] {
+        assert!(out.stderr.contains(&format!("Warning: {name}():")), "{}", out.stderr);
+    }
+}
+
+/// mktime snapshots defaults after every supplied argument, including named-call side effects.
+#[test]
+fn test_mktime_defaults_follow_argument_timezone_side_effects() {
+    let mut body = String::new();
+    for (name, formatter) in [("mktime", "date"), ("gmmktime", "gmdate")] {
+    body.push_str(&format!("$f = {name}(...);\n"));
+    for call in [
+        format!("{name}(hour: 12, minute: null, second: 0, month: 1, day: 1, year: switch_mktime_zone())"),
+        "$f(12, null, 0, 1, 1, switch_mktime_zone())".to_string(),
+        format!(r#"call_user_func("{name}", 12, null, 0, 1, 1, switch_mktime_zone())"#),
+        format!(r#"call_user_func_array("{name}", mktime_nullable_arguments())"#),
+    ] {
+        body.push_str(&format!(r#"date_default_timezone_set("UTC");
+$before = time();
+$stamp = {call};
+$after = time();
+$minute = {formatter}("i", $stamp);
+echo ($minute === {formatter}("i", $before) || $minute === {formatter}("i", $after)) ? "snapshot-ok|" : "bad-minute|";
+echo {formatter}("Y-m-d", $stamp), "|";"#));
+    }
+    }
+    let source = format!(r#"<?php
+function switch_mktime_zone(): int {{ date_default_timezone_set("Asia/Kolkata"); return 2024; }}
+function mktime_nullable_arguments(): array {{ return [12, null, 0, 1, 1, switch_mktime_zone()]; }}
+{body}
+$code = '{body}';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(compile_and_run(&source), "snapshot-ok|2024-01-01|".repeat(16));
+}
+
+/// Direct and callable local/UTC forms complete omitted fields after evaluating hour.
+#[test]
+fn test_mktime_callable_omitted_defaults() {
+    let mut body = String::new();
+    for (name, formatter) in [("mktime", "date"), ("gmmktime", "gmdate")] {
+        body.push_str(&format!("$f = {name}(...);\n"));
+        for call in [
+            format!("{name}(selected_hour())"),
+            "$f(selected_hour())".to_string(),
+            format!(r#"call_user_func("{name}", selected_hour())"#),
+            format!(r#"call_user_func_array("{name}", mktime_hour_array())"#),
+        ] {
+            body.push_str(&format!(r#"date_default_timezone_set("UTC");
+$before = time();
+$stamp = {call};
+$after = time();
+$fields = {formatter}("Y-m-d i:s", $stamp);
+echo ($fields === {formatter}("Y-m-d i:s", $before) || $fields === {formatter}("Y-m-d i:s", $after)) ? "defaults-ok|" : "bad-defaults|";
+"#));
+        }
+    }
+    let source = format!(r#"<?php
+function selected_hour(): int {{ date_default_timezone_set("Asia/Kolkata"); return 12; }}
+function mktime_hour_array(): array {{ return [selected_hour()]; }}
+{body}
+$code = '{body}';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(compile_and_run(&source), "defaults-ok|".repeat(16));
+}
+
+/// Concrete interface dispatch supplies optional parameters of date subclass overrides.
+#[test]
+fn test_datetime_interface_dispatch_subclass_optional_override() {
+    let source = r#"<?php
+class OptionalDate extends DateTime {
+    public function modify(string $modifier, bool $extra = true): DateTime {
+        echo $extra ? "default|" : "explicit|";
+        return parent::modify($modifier);
+    }
+}
+function advance_optional_date(DateTimeInterface $date): DateTimeInterface {
+    return $date->modify('+1 day');
+}
+$date = $argc > 0 ? new OptionalDate('@0') : new DateTime('@0');
+echo advance_optional_date($date)->format('Y-m-d'), '|';
+echo advance_optional_date(new DateTime('@0'))->format('Y-m-d'), '|';
+"#;
+    assert_eq!(compile_and_run(source), "default|1970-01-02|1970-01-02|");
+}
+
+/// Interface calls preserve variadic defaults, method callables, and nullsafe dispatch.
+#[test]
+fn test_datetime_interface_dispatch_subclass_callable_and_variadic() {
+    let source = r#"<?php
+class VariadicDate extends DateTime {
+    public function modify(string $modifier, bool $extra = true, string ...$rest): DateTime {
+        echo ($extra ? 'default' : 'explicit'), ':', count($rest), '|';
+        return parent::modify($modifier);
+    }
+}
+function date_method_callback(DateTimeInterface $date): Closure {
+    return $date->modify(...);
+}
+function advance_variadic_date(DateTimeInterface $date): DateTimeInterface {
+    return $date->modify('+1 day');
+}
+function advance_nullable_date(?DateTimeInterface $date): ?DateTimeInterface {
+    return $date?->modify('+1 day');
+}
+$date = new VariadicDate('@0');
+echo advance_variadic_date($date)->format('Y-m-d'), '|';
+$callback = date_method_callback($date);
+echo $callback('+1 day')->format('Y-m-d'), '|';
+$nullable = advance_nullable_date($date);
+echo $nullable->format('Y-m-d'), '|';
+var_dump(advance_nullable_date(null));
+"#;
+    assert_eq!(compile_and_run(source),
+        "default:0|1970-01-02|default:0|1970-01-03|default:0|1970-01-04|NULL\n");
+}
+
+/// A date method callable must transfer its already-owned object return into the result box.
+#[test]
+fn test_datetime_interface_dispatch_callable_object_return_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class HeapCallableDate extends DateTime {
+    public function modify(string $modifier, bool $extra = true, string ...$rest): DateTime {
+        return parent::modify($modifier);
+    }
+}
+function heap_date_callback(DateTimeInterface $date): Closure {
+    return $date->modify(...);
+}
+for ($i = 0; $i < 20; $i++) {
+    $date = new HeapCallableDate('@0');
+    $callback = heap_date_callback($date);
+    $result = $callback('+1 day');
+    echo $result->format('d');
+    unset($result, $callback, $date);
+}
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "02".repeat(20), "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Same-signature method invokers keep owned and borrowed date return contracts distinct.
+#[test]
+fn test_datetime_callable_owned_and_borrowed_object_return_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class DateReturnContracts {
+    public function owned(DateTime $value): DateTime { return new DateTime('@0'); }
+    public function borrowed(DateTime $value): DateTime { return $value; }
+}
+$carrier = new DateReturnContracts();
+$date = new DateTime('@0');
+$owned = $carrier->owned(...);
+$borrowed = $carrier->borrowed(...);
+for ($i = 0; $i < 20; $i++) {
+    $result = $owned($date);
+    echo $result->format('Y'), '|';
+    unset($result);
+    $result = $borrowed($date);
+    echo $result->format('Y'), '|';
+    unset($result);
+}
+unset($owned, $borrowed, $carrier, $date);
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "1970|".repeat(40), "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// The owning Mixed-to-Object return boundary must not retain the caller's distinct box.
+#[test]
+fn test_datetime_mixed_argument_owned_object_return_heap() {
+    assert_datetime_argument_object_return_heap("mixed");
+}
+
+/// Unboxing an argument for a borrowed raw-object return must preserve the returned payload.
+#[test]
+fn test_datetime_mixed_argument_borrowed_object_return_heap() {
+    assert_datetime_argument_object_return_heap("DateTime");
+}
+
+/// Exercises a true argument/result payload alias behind a runtime-dependent nullable box.
+fn assert_datetime_argument_object_return_heap(parameter_type: &str) {
+    let source = format!(r#"<?php
+function keep_date_result({parameter_type} $value): DateTime {{ return $value; }}
+for ($i = 0; $i < 20; $i++) {{
+    $result = keep_date_result($argc > 0 ? new DateTime('@0') : null);
+    echo $result->format('Y'), '|';
+    unset($result);
+}}
+"#);
+    let output = compile_and_run_with_heap_debug(&source);
+    assert!(output.success, "{parameter_type}: exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "1970|".repeat(20), "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{parameter_type}: {}", output.stderr);
+}
+
+/// Procedural diff uses native implementations while mutable and immutable overrides remain virtual.
+#[test]
+fn test_datetime_procedural_diff_bypasses_overrides() {
+    let out = compile_and_run(r#"<?php
+class DiffOverrideDate extends DateTime {
+    public function diff(DateTimeInterface $targetObject, bool $absolute = false): DateInterval {
+        return new DateInterval('P9D');
+    }
+}
+class DiffOverrideImmutable extends DateTimeImmutable {
+    public function diff(DateTimeInterface $targetObject, bool $absolute = false): DateInterval {
+        return new DateInterval('P7D');
+    }
+}
+$mutable = new DiffOverrideDate('@0');
+$immutable = new DiffOverrideImmutable('@0');
+$target = new DateTimeImmutable('@172800');
+echo date_diff($mutable, $target)->d, '|', $mutable->diff($target)->d, '|';
+echo date_diff(baseObject: $immutable, targetObject: $target, absolute: true)->d, '|', $immutable->diff($target)->d, '|';
+$code = 'echo date_diff($mutable, $target)->d, "|", $mutable->diff($target)->d, "|";
+echo date_diff(baseObject: $immutable, targetObject: $target, absolute: true)->d, "|", $immutable->diff($target)->d, "|";';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "2|9|2|7|".repeat(2));
+}
+
+/// A by-reference debug hook keeps the underlying property array alive across repeated renders.
+#[test]
+fn test_datetime_eval_debug_borrowed_hook_array_survives() {
+    let out = compile_and_run(r#"<?php
+class BorrowedDebugDate extends DateTime {
+    public array $fields = ['kept' => 7];
+    public function &__debugInfo(): array { return $this->fields; }
+}
+$date = new BorrowedDebugDate('@0');
+$code = 'print_r($date); print_r($date); echo $date->fields["kept"];';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, format!("{}7", "BorrowedDebugDate Object\n(\n    [kept] => 7\n)\n".repeat(2)));
+}
+
+/// Procedural time mutation bypasses overrides while explicit method calls remain virtual.
+#[test]
+fn test_datetime_procedural_time_set_bypasses_override() {
+    let out = compile_and_run(r#"<?php
+class TimeOverride extends DateTime {
+    public function setTime(int $hour, int $minute, int $second = 0, int $microsecond = 0): DateTime {
+        echo 'override|';
+        return $this;
+    }
+}
+$date = new TimeOverride('@0');
+$result = date_time_set($date, 12, 34);
+echo $date->format('H:i:s') . '|';
+echo $result === $date ? 'same|' : 'wrong|';
+$date->setTime(0, 0);
+$code = '$result = date_time_set($date, 5, 6, 7); echo $date->format("H:i:s") . "|"; echo $result === $date ? "same|" : "wrong|"; $date->setTime(0, 0);';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "12:34:00|same|override|05:06:07|same|override|");
+}
+
+/// Procedural time setters bind public names and reject immutable receivers in both backends.
+#[test]
+fn test_datetime_procedural_time_set_named_and_immutable() {
+    let out = compile_and_run(r#"<?php
+$date = new DateTime('@0');
+date_time_set(minute: 2, object: $date, microsecond: 123456, hour: 1);
+echo $date->format('H:i:s.u') . '|';
+$immutable = new DateTimeImmutable('@0');
+try { date_time_set($immutable, 1, 2); } catch (TypeError $e) { echo $e->getMessage() . '|'; }
+$code = 'date_time_set(second: 3, object: $date, minute: 2, hour: 1); echo $date->format("H:i:s.u") . "|"; try { date_time_set($immutable, 1, 2); } catch (TypeError $e) { echo $e->getMessage() . "|"; }';
+eval(substr($code, $argc - 1));
+"#);
+    let error = "date_time_set(): Argument #1 ($object) must be of type DateTime, DateTimeImmutable given|";
+    assert_eq!(out, format!("01:02:00.123456|{error}01:02:03.000000|{error}"));
+}
+
+/// Boxing a string method result after eval must preserve a getter's original property owner.
+#[test]
+fn test_datetime_mixed_string_result_preserves_property() {
+    let out = compile_and_run(r#"<?php
+class StringResultHolder {
+    public string $text = '';
+    public function get(): string { return $this->text; }
+}
+$holder = new StringResultHolder();
+$holder->text = 'value-' . $argc;
+eval(substr(' ', $argc - 1));
+echo $holder->get();
+$noise = str_repeat('x', 7);
+echo $holder->get();
+echo $holder->text;
+"#);
+    assert_eq!(out, "value-1value-1value-1");
+}
+
+/// Discarded procedural mutation results do not leak or consume the shared DateTime receiver.
+#[test]
+fn test_datetime_procedural_time_set_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$date = new DateTime('@0');
+for ($i = 0; $i < 4; $i++) { date_time_set($date, $i, 0); }
+$code = 'for ($j = 0; $j < 4; $j++) { date_time_set($date, $j, 0); }';
+eval(substr($code, $argc - 1));
+echo $date->format('H:i:s');
+unset($date, $code);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "03:00:00");
+    let summary = output.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Compile warnings replay on cache hits and use E_COMPILE_WARNING rather than E_WARNING masks.
+#[test]
+fn test_datetime_eval_octal_compile_warning_replay_and_masks() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$code = 'echo "body"; return "\400";';
+error_reporting(128);
+eval(substr($code, $argc - 1));
+eval(substr($code, $argc - 1));
+error_reporting(2);
+eval(substr($code, $argc - 1));
+error_reporting(128);
+@eval(substr($code, $argc - 1));
+unset($code);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "bodybodybodybody");
+    assert_eq!(output.stderr.matches("Octal escape sequence overflow \\400 is greater than \\377").count(), 2,
+        "{}", output.stderr);
+}
+
+/// Failed opaque eval fragments replay compile warnings before their catchable parse errors.
+#[test]
+fn test_datetime_eval_octal_compile_warning_failed_parse() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$code = '"\400"; return );';
+error_reporting(128);
+try { eval(substr($code, $argc - 1)); } catch (ParseError $e) { echo "caught"; }
+try { eval(substr($code, $argc - 1)); } catch (ParseError $e) { echo "caught"; }
+unset($code);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "caughtcaught");
+    assert_eq!(output.stderr.matches("Octal escape sequence overflow \\400 is greater than \\377").count(), 2,
+        "{}", output.stderr);
+}
+
+/// Nested opaque eval catches parse failures without escaping into the outer AOT frame.
+#[test]
+fn test_datetime_nested_eval_parse_error_is_catchable() {
+    let out = compile_and_run(r#"<?php
+$bad = 'return );';
+$code = 'try { eval($bad); } catch (ParseError $e) { echo strlen($e->getMessage()) > 0 ? "caught" : "empty"; } echo "after";';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "caughtafter");
+}
+
+/// Octal bytes survive the opaque eval lexer, parser and native value bridge without UTF-8 expansion.
+#[test]
+fn test_datetime_eval_debug_octal_binary_bytes() {
+    let out = compile_and_run(r#"<?php
+$code = 'return "\377\400\777";';
+echo bin2hex(eval(substr($code, $argc - 1)));
+"#);
+    assert_eq!(out, "ff00ff");
+}
+
+/// Constructor-free ParseError allocation preserves empty message, zero code and null previous.
+#[test]
+fn test_datetime_parse_error_without_constructor_defaults() {
+    let out = compile_and_run(r#"<?php
+$name = substr('ParseError', $argc - 1);
+$reflection = new ReflectionClass($name);
+$error = $reflection->newInstanceWithoutConstructor();
+echo '[' . $error->getMessage() . ']|' . $error->getCode() . '|';
+echo $error->getPrevious() === null ? 'null' : 'wrong';
+echo '|' . count($error->getTrace());
+"#);
+    assert_eq!(out, "[]|0|null|0");
+}
+
+/// Eval's reflection allocator preserves compact Throwable defaults without running a constructor.
+#[test]
+fn test_datetime_eval_parse_error_without_constructor_defaults() {
+    let out = compile_and_run(r#"<?php
+$name = 'ParseError';
+$code = '$reflection = new ReflectionClass($name); $error = $reflection->newInstanceWithoutConstructor(); echo "[" . $error->getMessage() . "]|" . $error->getCode() . "|"; echo $error->getPrevious() === null ? "null" : "wrong"; echo "|" . count($error->getTrace());';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "[]|0|null|0");
+}
+
+/// getPrevious keeps the returned exception alive after eval releases its former owner.
+#[test]
+fn test_datetime_eval_parse_error_previous_owner() {
+    let out = compile_and_run(r#"<?php
+$previous = new Exception('inner');
+$error = new ParseError('outer', 0, $previous);
+unset($previous);
+$code = '$kept = $error->getPrevious(); unset($error); echo $kept->getMessage(); unset($kept);';
+eval(substr($code, $argc - 1));
+unset($error, $code);
+"#);
+    assert_eq!(out, "inner");
+}
+
+/// Repeated nested parse failures release their exception and source owners after catch.
+#[test]
+fn test_datetime_nested_parse_error_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$bad = 'return );';
+$code = 'for ($i = 0; $i < 4; $i++) { try { eval($bad); } catch (ParseError $e) { echo "caught"; unset($e); } }';
+eval(substr($code, $argc - 1));
+unset($bad, $code);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "caughtcaughtcaughtcaught");
+    let summary = output.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Repeated native user debug hooks release their result containers and rendered fields.
+#[test]
+fn test_datetime_eval_debug_hook_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class DebugHeapDate extends DateTime {
+    public function __debugInfo(): array { return ['custom' => 7]; }
+}
+$date = new DebugHeapDate('@0');
+$code = 'for ($i = 0; $i < 4; $i++) { print_r($date); }';
+eval(substr($code, $argc - 1));
+unset($date, $code);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout.matches("[custom] => 7").count(), 4);
+    let summary = output.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// User __debugInfo takes precedence over the native date debug projection inside eval.
+#[test]
+fn test_datetime_eval_debug_honors_user_debug_info() {
+    let out = compile_and_run(r#"<?php
+class DebugInfoDate extends DateTime {
+    public function __debugInfo(): array { return ['custom' => 7]; }
+}
+$date = new DebugInfoDate('@0');
+$code = 'print_r($date);';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "DebugInfoDate Object\n(\n    [custom] => 7\n)\n");
+}
+
+/// Native date debug output keeps user visibility/order and overwrites a colliding public date value.
+#[test]
+fn test_datetime_eval_debug_user_property_order_and_visibility() {
+    for base in ["DateTime", "DateTimeImmutable"] {
+        let source = format!(r#"<?php
+class DebugFields extends {base} {{
+    public string $tag = 'x';
+    private string $p = 'p';
+    protected string $q = 'q';
+    public string $date = 'shadow';
+    public static string $ignored = 'ignored';
+    public function __serialize(): array {{ throw new RuntimeException('serialize override'); }}
+}}
+$date = new DebugFields('@0');
+$code = 'print_r($date);';
+eval(substr($code, $argc - 1));
+"#);
+        let out = compile_and_run(&source);
+        assert_eq!(out, "DebugFields Object\n(\n    [tag] => x\n    [p:DebugFields:private] => p\n    [q:protected] => q\n    [date] => 1970-01-01 00:00:00.000000\n    [timezone_type] => 1\n    [timezone] => +00:00\n)\n", "{base}");
+    }
+}
+
+/// Uninitialized native dates render without invoking serialization or formatting.
+#[test]
+fn test_datetime_eval_debug_uninitialized_date() {
+    let out = compile_and_run(r#"<?php
+$date = (new ReflectionClass(DateTime::class))->newInstanceWithoutConstructor();
+$code = 'print_r($date);';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "DateTime Object\n(\n)\n");
+}
+
+/// Repeated native date debug projection releases its snapshot arrays and retained field cells.
+#[test]
+fn test_datetime_eval_debug_snapshot_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$date = new DateTime('@0');
+$code = 'for ($i = 0; $i < 4; $i++) { print_r($date); }';
+eval(substr($code, $argc - 1));
+unset($date, $code);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout.matches("1970-01-01 00:00:00.000000").count(), 4);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// AOT and opaque-eval debug output ignore format overrides while explicit calls remain virtual.
+#[test]
+fn test_datetime_native_debug_ignores_format_override() {
+    let out = compile_and_run(r#"<?php
+class DebugOverrideDate extends DateTime {
+    public function format(string $format): string { return 'mutable-hook'; }
+}
+class DebugOverrideImmutable extends DateTimeImmutable {
+    public function format(string $format): string { return 'immutable-hook'; }
+}
+$mutable = new DebugOverrideDate('@0');
+$immutable = new DebugOverrideImmutable('@0');
+var_dump($mutable);
+print_r($mutable);
+var_dump($immutable);
+print_r($immutable);
+echo $mutable->format('Y'), '|', $immutable->format('Y');
+$code = 'var_dump($mutable); print_r($mutable); var_dump($immutable); print_r($immutable);
+echo $mutable->format("Y"), "|", $immutable->format("Y");';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out.matches("1970-01-01 00:00:00.000000").count(), 8, "{out}");
+    assert_eq!(out.matches("mutable-hook").count(), 4, "{out}");
+    assert!(out.ends_with("mutable-hook|immutable-hook"), "{out}");
+}
+
+/// Native diff reads target date state without invoking overridden public getters.
+#[test]
+fn test_datetime_procedural_diff_ignores_target_getters() {
+    let out = compile_and_run(r#"<?php
+class GetterTrapDate extends DateTime {
+    public function getTimestamp(): int { throw new RuntimeException('timestamp override'); }
+    public function getMicrosecond(): int { throw new RuntimeException('microsecond override'); }
+    public function getTimezone(): DateTimeZone|false { throw new RuntimeException('timezone override'); }
+    public function format(string $format): string { throw new RuntimeException('format override'); }
+}
+class GetterTrapImmutable extends DateTimeImmutable {
+    public function getTimestamp(): int { throw new RuntimeException('timestamp override'); }
+    public function getMicrosecond(): int { throw new RuntimeException('microsecond override'); }
+    public function getTimezone(): DateTimeZone|false { throw new RuntimeException('timezone override'); }
+    public function format(string $format): string { throw new RuntimeException('format override'); }
+}
+$base = new DateTime('@0');
+$immutableBase = new DateTimeImmutable('@0');
+$mutableTarget = new GetterTrapDate('@86400.5');
+$immutableTarget = new GetterTrapImmutable('@86400.5');
+echo $base->diff($mutableTarget)->format('%a|%f'), ';';
+echo date_diff($base, $immutableTarget)->format('%a|%f'), ';';
+echo $immutableBase->diff($mutableTarget)->format('%a|%f'), ';';
+$code = 'echo date_diff($base, $mutableTarget)->format("%a|%f"), ";";
+echo $immutableBase->diff($immutableTarget)->format("%a|%f"), ";";';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "1|500000;".repeat(5));
+}
+
+/// Invalid date_diff receivers report the public PHP parameter name in AOT and eval.
+#[test]
+fn test_datetime_procedural_diff_receiver_error() {
+    let out = compile_and_run(r#"<?php
+$target = new DateTime('@0');
+try { date_diff(123, $target); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$code = 'try { date_diff(123, $target); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out,
+        "date_diff(): Argument #1 ($baseObject) must be of type DateTimeInterface, int given\n".repeat(2));
+}
+
+/// Procedural date access bypasses overrides while explicit methods stay virtual in AOT and eval.
+#[test]
+fn test_datetime_procedural_getters_bypass_user_overrides() {
+    let output = compile_and_run(r#"<?php
+class ProceduralOverrideDate extends DateTime {
+    public function format(string $format): string { return 'override'; }
+    public function getTimestamp(): int { return 42; }
+}
+class ProceduralOverrideImmutableDate extends DateTimeImmutable {
+    public function format(string $format): string { return 'immutable'; }
+    public function getTimestamp(): int { return 43; }
+}
+$date = new ProceduralOverrideDate('@0');
+echo date_format($date, 'Y'), '|', $date->format('Y'), '|';
+echo date_timestamp_get($date), '|', $date->getTimestamp(), '|';
+$code = 'echo date_format($date, "Y"), "|", $date->format("Y"), "|", date_timestamp_get($date), "|", $date->getTimestamp(), "|";';
+eval(substr($code, $argc - 1));
+$date = new ProceduralOverrideImmutableDate('@0');
+echo date_format($date, 'Y'), '|', $date->format('Y'), '|';
+echo date_timestamp_get($date), '|', $date->getTimestamp(), '|';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(output, format!("{}{}", "1970|override|0|42|".repeat(2),
+        "1970|immutable|0|43|".repeat(2)));
+}
+
+/// Static methods release boxed arguments on both aliasing and fresh-object return paths.
+#[test]
+fn test_datetime_static_conditional_owned_object_return_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class StaticDateReturn {
+    public static function keep(mixed $value, bool $keep): DateTime {
+        if ($keep) { return $value; }
+        return new DateTime('@1');
+    }
+}
+for ($i = 0; $i < 20; $i++) {
+    $result = StaticDateReturn::keep($argc > 0 ? new DateTime('@0') : null, $i % 2 == 0);
+    echo $result->format('U'), '|';
+    unset($result);
+}
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "0|1|".repeat(10), "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Virtual date returns agree on ownership even when overrides return different objects.
+#[test]
+fn test_datetime_virtual_owned_object_return_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class VirtualDateReturn {
+    public function keep(mixed $value): DateTime { return $value; }
+}
+class FreshVirtualDateReturn extends VirtualDateReturn {
+    public function keep(mixed $value): DateTime { return new DateTime('@1'); }
+}
+function invoke_virtual_date(VirtualDateReturn $carrier, int $flag): DateTime {
+    return $carrier->keep($flag > 0 ? new DateTime('@0') : null);
+}
+for ($i = 0; $i < 20; $i++) {
+    $carrier = $i % 2 == 0 ? new VirtualDateReturn() : new FreshVirtualDateReturn();
+    $result = invoke_virtual_date($carrier, $argc);
+    echo $result->format('U'), '|';
+    unset($result, $carrier);
+}
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "0|1|".repeat(10), "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Static, free-function and closure descriptors adopt proven owned date results.
+#[test]
+fn test_datetime_callable_factories_object_return_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class CallableDateFactory {
+    public static function make(): DateTime { return new DateTime('@0'); }
+}
+function make_callable_date(): DateTime { return new DateTime('@0'); }
+$callbacks = [CallableDateFactory::make(...), make_callable_date(...),
+    function (): DateTime { return new DateTime('@0'); }];
+for ($i = 0; $i < 20; $i++) {
+    foreach ($callbacks as $callback) {
+        $result = $callback();
+        echo $result->format('Y'), '|';
+        unset($result);
+    }
+}
+unset($callback, $callbacks);
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "1970|".repeat(60), "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Discarded opaque eval results release implicit null, explicit scalar and borrowed scope cells.
+#[test]
+fn test_datetime_eval_result_ownership_discarded_cells_heap() {
+    for body in ["", "return null;", "return 42;", "return \"result\";", "return $value;"] {
+        let source = format!(r#"<?php
+$value = 'held';
+$code = '{body}';
+for ($i = 0; $i < 20; $i++) {{ eval(substr($code, $argc - 1)); }}
+echo $value;
+unset($value, $code);
+"#);
+        let output = compile_and_run_with_heap_debug(&source);
+        assert!(output.success, "body={body}: {}", output.stderr);
+        assert_eq!(output.stdout, "held", "body={body}: {}", output.stderr);
+        let summary = output.stderr.lines()
+            .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+            .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+        assert!(summary.ends_with("clean"), "body={body}: {}", output.stderr);
+    }
+}
+
+/// A pending eval return survives finally unsetting its last scope owner and reusing heap storage.
+#[test]
+fn test_datetime_eval_result_ownership_survives_finally_source_unset() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$code = '$inside = "original"; try { return $inside; } finally { unset($inside); $replacement = "replaced"; }';
+$result = eval(substr($code, $argc - 1));
+echo $result;
+unset($result, $code);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "original", "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Finally overriding a borrowed return must leave the original scope value alive.
+#[test]
+fn test_datetime_eval_result_ownership_finally_preserves_borrowed_value() {
+    let out = compile_and_run(r#"<?php
+$value = 'held';
+$code = 'try { return $value; } finally { return "replacement"; }';
+$result = eval(substr($code, $argc - 1));
+echo $result, '|', $value;
+"#);
+    assert_eq!(out, "replacement|held");
+}
+
+/// Returned receivers and Closure targets survive destruction of their source callback arrays.
+#[test]
+fn test_datetime_eval_callback_receiver_survives_result_and_closure_transfer() {
+    let out = compile_and_run(r#"<?php
+class EvalReceiverDate extends DateTime {
+    public function identity(): DateTime { return $this; }
+    public function label(): string { return $this->format('U'); }
+}
+$code = '
+$callback = [new EvalReceiverDate("@3"), "identity"];
+$returned = call_user_func($callback);
+unset($callback);
+echo $returned->format("U"), "|";
+$callback = [new EvalReceiverDate("@4"), "label"];
+$closure = Closure::fromCallable($callback);
+unset($callback);
+echo $closure(), "|";
+$callback = [new EvalReceiverDate("@5"), "identity"];
+$returned = call_user_func_array($callback, []);
+unset($callback);
+echo $returned->format("U");
+';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "3|4|5");
+}
+
+/// Opaque eval adopts owned date returns from registered native functions and callable methods.
+#[test]
+fn test_datetime_eval_native_factories_object_return_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class EvalDateFactory {
+    public static function staticDate(): DateTime { return new DateTime('@1'); }
+    public function instanceDate(): DateTime { return new DateTime('@2'); }
+}
+function make_eval_native_date(): DateTime { return new DateTime('@0'); }
+$factory = new EvalDateFactory();
+$code = '
+for ($i = 0; $i < 20; $i++) {
+    $result = make_eval_native_date();
+    echo $result->format("U"), "|";
+    unset($result);
+    $function = "make_eval_native_date";
+    $result = $function();
+    echo $result->format("U"), "|";
+    unset($result);
+    $result = call_user_func("EvalDateFactory::staticDate");
+    echo $result->format("U"), "|";
+    unset($result);
+    $result = call_user_func([$factory, "instanceDate"]);
+    echo $result->format("U"), "|";
+    unset($result);
+}';
+eval(substr($code, $argc - 1));
+unset($factory);
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "0|0|1|2|".repeat(20), "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Releasing temporary eval source preserves literal returns and borrowed scope values.
+#[test]
+fn test_datetime_eval_source_cleanup_preserves_return_values() {
+    let out = compile_and_run(r#"<?php
+$code = 'return "literal";';
+$literal = eval(substr($code, $argc - 1));
+$code = str_repeat('x', 1024);
+echo $literal, '|';
+$value = 'scope';
+$code = 'return $value;';
+$scoped = eval(substr($code, 0));
+$code = str_repeat('y', 1024);
+echo $scoped, '|', $value;
+"#);
+    assert_eq!(out, "literal|scope|scope");
+}
+
+/// Increasing opaque eval source length must not increase the retained runtime heap.
+#[test]
+fn test_datetime_eval_source_cleanup_does_not_retain_source_bytes() {
+    let mut baseline = None;
+    for padding in [16, 8192] {
+        let source = format!(
+            "<?php\n$code = '{}echo \"ok\";';\neval(substr($code, $argc - 1));",
+            " ".repeat(padding),
+        );
+        let output = compile_and_run_with_heap_debug(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "ok", "{}", output.stderr);
+        let summary = output.stderr.lines()
+            .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+            .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+        let live_bytes = if summary.ends_with("clean") { 0 } else {
+            summary.split_whitespace().find_map(|field| field.strip_prefix("live_bytes="))
+                .expect("live byte count").parse::<usize>().unwrap()
+        };
+        if let Some(baseline) = baseline {
+            assert_eq!(live_bytes, baseline, "retained source bytes: {}", output.stderr);
+        } else {
+            baseline = Some(live_bytes);
+        }
+    }
+}
+
+/// Borrowed builtin string slices outlive temporary casts without leaking their backing strings.
+#[test]
+fn test_datetime_string_local_temporary_substring_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 20; $i++) {
+    $source = 'prefix:payload';
+    echo substr($source, 7), '|', substr(substr($source, 0), 7), '|';
+    unset($source);
+}
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "payload|payload|".repeat(20), "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Reusing a string variable after unset must clean its final widened storage and read copies.
+#[test]
+fn test_datetime_string_local_reuse_after_unset_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class DateStringFactory {
+    public function label(): string { return substr('hello!', 0, 5); }
+    public static function staticLabel(): string { return substr('hello!', 0, 5); }
+}
+$factory = new DateStringFactory();
+for ($i = 0; $i < 20; $i++) {
+    $value = $factory->label(); echo $value; unset($value);
+    $value = DateStringFactory::staticLabel(); echo $value; unset($value);
+}
+unset($factory);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "hellohello".repeat(20));
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Boxed storage for unset must preserve by-value string parameters, aliases and declared returns.
+#[test]
+fn test_datetime_string_local_reuse_after_unset_parameter_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function cycle_date_label(string $value): string {
+    for ($i = 0; $i < 20; $i++) {
+        $before = $value;
+        unset($value);
+        $value = $before;
+        unset($before);
+    }
+    return $value;
+}
+echo cycle_date_label('date');
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "date");
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Mixed string returns release detached heap copies while scalar conversions keep scratch valid.
+#[test]
+fn test_datetime_string_local_mixed_cast_return_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function date_label_text(mixed $value): string { return (string)$value; }
+$values = [1, 1.5, true, false, null, 'word'];
+foreach ($values as $value) { echo date_label_text($value), '|'; }
+unset($value, $values);
+$text = date_label_text(42);
+echo date_label_text(1.5), $text;
+unset($text);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "1|1.5|1|||word|1.542");
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Direct eval method bridges consume owned string/object returns without per-call heap growth.
+#[test]
+fn test_datetime_eval_native_string_returns_do_not_accumulate() {
+    let mut baseline = None;
+    for count in [1, 20] {
+        let source = r#"<?php
+class DateStringFactory {
+    public function label(): string { return substr('hello!', 0, 5); }
+    public static function staticLabel(): string { return substr('hello!', 0, 5); }
+    public function date(): DateTime { echo 'made'; return new DateTime('@0'); }
+    public static function staticDate(): DateTime { echo 'made'; return new DateTime('@0'); }
+}
+$factory = new DateStringFactory();
+$code = '
+for ($i = 0; $i < __COUNT__; $i++) {
+    $value = $factory->label(); echo $value; unset($value);
+    $value = DateStringFactory::staticLabel(); echo $value; unset($value);
+    $date = $factory->date(); unset($date);
+    $date = DateStringFactory::staticDate(); unset($date);
+}';
+eval(substr($code, $argc - 1));
+unset($factory);
+"#.replace("__COUNT__", &count.to_string());
+        let output = compile_and_run_with_heap_debug(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "hellohellomademade".repeat(count));
+        let summary = output.stderr.lines()
+            .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+            .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+        let live = if summary.ends_with("clean") { 0 } else {
+            summary.split_whitespace().find_map(|field| field.strip_prefix("live_blocks="))
+                .expect("live block count").parse::<usize>().unwrap()
+        };
+        if let Some(baseline) = baseline {
+            assert_eq!(live, baseline, "per-call leak at {count} iterations: {}", output.stderr);
+        } else {
+            baseline = Some(live);
+        }
+    }
+}
+
+/// Native string-return bridges and boxed string reuse emit on every supported target.
+#[test]
+fn test_datetime_eval_native_string_return_all_target_assembly() {
+    for target in ["macos-aarch64", "linux-aarch64", "linux-x86_64", "ios-arm64", "ios-sim-arm64"] {
+        let dir = make_cli_test_dir("elephc_eval_string_return_targets");
+        let path = dir.join("main.php");
+        std::fs::write(&path, r#"<?php
+class DateStringFactory {
+    public array $values = ['value' => 7];
+    public function &__debugInfo(): array { return $this->values; }
+    public function label(): string { return substr('hello!', 0, 5); }
+    public static function staticLabel(): string { return substr('hello!', 0, 5); }
+}
+$factory = new DateStringFactory();
+for ($i = 0; $i < 2; $i++) { $label = $factory->label(); echo $label; unset($label); }
+$code = '$value = $factory->label(); echo $value; unset($value); $value = DateStringFactory::staticLabel(); echo $value; unset($value); print_r($factory); echo $factory->values["value"];';
+eval(substr($code, $argc - 1));
+"#).unwrap();
+        let mut command = elephc_cli_command(&dir);
+        command.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") { command.args(["--emit", "staticlib"]); }
+        let output = command.arg(&path).output().expect("emit eval string return assembly");
+        assert!(output.status.success(), "{target}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(path.with_extension("s").is_file(), "{target}: missing assembly");
+    }
+}
+
+/// Procedural getter wrappers release nullable temporary argument boxes independently of their result.
+#[test]
+fn test_datetime_procedural_getters_temporary_arguments_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 20; $i++) {
+    echo date_format($argc > 0 ? new DateTime('@0') : null, 'Y'), '|';
+    echo date_timestamp_get($argc > 0 ? new DateTimeImmutable('@0') : null), '|';
+}
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "1970|0|".repeat(20), "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Procedural getter receiver errors preserve PHP's exception class and type names.
+#[test]
+fn test_datetime_procedural_getters_invalid_receiver_type_errors() {
+    let output = compile_and_run(r#"<?php
+$inputs = [null, false, true, 42, 1.5, 'x', [], new stdClass()];
+foreach ($inputs as $input) {
+    try { date_format($input, 'Y'); }
+    catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { date_timestamp_get($input); }
+    catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+$code = '
+foreach ($inputs as $input) {
+    try { date_format($input, "Y"); }
+    catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { date_timestamp_get($input); }
+    catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}';
+eval(substr($code, $argc - 1));
+"#);
+    let mut expected = String::new();
+    for actual in ["null", "false", "true", "int", "float", "string", "array", "stdClass"] {
+        for function in ["date_format", "date_timestamp_get"] {
+            expected.push_str(&format!(
+                "{function}(): Argument #1 ($object) must be of type DateTimeInterface, {actual} given\n"
+            ));
+        }
+    }
+    assert_eq!(output, expected.repeat(2));
+}
+
+/// Wrong procedural getter receivers release diagnostic and receiver owners before throwing.
+#[test]
+fn test_datetime_procedural_getters_invalid_receiver_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$inputs = [null, false, true, 42, 1.5, 'x', [], new stdClass()];
+foreach ($inputs as $input) {
+    try { date_format($input, 'Y'); }
+    catch (TypeError $e) { echo 'caught|'; }
+    try { date_timestamp_get($input); }
+    catch (TypeError $e) { echo 'caught|'; }
+}
+unset($e, $input, $inputs);
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "caught|".repeat(16), "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Procedural timezone getters ignore user overrides in both date families and opaque eval.
+#[test]
+fn test_datetime_procedural_getters_timezone_overrides() {
+    let output = compile_and_run(r#"<?php
+class ZoneOverrideDate extends DateTime {
+    public function getOffset(): int { return 99; }
+    public function getTimezone(): DateTimeZone { return new DateTimeZone('Europe/Paris'); }
+}
+class ZoneOverrideImmutableDate extends DateTimeImmutable {
+    public function getOffset(): int { return 99; }
+    public function getTimezone(): DateTimeZone { return new DateTimeZone('Europe/Paris'); }
+}
+function describe_date_zone(DateTimeInterface $date): void {
+    echo date_offset_get($date), '|', $date->getOffset(), '|';
+    echo date_timezone_get($date)->getName(), '|', $date->getTimezone()->getName(), '|';
+}
+$date = new ZoneOverrideDate('2024-01-01', new DateTimeZone('UTC'));
+describe_date_zone($date);
+$code = 'echo date_offset_get($date), "|", $date->getOffset(), "|", date_timezone_get($date)->getName(), "|", $date->getTimezone()->getName(), "|";';
+eval(substr($code, $argc - 1));
+$date = new ZoneOverrideImmutableDate('2024-01-01', new DateTimeZone('UTC'));
+describe_date_zone($date);
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(output, "0|99|UTC|Europe/Paris|".repeat(4));
+}
+
+/// Dynamic arguments are checked after source-order evaluation and before entering the callee.
+#[test]
+fn test_datetime_object_argument_runtime_guard() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function accept_date(DateTimeInterface $date, string $marker): void { echo 'body|'; }
+function mark_argument(): string { echo 'argument|'; return substr('marker!', 0, 6); }
+$inputs = [null, false, true, 42, 1.5, 'x', [], new stdClass(), new DateTime('@0'), new DateTimeImmutable('@0')];
+foreach ($inputs as $input) {
+    try { accept_date(marker: mark_argument(), date: $input); }
+    catch (TypeError $e) { echo $e->getMessage(), '|'; }
+}
+unset($e, $input, $inputs);
+"#);
+    let mut expected = String::new();
+    for kind in ["null", "false", "true", "int", "float", "string", "array", "stdClass"] {
+        expected.push_str(&format!("argument|accept_date(): Argument #1 ($date) must be of type DateTimeInterface, {kind} given|"));
+    }
+    expected.push_str("argument|body|argument|body|");
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// A rejected owned Mixed argument remains alive for diagnostics and is released on throw.
+#[test]
+fn test_datetime_object_argument_runtime_guard_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function boxed_argument($value): mixed { return $value; }
+function require_date(DateTimeInterface $date): void { echo 'body|'; }
+for ($i = 0; $i < 20; $i++) {
+    try { require_date(boxed_argument(new stdClass())); }
+    catch (TypeError $e) { echo $e->getMessage(), '|'; }
+}
+unset($e);
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout,
+        "require_date(): Argument #1 ($date) must be of type DateTimeInterface, stdClass given|".repeat(20));
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// A fresh factory result isolates guard cleanup from parameter-to-return ownership transfer.
+#[test]
+fn test_datetime_object_argument_runtime_guard_factory_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function fresh_argument(): mixed { return new stdClass(); }
+function require_fresh_date(DateTimeInterface $date): void { echo 'body|'; }
+for ($i = 0; $i < 20; $i++) {
+    try { require_fresh_date(fresh_argument()); }
+    catch (TypeError $e) { echo 'caught|'; }
+}
+unset($e);
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "caught|".repeat(20));
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Boxing a borrowed object parameter retains a result owner independent of the caller's temporary.
+#[test]
+fn test_datetime_object_to_mixed_return_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function boxed_date(DateTime $date): mixed { return $date; }
+for ($i = 0; $i < 20; $i++) {
+    $date = boxed_date(new DateTime('@0'));
+    echo date_timestamp_get($date), '|';
+    unset($date);
+}
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "0|".repeat(20));
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// All supported targets lower object-to-Mixed return cleanup and the runtime object guard.
+#[test]
+fn test_datetime_object_argument_all_target_assembly() {
+    for target in ["macos-aarch64", "linux-aarch64", "linux-x86_64", "ios-arm64", "ios-sim-arm64"] {
+        let dir = make_cli_test_dir("elephc_object_argument_targets");
+        let path = dir.join("main.php");
+        std::fs::write(&path, r#"<?php
+function boxed_date(DateTime $date): mixed { return $date; }
+function accept_date(DateTimeInterface $date): void { echo date_timestamp_get($date); }
+accept_date(boxed_date(new DateTime('@0')));
+"#).unwrap();
+        let mut command = elephc_cli_command(&dir);
+        command.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") { command.args(["--emit", "staticlib"]); }
+        let output = command.arg(&path).output().expect("emit object argument target assembly");
+        assert!(output.status.success(), "{target}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(path.with_extension("s").is_file(), "{target}: missing assembly");
+    }
+}
+
+/// Every supported emitter uses the checked bridge and its two-word C return ABI.
+#[test]
+fn test_mktime_checked_bridge_all_target_assembly() {
+    for target in ["macos-aarch64", "linux-aarch64", "linux-x86_64", "ios-arm64", "ios-sim-arm64"] {
+        let dir = make_cli_test_dir("elephc_mktime_checked_targets");
+        let path = dir.join("main.php");
+        std::fs::write(&path, r#"<?php
+function time_probe(): void {
+$f = mktime(...);
+for ($i = 0; $i < 2; $i++) { var_dump($f(12)); }
+var_dump(gmmktime(23, 59, 59, 12, 31, 1969));
+}
+time_probe();
+"#).unwrap();
+        let mut command = elephc_cli_command(&dir);
+        command.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") {
+            command.args(["--emit", "staticlib"]);
+        }
+        let output = command.arg(&path).output().expect("emit target assembly");
+        assert!(output.status.success(), "{target}: {}", String::from_utf8_lossy(&output.stderr));
+        let asm = std::fs::read_to_string(path.with_extension("s")).unwrap();
+        for symbol in ["elephc_tz_mktime_checked", "elephc_tz_gmmktime_checked"] {
+            let lines = asm.lines().collect::<Vec<_>>();
+            let call = lines.iter().position(|line| line.contains(symbol)
+                && (line.trim_start().starts_with("bl ") || line.trim_start().starts_with("call ")))
+                .unwrap_or_else(|| panic!("{target}: missing checked call {symbol}"));
+            let context = lines[call.saturating_sub(4)..(call + 5).min(lines.len())].join("\n");
+            if target == "linux-x86_64" {
+                assert!(context.contains("add rsp, 48"), "{target}: mask stack argument lost: {context}");
+                assert!(context.contains("test rdx, rdx"), "{target}: invalid result ABI: {context}");
+            } else {
+                assert!(context.contains("ldr x6, [sp, #0]"), "{target}: missing nullable mask: {context}");
+                assert!(context.contains("cbz x1,"), "{target}: invalid result ABI: {context}");
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// The invoker preserves both nullable-integer words across scalar coercion and cleanup.
+#[test]
+fn test_datetime_invoker_nullable_integer_scalar_arguments() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nullable_integer(?int $value = null): int {
+    echo gettype($value), ":";
+    return $value ?? 41;
+}
+function make_nullable_callable(): callable { return nullable_integer(...); }
+function numeric_string_arguments(int $value): array { return [(string) $value]; }
+$f = make_nullable_callable();
+for ($i = 0; $i < 3; $i++) {
+    echo call_user_func_array($f, numeric_string_arguments($argc + 22)), "|";
+    echo call_user_func_array($f, [23.0]), "|";
+    echo call_user_func_array($f, [false]), "|";
+    echo call_user_func_array($f, [null]), "|";
+    echo call_user_func_array($f, []), "|";
+}
+unset($f);
+"#);
+    assert!(out.success, "exit={:?} stdout={} stderr={}", out.exit_code, out.stdout, out.stderr);
+    assert_eq!(out.stdout, "integer:23|integer:23|integer:0|NULL:41|NULL:41|".repeat(3));
+    let summary = out.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", out.stderr));
+    assert!(summary.ends_with("clean"), "{}", out.stderr);
+}
+
+/// Runtime-selected builtin names use the same local/UTC default and boxed-result contract.
+#[test]
+fn test_mktime_runtime_selected_name_defaults() {
+    let out = compile_and_run(r#"<?php
+date_default_timezone_set("Asia/Kolkata");
+$local = substr("mktime", $argc - 1);
+$utc = substr("gmmktime", $argc - 1);
+$before = time();
+$localStamp = $local(12);
+$utcStamp = $utc(12);
+$after = time();
+$localFields = date("Y-m-d i:s", $localStamp);
+$utcFields = gmdate("Y-m-d i:s", $utcStamp);
+echo ($localFields === date("Y-m-d i:s", $before) || $localFields === date("Y-m-d i:s", $after)) ? "local-ok|" : "local-bad|";
+echo ($utcFields === gmdate("Y-m-d i:s", $before) || $utcFields === gmdate("Y-m-d i:s", $after)) ? "utc-ok|" : "utc-bad|";
+var_dump($utc(23, 59, 59, 12, 31, 1969));
+"#);
+    assert_eq!(out, "local-ok|utc-ok|int(-1)\n");
+}
+
+/// Direct, dynamic FCC, and eval calls preserve the valid integer -1 result.
+#[test]
+fn test_mktime_minus_one_is_not_false() {
+    let out = compile_and_run(r#"<?php
+date_default_timezone_set("UTC");
+$f = gmmktime(...);
+for ($i = 0; $i < 3; $i++) {
+    var_dump($f(23, 59, 59, 12, 31, 1969));
+}
+var_dump(gmmktime(23, 59, 59, 12, 31, 1969), mktime(23, 59, 59, 12, 31, 1969));
+$code = 'var_dump(gmmktime(23, 59, 59, 12, 31, 1969), mktime(23, 59, 59, 12, 31, 1969));';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "int(-1)\n".repeat(7));
+}
+
+/// Callable default preparation releases boxed values, arrays, and formatter temporaries.
+#[test]
+fn test_mktime_callable_defaults_release_temporaries() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+date_default_timezone_set("UTC");
+function nullable_mktime_args(): array { return [12, null, null, null, null, null]; }
+$f = mktime(...);
+$sum = 0;
+for ($i = 0; $i < 40; $i++) {
+    $sum += $f(12);
+    $sum += call_user_func_array("mktime", nullable_mktime_args());
+}
+unset($f);
+echo $sum > 0 ? "ok" : "bad";
+"#);
+    assert!(output.success, "exit={:?} stdout={} stderr={}", output.exit_code, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "ok", "{}", output.stderr);
+    let summary = output.stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap-debug summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
+/// Callback argument arrays run once and three callable forms agree on a fixed instant.
+#[test]
+fn test_mktime_callback_array_evaluated_once() {
+    let out = compile_and_run(r#"<?php
+date_default_timezone_set("UTC");
+function mktime_arguments(): array {
+    echo "args|";
+    return [0, 0, 0, 1, 1, 2024];
+}
+echo call_user_func_array("mktime", mktime_arguments()), "|";
+$f = mktime(...);
+echo $f(0, 0, 0, 1, 1, 2024), "|";
+echo call_user_func("mktime", 0, 0, 0, 1, 1, 2024), "|";
+function string_arguments(): array { echo "string-args|"; return ["abc"]; }
+echo call_user_func_array("strlen", string_arguments()), "|";
+function empty_mktime_arguments(): array { return []; }
+function extra_mktime_arguments(): array { return [0, 0, 0, 1, 1, 2024, 7]; }
+try { call_user_func_array("mktime", empty_mktime_arguments()); }
+catch (ArgumentCountError $e) { echo $e->getMessage(), "|"; }
+try { call_user_func_array("mktime", extra_mktime_arguments()); }
+catch (ArgumentCountError $e) { echo $e->getMessage(), "|"; }
+function extra_string_arguments(): array { return ["a", "b"]; }
+try { call_user_func_array("strlen", extra_string_arguments()); }
+catch (ArgumentCountError $e) { echo $e->getMessage(), "|"; }
+"#);
+    assert_eq!(out, concat!(
+        "args|1704067200|1704067200|1704067200|string-args|3|",
+        "mktime() expects at least 1 argument, 0 given|",
+        "mktime() expects at most 6 arguments, 7 given|",
+        "strlen() expects exactly 1 argument, 2 given|",
+    ));
+}
+
+/// Opaque aliases use shared names/defaults and throw catchable procedural argument errors.
+#[test]
+fn test_datetime_opaque_eval_shared_argument_binding() {
+    let out = compile_and_run(r#"<?php
+date_default_timezone_set("UTC");
+error_reporting(0);
+$code = '$parsed = strptime(format: "%Y-%m-%d", timestamp: "2024-01-02");
+echo $parsed["tm_year"], ":", $parsed["tm_mon"], ":", $parsed["tm_mday"], "|";
+echo idate(timestamp: 0, format: "Y"), "|";
+echo date_format(format: "Y", object: new DateTime("@0")), "|";
+echo date_create(timezone: new DateTimeZone("UTC"))->getTimezone()->getName(), "|";
+echo count(timezone_identifiers_list(countryCode: null)) === count(timezone_identifiers_list()) ? "default-ok|" : "bad|";
+try { date_format(); } catch (ArgumentCountError $e) { echo $e->getMessage(), "|"; }
+try { date_format(new DateTime("@0"), "Y", 123); } catch (ArgumentCountError $e) { echo $e->getMessage(), "|"; }
+try { date_format(format: "Y"); } catch (ArgumentCountError $e) { echo $e->getMessage(), "|"; }
+try { strptime(datetime: "x", format: "Y"); } catch (Error $e) { echo $e->getMessage(), "|"; }
+try { date_format(new DateTime("@0"), "Y", format: "Y"); } catch (Error $e) { echo $e->getMessage(), "|"; }
+try { call_user_func_array("timezone_version_get", [123]); } catch (ArgumentCountError $e) { echo $e->getMessage(), "|"; }
+try { call_user_func_array("date_format", ["format" => "Y"]); } catch (ArgumentCountError $e) { echo $e->getMessage(), "|"; }
+echo "done";';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, concat!(
+        "124:0:2|1970|1970|UTC|default-ok|",
+        "date_format() expects exactly 2 arguments, 0 given|",
+        "date_format() expects exactly 2 arguments, 3 given|",
+        "date_format(): Argument #1 ($object) not passed|",
+        "Unknown named parameter $datetime|",
+        "Named parameter $format overwrites previous argument|",
+        "timezone_version_get() expects exactly 0 arguments, 1 given|",
+        "date_format(): Argument #1 ($object) not passed|done",
+    ));
+}
+
+/// idate validates byte tokens and preserves PHP's C-int truncation and -1 sentinel.
+#[test]
+fn test_idate_aot_and_opaque_eval_integer_semantics() {
+    let body = r#"foreach ([0, -1, -62198755200, -62230291200, PHP_INT_MAX] as $t) {
+    foreach (["j", "o", "U", "Y", "y"] as $f) { var_export(idate($f, $t)); echo ","; }
+    echo "|";
+}
+foreach (["Y-m", "c", ""] as $f) { var_export(idate($f, 0)); echo ","; }"#;
+    let source = format!("<?php date_default_timezone_set(\"UTC\"); error_reporting(0); {body} echo \"\\n\"; $code = '{body}'; eval(substr($code, $argc - 1));");
+    let out = compile_and_run(&source);
+    let expected = "1,1970,0,1970,70,|31,1970,false,1969,69,|1,-2,-2069213056,false,false,|1,-2,-2100749056,-2,-2,|4,219250468,false,219250468,96,|false,false,false,";
+    assert_eq!(out, format!("{expected}\n{expected}"));
+}
+
+/// Opaque eval uses timelib and i64 years for getdate/localtime at extreme timestamps.
+#[test]
+fn test_datetime_opaque_eval_broken_down_extreme_years() {
+    let out = compile_and_run(r#"<?php
+date_default_timezone_set("UTC");
+$code = 'foreach ([100000000000000000, PHP_INT_MIN, PHP_INT_MAX] as $stamp) {
+    $g = getdate($stamp);
+    $l = localtime($stamp, true);
+    echo $g["year"], ":", $g["mon"], ":", $g["mday"], ":", $l["tm_year"], "|";
+}';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "3168875820:9:6:3168873920|-292277022657:1:27:-292277024557|292277026596:12:4:292277024696|");
+}
+
+/// Eval reads request timezone changes made by AOT and by a native callback mid-fragment.
+#[test]
+fn test_datetime_opaque_eval_timezone_tracks_native_callbacks() {
+    let out = compile_and_run(r#"<?php
+function switchDateTimezone(): void { date_default_timezone_set("America/New_York"); }
+date_default_timezone_set("Europe/Paris");
+$code = 'echo date_default_timezone_get(), "|", date("H", 0), "|";
+switchDateTimezone();
+echo date_default_timezone_get(), "|", date("H", 0), "|";
+echo strtotime("1970-01-01 00:00:00", 0), "|";
+echo mktime(0, 0, 0, 1, 1, 1970), "|";
+$fields = getdate(0); echo $fields["hours"], "|";
+$fields = localtime(0, true); echo $fields["tm_hour"], "|";
+date_default_timezone_set("UTC");';
+eval(substr($code, $argc - 1));
+echo date_default_timezone_get(), "|", date("H", 0);
+"#);
+    assert_eq!(out, "Europe/Paris|01|America/New_York|19|18000|18000|19|19|UTC|00");
+}
+
+/// Invalid timezone setters use notice masks and suppression in AOT and opaque eval.
+#[test]
+fn test_timezone_invalid_setter_notice_masks_and_opaque_eval() {
+    let out = compile_and_run_capture(r#"<?php
+date_default_timezone_set("UTC");
+error_reporting(E_WARNING);
+date_default_timezone_set("Invalid/StaticWarningMask");
+error_reporting(E_NOTICE);
+date_default_timezone_set("Invalid/StaticNoticeMask");
+@date_default_timezone_set("Invalid/SuppressedStatic");
+$code = 'error_reporting(E_WARNING);
+date_default_timezone_set("Invalid/EvalWarningMask");
+error_reporting(E_NOTICE);
+date_default_timezone_set("Invalid/EvalNoticeMask");
+@date_default_timezone_set("Invalid/SuppressedEval");
+echo date_default_timezone_get();';
+eval(substr($code, $argc - 1));
+echo ":done";
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "UTC:done");
+    assert!(out.stderr.contains("Invalid/StaticNoticeMask"), "{}", out.stderr);
+    assert!(out.stderr.contains("Invalid/EvalNoticeMask"), "{}", out.stderr);
+    assert_eq!(out.stderr.matches("Notice: date_default_timezone_set()").count(), 2);
+    assert!(!out.stderr.contains("WarningMask"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Suppressed"), "{}", out.stderr);
+}
+
 /// Calls concrete mutators through the date interface without changing its reflected surface.
 #[test]
 fn test_datetime_interface_concrete_mutators_and_callables() {

@@ -53,7 +53,8 @@ pub(in crate::interpreter) fn eval_strtotime_result(
         _ => None,
     };
     let input = String::from_utf8_lossy(&bytes);
-    match elephc_tz::strtotime_timestamp_php(&input, base_timestamp, context.default_timezone()) {
+    let timezone = eval_request_timezone(context, values)?;
+    match elephc_tz::strtotime_timestamp_php(&input, base_timestamp, &timezone) {
         Some(timestamp) => values.int(timestamp),
         None => values.bool_value(false),
     }

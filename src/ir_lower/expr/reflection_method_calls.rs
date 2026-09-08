@@ -290,7 +290,7 @@ fn lower_reflection_exact_instance_method_checked(
 }
 
 /// Emits the exact method call and, for DateTime user overrides, runtime-kind finalization.
-fn lower_exact_reflection_instance_method(
+pub(super) fn lower_exact_reflection_instance_method(
     ctx: &mut LoweringContext<'_, '_>,
     declaring_class: &str,
     reflected_method: &str,

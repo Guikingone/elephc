@@ -2,7 +2,7 @@
 title: "__elephc_diag_warning() — internals"
 description: "Compiler internals for __elephc_diag_warning(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 602
+  order: 963
 ---
 
 ## `__elephc_diag_warning()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_diag_warning.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_diag_warning.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

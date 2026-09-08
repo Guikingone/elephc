@@ -2,7 +2,7 @@
 title: "__elephc_print_r_object_properties() — internals"
 description: "Compiler internals for __elephc_print_r_object_properties(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 637
+  order: 998
 ---
 
 ## `__elephc_print_r_object_properties()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_print_r_object_properties.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_print_r_object_properties.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

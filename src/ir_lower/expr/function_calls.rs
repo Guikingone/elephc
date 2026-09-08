@@ -124,6 +124,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return call;
     }
     if is_user_function {
+        if let Some(signature) = sig.as_ref() {
+            super::object_argument_guards::guard_object_arguments(
+                ctx, canonical, signature, &operands, expr.span,
+            );
+        }
         let data = ctx.intern_function_name(canonical);
         let call = ctx.emit_value(
             Op::Call,
@@ -331,7 +336,7 @@ pub(super) fn emit_builtin_call_value(
                 ctx.builder
                     .set_value_ownership(call.value, crate::ir::Ownership::Owned);
             }
-            let return_alias = match def.spec.semantics.result_ownership {
+            let mut return_alias = match def.spec.semantics.result_ownership {
                 crate::builtins::semantics::BuiltinResultOwnership::NonHeap
                 | crate::builtins::semantics::BuiltinResultOwnership::Fresh
                 | crate::builtins::semantics::BuiltinResultOwnership::Independent => {
@@ -344,6 +349,24 @@ pub(super) fn emit_builtin_call_value(
                 | crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments => {
                     ReturnArgAlias::Unknown
                 }
+            };
+            // A borrowed string may be a slice into an owned argument temporary.
+            // Persist the slice before dropping its backing allocation; an interior
+            // pointer cannot transfer the allocation's release obligation safely.
+            let needs_string_owner = ctx.builder.value_php_type(call.value).codegen_repr()
+                == PhpType::Str
+                && operands.iter().enumerate().any(|(index, value)| {
+                    return_alias.may_alias_parameter(index)
+                        && ctx.value_is_owning_temporary(LoweredValue {
+                            value: *value,
+                            ir_type: ctx.builder.value_type(*value),
+                        })
+                });
+            let call = if needs_string_owner {
+                return_alias = ReturnArgAlias::None;
+                crate::ir_lower::ownership::acquire_if_refcounted(ctx, call, Some(span))
+            } else {
+                call
             };
             release_owned_call_arg_temporaries(
                 ctx,
@@ -388,11 +411,25 @@ pub(super) fn emit_builtin_call_value(
         effects,
         Some(span),
     );
+    // The opaque eval ABI now returns a distinct owner, including when its PHP
+    // return expression borrowed an existing scope cell.
+    if op == Op::LanguageConstructCall
+        && php_symbol_key(name.trim_start_matches('\\')) == "eval"
+    {
+        ctx.builder.set_value_ownership(call.value, crate::ir::Ownership::Owned);
+    }
+    // Eval parses its source into independently owned program data; its result
+    // never aliases the temporary source-string allocation.
+    let return_alias = if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
+        ReturnArgAlias::None
+    } else {
+        ReturnArgAlias::Unknown
+    };
     release_owned_call_arg_temporaries(
         ctx,
         &operands,
         Some(call.value),
-        &ReturnArgAlias::Unknown,
+        &return_alias,
         span,
     );
     let eval_needs_barrier = match eval_literal {

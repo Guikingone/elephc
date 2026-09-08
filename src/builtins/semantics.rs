@@ -157,6 +157,8 @@ pub enum BuiltinArgumentLowering {
     Count,
     /// Preserve date's literal-format specialization inputs.
     Date,
+    /// Complete nullable civil fields from one clock sample after shared argument binding.
+    Mktime { utc: bool },
     /// Preserve JSON decode's source-sensitive option handling.
     JsonDecode,
     /// Preserve getenv's nullable name until runtime selects lookup or enumeration.

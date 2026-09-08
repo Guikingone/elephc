@@ -96,6 +96,7 @@ pub struct ElephcEvalContext {
     pub(super) call_line: i64,
     pub(super) file_magic_override: Option<String>,
     pub(super) strict_types: bool,
+    pub(super) owned_program_returns: bool,
 }
 
 impl ElephcEvalContext {
@@ -186,6 +187,7 @@ impl ElephcEvalContext {
             call_line: 0,
             file_magic_override: None,
             strict_types: false,
+            owned_program_returns: false,
         }
     }
 
@@ -264,6 +266,7 @@ impl ElephcEvalContext {
             call_line: 0,
             file_magic_override: None,
             strict_types: false,
+            owned_program_returns: false,
         }
     }
 
@@ -275,6 +278,16 @@ impl ElephcEvalContext {
     /// Replaces the active eval file's strict-types flag and returns the prior nested-file value.
     pub(crate) fn replace_strict_types(&mut self, strict_types: bool) -> bool {
         std::mem::replace(&mut self.strict_types, strict_types)
+    }
+
+    /// Reports whether the current program body must own pending return values before finally runs.
+    pub(crate) fn owned_program_returns(&self) -> bool {
+        self.owned_program_returns
+    }
+
+    /// Changes the lexical return-ownership mode and returns the previous mode for restoration.
+    pub(crate) fn replace_owned_program_returns(&mut self, owned: bool) -> bool {
+        std::mem::replace(&mut self.owned_program_returns, owned)
     }
 
     /// Returns whether the currently executing eval file uses strict scalar parameter binding.

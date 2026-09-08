@@ -58,34 +58,7 @@ pub(in crate::codegen::lower_inst) fn lower_preallocated_throwable_constructor(
 
 /// Returns true for builtin classes that share PHP's compact Throwable payload.
 pub(super) fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
-    matches!(
-        class_name,
-        "Error"
-            | "TypeError"
-            | "ArgumentCountError"
-            | "ValueError"
-            | "ArithmeticError"
-            | "DivisionByZeroError"
-            | "AssertionError"
-            | "UnhandledMatchError"
-            | "Exception"
-            | "RuntimeException"
-            | "ReflectionException"
-            | "JsonException"
-            | "FiberError"
-            | "LogicException"
-            | "BadFunctionCallException"
-            | "BadMethodCallException"
-            | "DomainException"
-            | "InvalidArgumentException"
-            | "LengthException"
-            | "OutOfRangeException"
-            | "OutOfBoundsException"
-            | "OverflowException"
-            | "RangeException"
-            | "UnderflowException"
-            | "UnexpectedValueException"
-    )
+    crate::types::builtin_classes::is_compact_throwable_class(class_name)
 }
 
 /// Returns a class id for Throwable-compatible classes that can use the compact payload.

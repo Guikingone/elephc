@@ -222,6 +222,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_out_of_bounds_exception_class_id", "OutOfBoundsException"),
         ("_spl_invalid_argument_exception_class_id", "InvalidArgumentException"),
         ("_spl_argument_count_error_class_id", "ArgumentCountError"),
+        ("_spl_parse_error_class_id", "ParseError"),
         ("_spl_type_error_class_id", "TypeError"),
         ("_spl_value_error_class_id", "ValueError"),
         ("_spl_arithmetic_error_class_id", "ArithmeticError"),

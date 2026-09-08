@@ -27,7 +27,9 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
         let invoker_label = descriptor
             .sig
             .as_ref()
-            .map(|sig| emit_runtime_callable_invoker_inline(ctx, sig, &[]));
+            .map(|sig| super::runtime_wrappers::emit_runtime_callable_invoker_with_ownership(
+                ctx, sig, &[], descriptor.owned_object_return,
+            ));
         let static_bindings = fake_callable_static_debug_bindings(ctx, display_name);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_debug_meta(
             ctx.data,
@@ -523,7 +525,9 @@ pub(super) fn emit_instance_method_first_class_callable(
     let invoker_label = if is_date_serialize_descriptor(ctx, &normalized_class, &method_key) {
         emit_runtime_date_serialize_invoker_inline(ctx, &sig, &captures)
     } else {
-        emit_runtime_callable_invoker_inline(ctx, &sig, &captures)
+        super::runtime_wrappers::emit_method_callable_invoker_inline(
+            ctx, &sig, &captures, &impl_class, &method_key,
+        )
     };
     let canonical_method_name =
         canonical_first_class_callable_method_name(ctx, &impl_class, method_name);

@@ -433,6 +433,16 @@ pub(super) fn static_method_return_arg_alias(
     let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
         return ReturnArgAlias::Unknown;
     };
+    if crate::types::date_method_dispatch::native_procedural_mutator_method(
+        &format!("{class_name}::{method}"),
+    ).is_some() {
+        return ReturnArgAlias::Parameters([0].into_iter().collect());
+    }
+    if crate::types::date_method_dispatch::native_procedural_read_method(
+        &format!("{class_name}::{method}"),
+    ).is_some() {
+        return ReturnArgAlias::None;
+    }
     let method_key = php_symbol_key(method);
     let Some(class_info) = ctx.classes.get(&class_name) else {
         return ReturnArgAlias::Unknown;

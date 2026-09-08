@@ -36,12 +36,13 @@ pub(in crate::interpreter) enum EvalDebugPropertyVisibilityKind {
 }
 
 /// Object property entry collected before rendering object headers.
-#[derive(Clone)]
 pub(in crate::interpreter) struct EvalDebugObjectProperty {
     pub(in crate::interpreter) name: String,
     pub(in crate::interpreter) visibility: EvalDebugPropertyVisibility,
     pub(in crate::interpreter) value: RuntimeCellHandle,
     pub(in crate::interpreter) is_reference: bool,
+    pub(in crate::interpreter) owned_value: bool,
+    pub(in crate::interpreter) numeric_name: bool,
 }
 
 /// Evaluates PHP `print_r()` over one value and an optional return flag.
@@ -105,7 +106,10 @@ fn eval_print_r_value_result(
     if return_output {
         Ok(output)
     } else {
-        values.echo(output)?;
+        let result = values.echo(output);
+        let cleanup = values.release(output);
+        result?;
+        cleanup?;
         values.bool_value(true)
     }
 }
@@ -197,29 +201,33 @@ fn eval_print_r_append_object(
     objects_seen.push(object_key);
     let class_name = eval_debug_object_class_name(value, identity, context, values)?;
     let properties = eval_debug_object_properties(value, identity, &class_name, context, values)?;
-    output.extend_from_slice(class_name.as_bytes());
-    output.extend_from_slice(b" Object\n");
-    eval_print_r_append_indent(depth, output);
-    output.extend_from_slice(b"(\n");
-    for property in &properties {
-        eval_print_r_append_indent(depth + 1, output);
-        eval_print_r_append_object_key(property, output);
-        output.extend_from_slice(b" => ");
-        eval_print_r_append_value(
-            property.value,
-            context,
-            values,
-            depth + 1,
-            arrays_seen,
-            objects_seen,
-            output,
-        )?;
-        output.extend_from_slice(b"\n");
-    }
-    eval_print_r_append_indent(depth, output);
-    output.extend_from_slice(b")\n");
+    let result = (|| {
+        output.extend_from_slice(class_name.as_bytes());
+        output.extend_from_slice(b" Object\n");
+        eval_print_r_append_indent(depth, output);
+        output.extend_from_slice(b"(\n");
+        for property in &properties {
+            eval_print_r_append_indent(depth + 1, output);
+            eval_print_r_append_object_key(property, output);
+            output.extend_from_slice(b" => ");
+            eval_print_r_append_value(
+                property.value,
+                context,
+                values,
+                depth + 1,
+                arrays_seen,
+                objects_seen,
+                output,
+            )?;
+            output.extend_from_slice(b"\n");
+        }
+        eval_print_r_append_indent(depth, output);
+        output.extend_from_slice(b")\n");
+        Ok(())
+    })();
     objects_seen.pop();
-    Ok(())
+    let cleanup = release_debug_properties(properties, context, values);
+    result.and_then(|()| cleanup)
 }
 
 /// Appends one object property key for `print_r()`.
@@ -283,6 +291,12 @@ pub(in crate::interpreter) fn eval_debug_object_properties(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
+    if let Some(properties) = eval_user_debug_properties(object, class_name, context, values)? {
+        return Ok(properties);
+    }
+    if let Some(properties) = eval_native_date_debug_properties(object, identity, class_name, context, values)? {
+        return Ok(properties);
+    }
     if let Some(identity) = identity {
         if let Some(target) = context.closure_object_target(identity).cloned() {
             return eval_debug_closure_properties(&target, context, values);
@@ -301,6 +315,15 @@ fn eval_debug_closure_properties(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
     match target {
+        EvalClosureObjectTarget::ForeignContext { target, owner } => {
+            let pointer = owner.context_ptr();
+            if std::ptr::eq(pointer, context as *mut ElephcEvalContext) {
+                return eval_debug_closure_properties(target, context, values);
+            }
+            // The target's lease keeps its distinct defining context alive.
+            let defining_context = unsafe { pointer.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+            eval_debug_closure_properties(target, defining_context, values)
+        }
         EvalClosureObjectTarget::Named(name)
         | EvalClosureObjectTarget::BoundNamed { name, .. } => {
             let function = context
@@ -435,11 +458,13 @@ fn eval_debug_public_property(
         },
         value,
         is_reference: false,
+        owned_value: false,
+        numeric_name: false,
     }
 }
 
 /// Collects eval-declared object properties plus public dynamic properties.
-fn eval_debug_dynamic_object_properties(
+pub(super) fn eval_debug_dynamic_object_properties(
     object: RuntimeCellHandle,
     identity: u64,
     class_name: &str,
@@ -475,6 +500,8 @@ fn eval_debug_dynamic_object_properties(
                 visibility: eval_debug_property_visibility(class.name(), property.visibility()),
                 value,
                 is_reference: alias.is_some(),
+                owned_value: false,
+                numeric_name: false,
             });
         }
     }
@@ -517,6 +544,8 @@ fn eval_debug_append_dynamic_public_properties(
             },
             value,
             is_reference: false,
+            owned_value: false,
+            numeric_name: false,
         });
     }
     Ok(())
@@ -542,6 +571,8 @@ fn eval_debug_public_object_properties(
             },
             value,
             is_reference: false,
+            owned_value: false,
+            numeric_name: false,
         });
     }
     Ok(properties)

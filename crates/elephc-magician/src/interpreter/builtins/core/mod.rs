@@ -33,6 +33,8 @@ mod ob_get_status;
 mod ob_implicit_flush;
 mod ob_list_handlers;
 mod ob_start;
+mod native_date_debug;
+mod debug_hooks;
 mod print_r;
 mod var_dump;
 
@@ -52,6 +54,8 @@ pub(in crate::interpreter) use ob_implicit_flush::*;
 pub(in crate::interpreter) use ob_list_handlers::*;
 pub(in crate::interpreter) use ob_start::*;
 pub(in crate::interpreter) use print_r::*;
+pub(in crate::interpreter) use native_date_debug::*;
+pub(in crate::interpreter) use debug_hooks::*;
 pub(in crate::interpreter) use var_dump::*;
 
 /// Dispatches direct expression-level calls for core builtins.

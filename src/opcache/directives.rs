@@ -72,13 +72,9 @@ pub const OPCACHE_PRODUCT_NAME: &str = "Zend OPcache";
 /// Returns the targeted PHP language-version string reported under
 /// `['version']['version']`, using stable `8.<minor>.0` profile spellings.
 pub fn opcache_version_string(version_id: u32) -> &'static str {
-    match version_id {
-        80200 => "8.2.0",
-        80300 => "8.3.0",
-        80400 => "8.4.0",
-        // 80500 and any newer/unknown id fall back to the newest maintained profile.
-        _ => "8.5.0",
-    }
+    elephc_builtin_contract::PhpVersion::ALL.iter()
+        .copied().find(|profile| profile.version_id() == version_id)
+        .unwrap_or_default().version_string()
 }
 
 /// Returns the ordered list of `opcache.*` directives and their typed, normalized
@@ -1700,6 +1696,16 @@ mod tests {
     //!   `opcache_get_configuration()['directives']` capture.
 
     use super::*;
+
+    /// OPcache reports the selected stable minor profile, including PHP 8.6.
+    #[test]
+    fn version_strings_follow_shared_minor_profiles() {
+        assert_eq!(opcache_version_string(80500), "8.5.0");
+        assert_eq!(opcache_version_string(80600), "8.6.0");
+        for profile in elephc_builtin_contract::PhpVersion::ALL {
+            assert_eq!(opcache_version_string(profile.version_id()), profile.version_string());
+        }
+    }
 
     /// The 8.5 default set has exactly 54 directives (reference PHP 8.5.6).
     #[test]

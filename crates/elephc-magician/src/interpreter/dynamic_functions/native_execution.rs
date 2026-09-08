@@ -70,25 +70,11 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
 }
 
 /// Builds the positional runtime array passed to descriptor-compatible native invokers.
-fn build_native_function_arg_array(
+pub(in crate::interpreter) fn build_native_function_arg_array(
     bound_args: &BoundNativeFunctionArgs,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let arg_array = values.array_new(bound_args.values.len())?;
-    for (index, value) in bound_args.values.iter().copied().enumerate() {
-        let index = match values.int(index as i64) {
-            Ok(index) => index,
-            Err(status) => {
-                values.release(arg_array)?;
-                return Err(status);
-            }
-        };
-        if let Err(status) = values.array_set(arg_array, index, value) {
-            values.release(arg_array)?;
-            return Err(status);
-        }
-    }
-    Ok(arg_array)
+    values.argument_array(&bound_args.values)
 }
 
 /// Releases retained raw native-function by-reference staging slots without writeback.

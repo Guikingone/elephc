@@ -1,11 +1,12 @@
 //! Purpose:
-//! Audited DateInterval behavior, timelib diff, and final DateTime class-map injection.
+//! Test-only reference model for DateInterval behavior, timelib diff, and date declarations.
 //!
 //! Called from:
-//! - The DateTime checker metadata facade and sibling compliance modules.
+//! - DateTime's audited-model comparison and AST transcription tests.
 //!
 //! Key details:
-//! - Preserves the audited php-src DateTime semantics while the checker metadata stays split.
+//! - The parent module includes this reference under `cfg(test)` only.
+//! - Production uses direct AST declarations and does not parse this PHP reference source.
 
 #[allow(unused_imports)]
 use super::{
@@ -1454,9 +1455,11 @@ pub(super) fn datetime_timelib_diff_method() -> ClassMethod {
 $leftTimestamp = $this->timestamp;
 $leftMicrosecond = $this->microsecond;
 $leftTimezone = $this->timezone_name;
-$rightTimestamp = $targetObject->getTimestamp();
-$rightMicrosecond = $targetObject->getMicrosecond();
-$rightTimezone = $targetObject->getTimezone()->getName();
+$rightTimestamp = DateTime::__elephc_date_timestamp_get($targetObject);
+$rightMicrosecond = $targetObject instanceof DateTimeImmutable
+    ? DateTimeImmutable::__elephc_microsecond_of($targetObject)
+    : DateTime::__elephc_microsecond_of($targetObject);
+$rightTimezone = DateTime::__elephc_date_timezone_get($targetObject)->getName();
 $parsed = __elephc_timelib_diff(
     $leftTimestamp,
     $leftMicrosecond,

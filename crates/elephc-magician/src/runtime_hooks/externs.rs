@@ -365,6 +365,12 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_fatal(message_ptr: *const u8, message_len: u64);
     /// Mirrors Magician's signal-dispatch region into the generated runtime Fiber guard.
     pub(super) fn __elephc_eval_set_pcntl_dispatching(active: u64);
+    /// Writes an E_COMPILE_WARNING diagnostic governed by its own mask bit.
+    pub(super) fn __elephc_eval_compile_warning(message_ptr: *const u8, message_len: u64);
+    /// Emits one eval notice from a borrowed PHP byte string.
+    pub(super) fn __elephc_eval_notice(message_ptr: *const u8, message_len: u64);
+    /// Begins or ends a PHP silence scope using the raw shared error mask.
+    pub(super) fn __elephc_eval_suppression(previous: i64, finishing: u64) -> i64;
     /// Emits one eval deprecation from a borrowed UTF-8 message buffer.
     pub(super) fn __elephc_eval_deprecated(message_ptr: *const u8, message_len: u64);
     /// Gets or updates the active eval error-reporting mask.

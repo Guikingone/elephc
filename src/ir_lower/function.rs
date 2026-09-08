@@ -82,7 +82,7 @@ pub(crate) fn lower_main(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -204,7 +204,7 @@ pub(crate) fn lower_user_function(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -313,7 +313,7 @@ pub(crate) fn lower_class_method(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -438,7 +438,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &bind_kill_sites,
         &retype_sites,
         &mixed_storage_store_sites,
@@ -549,7 +549,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &bind_kill_sites,
         &retype_sites,
         &mixed_storage_store_sites,
@@ -604,7 +604,14 @@ pub(crate) fn lower_property_init_thunk(
         return;
     }
     let web = module.web;
-    let body = property_init_body(class_info);
+    // By-name allocation already zeroes compact Throwable fields. Keep a thunk
+    // so runtime metadata retains declared defaults, but do not allocate generic
+    // trace/previous property owners that compact construction would overwrite.
+    let body = if crate::types::builtin_classes::is_compact_throwable_class(class_name) {
+        Vec::new()
+    } else {
+        property_init_body(class_info)
+    };
     let function_name = format!("_class_propinit_{}", class_info.class_id);
     let this_type = PhpType::Object(class_name.to_string());
     let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
@@ -653,7 +660,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -1008,7 +1015,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -1216,7 +1223,7 @@ fn lower_closure_function_with_signature(
         parent.throw_access_sites,
         parent.builtin_call_types,
         parent.loop_storage_types,
-        parent.string_incdec_locals,
+        parent.boxed_string_locals,
         parent.bind_kill_sites,
         parent.retype_sites,
         parent.mixed_storage_store_sites,
@@ -1257,7 +1264,7 @@ fn lower_body_into_function(
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     loop_storage_types: &crate::types::LoopStorageTypes,
-    string_incdec_locals: &std::collections::HashSet<(String, String)>,
+    boxed_string_locals: &std::collections::HashSet<(String, String)>,
     bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     retype_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     mixed_storage_store_sites: &std::collections::HashMap<
@@ -1310,7 +1317,7 @@ fn lower_body_into_function(
         throw_access_sites,
         builtin_call_types,
         loop_storage_types,
-        string_incdec_locals,
+        boxed_string_locals,
         bind_kill_sites,
         retype_sites,
         mixed_storage_store_sites,

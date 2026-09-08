@@ -33,7 +33,7 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
             return_owner,
             called_class_name,
             strict_types,
-            result,
+            result.value,
             context,
             values,
         ),

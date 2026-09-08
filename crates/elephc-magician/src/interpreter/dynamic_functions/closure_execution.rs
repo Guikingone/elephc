@@ -100,7 +100,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         &evaluated_args,
     );
     let result = with_lexical_strict_types(context, function.strict_types(), |context| {
-        execute_statements(function.body(), context, &mut function_scope, values)
+        execute_statements_with_return_ownership(function.body(), context, &mut function_scope, values, false)
     });
     let persist_result = persist_static_locals(
         context,
@@ -407,7 +407,7 @@ fn eval_closure_with_optional_binding(
         &evaluated_args,
     );
     let result = with_lexical_strict_types(context, function.strict_types(), |context| {
-        execute_statements(function.body(), context, &mut function_scope, values)
+        execute_statements_with_return_ownership(function.body(), context, &mut function_scope, values, false)
     });
     let persist_result = persist_static_locals(
         context,

@@ -90,7 +90,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     // what turned `if (…) { $a = 42; } else { $a = "hello"; } echo strlen($a);` into a compiler
     // PANIC — "strlen cannot lower checked operand type Int" — from the copy of the `echo` sunk
     // into the `int` arm. `Mixed` on every store makes every read a boxed read, which is exactly
-    // the type the checker bound for the name. This mirrors `boxed_incdec_storage_type`, the other
+    // the type the checker bound for the name. This mirrors `boxed_string_storage_type`, the other
     // whole-frame boxed-storage contract, which forces the same substitution inside `store_local`.
     //
     // That is also what makes the checker's flow NARROWING harmless here. Inside

@@ -1162,7 +1162,7 @@ fn emit_array_get_in_bounds_aarch64(
     }
     match elem_ty {
         PhpType::Void | PhpType::Never => {
-            abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
+            emit_array_get_null_fallback(ctx, result_ty, true);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction(
@@ -1257,7 +1257,7 @@ fn emit_array_get_in_bounds_x86_64(
     }
     match elem_ty {
         PhpType::Void | PhpType::Never => {
-            abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
+            emit_array_get_null_fallback(ctx, result_ty, true);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction(
@@ -2200,7 +2200,7 @@ fn require_array_get_result(elem_ty: &PhpType, inst: &Instruction) -> Result<()>
         return Ok(());
     }
     if matches!(elem_ty, PhpType::Void | PhpType::Never)
-        && matches!(result_ty, PhpType::Void | PhpType::Never)
+        && matches!(result_ty, PhpType::Void | PhpType::Never | PhpType::Mixed)
     {
         return Ok(());
     }

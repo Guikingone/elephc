@@ -94,6 +94,9 @@ pub(super) fn lower_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::Date => {
             lower_date_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::Mktime { utc } => {
+            lower_mktime_args(ctx, name, sig, args, utc)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
             lower_json_decode_args(ctx, sig, args)
         }
@@ -144,7 +147,9 @@ pub(super) fn lower_builtin_call_args(
         {
             lower_positional_builtin_args_with_signature(ctx, sig, args)
         }
-        _ => lower_args_with_signature(ctx, sig, args),
+        _ => lower_args_with_signature_and_spread_bounds(
+            ctx, sig, args, Some(SpreadOverflowError::Builtin(name)),
+        ),
     };
     for (name, ty) in pcntl_outputs {
         ctx.set_local_logical_type(&name, ty);

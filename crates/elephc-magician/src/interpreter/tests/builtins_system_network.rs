@@ -327,6 +327,29 @@ return function_exists("mktime");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Silence restores masks on normal and exceptional exits and keeps explicit changes.
+#[test]
+fn execute_program_error_suppression_restores_masks() {
+    let program = parse_fragment(br#"
+error_reporting(E_NOTICE);
+echo @error_reporting(), ":", error_reporting(), ":";
+function change_mask() { error_reporting(E_WARNING); return error_reporting(); }
+echo @change_mask(), ":", error_reporting(), ":";
+error_reporting(E_NOTICE);
+function throw_silenced() { throw new Exception("silenced"); }
+try { @throw_silenced(); } catch (Exception $e) {}
+@date_default_timezone_set("Invalid/Suppressed");
+date_default_timezone_set("Invalid/Notice");
+echo error_reporting();
+"#).expect("silence fixture parses");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("silence fixture executes");
+    assert_eq!(values.output, "0:8:2:2:8");
+    assert_eq!(values.warnings.len(), 1);
+    assert!(values.warnings[0].contains("Invalid/Notice"));
+}
+
 /// Verifies eval UTC calendar builtins and timezone probes are callable-visible.
 #[test]
 fn execute_program_dispatches_extended_calendar_builtins() {

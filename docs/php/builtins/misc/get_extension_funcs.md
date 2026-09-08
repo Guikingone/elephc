@@ -2,7 +2,7 @@
 title: "get_extension_funcs()"
 description: "Returns functions exported by a loaded extension. Weak calls coerce int, float, and bool to string and deprecate null; strict calls accept only string, while arrays, resources, and non-Stringable objects throw TypeError. Extension names are case-insensitive."
 sidebar:
-  order: 328
+  order: 612
 ---
 
 ## get_extension_funcs()

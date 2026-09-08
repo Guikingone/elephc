@@ -129,6 +129,8 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
         "Throwable",
         "Error",               // _spl_error_class_id
         "TypeError",           // _spl_type_error_class_id
+        "CompileError",        // parent of runtime ParseError
+        "ParseError",          // _spl_parse_error_class_id
         "ValueError",          // _spl_value_error_class_id
         "ArithmeticError",     // _spl_arithmetic_error_class_id
         "DivisionByZeroError", // _spl_division_by_zero_error_class_id

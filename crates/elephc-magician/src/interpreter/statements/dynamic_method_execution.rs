@@ -106,7 +106,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         &evaluated_args,
     );
     let result = with_lexical_strict_types(context, method.strict_types(), |context| {
-        execute_statements(method.body(), context, &mut method_scope, values)
+        execute_statements_with_return_ownership(method.body(), context, &mut method_scope, values, false)
     });
     let persist_result = persist_static_locals(
         context,
@@ -233,7 +233,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
         &evaluated_args,
     );
     let result = with_lexical_strict_types(context, method.strict_types(), |context| {
-        execute_statements(method.body(), context, &mut method_scope, values)
+        execute_statements_with_return_ownership(method.body(), context, &mut method_scope, values, false)
     });
     let persist_result = persist_static_locals(
         context,

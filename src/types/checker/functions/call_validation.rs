@@ -578,8 +578,11 @@ impl Checker {
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                     }
-                    if coercive_param_binding
-                        && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                    let nullable_scalar_binding = expected_ty.codegen_repr() == PhpType::TaggedScalar
+                        && !sig.ref_params.get(param_idx).copied().unwrap_or(false);
+                    if (coercive_param_binding
+                        && sig.declared_params.get(param_idx).copied().unwrap_or(false))
+                        || nullable_scalar_binding
                     {
                         self.require_bound_param_arg_type(
                             expected_ty,

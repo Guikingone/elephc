@@ -3440,9 +3440,9 @@ method("diff")
         s_assign("leftTimestamp", e_this_prop("timestamp")),
         s_assign("leftMicrosecond", e_this_prop("microsecond")),
         s_assign("leftTimezone", e_this_prop("timezone_name")),
-        s_assign("rightTimestamp", e_method_call(e_var("targetObject"), "getTimestamp", vec![])),
-        s_assign("rightMicrosecond", e_method_call(e_var("targetObject"), "getMicrosecond", vec![])),
-        s_assign("rightTimezone", e_method_call(e_method_call(e_var("targetObject"), "getTimezone", vec![]), "getName", vec![])),
+        s_assign("rightTimestamp", e_static_call("DateTime", "__elephc_date_timestamp_get", vec![e_var("targetObject")])),
+        s_assign("rightMicrosecond", e_ternary(e_instance_of(e_var("targetObject"), "DateTimeImmutable"), e_static_call("DateTimeImmutable", "__elephc_microsecond_of", vec![e_var("targetObject")]), e_static_call("DateTime", "__elephc_microsecond_of", vec![e_var("targetObject")]))),
+        s_assign("rightTimezone", e_method_call(e_static_call("DateTime", "__elephc_date_timezone_get", vec![e_var("targetObject")]), "getName", vec![])),
         s_assign("parsed", e_call("__elephc_timelib_diff", vec![e_var("leftTimestamp"), e_var("leftMicrosecond"), e_var("leftTimezone"), e_var("rightTimestamp"), e_var("rightMicrosecond"), e_var("rightTimezone")])),
         s_assign("interval", e_new("DateInterval", vec![e_str("PT0S")])),
         s_prop_assign(e_var("interval"), "y", e_index(e_var("parsed"), e_str("y"))),
@@ -4287,7 +4287,7 @@ method("__elephc_idate")
             vec![],
             None,
         ),
-        s_assign("valid", e_array(vec![e_str("B"), e_str("d"), e_str("G"), e_str("g"), e_str("H"), e_str("h"), e_str("I"), e_str("i"), e_str("L"), e_str("m"), e_str("N"), e_str("n"), e_str("s"), e_str("t"), e_str("U"), e_str("W"), e_str("w"), e_str("Y"), e_str("y"), e_str("z"), e_str("Z")])),
+        s_assign("valid", e_array(vec![e_str("B"), e_str("d"), e_str("j"), e_str("G"), e_str("g"), e_str("H"), e_str("h"), e_str("I"), e_str("i"), e_str("L"), e_str("m"), e_str("N"), e_str("n"), e_str("o"), e_str("s"), e_str("t"), e_str("U"), e_str("W"), e_str("w"), e_str("Y"), e_str("y"), e_str("z"), e_str("Z")])),
         s_if(
             e_not(e_call("in_array", vec![e_var("format"), e_var("valid"), e_bool(true)])),
             vec![
@@ -4297,15 +4297,20 @@ method("__elephc_idate")
             vec![],
             None,
         ),
-        s_if(
-            e_binop(e_var("timestamp"), BinOp::StrictEq, e_null()),
-            vec![
-                s_return(e_call("intval", vec![e_call("date", vec![e_var("format")])])),
-            ],
-            vec![],
-            None,
-        ),
-        s_return(e_call("intval", vec![e_call("date", vec![e_var("format"), e_call("intval", vec![e_var("timestamp")])])])),
+        s_assign("numericFormat", e_ternary(e_binop(e_var("format"), BinOp::StrictEq, e_str("y")), e_str("Y"), e_var("format"))),
+        s_assign("value", e_call("intval", vec![e_call("date", vec![e_var("numericFormat"), e_var("timestamp")])])),
+        s_if(e_binop(e_var("format"), BinOp::StrictEq, e_str("y")),
+            vec![s_assign("value", e_binop(e_var("value"), BinOp::Mod, e_int(100)))], vec![], None),
+        s_assign("value", e_binop(e_var("value"), BinOp::Mod, e_int(4294967296))),
+        s_if(e_binop(e_var("value"), BinOp::GtEq, e_int(2147483648)),
+            vec![s_assign("value", e_binop(e_var("value"), BinOp::Sub, e_int(4294967296)))], vec![], None),
+        s_if(e_binop(e_var("value"), BinOp::Lt, e_neg(e_int(2147483648))),
+            vec![s_assign("value", e_binop(e_var("value"), BinOp::Add, e_int(4294967296)))], vec![], None),
+        s_if(e_binop(e_var("value"), BinOp::StrictEq, e_neg(e_int(1))), vec![
+            s_expr(e_call("__elephc_diag_warning", vec![e_str("\nWarning: idate(): Unrecognized date format token"), e_var("sourceLine"), e_const("E_WARNING")])),
+            s_return(e_bool(false)),
+        ], vec![], None),
+        s_return(e_var("value")),
     ])
 }
 
@@ -4708,7 +4713,7 @@ method("__elephc_debug_dump")
         s_expr(e_call("__elephc_var_dump_indent", vec![e_neg(e_int(2))])),
         s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"date\"]=>\n"))),
         s_echo(e_var("field_pad")),
-        s_expr(e_call("var_dump", vec![e_method_call(e_this(), "format", vec![e_str("x-m-d H:i:s.u")])])),
+        s_expr(e_call("var_dump", vec![e_static_call("DateTime", "__elephc_date_format", vec![e_this(), e_str("x-m-d H:i:s.u")])])),
         s_if(
             e_this_prop("__elephc_is_localtime"),
             vec![
@@ -4735,7 +4740,7 @@ method("__elephc_print_r_dump")
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
         s_echo(e_binop(e_call("get_class", vec![e_this()]), BinOp::Concat, e_str(" Object\n(\n"))),
         s_expr(e_call("__elephc_print_r_object_properties", vec![e_this()])),
-        s_echo(e_binop(e_binop(e_str("    [date] => "), BinOp::Concat, e_method_call(e_this(), "format", vec![e_str("x-m-d H:i:s.u")])), BinOp::Concat, e_str("\n"))),
+        s_echo(e_binop(e_binop(e_str("    [date] => "), BinOp::Concat, e_static_call("DateTime", "__elephc_date_format", vec![e_this(), e_str("x-m-d H:i:s.u")])), BinOp::Concat, e_str("\n"))),
         s_if(
             e_this_prop("__elephc_is_localtime"),
             vec![
@@ -9055,9 +9060,9 @@ method("diff")
         s_assign("leftTimestamp", e_this_prop("timestamp")),
         s_assign("leftMicrosecond", e_this_prop("microsecond")),
         s_assign("leftTimezone", e_this_prop("timezone_name")),
-        s_assign("rightTimestamp", e_method_call(e_var("targetObject"), "getTimestamp", vec![])),
-        s_assign("rightMicrosecond", e_method_call(e_var("targetObject"), "getMicrosecond", vec![])),
-        s_assign("rightTimezone", e_method_call(e_method_call(e_var("targetObject"), "getTimezone", vec![]), "getName", vec![])),
+        s_assign("rightTimestamp", e_static_call("DateTime", "__elephc_date_timestamp_get", vec![e_var("targetObject")])),
+        s_assign("rightMicrosecond", e_ternary(e_instance_of(e_var("targetObject"), "DateTimeImmutable"), e_static_call("DateTimeImmutable", "__elephc_microsecond_of", vec![e_var("targetObject")]), e_static_call("DateTime", "__elephc_microsecond_of", vec![e_var("targetObject")]))),
+        s_assign("rightTimezone", e_method_call(e_static_call("DateTime", "__elephc_date_timezone_get", vec![e_var("targetObject")]), "getName", vec![])),
         s_assign("parsed", e_call("__elephc_timelib_diff", vec![e_var("leftTimestamp"), e_var("leftMicrosecond"), e_var("leftTimezone"), e_var("rightTimestamp"), e_var("rightMicrosecond"), e_var("rightTimezone")])),
         s_assign("interval", e_new("DateInterval", vec![e_str("PT0S")])),
         s_prop_assign(e_var("interval"), "y", e_index(e_var("parsed"), e_str("y"))),
@@ -10053,7 +10058,7 @@ method("__elephc_debug_dump")
         s_expr(e_call("__elephc_var_dump_indent", vec![e_neg(e_int(2))])),
         s_echo(e_binop(e_var("field_pad"), BinOp::Concat, e_str("[\"date\"]=>\n"))),
         s_echo(e_var("field_pad")),
-        s_expr(e_call("var_dump", vec![e_method_call(e_this(), "format", vec![e_str("x-m-d H:i:s.u")])])),
+        s_expr(e_call("var_dump", vec![e_static_call("DateTime", "__elephc_date_format", vec![e_this(), e_str("x-m-d H:i:s.u")])])),
         s_if(
             e_this_prop("__elephc_is_localtime"),
             vec![
@@ -10080,7 +10085,7 @@ method("__elephc_print_r_dump")
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
         s_echo(e_binop(e_call("get_class", vec![e_this()]), BinOp::Concat, e_str(" Object\n(\n"))),
         s_expr(e_call("__elephc_print_r_object_properties", vec![e_this()])),
-        s_echo(e_binop(e_binop(e_str("    [date] => "), BinOp::Concat, e_method_call(e_this(), "format", vec![e_str("x-m-d H:i:s.u")])), BinOp::Concat, e_str("\n"))),
+        s_echo(e_binop(e_binop(e_str("    [date] => "), BinOp::Concat, e_static_call("DateTime", "__elephc_date_format", vec![e_this(), e_str("x-m-d H:i:s.u")])), BinOp::Concat, e_str("\n"))),
         s_if(
             e_this_prop("__elephc_is_localtime"),
             vec![

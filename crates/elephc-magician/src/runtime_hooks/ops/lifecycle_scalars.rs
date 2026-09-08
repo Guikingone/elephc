@@ -80,6 +80,29 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(())
     }
 
+    /// Emits a preformatted compile warning without runtime-handler dispatch.
+    fn compile_warning(&mut self, message: &str) -> Result<(), EvalStatus> {
+        unsafe { __elephc_eval_compile_warning(message.as_ptr(), message.len() as u64); }
+        Ok(())
+    }
+
+    /// Emits raw PHP notice bytes through the E_NOTICE-aware runtime helper.
+    fn notice(&mut self, message: &[u8]) -> Result<(), EvalStatus> {
+        unsafe { __elephc_eval_notice(message.as_ptr(), message.len() as u64); }
+        Ok(())
+    }
+
+    /// Saves the unfiltered shared error mask before entering an eval silence scope.
+    fn begin_error_suppression(&mut self) -> Result<i64, EvalStatus> {
+        Ok(unsafe { __elephc_eval_suppression(0, 0) })
+    }
+
+    /// Restores the saved mask according to PHP's END_SILENCE rule.
+    fn end_error_suppression(&mut self, previous: i64) -> Result<(), EvalStatus> {
+        unsafe { __elephc_eval_suppression(previous, 1); }
+        Ok(())
+    }
+
     /// Emits one PHP deprecation through the generated runtime diagnostic helper.
     fn deprecated(&mut self, message: &str) -> Result<(), EvalStatus> {
         unsafe {

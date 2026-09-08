@@ -40,6 +40,21 @@ macro_rules! constant {
     (@flag) => { false };
 }
 
+/// Resolves POSIX locale categories for Darwin or Linux without duplicating backend tables.
+pub fn locale_category_value(name: &str, is_darwin: bool) -> Option<i64> {
+    let (darwin, linux) = match name {
+        "LC_ALL" => (0, 6),
+        "LC_COLLATE" => (1, 3),
+        "LC_CTYPE" => (2, 0),
+        "LC_MESSAGES" => (6, 5),
+        "LC_MONETARY" => (3, 4),
+        "LC_NUMERIC" => (4, 1),
+        "LC_TIME" => (5, 2),
+        _ => return None,
+    };
+    Some(if is_darwin { darwin } else { linux })
+}
+
 pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("ARRAY_FILTER_USE_BOTH", Standard, ConstValue::Int(1)),
     constant!("ARRAY_FILTER_USE_KEY", Standard, ConstValue::Int(2)),
@@ -244,6 +259,13 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("JSON_THROW_ON_ERROR", Json, ConstValue::Int(4194304)),
     constant!("JSON_UNESCAPED_SLASHES", Json, ConstValue::Int(64)),
     constant!("JSON_UNESCAPED_UNICODE", Json, ConstValue::Int(256)),
+    constant!("LC_ALL", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_COLLATE", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_CTYPE", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_MESSAGES", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_MONETARY", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_NUMERIC", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_TIME", Standard, ConstValue::TargetDependent(ConstType::Int)),
     constant!("LOCK_EX", Standard, ConstValue::Int(2)),
     constant!("LOCK_NB", Standard, ConstValue::Int(4)),
     constant!("LOCK_SH", Standard, ConstValue::Int(1)),
@@ -436,3 +458,24 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("SUNFUNCS_RET_STRING", Date, ConstValue::Int(1)),
     constant!("SUNFUNCS_RET_TIMESTAMP", Date, ConstValue::Int(0)),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Locale constants use each target's native categories and remain catalogued.
+    #[test]
+    fn locale_categories_match_darwin_and_linux() {
+        for (name, darwin, linux) in [
+            ("LC_ALL", 0, 6), ("LC_COLLATE", 1, 3), ("LC_CTYPE", 2, 0),
+            ("LC_MESSAGES", 6, 5), ("LC_MONETARY", 3, 4),
+            ("LC_NUMERIC", 4, 1), ("LC_TIME", 5, 2),
+        ] {
+            assert_eq!(locale_category_value(name, true), Some(darwin));
+            assert_eq!(locale_category_value(name, false), Some(linux));
+            assert_eq!(crate::lookup_constant(name).unwrap().value,
+                ConstValue::TargetDependent(ConstType::Int));
+        }
+        assert_eq!(locale_category_value("unknown", true), None);
+    }
+}

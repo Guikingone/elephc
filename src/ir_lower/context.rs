@@ -212,7 +212,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
     /// target. Those locals get boxed `Mixed` frame storage from their first store, so
     /// every read of the slot is already a boxed load instead of an owned string detach.
-    pub string_incdec_locals: &'m HashSet<(String, String)>,
+    pub boxed_string_locals: &'m HashSet<(String, String)>,
     /// Spans of the `unset()` ARGUMENTS whose local binding the CHECKER decided to kill
     /// (`CheckResult::local_bind_kill_sites`), each mapped to the SET of locals killed at that
     /// position. At one of these spans `unset_local` abandons the frame slot after releasing its
@@ -317,7 +317,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
-        string_incdec_locals: &'m HashSet<(String, String)>,
+        boxed_string_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
         retype_sites: &'m HashMap<Span, HashSet<String>>,
         mixed_storage_store_sites: &'m HashMap<Span, HashSet<String>>,
@@ -371,7 +371,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             throw_access_sites,
             builtin_call_types,
             loop_storage_types,
-            string_incdec_locals,
+            boxed_string_locals,
             bind_kill_sites,
             retype_sites,
             mixed_storage_store_sites,
@@ -735,19 +735,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns the frame storage type a local must use, boxing `string` locals that PHP's
     /// `++`/`--` can retype.
     ///
-    /// `"9"++` is `int(10)`, so a local the checker recorded as a string increment/decrement
-    /// target cannot keep concrete `Str` storage. Widening the slot lazily at the increment
+    /// String increment/decrement or a null-storing unset cannot keep concrete `Str`
+    /// storage. Widening the slot lazily at the operation
     /// is not enough: the slot type is a whole-frame property, so every OTHER `Str`-typed
     /// read of the same slot would then have to detach an owned copy out of the boxed cell
     /// (`__rt_mixed_cast_string`), leaking one heap block per executed read. Boxing from the
     /// first store — including the incoming-parameter store — keeps every access on the
     /// ordinary boxed-Mixed path instead.
-    fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
+    fn boxed_string_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
         if !matches!(php_type.codegen_repr(), PhpType::Str) {
             return php_type;
         }
         let key = (self.loop_storage_scope.clone(), name.to_string());
-        if self.string_incdec_locals.contains(&key) {
+        if self.boxed_string_locals.contains(&key) {
             return PhpType::Mixed;
         }
         php_type
@@ -764,7 +764,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return *slot;
         }
         let boxed_php_type = if kind == LocalKind::PhpLocal {
-            self.boxed_incdec_storage_type(name, php_type.clone())
+            self.boxed_string_storage_type(name, php_type.clone())
         } else {
             php_type.clone()
         };
@@ -934,6 +934,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let name = format!("__eir_tmp{}", self.hidden_temp_counter);
         self.hidden_temp_counter += 1;
         self.declare_local_with_kind(&name, php_type, LocalKind::HiddenTemp);
+        name
+    }
+
+    /// Declares a non-owning alias for an already evaluated value used by synthetic AST.
+    pub(crate) fn declare_borrowed_hidden_temp(&mut self, php_type: PhpType) -> String {
+        let name = format!("__eir_tmp{}", self.hidden_temp_counter);
+        self.hidden_temp_counter += 1;
+        self.declare_local_with_kind(&name, php_type, LocalKind::BorrowedTemp);
         name
     }
 
@@ -1426,13 +1434,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///
     /// The caller must first retain the incoming value because borrowing operations
     /// can return storage that aliases the previous occupant (for example,
-    /// `$value = trim($value)`). When the slot's storage type already needs lifetime
-    /// tracking this emits the eager load+release pair. When it does not, the slot can
-    /// STILL be widened to refcounted storage by a store lowered later that reaches
-    /// this one through a loop back-edge (e.g. an inner `for` counter re-initialized
-    /// by the outer body but widened Int→Mixed by its checked-add update). The storage
-    /// type visible here is stale in that case, so inside loops a deferred
-    /// `release_local_slot` is emitted instead: the backend releases the occupant
+    /// `$value = trim($value)`). Outside loops this emits the eager load+release pair
+    /// for tracked storage. Inside loops even tracked storage can change representation
+    /// later (for example Str→Mixed after unset), so non-reference slots use deferred
+    /// `release_local_slot`: the backend releases the occupant
     /// using the final widened storage type, and `prune_untracked_release_local_slot_ops`
     /// erases the op when the slot never widens (issue #534: without this, the
     /// previous outer iteration's Mixed box leaked on every re-initialization).
@@ -1443,7 +1448,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let storage_type = self.builder.local_php_type(slot);
-        if Ownership::php_type_needs_lifetime_tracking(&storage_type) {
+        if Ownership::php_type_needs_lifetime_tracking(&storage_type)
+            && (self.loop_stack.is_empty() || self.is_ref_bound_local(name))
+        {
             self.release_stored_local_value(name, slot, span);
             return;
         }
@@ -1510,7 +1517,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else if previous_kind == LocalKind::PhpLocal {
             // A `string` local PHP's `++`/`--` can retype uses boxed Mixed storage from its
             // FIRST store, so no read of the slot is ever typed `Str` against boxed storage.
-            self.boxed_incdec_storage_type(name, php_type)
+            self.boxed_string_storage_type(name, php_type)
         } else {
             php_type
         };
@@ -1535,7 +1542,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         ) && previous_kind != LocalKind::StaticLocal;
         let release_source_after_store =
             self.value_needs_release_after_retaining_store(value)
-                && !matches!(previous_kind, LocalKind::HiddenTemp | LocalKind::OwnedTemp)
+                && !matches!(previous_kind,
+                    LocalKind::HiddenTemp | LocalKind::OwnedTemp | LocalKind::BorrowedTemp)
                 && !transfer_catch_source_to_store;
         let transfer_callable_source_to_store = source_is_owning_temporary
             && matches!(php_type.codegen_repr(), PhpType::Callable);
@@ -2438,6 +2446,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             return false;
         }
+        if self.builder.value_defining_op(value.value) == Some(Op::LanguageConstructCall) {
+            // Only language constructs with an explicit producer ownership
+            // contract (currently opaque eval) may be consumed by cleanup.
+            return self.builder.value_ownership(value.value) == Ownership::Owned;
+        }
         if matches!(
             self.builder.value_defining_instruction(value.value)
                 .and_then(|inst| inst.immediate.as_ref()),
@@ -2636,6 +2649,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         else {
             return false;
         };
+        // By-value native string returns own a persisted result (or immutable
+        // literal). Keep the existing reference-return policy for actual aliases.
+        if self.builder.value_php_type(result).codegen_repr() == PhpType::Str
+            && !self.functions.get(function_name).is_some_and(|signature| signature.by_ref_return)
+        {
+            return false;
+        }
         let Some(return_alias) = self.return_alias_summaries.function(function_name) else {
             return false;
         };

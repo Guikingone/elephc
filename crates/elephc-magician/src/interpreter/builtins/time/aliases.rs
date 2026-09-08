@@ -46,8 +46,22 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_call(
     {
         return Ok(None);
     }
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    eval_date_procedural_alias_with_evaluated_args(name, evaluated_args, context, values)
+    let mut owners = Vec::new();
+    let mut result = (|| {
+        let evaluated_args = eval_call_arg_values_with_temporaries(
+            args, context, scope, values, Some(&mut owners),
+        )?;
+        eval_date_procedural_alias_with_evaluated_args(name, evaluated_args, context, values)
+    })();
+    let returned = result.as_ref().ok().copied().flatten();
+    for owner in owners {
+        if returned == Some(owner) { continue; }
+        let cleanup = eval_release_value(context, values, owner);
+        if result.is_ok() {
+            if let Err(status) = cleanup { result = Err(status); }
+        }
+    }
+    result
 }
 
 /// Attempts to execute one procedural date/time alias from positional runtime values.
@@ -82,134 +96,11 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_with_evaluated_args(
     if eval_date_alias_should_fall_back_to_builtin(&name, &evaluated_args) {
         return Ok(None);
     }
-    let args = bind_date_alias_args(&name, evaluated_args, values)?;
+    let args = bind_evaluated_builtin_args(&name, evaluated_args, context, values)?;
     let result = eval_date_alias_result(&name, args, context, values)?;
     Ok(Some(result))
 }
 
-/// Binds evaluated procedural-date arguments by PHP-visible parameter name and order.
-fn bind_date_alias_args(
-    name: &str,
-    evaluated_args: Vec<EvaluatedCallArg>,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
-        return Ok(evaluated_args.into_iter().map(|arg| arg.value).collect());
-    }
-    let params = date_alias_param_names(name).ok_or(EvalStatus::RuntimeFatal)?;
-    let mut bound = vec![None; params.len()];
-    let mut next_positional = 0;
-    for arg in evaluated_args {
-        if let Some(arg_name) = arg.name {
-            bind_builtin_named_arg(params, &mut bound, &arg_name, arg.value)?;
-        } else {
-            bind_dynamic_positional_arg(&mut bound, &mut next_positional, arg.value)?;
-        }
-    }
-    let last = bound
-        .iter()
-        .rposition(Option::is_some)
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    let mut result = Vec::with_capacity(last + 1);
-    for (index, value) in bound.into_iter().take(last + 1).enumerate() {
-        match value {
-            Some(value) => result.push(value),
-            None => result.push(date_alias_default(name, index, values)?),
-        }
-    }
-    Ok(result)
-}
-
-/// Returns canonical PHP parameter names for every procedural date alias handled here.
-fn date_alias_param_names(name: &str) -> Option<&'static [&'static str]> {
-    Some(match name {
-        "idate" => &["format", "timestamp"],
-        "date_create" | "date_create_immutable" => &["datetime", "timezone"],
-        "date_create_from_format" | "date_create_immutable_from_format" => {
-            &["format", "datetime", "timezone"]
-        }
-        "date_parse_from_format" | "strptime" => &["format", "datetime"],
-        "date_parse" | "date_interval_create_from_date_string" => &["datetime"],
-        "date_sun_info" => &["timestamp", "latitude", "longitude"],
-        "cal_days_in_month" => &["calendar", "month", "year"],
-        "date_sunrise" | "date_sunset" => {
-            &["timestamp", "returnFormat", "latitude", "longitude", "zenith", "utcOffset"]
-        }
-        "timezone_name_from_abbr" => &["abbr", "utcOffset", "isDST"],
-        "cal_to_jd" => &["calendar", "month", "day", "year"],
-        "date_date_set" => &["object", "year", "month", "day"],
-        "cal_from_jd" => &["julian_day", "calendar"],
-        "cal_info" => &["calendar"],
-        "gregoriantojd" | "juliantojd" | "frenchtojd" | "jewishtojd" => {
-            &["month", "day", "year"]
-        }
-        "jdtogregorian" | "jdtojulian" | "jdtofrench" | "jdtounix" => &["julian_day"],
-        "jdtojewish" => &["julian_day", "hebrew", "flags"],
-        "jddayofweek" | "jdmonthname" => &["julian_day", "mode"],
-        "unixtojd" => &["timestamp"],
-        "easter_days" | "easter_date" => &["year", "mode"],
-        "gettimeofday" => &["as_float"],
-        "date_get_last_errors" | "timezone_abbreviations_list" | "timezone_version_get" => &[],
-        "strftime" | "gmstrftime" => &["format", "timestamp"],
-        "timezone_open" => &["timezone"],
-        "timezone_identifiers_list" => &["timezoneGroup", "countryCode"],
-        "timezone_location_get" | "date_timestamp_get" | "date_timezone_get"
-        | "date_offset_get" | "timezone_name_get" => &["object"],
-        "timezone_transitions_get" => &["object", "timestampBegin", "timestampEnd"],
-        "date_diff" => &["baseObject", "targetObject", "absolute"],
-        "date_format" | "date_interval_format" => &["object", "format"],
-        "date_add" | "date_sub" => &["object", "interval"],
-        "date_modify" => &["object", "modifier"],
-        "date_timestamp_set" => &["object", "timestamp"],
-        "date_timezone_set" => &["object", "timezone"],
-        "date_isodate_set" => &["object", "year", "week", "dayOfWeek"],
-        "date_time_set" => &["object", "hour", "minute", "second", "microsecond"],
-        "timezone_offset_get" => &["object", "datetime"],
-        _ => return None,
-    })
-}
-
-/// Materializes optional defaults needed when a named call skips an earlier parameter.
-fn date_alias_default(
-    name: &str,
-    index: usize,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    match (name, index) {
-        ("date_create" | "date_create_immutable", 0) => values.string("now"),
-        ("timezone_name_from_abbr", 1 | 2) | ("cal_info", 0) => values.int(-1),
-        ("timezone_identifiers_list", 0) => values.int(EVAL_DATETIMEZONE_ALL),
-        ("date_sunrise" | "date_sunset", 1) => values.int(1),
-        ("timezone_transitions_get", 1) => values.int(i64::MIN),
-        ("timezone_transitions_get", 2) => values.int(2_147_483_647),
-        ("date_diff", 2) | ("gettimeofday", 0) | ("jdtojewish", 1) => {
-            values.bool_value(false)
-        }
-        ("jdtojewish", 2)
-        | ("jddayofweek", 1)
-        | ("easter_days" | "easter_date", 1)
-        | ("date_time_set", 3 | 4) => {
-            values.int(0)
-        }
-        ("date_isodate_set", 3) => values.int(1),
-        (_, _) if date_alias_param_is_nullable_default(name, index) => values.null(),
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
-}
-
-/// Returns whether one procedural alias parameter has PHP's null default.
-fn date_alias_param_is_nullable_default(name: &str, index: usize) -> bool {
-    matches!(
-        (name, index),
-        ("idate", 1)
-            | ("date_create" | "date_create_immutable", 1)
-            | ("date_create_from_format" | "date_create_immutable_from_format", 2)
-            | ("unixtojd" | "easter_days" | "easter_date", 0)
-            | ("strftime" | "gmstrftime", 1)
-            | ("timezone_identifiers_list", 1)
-            | ("date_sunrise" | "date_sunset", 2..=5)
-    )
-}
 
 /// Dispatches a normalized alias name to the equivalent runtime operation.
 fn eval_date_alias_result(
@@ -304,7 +195,9 @@ fn eval_date_alias_result(
         }
         "strftime" => eval_strftime_alias(false, args, context, values),
         "gmstrftime" => eval_strftime_alias(true, args, context, values),
-        "timezone_open" => eval_new_datetime_alias("DateTimeZone", args, context, values),
+        "timezone_open" => eval_procedural_static_alias(
+            "DateTimeZone", "__elephc_timezone_open", args, context, values,
+        ),
         "timezone_identifiers_list" => eval_timezone_identifiers_alias(args, context, values),
         "timezone_location_get" => eval_method_alias(args, 0, "getLocation", &[], context, values),
         "timezone_transitions_get" => {
@@ -315,25 +208,27 @@ fn eval_date_alias_result(
         }
         "timezone_version_get" => eval_timezone_version_alias(args, values),
         "date_interval_create_from_date_string" => {
-            eval_static_alias("DateInterval", "createFromDateString", args, context, values)
+            eval_procedural_static_alias("DateInterval", "__elephc_create_from_date_string", args, context, values)
         }
-        "date_diff" => eval_method_alias_tail(args, 0, "diff", context, values),
-        "date_format" => eval_method_alias(args, 0, "format", &[1], context, values),
+        "date_diff" => eval_static_alias("DateTime", "__elephc_date_diff", args, context, values),
+        "date_format" => eval_static_alias("DateTime", "__elephc_date_format", args, context, values),
         "date_add" => eval_method_alias(args, 0, "add", &[1], context, values),
         "date_sub" => eval_method_alias(args, 0, "sub", &[1], context, values),
-        "date_modify" => eval_method_alias(args, 0, "modify", &[1], context, values),
-        "date_timestamp_get" => eval_method_alias(args, 0, "getTimestamp", &[], context, values),
+        "date_modify" => eval_procedural_static_alias(
+            "DateTime", "__elephc_date_modify", args, context, values,
+        ),
+        "date_timestamp_get" => eval_static_alias("DateTime", "__elephc_date_timestamp_get", args, context, values),
         "date_timestamp_set" => {
             eval_method_alias(args, 0, "setTimestamp", &[1], context, values)
         }
-        "date_timezone_get" => eval_method_alias(args, 0, "getTimezone", &[], context, values),
+        "date_timezone_get" => eval_static_alias("DateTime", "__elephc_date_timezone_get", args, context, values),
         "date_timezone_set" => {
             eval_method_alias(args, 0, "setTimezone", &[1], context, values)
         }
-        "date_offset_get" => eval_method_alias(args, 0, "getOffset", &[], context, values),
+        "date_offset_get" => eval_static_alias("DateTime", "__elephc_date_offset_get", args, context, values),
         "date_date_set" => eval_method_alias(args, 0, "setDate", &[1, 2, 3], context, values),
         "date_isodate_set" => eval_method_alias_tail(args, 0, "setISODate", context, values),
-        "date_time_set" => eval_method_alias_tail(args, 0, "setTime", context, values),
+        "date_time_set" => eval_static_alias("DateTime", "__elephc_date_time_set", args, context, values),
         "date_interval_format" => eval_method_alias(args, 0, "format", &[1], context, values),
         "timezone_name_get" => eval_method_alias(args, 0, "getName", &[], context, values),
         "timezone_offset_get" => eval_method_alias(args, 0, "getOffset", &[1], context, values),
@@ -341,20 +236,37 @@ fn eval_date_alias_result(
     }
 }
 
-/// Implements `idate()` as `intval(date(...))`.
+/// Implements idate's byte-token validation, signed year remainder and C-int result.
 fn eval_idate_alias(
     args: Vec<RuntimeCellHandle>,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = match args.as_slice() {
-        [format] => eval_date_result("date", *format, None, context, values),
-        [format, timestamp] => eval_date_result("date", *format, Some(*timestamp), context, values),
-        _ => return Err(EvalStatus::RuntimeFatal),
-    }?;
-    let cast = values.cast_int(result);
-    values.release(result)?;
-    cast
+    if !(1..=2).contains(&args.len()) { return Err(EvalStatus::RuntimeFatal); }
+    let format = values.string_bytes(args[0])?;
+    if format.len() != 1 {
+        values.warning("\nWarning: idate(): idate format is one char\n")?;
+        return values.bool_value(false);
+    }
+    let token = format[0];
+    if !b"BdjNGHghIiLmntosUWwYyzZ".contains(&token) {
+        values.warning("\nWarning: idate(): Unrecognized date format token\n")?;
+        return values.bool_value(false);
+    }
+    let timestamp = eval_optional_timestamp(args.get(1).copied(), values)?;
+    let timezone = eval_request_timezone(context, values)?;
+    let numeric_token = if token == b'y' { b'Y' } else { token };
+    let formatted = elephc_tz::format_timestamp_php(timestamp, &timezone, &[numeric_token], true)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let mut value = std::str::from_utf8(&formatted).map_err(|_| EvalStatus::RuntimeFatal)?
+        .parse::<i64>().map_err(|_| EvalStatus::RuntimeFatal)?;
+    if token == b'y' { value %= 100; }
+    let value = i64::from(value as i32);
+    if value == -1 {
+        values.warning("\nWarning: idate(): Unrecognized date format token\n")?;
+        return values.bool_value(false);
+    }
+    values.int(value)
 }
 
 /// Implements `mktime()` and `gmmktime()` optional argument filling.
@@ -365,27 +277,6 @@ fn eval_mktime_alias(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_mktime_result_with_defaults(name, &args, context, values)
-}
-
-/// Constructs one native class instance and runs its constructor for constructor-equivalent aliases.
-fn eval_new_datetime_alias(
-    class_name: &str,
-    args: Vec<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let object = values.new_object(class_name)?;
-    if let Err(status) = eval_native_constructor_with_evaluated_args(
-        class_name,
-        object,
-        positional_args(args),
-        context,
-        values,
-    ) {
-        let _ = values.release(object);
-        return Err(status);
-    }
-    Ok(object)
 }
 
 /// Calls one native/static method alias with positional arguments.
@@ -405,6 +296,24 @@ fn eval_static_alias(
         context,
         values,
     )
+}
+
+/// Calls the native procedural wrapper with its hidden source-location argument.
+fn eval_procedural_static_alias(
+    class_name: &str,
+    method_name: &str,
+    mut args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let line = values.int(0)?;
+    args.push(line);
+    let result = eval_static_alias(class_name, method_name, args, context, values);
+    let released = values.release(line);
+    match result {
+        Ok(value) => { released?; Ok(value) }
+        Err(error) => Err(error),
+    }
 }
 
 /// Calls the injected list-identifiers prelude function, falling back to the

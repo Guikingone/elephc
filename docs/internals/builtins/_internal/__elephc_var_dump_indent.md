@@ -2,7 +2,7 @@
 title: "__elephc_var_dump_indent() — internals"
 description: "Compiler internals for __elephc_var_dump_indent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 642
+  order: 1003
 ---
 
 ## `__elephc_var_dump_indent()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_var_dump_indent.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_var_dump_indent.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

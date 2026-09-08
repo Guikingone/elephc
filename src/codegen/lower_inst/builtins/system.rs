@@ -271,21 +271,31 @@ pub(crate) fn lower_date_default_timezone_set(
             }
         }
 
-        emit_diag_warning_fragment(
-            ctx,
-            b"\nNotice: date_default_timezone_set(): Timezone ID '",
-        );
+        let notice_masked = ctx.next_label("timezone_notice_masked");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_rt_error_reporting", 0);
+                ctx.emitter.instruction(&format!("tbz x9, #3, {notice_masked}")); // suppress the entire notice unless E_NOTICE is enabled
+            }
+            Arch::X86_64 => {
+                abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_rt_error_reporting", 0);
+                ctx.emitter.instruction("test r10, 8");                         // check notice severity independently of warning severity
+                ctx.emitter.instruction(&format!("jz {notice_masked}"));        // suppress the entire notice when its bit is disabled
+            }
+        }
+        emit_diag_warning_fragment(ctx, b"\nNotice: date_default_timezone_set(): Timezone ID '");
         match ctx.emitter.target.arch {
             Arch::AArch64 => ctx.load_string_value_to_regs(identifier, "x1", "x2")?,
             Arch::X86_64 => ctx.load_string_value_to_regs(identifier, "rdi", "rsi")?,
         }
-        abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+        abi::emit_call_label(ctx.emitter, "__rt_diag_write");
         let source = ctx.module.source_path.as_deref().unwrap_or("Unknown");
         let line = inst.span.map_or(0, |span| span.line);
         emit_diag_warning_fragment(
             ctx,
             format!("' is invalid in {source} on line {line}\n").as_bytes(),
         );
+        ctx.emitter.label(&notice_masked);
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         abi::emit_jump(ctx.emitter, &done_label);
 
@@ -349,7 +359,7 @@ pub(crate) fn lower_mktime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_mktime_like(ctx, inst, "mktime", "elephc_tz_mktime")
+    super::mktime::lower_checked_mktime(ctx, inst, false)
 }
 
 /// Lowers `gmmktime(...)`: the UTC counterpart of `mktime()`.
@@ -359,6 +369,16 @@ pub(crate) fn lower_gmmktime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    super::mktime::lower_checked_mktime(ctx, inst, true)
+}
+
+/// Keeps the fixed-integer internal helper ABI used by DateTime/calendar implementations.
+pub(crate) fn lower_mktime_raw(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_mktime_like(ctx, inst, "mktime", "elephc_tz_mktime")
+}
+
+/// Keeps the fixed-integer UTC helper ABI separate from the PHP checked surface.
+pub(crate) fn lower_gmmktime_raw(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_mktime_like(ctx, inst, "gmmktime", "elephc_tz_gmmktime")
 }
 
@@ -585,7 +605,7 @@ fn lower_mktime_like(
 }
 
 /// Diagnostic labels for the six `mktime`/`gmmktime` integer arguments, in ABI order.
-const MKTIME_ARG_LABELS: [&str; 6] = [
+pub(super) const MKTIME_ARG_LABELS: [&str; 6] = [
     "mktime hour",
     "mktime minute",
     "mktime second",
@@ -605,7 +625,7 @@ const MKTIME_ARG_LABELS: [&str; 6] = [
 /// plain integer one at a time and staged in a 16-byte-aligned stack scratch area below the frame —
 /// untouched by the unbox calls, whose own frames sit below it — then all are reloaded into the
 /// argument registers with no intervening call.
-fn marshal_integer_args(
+pub(super) fn marshal_integer_args(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     labels: &[&str],
@@ -639,7 +659,7 @@ fn resolve_integer_arg_to_result(
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, value)?;
             if ctx.emitter.target.arch == Arch::X86_64 {
-                ctx.emitter.instruction("mov rax, rdi");                       // mixed-cast helpers use the legacy boxed-value input register
+                ctx.emitter.instruction("mov rax, rdi");                        // mixed-cast helpers use the legacy boxed-value input register
             }
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
         }
@@ -660,7 +680,7 @@ fn resolve_integer_arg_to_result(
 /// Reserves `bytes` of 16-byte-aligned scratch space below the stack pointer for argument staging.
 /// Calls made while resolving arguments push their own frames below this area, so the staged
 /// integers are never overwritten.
-fn emit_scratch_reserve(ctx: &mut FunctionContext<'_>, bytes: usize) {
+pub(super) fn emit_scratch_reserve(ctx: &mut FunctionContext<'_>, bytes: usize) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("sub sp, sp, #{}", bytes));        // reserve 16-byte-aligned argument scratch below the frame
@@ -672,7 +692,7 @@ fn emit_scratch_reserve(ctx: &mut FunctionContext<'_>, bytes: usize) {
 }
 
 /// Releases the scratch space reserved by `emit_scratch_reserve`, restoring the stack pointer.
-fn emit_scratch_release(ctx: &mut FunctionContext<'_>, bytes: usize) {
+pub(super) fn emit_scratch_release(ctx: &mut FunctionContext<'_>, bytes: usize) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("add sp, sp, #{}", bytes));        // release the argument scratch area
@@ -685,7 +705,7 @@ fn emit_scratch_release(ctx: &mut FunctionContext<'_>, bytes: usize) {
 
 /// Stages the canonical integer result register into the scratch slot at `offset` from the stack
 /// pointer.
-fn emit_store_result_to_scratch(ctx: &mut FunctionContext<'_>, offset: usize) {
+pub(super) fn emit_store_result_to_scratch(ctx: &mut FunctionContext<'_>, offset: usize) {
     let result = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -707,10 +727,10 @@ fn emit_load_scratch_to_arg_reg(ctx: &mut FunctionContext<'_>, index: usize, off
 }
 
 /// Loads the staged integer at scratch `offset` into a caller-selected register.
-fn emit_load_scratch_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, offset: usize) {
+pub(super) fn emit_load_scratch_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, offset: usize) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));// load the staged integer into the target register
+            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset)); // load the staged integer into the target register
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -961,7 +981,7 @@ fn materialize_boxed_nullable_strtotime_base(
             ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the boxed base is null
             ctx.emitter.instruction(&format!("je {}", null_label));             // null asks timelib to choose the current timestamp
             abi::emit_pop_reg(ctx.emitter, "rdi");
-            ctx.emitter.instruction("mov rax, rdi");                           // mixed-cast helpers consume the boxed value in rax
+            ctx.emitter.instruction("mov rax, rdi");                            // mixed-cast helpers consume the boxed value in rax
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             ctx.emitter.instruction("mov rdx, rax");                            // move the concrete payload into the base-timestamp register
             ctx.emitter.instruction("mov rcx, 1");                              // a concrete boxed base timestamp was provided
@@ -1803,7 +1823,7 @@ fn load_boxed_nullable_date_timestamp(
             ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the boxed timestamp is null
             ctx.emitter.instruction(&format!("je {}", null_label));             // null selects the formatter's current-time sentinel
             abi::emit_pop_reg(ctx.emitter, "rdi");
-            ctx.emitter.instruction("mov rax, rdi");                           // mixed-cast helpers consume the boxed value in rax
+            ctx.emitter.instruction("mov rax, rdi");                            // mixed-cast helpers consume the boxed value in rax
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             ctx.emitter.instruction("mov rcx, 1");                              // a concrete boxed timestamp was supplied
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null cleanup path after coercion

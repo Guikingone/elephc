@@ -838,55 +838,6 @@ fn rewrite_date_procedural_alias(
                 args: wrapper_args,
             })
         }
-        // mktime()/gmmktime(): one to six arguments are accepted; omitted trailing ones default to the
-        // corresponding component of the current local (mktime) or UTC (gmmktime) time. Desugar to the
-        // internal `__elephc_mktime_raw`/`__elephc_gmmktime_raw` builtins (which keep the fixed 6-int
-        // runtime ABI), filling each omitted slot with `intval(date("G"|"i"|"s"|"n"|"j"|"Y"))` (or
-        // `gmdate` for gmmktime) so the runtime always receives six integers. Up to 6 args pass through
-        // verbatim; more than 6 falls through to the arity diagnostic. The `int|false` failure path
-        // PHP can return for out-of-range inputs is not modeled — elephc's runtime always yields a
-        // normalized timestamp — so the return stays `int`.
-        "mktime" | "gmmktime" if (1..=6).contains(&args.len()) => {
-            let is_gm = bare == "gmmktime";
-            let date_fn = if is_gm { "gmdate" } else { "date" };
-            let specs = ["G", "i", "s", "n", "j", "Y"];
-            let mut full: Vec<Expr> = Vec::with_capacity(6);
-            for i in 0..6 {
-                let span = crate::span::Span::dummy();
-                let date_call = Expr::new(
-                    ExprKind::FunctionCall {
-                        name: resolved_name(date_fn.to_string()),
-                        args: vec![Expr::new(
-                            ExprKind::StringLiteral(specs[i].to_string()),
-                            span,
-                        )],
-                    },
-                    span,
-                );
-                let current_component = Expr::new(
-                    ExprKind::FunctionCall {
-                        name: resolved_name("intval".to_string()),
-                        args: vec![date_call],
-                    },
-                    span,
-                );
-                full.push(match args.get(i) {
-                    Some(argument) => Expr::new(
-                        ExprKind::NullCoalesce {
-                            value: Box::new(argument.clone()),
-                            default: Box::new(current_component),
-                        },
-                        argument.span,
-                    ),
-                    None => current_component,
-                });
-            }
-            let raw_name = if is_gm { "__elephc_gmmktime_raw" } else { "__elephc_mktime_raw" };
-            Some(ExprKind::FunctionCall {
-                name: resolved_name(raw_name.to_string()),
-                args: full,
-            })
-        }
         "date_create" if args.len() <= 2 => Some(static_call("DateTime", "__elephc_date_create")),
         "date_create_immutable" if args.len() <= 2 => {
             Some(static_call("DateTimeImmutable", "__elephc_date_create"))
@@ -1113,9 +1064,8 @@ fn rewrite_date_procedural_alias(
                 args: wrapper_args,
             })
         }
-        "date_diff" if args.len() == 2 => Some(method(0, "diff", &[1])),
-        "date_diff" if args.len() == 3 => Some(method(0, "diff", &[1, 2])),
-        "date_format" if args.len() == 2 => Some(method(0, "format", &[1])),
+        "date_diff" if (2..=3).contains(&args.len()) => Some(static_call("DateTime", "__elephc_date_diff")),
+        "date_format" if args.len() == 2 => Some(static_call("DateTime", "__elephc_date_format")),
         "date_add" if args.len() == 2 => Some(static_call("DateTime", "__elephc_date_add")),
         "date_sub" if args.len() == 2 => {
             let mut wrapper_args = args.to_vec();
@@ -1141,7 +1091,7 @@ fn rewrite_date_procedural_alias(
                 args: wrapper_args,
             })
         }
-        "date_timestamp_get" if args.len() == 1 => Some(method(0, "getTimestamp", &[])),
+        "date_timestamp_get" if args.len() == 1 => Some(static_call("DateTime", "__elephc_date_timestamp_get")),
         "date_timestamp_set" if args.len() == 2 => {
             let mut wrapper_args = args.to_vec();
             wrapper_args.push(Expr::new(
@@ -1154,15 +1104,13 @@ fn rewrite_date_procedural_alias(
                 args: wrapper_args,
             })
         }
-        "date_timezone_get" if args.len() == 1 => Some(method(0, "getTimezone", &[])),
+        "date_timezone_get" if args.len() == 1 => Some(static_call("DateTime", "__elephc_date_timezone_get")),
         "date_timezone_set" if args.len() == 2 => Some(method(0, "setTimezone", &[1])),
-        "date_offset_get" if args.len() == 1 => Some(method(0, "getOffset", &[])),
+        "date_offset_get" if args.len() == 1 => Some(static_call("DateTime", "__elephc_date_offset_get")),
         "date_date_set" if args.len() == 4 => Some(method(0, "setDate", &[1, 2, 3])),
         "date_isodate_set" if args.len() == 4 => Some(method(0, "setISODate", &[1, 2, 3])),
         "date_isodate_set" if args.len() == 3 => Some(method(0, "setISODate", &[1, 2])),
-        "date_time_set" if args.len() == 3 => Some(method(0, "setTime", &[1, 2])),
-        "date_time_set" if args.len() == 4 => Some(method(0, "setTime", &[1, 2, 3])),
-        "date_time_set" if args.len() == 5 => Some(method(0, "setTime", &[1, 2, 3, 4])),
+        "date_time_set" if (3..=5).contains(&args.len()) => Some(static_call("DateTime", "__elephc_date_time_set")),
         "date_interval_format" if args.len() == 2 => Some(method(0, "format", &[1])),
         "timezone_name_get" if args.len() == 1 => Some(method(0, "getName", &[])),
         _ => None,

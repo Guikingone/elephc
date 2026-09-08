@@ -99,5 +99,19 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         DefaultSpec::Str(value) => EvalBuiltinDefaultValue::String(value),
         DefaultSpec::IntMax => EvalBuiltinDefaultValue::Int(i64::MAX),
         DefaultSpec::EmptyArray => EvalBuiltinDefaultValue::EmptyArray,
+        DefaultSpec::ClassConstant { class, name } => EvalBuiltinDefaultValue::ClassConstant { class, name },
+        DefaultSpec::Constant(name) => {
+            if let Some((class, constant)) = name.split_once("::") {
+                return Some(EvalBuiltinDefaultValue::ClassConstant { class, name: constant });
+            }
+            use crate::interpreter::{constant_eval::eval_predefined_constant_value, EvalPredefinedConstant};
+            match eval_predefined_constant_value(name)? {
+                EvalPredefinedConstant::Int(value) => EvalBuiltinDefaultValue::Int(value),
+                EvalPredefinedConstant::Float(value) => EvalBuiltinDefaultValue::Float(value),
+                EvalPredefinedConstant::String(value) => EvalBuiltinDefaultValue::String(value),
+            }
+        }
+        // Textual prelude defaults are not reparsed by registry argument binding.
+        DefaultSpec::Expr(_) => return None,
     })
 }

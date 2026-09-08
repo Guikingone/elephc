@@ -103,40 +103,6 @@ pub(super) fn lower_static_call_user_func(
             let [callback_arg, arg_array] = args else {
                 return None;
             };
-            if let ExprKind::StringLiteral(callback_name) = &callback_arg.kind {
-                let callback_key = php_symbol_key(callback_name.trim_start_matches('\\'));
-                if matches!(
-                    callback_key.as_str(),
-                    "mktime" | "gmmktime" | "__elephc_mktime_raw" | "__elephc_gmmktime_raw"
-                ) {
-                    let internal = if callback_key.contains("gmmktime") {
-                        "__elephc_gmmktime_raw"
-                    } else {
-                        "__elephc_mktime_raw"
-                    };
-                    let direct = Expr::new(
-                        ExprKind::FunctionCall {
-                            name: Name::unqualified(internal),
-                            args: (0..6)
-                                .map(|index| {
-                                    Expr::new(
-                                        ExprKind::ArrayAccess {
-                                            array: Box::new(arg_array.clone()),
-                                            index: Box::new(Expr::new(
-                                                ExprKind::IntLiteral(index),
-                                                arg_array.span,
-                                            )),
-                                        },
-                                        arg_array.span,
-                                    )
-                                })
-                                .collect(),
-                        },
-                        expr.span,
-                    );
-                    return Some(lower_expr(ctx, &direct));
-                }
-            }
             if matches!(arg_array.kind, ExprKind::ArrayLiteralAssoc(_))
                 && static_callable_binding_for_expr(ctx, callback_arg)
                     .is_some_and(|target| matches!(target, StaticCallableBinding::InstanceMethod { .. }))
@@ -156,6 +122,15 @@ pub(super) fn lower_static_call_user_func(
                 if let Some(callback) = static_call_user_func_callback(ctx, callback_arg) {
                     return lower_static_callable_call(ctx, callback, &callback_args, expr);
                 }
+            }
+            // A known builtin does not become an unknown callable merely because its
+            // argument array is computed at runtime. Shared spread lowering evaluates
+            // the container once and performs signature-based extraction and bounds checks.
+            if let Some(callback @ StaticCallableBinding::Builtin(_)) =
+                static_call_user_func_callback(ctx, callback_arg)
+            {
+                let spread = Expr::new(ExprKind::Spread(Box::new(arg_array.clone())), arg_array.span);
+                return lower_static_callable_call(ctx, callback, &[spread], expr);
             }
             lower_eval_call_user_func_array_fallback(ctx, callback_arg, arg_array, expr)
         }

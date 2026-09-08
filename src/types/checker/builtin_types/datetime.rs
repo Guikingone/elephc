@@ -48,6 +48,7 @@ mod gate;
 mod generated_declarations_fallback;
 mod generated_declarations_timelib;
 mod generated_injection;
+mod native_procedural;
 #[cfg(test)]
 #[allow(dead_code)]
 mod injection;

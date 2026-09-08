@@ -39,7 +39,9 @@ use crate::context::{
     EvalReferenceTarget, EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget,
     NativeCallableDefault, NativeCallableSignature, NativeFunction,
 };
-use crate::errors::{EvalParseError, EvalStatus};
+use crate::errors::EvalStatus;
+#[cfg(test)]
+use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch,
     EvalCastType, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst,
@@ -114,19 +116,25 @@ pub fn execute_program_with_context(
     }
 }
 
-/// Executes an EvalIR program and preserves escaping Throwable cells.
+/// Executes an EvalIR program, returning an owned value cell and preserving escaping throwables.
 pub fn execute_program_outcome_with_context(
     context: &mut ElephcEvalContext,
     program: &EvalProgram,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
+    emit_eval_compile_warnings(program.compile_warnings(), context, values, false)?;
     let control = with_lexical_strict_types(context, program.strict_types(), |context| {
-        execute_statements(program.statements(), context, scope, values)
+        execute_statements_with_return_ownership(program.statements(), context, scope, values, true)
     });
     match control {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
-        Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
+        Ok(EvalControl::Return(result)) => {
+            // Known owners transfer directly. Borrowed or unclassified results
+            // receive a separate ABI owner without consuming their existing source.
+            let value = if result.owned { result.value } else { values.retain(result.value)? };
+            Ok(EvalOutcome::Value(value))
+        }
         Ok(EvalControl::Throw(result)) => Ok(EvalOutcome::Throwable(result)),
         Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
         Err(EvalStatus::UncaughtThrowable) => context
@@ -135,6 +143,22 @@ pub fn execute_program_outcome_with_context(
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
     }
+}
+
+/// Replays cached parse warnings before executing a fragment's first statement.
+pub(crate) fn emit_eval_compile_warnings(
+    warnings: &[crate::eval_ir::EvalCompileWarning], context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps, included_file: bool,
+) -> Result<(), EvalStatus> {
+    let (file, _, caller_line, _) = context.call_site();
+    let source = if included_file { file }
+        else if file.is_empty() { "eval()'d code".to_string() }
+        else { format!("{file}({caller_line}) : eval()'d code") };
+    for warning in warnings {
+        values.compile_warning(&format!("\nWarning: {} in {} on line {}\n",
+            warning.message, source, warning.line))?;
+    }
+    Ok(())
 }
 
 /// Runs one lexical PHP body under its compiled strict-types mode and restores its caller.

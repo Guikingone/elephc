@@ -52,20 +52,38 @@ pub(in crate::interpreter) fn eval_mktime_result_with_defaults(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_mktime_with_clock(name, args, context, values, eval_current_unix_timestamp)
+}
+
+/// Reads a single clock sample after argument evaluation; the injected clock is a test seam.
+pub(in crate::interpreter) fn eval_mktime_with_clock(
+    name: &str,
+    args: &[RuntimeCellHandle],
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    clock: impl FnOnce() -> Result<i64, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if !(1..=6).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let date_name = if name == "gmmktime" { "gmdate" } else { "date" };
+    let timezone = match name {
+        "mktime" => eval_request_timezone(context, values)?,
+        "gmmktime" => "UTC".to_owned(),
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    let current = eval_timezone_broken_down_time(clock()?, &timezone)?;
+    let defaults = [current.tm_hour, current.tm_min, current.tm_sec,
+        current.tm_mon + 1, current.tm_mday, current.tm_year + 1900];
     let mut full = Vec::with_capacity(6);
     let mut temps = Vec::new();
-    for (index, spec) in ["G", "i", "s", "n", "j", "Y"].into_iter().enumerate() {
+    for (index, default) in defaults.into_iter().enumerate() {
         if let Some(arg) = args.get(index) {
-            if !values.is_null(*arg)? {
+            if index == 0 || !values.is_null(*arg)? {
                 full.push(*arg);
                 continue;
             }
         }
-        match eval_current_date_part_int(date_name, spec, context, values) {
+        match values.int(default) {
             Ok(default) => {
                 temps.push(default);
                 full.push(default);
@@ -93,7 +111,7 @@ pub(in crate::interpreter) fn eval_mktime_result_with_defaults(
     result
 }
 
-/// Converts PHP date components to a local Unix timestamp through libc `mktime`.
+/// Converts PHP date components to a local Unix timestamp through frozen timelib.
 pub(in crate::interpreter) fn eval_mktime_result(
     name: &str,
     hour: RuntimeCellHandle,
@@ -110,12 +128,12 @@ pub(in crate::interpreter) fn eval_mktime_result(
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
     let timezone = match name {
-        "mktime" => context.default_timezone(),
-        "gmmktime" => "UTC",
+        "mktime" => eval_request_timezone(context, values)?,
+        "gmmktime" => "UTC".to_owned(),
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     match elephc_tz::mktime_timestamp_php(
-        args[0], args[1], args[2], args[3], args[4], args[5], timezone,
+        args[0], args[1], args[2], args[3], args[4], args[5], &timezone,
     ) {
         Some(timestamp) => values.int(timestamp),
         None => values.bool_value(false),

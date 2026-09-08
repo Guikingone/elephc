@@ -97,6 +97,13 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for constant in registered_constants() {
+        if let Some(value) = elephc_builtin_contract::locale_category_value(
+            constant.name, target_platform == Platform::MacOS,
+        ) {
+            constants.insert(constant.name.to_string(), int_const(value));
+        }
+    }
     collect_constant_decls(program, &mut constants);
     constants
 }

@@ -426,8 +426,10 @@ fn eval_user_function_callable_cases(
     let mut cases = Vec::with_capacity(functions.len());
     for (name, sig) in functions {
         let case_sig = callable_wrapper_sig(&sig);
+        let owned_object_return = module.functions.iter().find(|function| function.name == name)
+            .is_some_and(eval_callee_owns_object_return);
         let invoker_label =
-            emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &[]);
+            emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &[], owned_object_return);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             data,
             &function_symbol(&name),
@@ -559,6 +561,7 @@ fn eval_instance_callable_cases(
         .map(
             |(class_name, class_id, method_name, method_key, impl_class, sig)| {
                 let case = receiver_bound_instance_method_case(
+                    module,
                     emitter,
                     data,
                     state,
@@ -633,8 +636,9 @@ fn eval_static_method_callable_cases(
                     class_id,
                 );
                 let php_name = format!("{}::{}", class_name, method_name);
+                let owned_object_return = eval_method_owns_object_return(module, &impl_class, &method_key, true);
                 let invoker_label =
-                    emit_eval_runtime_callable_invoker_inline(emitter, data, state, &wrapper_sig, &[]);
+                    emit_eval_runtime_callable_invoker_inline(emitter, data, state, &wrapper_sig, &[], owned_object_return);
                 let descriptor_label =
                     callable_descriptor::static_descriptor_with_optional_invoker_meta(
                         data,
@@ -684,6 +688,7 @@ fn eval_eir_class_method_keys(module: &Module) -> HashSet<(String, String, bool)
 /// Builds a receiver-bound descriptor case for one public instance method.
 #[allow(clippy::too_many_arguments)]
 fn receiver_bound_instance_method_case(
+    module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
     state: &mut EvalCallableEmitState,
@@ -705,8 +710,10 @@ fn receiver_bound_instance_method_case(
         method_key,
         &case_sig,
     );
-    let invoker_label =
-        emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &captures);
+    let owned_object_return = eval_method_owns_object_return(module, impl_class, method_key, false);
+    let invoker_label = emit_eval_runtime_callable_invoker_inline(
+        emitter, data, state, &case_sig, &captures, owned_object_return,
+    );
     let (kind, invocation_shape) = match shape {
         EvalInstanceCallableShape::ObjectInvoke => (
             callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
@@ -740,6 +747,45 @@ fn receiver_bound_instance_method_case(
     }
 }
 
+/// Queries the shared EIR proof without assuming that every native object return owns a reference.
+fn eval_callee_owns_object_return(function: &Function) -> bool {
+    super::lower_inst::object_return_ownership::object_return_ownership(function)
+        == super::lower_inst::object_return_ownership::ObjectReturnOwnership::Owned
+}
+
+/// Looks up the selected implementation rather than the receiver's potentially inherited signature.
+pub(super) fn eval_method_owns_object_return(module: &Module, class: &str, method: &str, is_static: bool) -> bool {
+    module.class_methods.iter().find(|function| {
+        function.flags.is_static == is_static && function.name.rsplit_once("::")
+            .is_some_and(|(owner, name)| owner == class && php_symbol_key(name) == method)
+    }).is_some_and(eval_callee_owns_object_return)
+}
+
+/// Proves a selected array-returning implementation transfers an owner on every return path.
+pub(super) fn eval_method_owns_array_return(module: &Module, class: &str, method: &str, is_static: bool) -> bool {
+    let Some(function) = module.class_methods.iter().find(|function| {
+        function.flags.is_static == is_static && function.name.rsplit_once("::")
+            .is_some_and(|(owner, name)| owner == class && php_symbol_key(name) == method)
+    }) else { return false; };
+    if function.flags.by_ref_return
+        || function.signature.as_ref().is_some_and(|signature| signature.by_ref_return)
+        || !matches!(function.return_php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable)
+    {
+        return false;
+    }
+    let mut saw_return = false;
+    for block in &function.blocks {
+        if let Some(crate::ir::Terminator::Return { value }) = &block.terminator {
+            let Some(value) = value else { return false; };
+            saw_return = true;
+            if function.values[value.as_raw() as usize].ownership != crate::ir::Ownership::Owned {
+                return false;
+            }
+        }
+    }
+    saw_return
+}
+
 /// Emits a descriptor invoker inline and branches around its global entry body.
 fn emit_eval_runtime_callable_invoker_inline(
     emitter: &mut Emitter,
@@ -747,6 +793,7 @@ fn emit_eval_runtime_callable_invoker_inline(
     state: &mut EvalCallableEmitState,
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
+    owned_object_return: bool,
 ) -> String {
     let label = state.next_label("callable_invoker");
     let done_label = state.next_label("callable_invoker_done");
@@ -755,6 +802,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         sig,
         captures,
         date_serialize_finalize: false,
+        owned_object_return,
     };
     abi::emit_jump(emitter, &done_label);
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);

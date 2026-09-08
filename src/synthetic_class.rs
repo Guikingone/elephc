@@ -1411,7 +1411,10 @@ struct Signature {
 impl Default for Signature {
     /// Creates the empty callable shape used before a builder adds parameters or a body.
     fn default() -> Self {
-        Self { params: Vec::new(), variadic: None, return_type: None, body: Vec::new() }
+        Self {
+            params: Vec::new(), variadic: None, variadic_by_ref: false,
+            return_type: None, body: Vec::new(), keep_unread_params: false,
+        }
     }
 }
 

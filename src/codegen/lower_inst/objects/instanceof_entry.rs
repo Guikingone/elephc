@@ -8,7 +8,6 @@
 //! - Eval-aware and runtime metadata paths keep their existing precedence.
 
 use super::*;
-use crate::codegen::lower_inst::predicates;
 
 /// Lowers named `instanceof` using runtime class/interface metadata.
 pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {

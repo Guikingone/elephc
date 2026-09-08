@@ -19,7 +19,8 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
-    emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
+    emit_box_current_value_as_mixed, emit_box_current_owned_value_as_mixed,
+    emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
@@ -548,7 +549,14 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
-    let globals = ctx.module.data.global_names.clone();
+    let mut globals = ctx.module.data.global_names.clone();
+    // Eval initializes these globals even when no source-level global declaration
+    // put their names in the module inventory.
+    for name in ["argc", "argv"] {
+        if superglobal_storage_needed(ctx, name) && !globals.iter().any(|global| global == name) {
+            globals.push(name.to_string());
+        }
+    }
     for name in globals {
         if ctx.module.extern_globals.contains_key(&name) {
             continue;
@@ -1982,7 +1990,7 @@ fn store_argv_local_if_present(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.comment("build $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
     if matches!(argv_ty, PhpType::Mixed | PhpType::Union(_)) {
-        emit_box_current_value_as_mixed(ctx.emitter, &array_ty);
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &array_ty);
     }
     abi::emit_store(ctx.emitter, &argv_ty, offset);
 }
@@ -1996,7 +2004,8 @@ fn store_argc_global_if_needed(ctx: &mut FunctionContext<'_>) {
     ctx.data.add_comm(symbol.clone(), PhpType::Int.stack_size().max(8));
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Int, false);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
 }
 
 /// Initializes program-global `$argv` storage for eval or static `global $argv`.
@@ -2009,7 +2018,8 @@ fn store_argv_global_if_needed(ctx: &mut FunctionContext<'_>) {
     ctx.data.add_comm(symbol.clone(), array_ty.stack_size().max(8));
     ctx.emitter.comment("build global $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &array_ty, false);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &array_ty);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
 }
 
 /// Returns true when a process superglobal needs program-global storage.

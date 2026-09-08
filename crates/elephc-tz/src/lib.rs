@@ -24,6 +24,7 @@ use std::sync::OnceLock;
 
 mod abi;
 mod format;
+mod mktime;
 mod timelib_ffi;
 
 /// Embedded transition table: one line per zone, `<zone>\t<field>` where field is

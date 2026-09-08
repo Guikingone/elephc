@@ -835,7 +835,11 @@ fn runtime_user_function_descriptor_cases(
         let wrapper_sig =
             crate::types::callable_wrapper_sig(&function_signature_from_eir(function));
         let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
-        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &case_sig, &[]);
+        let owned_object_return = super::object_return_ownership::object_return_ownership(function)
+            == super::object_return_ownership::ObjectReturnOwnership::Owned;
+        let invoker_label = super::runtime_wrappers::emit_runtime_callable_invoker_with_ownership(
+            ctx, &case_sig, &[], owned_object_return,
+        );
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &function_symbol(&function.name),
@@ -1115,7 +1119,9 @@ fn runtime_instance_method_descriptor_template(
     let invoker_label = if is_date_serialize_descriptor(ctx, class_name, method_key) {
         emit_runtime_date_serialize_invoker_inline(ctx, sig, &captures)
     } else {
-        emit_runtime_callable_invoker_inline(ctx, sig, &captures)
+        super::runtime_wrappers::emit_method_callable_invoker_inline(
+            ctx, sig, &captures, impl_class, method_key,
+        )
     };
     let canonical_method_name = super::callable_descriptors::canonical_first_class_callable_method_name(
         ctx,
@@ -1717,7 +1723,9 @@ fn runtime_static_method_descriptor_cases(
         ) else {
             continue;
         };
-        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &wrapper_sig, &[]);
+        let invoker_label = super::runtime_wrappers::emit_method_callable_invoker_inline(
+            ctx, &wrapper_sig, &[], &impl_class, &method_key,
+        );
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &entry_label,

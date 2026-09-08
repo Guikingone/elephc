@@ -190,6 +190,11 @@ pub(super) fn lower_method_call(
             return result;
         }
     }
+    if let Some(call) = super::date_interface_calls::lower_date_interface_call(
+        ctx, object, method, args, op, expr,
+    ) {
+        return call;
+    }
     let receiver_type = ctx.builder.value_php_type(object.value);
     if op == Op::MethodCall
         && php_symbol_key(method) == "format"

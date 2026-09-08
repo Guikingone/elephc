@@ -2,7 +2,7 @@
 title: "getrandmax()"
 description: "Returns the largest possible random value."
 sidebar:
-  order: 295
+  order: 579
 ---
 
 ## getrandmax()

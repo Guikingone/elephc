@@ -444,6 +444,7 @@ pub(crate) fn inject_builtin_datetime(
             .or_insert_with(|| date_exception_class(name, parent));
     }
     install_date_magic_restore_helpers(class_map);
+    super::native_procedural::install(class_map);
 }
 
 /// Injects DatePeriod from the same generated declaration variant.

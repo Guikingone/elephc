@@ -32,6 +32,7 @@ use crate::codegen_support::try_handlers::{
 };
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
+mod nullable_args;
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
@@ -82,6 +83,8 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) captures: &'a [(String, PhpType, bool)],
     /// Whether this invoker calls a proven internal DateTime `__serialize()` method.
     pub(super) date_serialize_finalize: bool,
+    /// The concrete EIR callee transfers an object reference on every return path.
+    pub(super) owned_object_return: bool,
 }
 
 /// Minimal state needed by the descriptor invoker emitter.
@@ -213,6 +216,8 @@ fn emit_runtime_callable_invoker_impl(
     );
     if invoker.date_serialize_finalize {
         emit_date_serialize_invoker_return(emitter, invoker.captures, &ret_ty);
+    } else if invoker.owned_object_return {
+        emit_box_current_owned_value_as_mixed(emitter, &ret_ty.codegen_repr());
     } else {
         emit_boxed_invoker_return(emitter, &ret_ty);
     }
@@ -1212,20 +1217,7 @@ fn push_loaded_invoker_ref_cell_value_arg(
     data: &mut DataSection,
 ) -> PhpType {
     emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter, ctx);
-    let release_mixed_after_coerce = target_ty.is_some_and(|target_ty| {
-        !matches!(target_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-            && can_coerce_result_to_type(&PhpType::Mixed, target_ty)
-    });
-    if release_mixed_after_coerce {
-        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-    }
-    let (pushed_ty, _boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
-    if release_mixed_after_coerce {
-        release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
-    }
-    abi::emit_push_result_value(emitter, &pushed_ty);
-    pushed_ty
+    push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data)
 }
 
 /// Boxes the value referenced by an invoker marker into an owned Mixed cell.
@@ -1699,6 +1691,14 @@ fn push_materialized_mixed_hash_value_arg(
     }
     let (pushed_ty, _boxed_to_mixed) =
         coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
+    // Unboxing borrows the heap child; argument cleanup owns a separate reference.
+    // Acquire it before releasing a temporary source box. An unchanged borrowed
+    // Mixed cell also needs its own reference, whereas a fresh source box transfers.
+    if matches!(pushed_ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_))
+        || (pushed_ty == PhpType::Mixed && !release_source_mixed_after_coerce)
+    {
+        abi::emit_incref_if_refcounted(emitter, &pushed_ty);
+    }
     if release_mixed_after_coerce {
         release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
     }
@@ -1917,6 +1917,10 @@ fn emit_float_literal_to_result(emitter: &mut Emitter, data: &mut DataSection, v
 
 /// Emits a null default into result registers for the target storage shape.
 fn emit_null_default_to_result(emitter: &mut Emitter, target_ty: Option<&PhpType>) -> PhpType {
+    if target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::TaggedScalar) {
+        crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+        return PhpType::TaggedScalar;
+    }
     if target_ty.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))) {
         let tag_reg = abi::int_result_reg(emitter);
         let lo_reg = abi::secondary_scratch_reg(emitter);
@@ -2017,6 +2021,10 @@ fn coerce_result_to_type(
     if source_ty == target_ty {
         return;
     }
+    if target_ty.codegen_repr() == PhpType::TaggedScalar {
+        nullable_args::coerce_to_tagged_scalar(emitter, ctx, data, source_ty);
+        return;
+    }
     if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         match target_ty.codegen_repr() {
             PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) => {
@@ -2061,6 +2069,11 @@ fn coerce_result_to_type(
 fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
     if source_ty == target_ty {
         return true;
+    }
+    if target_ty.codegen_repr() == PhpType::TaggedScalar {
+        return matches!(source_ty.codegen_repr(),
+            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+            | PhpType::Mixed | PhpType::Void | PhpType::Never | PhpType::TaggedScalar);
     }
     if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return matches!(
@@ -2157,6 +2170,11 @@ fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, pushed_ty: 
 /// Restores a pushed result value after releasing another value.
 fn restore_pushed_value_after_release(emitter: &mut Emitter, pushed_ty: &PhpType) {
     match pushed_ty.codegen_repr() {
+        PhpType::TaggedScalar => {
+            let payload = abi::int_result_reg(emitter);
+            let tag = crate::codegen::sentinels::tagged_scalar_tag_reg(emitter);
+            abi::emit_pop_reg_pair(emitter, payload, tag);
+        }
         PhpType::Float => abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter)),
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);

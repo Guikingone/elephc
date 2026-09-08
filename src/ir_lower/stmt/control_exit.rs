@@ -139,17 +139,23 @@ pub(super) fn persist_scratch_return_string(
     let Some(op) = ctx.builder.value_defining_op(value.value) else {
         return value;
     };
-    if !string_op_uses_scratch_storage(op) {
+    if !string_op_uses_scratch_storage(op) && op != Op::Cast {
         return value;
     }
-    ctx.emit_value(
+    let persisted = ctx.emit_value(
         Op::StrPersist,
         vec![value.value],
         None,
         PhpType::Str,
         Op::StrPersist.default_effects(),
         Some(span),
-    )
+    );
+    // Persistence creates the return owner. A producer that already owns a heap
+    // string must not leave that earlier copy behind; scratch releases remain no-ops.
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    persisted
 }
 
 /// Acquires return values read from heap containers before local cleanup runs.

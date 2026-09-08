@@ -1044,7 +1044,7 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
             // The prelude runs where the enclosing expression does, so it inherits its depth.
             collect_block(checker, prelude, depth, facts);
         }
-        // `++`/`--` is a read-modify-write with its own storage contract (`string_incdec_locals`).
+        // `++`/`--` is a read-modify-write with its own storage contract (`boxed_string_locals`).
         ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)

@@ -1,11 +1,11 @@
 //! Purpose:
-//! Audited serialization, procedural date helpers, debug rendering, and interface metadata.
+//! Test-only reference model for serialization, procedural dates, debug output and interfaces.
 //!
 //! Called from:
-//! - The DateTime checker metadata facade and sibling compliance modules.
+//! - DateTime's audited-model comparison and AST transcription tests.
 //!
 //! Key details:
-//! - Preserves the audited php-src DateTime semantics while the checker metadata stays split.
+//! - The parent includes this model under `cfg(test)` only; production uses direct AST declarations.
 
 #[allow(unused_imports)]
 use super::{
@@ -111,7 +111,7 @@ __elephc_var_dump_indent(2);
 __elephc_var_dump_object_properties($this);
 __elephc_var_dump_indent(-2);
 echo $field_pad . "[\"date\"]=>\n";
-echo $field_pad; var_dump($this->format("x-m-d H:i:s.u"));
+echo $field_pad; var_dump(DateTime::__elephc_date_format($this, "x-m-d H:i:s.u"));
 if ($this->__elephc_is_localtime) {
     echo $field_pad . "[\"timezone_type\"]=>\n";
     echo $field_pad; var_dump(DateTime::__elephc_timezone_type($this->timezone_name));
@@ -150,7 +150,7 @@ pub(super) fn datetime_print_r_dump() -> ClassMethod {
     let src = r#"<?php
 echo get_class($this) . " Object\n(\n";
 __elephc_print_r_object_properties($this);
-echo "    [date] => " . $this->format("x-m-d H:i:s.u") . "\n";
+echo "    [date] => " . DateTime::__elephc_date_format($this, "x-m-d H:i:s.u") . "\n";
 if ($this->__elephc_is_localtime) {
     echo "    [timezone_type] => " . DateTime::__elephc_timezone_type($this->timezone_name) . "\n";
     echo "    [timezone] => " . $this->timezone_name . "\n";

@@ -221,10 +221,10 @@ pub(super) fn lower(
             )
         }),
         RuntimeFnId::ElephcGmmktimeRaw => Some({
-            crate::codegen::lower_inst::builtins::system::lower_gmmktime(ctx, inst)
+            crate::codegen::lower_inst::builtins::system::lower_gmmktime_raw(ctx, inst)
         }),
         RuntimeFnId::ElephcMktimeRaw => Some({
-            crate::codegen::lower_inst::builtins::system::lower_mktime(ctx, inst)
+            crate::codegen::lower_inst::builtins::system::lower_mktime_raw(ctx, inst)
         }),
         RuntimeFnId::ElephcStrtotimeRaw => Some({
             crate::codegen::lower_inst::builtins::system::lower_elephc_strtotime_raw(ctx, inst)
