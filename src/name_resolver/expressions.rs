@@ -1095,7 +1095,13 @@ fn rewrite_date_procedural_alias(
         "date_timestamp_set" if args.len() == 2 => {
             let mut wrapper_args = args.to_vec();
             wrapper_args.push(Expr::new(
-                ExprKind::IntLiteral(call_span.line as i64),
+                ExprKind::NamedArg {
+                    name: "sourceLine".to_string(),
+                    value: Box::new(Expr::new(
+                        ExprKind::IntLiteral(call_span.line as i64),
+                        call_span,
+                    )),
+                },
                 call_span,
             ));
             Some(ExprKind::StaticMethodCall {

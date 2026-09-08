@@ -4898,8 +4898,16 @@ method("__elephc_date_timestamp_set")
     .param("object", t_mixed())
     .param("timestamp", t_mixed())
     .param("sourceLine", TypeExpr::Int)
-    .returns(t_mixed())
+    .returns(t_class("DateTime"))
     .body_exact(vec![
+        s_if(
+            e_not(e_instance_of(e_var("object"), "DateTime")),
+            vec![s_expr(e_static_call("DateTime", "__elephc_argument_type_error", vec![
+                e_var("object"), e_str("date_timestamp_set(): Argument #1 ($object) must be of type DateTime, "),
+            ]))],
+            vec![],
+            None,
+        ),
         s_if(
             e_binop(e_var("timestamp"), BinOp::StrictEq, e_null()),
             vec![

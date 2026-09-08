@@ -38,6 +38,9 @@ pub(super) fn make_set_timestamp(mutable: bool, class_name: &str) -> ClassMethod
 pub(super) fn datetime_procedural_set_timestamp() -> ClassMethod {
     let tokens = crate::lexer::tokenize(
         r#"<?php
+if (!($object instanceof DateTime)) {
+    DateTime::__elephc_argument_type_error($object, "date_timestamp_set(): Argument #1 (\$object) must be of type DateTime, ");
+}
 if ($timestamp === null) {
     __elephc_diag_warning(
         "\nDeprecated: date_timestamp_set(): Passing null to parameter #2 (\$timestamp) of type int is deprecated",
@@ -78,7 +81,7 @@ return $object->setTimestamp($timestamp);
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        return_type: Some(TypeExpr::Named(Name::unqualified("DateTime"))),
         by_ref_return: false,
         body,
         span: dummy(),

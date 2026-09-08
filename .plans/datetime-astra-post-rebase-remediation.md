@@ -24,6 +24,55 @@
 
 ## Locked audit
 
+### 2026-09-08 checkpoint: timestamp setter target validation
+
+- Extended test_datetime_object_argument_all_target_assembly with native and
+  opaque-eval timestamp setters, including reordered named arguments. PASS for
+  macOS ARM64, Linux ARM64/x86_64 and iOS device/simulator (47.84s). This verifies
+  emission, not executable behavior on every target.
+- git diff --check PASS. Remote origin/main remains 640380cf8856379228db77e48c142d7613ed4e48,
+  already integrated; remote PR branch remains d07ae8bc7d before this checkpoint.
+- Timestamp override/identity, receiver priority, heap, named scalar coercions and
+  both audited declaration models have focused passing evidence. Broader coercion
+  coverage, other R03 mutations and the campaign's final gates remain open.
+
+### 2026-09-08 continuation: timestamp named-argument regression fixed
+
+- Added test_datetime_procedural_timestamp_set_named_coercions for reordered
+  named parameters with numeric strings and booleans in AOT and opaque eval.
+  Frozen php-src oracle returns 123|1|456|0|.
+- The test initially failed during checking: the resolver appended a positional
+  source-line argument after named user arguments. Changed that hidden argument
+  to the AST NamedArg sourceLine, following the existing timezone_open pattern.
+- The regression now PASSes (20.68s); git diff --check PASS. Full coercion breadth,
+  supported-target checks and publication remain open. No task process remains.
+
+### 2026-09-08 continuation: timestamp setter ownership and model validation
+
+- Recovered current worktree state; no earlier timestamp test process remained
+  active. Re-ran the focused heap regression rather than assuming its result.
+- test_datetime_procedural_timestamp_set_heap PASS (20.88s): repeated AOT and
+  opaque-eval calls preserve timestamp 3 and finish with a clean heap summary.
+- match_audited PASS (2 tests): both generated declaration variants still match
+  their audited test-only models after the receiver guard and return-type change.
+- git diff --check PASS. Named/coercion and target breadth validation remain
+  before publication of this lot; no full DateTime closure is claimed.
+
+### 2026-09-08 continuation: native procedural timestamp setter
+
+- Registered existing __elephc_date_timestamp_set as a native mutable-receiver
+  wrapper, included it in eval reachability and routed eval calls through it with
+  an owned, cleaned source-line argument. Its declared result is now DateTime in
+  both generated variants and the cfg(test) model, matching receiver identity.
+- Added receiver validation before null timestamp deprecation, using the shared
+  type-error helper. This preserves PHP's argument-error priority for immutable
+  receivers rather than warning about argument two first.
+- Native regressions PASS for AOT/eval override bypass and receiver identity, plus
+  invalid-receiver/null priority (2 tests, 44.23s). Oracle output verified separately.
+- git diff --check PASS. Model, heap, named/coercion and target breadth checks remain
+  before the next checkpoint; other procedural wrappers and final gates remain open.
+- All task sessions completed. Latest published checkpoint remains d07ae8bc7d.
+
 ### 2026-09-08 checkpoint: second origin/main synchronization validated
 
 - Calendar/formatting lot was committed as fcde7f791f and preserved by

@@ -1266,6 +1266,71 @@ unset($date, $zone, $code);
     assert!(summary.ends_with("clean"), "{}", output.stderr);
 }
 
+/// Procedural timestamp mutation bypasses overrides and retains receiver identity in AOT/eval.
+#[test]
+fn test_datetime_procedural_timestamp_set_bypasses_override() {
+    let out = compile_and_run(r#"<?php
+class TimestampOverride extends DateTime {
+    public function setTimestamp(int $timestamp): DateTime { echo 'override|'; return $this; }
+}
+$date = new TimestampOverride('@0');
+$result = date_timestamp_set($date, 123);
+echo $date->getTimestamp() . '|';
+echo $result === $date ? 'same|' : 'wrong|';
+$date->setTimestamp(0);
+$code = '$result = date_timestamp_set($date, 456); echo $date->getTimestamp() . "|"; echo $result === $date ? "same|" : "wrong|"; $date->setTimestamp(0);';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "123|same|override|456|same|override|");
+}
+
+/// Invalid timestamp-set receivers fail before null timestamp deprecation in AOT and eval.
+#[test]
+fn test_datetime_procedural_timestamp_set_receiver_priority() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$date = new DateTimeImmutable('@0');
+try { date_timestamp_set($date, null); } catch (TypeError $e) { echo 'caught|'; }
+$code = 'try { date_timestamp_set($date, null); } catch (TypeError $e) { echo "caught|"; }';
+eval(substr($code, $argc - 1));
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "caught|caught|");
+    assert!(!output.stderr.contains("Deprecated:"), "{}", output.stderr);
+}
+
+/// Named timestamp arguments preserve weak scalar coercions in native and opaque eval calls.
+#[test]
+fn test_datetime_procedural_timestamp_set_named_coercions() {
+    let out = compile_and_run(r#"<?php
+$date = new DateTime('@0');
+date_timestamp_set(timestamp: '123', object: $date);
+echo $date->getTimestamp() . '|';
+date_timestamp_set(timestamp: true, object: $date);
+echo $date->getTimestamp() . '|';
+$code = 'date_timestamp_set(timestamp: "456", object: $date); echo $date->getTimestamp() . "|"; date_timestamp_set(timestamp: false, object: $date); echo $date->getTimestamp() . "|";';
+eval(substr($code, $argc - 1));
+"#);
+    assert_eq!(out, "123|1|456|0|");
+}
+
+/// Repeated timestamp setters release discarded results and hidden diagnostic arguments.
+#[test]
+fn test_datetime_procedural_timestamp_set_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$date = new DateTime('@0');
+for ($i = 0; $i < 4; $i++) { date_timestamp_set($date, $i); }
+$code = 'for ($j = 0; $j < 4; $j++) { date_timestamp_set($date, $j); }';
+eval(substr($code, $argc - 1));
+echo $date->getTimestamp();
+unset($date, $code);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "3");
+    let summary = output.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
 /// Procedural time mutation bypasses overrides while explicit method calls remain virtual.
 #[test]
 fn test_datetime_procedural_time_set_bypasses_override() {
@@ -2211,6 +2276,10 @@ fn test_datetime_object_argument_all_target_assembly() {
 function boxed_date(DateTime $date): mixed { return $date; }
 function accept_date(DateTimeInterface $date): void { echo date_timestamp_get($date); }
 accept_date(boxed_date(new DateTime('@0')));
+$date = new DateTime('@0');
+date_timestamp_set(timestamp: '123', object: $date);
+eval(substr('date_timestamp_set(timestamp: 456, object: $date);', $argc - 1));
+accept_date($date);
 "#).unwrap();
         let mut command = elephc_cli_command(&dir);
         command.args(["--emit-asm", "--target", target]);

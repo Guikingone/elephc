@@ -219,7 +219,11 @@ fn eval_date_alias_result(
         ),
         "date_timestamp_get" => eval_static_alias("DateTime", "__elephc_date_timestamp_get", args, context, values),
         "date_timestamp_set" => {
-            eval_method_alias(args, 0, "setTimestamp", &[1], context, values)
+            let line = values.int(context.call_site().2)?;
+            let mut args = args;
+            args.push(line);
+            let result = eval_static_alias("DateTime", "__elephc_date_timestamp_set", args, context, values);
+            finish_evaluated_result(EvalExprResult { value: line, owned: true }, result, context, values)
         }
         "date_timezone_get" => eval_static_alias("DateTime", "__elephc_date_timezone_get", args, context, values),
         "date_timezone_set" => {
