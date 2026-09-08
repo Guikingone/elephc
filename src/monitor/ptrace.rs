@@ -23,6 +23,10 @@ use std::time::{Duration, Instant};
 
 use super::process_id::{self, Identity};
 
+#[path = "ptrace_pac.rs"]
+mod pac;
+use pac::strip_pointer_auth;
+
 /// How deep a single frame walk may go.
 ///
 /// A chain longer than this is a corrupt frame pointer, not a deep program: a
@@ -48,6 +52,8 @@ pub(crate) struct Registers {
     pub(crate) pc: u64,
     /// The frame pointer, which is where the chain walk starts.
     pub(crate) fp: u64,
+    /// Instruction PAC bits reported by the stopped target, zero without PAC.
+    pub(crate) instruction_pac_mask: u64,
 }
 
 /// Every thread of a process, as the kernel lists them.
@@ -135,6 +141,10 @@ pub(crate) fn seize(tid: u32) -> io::Result<()> {
 /// about to be, and from that moment every exit owes it a resume — so the split
 /// is what lets the caller put the resume where nothing can step around it.
 pub(crate) fn interrupt(tid: u32) -> io::Result<()> {
+    #[cfg(test)]
+    if test_faults::withhold_interrupt(tid) {
+        return Ok(());
+    }
     // SAFETY: a ptrace request with no memory operands.
     let result = unsafe { libc::ptrace(libc::PTRACE_INTERRUPT, tid as libc::pid_t, 0, 0) };
     if result == -1 {
@@ -271,6 +281,8 @@ pub(crate) fn detach(tid: u32) -> bool {
     let Some(signal) = detach_signal(&stop) else {
         return false;
     };
+    #[cfg(test)]
+    test_faults::record_detach(tid);
     // SAFETY: no memory operands; ESRCH for a thread that has gone is fine, and
     // a tracer that exits detaches whatever it still holds.
     unsafe {
@@ -343,7 +355,11 @@ pub(crate) fn registers(tid: u32) -> io::Result<Registers> {
     if result == -1 {
         return Err(io::Error::last_os_error());
     }
-    Ok(Registers { pc: regs[PROGRAM_COUNTER_INDEX], fp: regs[FRAME_POINTER_INDEX] })
+    Ok(Registers {
+        pc: regs[PROGRAM_COUNTER_INDEX],
+        fp: regs[FRAME_POINTER_INDEX],
+        instruction_pac_mask: pac::instruction_mask(tid)?,
+    })
 }
 
 /// Reads a run of bytes out of the target's address space.
@@ -378,31 +394,10 @@ pub(crate) fn read_memory(pid: u32, address: u64, into: &mut [u8]) -> io::Result
 ///
 /// Split from the walk so the walk's stopping rules can be read — and tested —
 /// without a process to read from.
-pub(crate) fn decode_frame(bytes: [u8; 16]) -> (u64, u64) {
+pub(crate) fn decode_frame(bytes: [u8; 16], instruction_pac_mask: u64) -> (u64, u64) {
     let next = u64::from_le_bytes(bytes[0..8].try_into().unwrap_or([0; 8]));
     let return_address = u64::from_le_bytes(bytes[8..16].try_into().unwrap_or([0; 8]));
-    (next, strip_pointer_auth(return_address))
-}
-
-/// Clears aarch64 pointer-authentication bits from a saved address.
-///
-/// PAC signs the unused high bits of a return address. Walking the raw LR
-/// then misses every symbol: the address is not in anyone's range, so the
-/// frame becomes `<native>`. User VA is at most 52 bits with LVA; masking to
-/// 56 bits strips PAC and TBI without touching a canonical user address on
-/// any current Linux configuration. Other architectures pass the value through.
-pub(crate) fn strip_pointer_auth(addr: u64) -> u64 {
-    strip_pointer_auth_on(cfg!(target_arch = "aarch64"), addr)
-}
-
-/// Architecture-independent PAC strip so both sides of the mask are testable
-/// on a host that is not aarch64.
-fn strip_pointer_auth_on(aarch64: bool, addr: u64) -> u64 {
-    if aarch64 {
-        addr & ((1u64 << 56) - 1)
-    } else {
-        addr
-    }
+    (next, strip_pointer_auth(return_address, instruction_pac_mask))
 }
 
 /// Whether a frame pointer can be followed at all.
@@ -422,7 +417,7 @@ pub(crate) fn can_follow(fp: u64, previous: u64) -> bool {
 /// the address to return to. The walk stops at the first read that fails, at a
 /// pointer `can_follow` rejects, and at `MAX_DEPTH`.
 pub(crate) fn walk(pid: u32, regs: &Registers) -> Vec<u64> {
-    let mut chain = vec![strip_pointer_auth(regs.pc)];
+    let mut chain = vec![strip_pointer_auth(regs.pc, regs.instruction_pac_mask)];
     let mut fp = regs.fp;
     for _ in 0..MAX_DEPTH {
         if !can_follow(fp, 0) {
@@ -432,7 +427,7 @@ pub(crate) fn walk(pid: u32, regs: &Registers) -> Vec<u64> {
         if read_memory(pid, fp, &mut frame).is_err() {
             break;
         }
-        let (next, return_address) = decode_frame(frame);
+        let (next, return_address) = decode_frame(frame, regs.instruction_pac_mask);
         if return_address == 0 {
             break;
         }
@@ -548,25 +543,24 @@ pub(crate) fn attach_window(
     duration_secs: u32,
     image: &mut super::attach::Image,
 ) -> Result<Vec<(Vec<(String, super::Kind)>, u64)>, String> {
-    if let Some(identity) = image.identity {
-        match process_id::identity_of_pid(identity) {
-            Identity::Same => {}
-            // The process ended. An empty window is how attach has always learnt
-            // that, and a live view closes on it.
-            Identity::Gone => {
-                image.held = release_held(std::mem::take(&mut image.held));
-                return Ok(Vec::new());
-            }
-            // Same number, different starttime: sampling this against the
-            // original symbols would name the wrong program.
-            Identity::Replaced => {
-                image.held = release_held(std::mem::take(&mut image.held));
-                return Err(format!(
-                    "pid {} is no longer the process this attach started with; \
-                     the kernel reused the pid",
-                    identity.pid
-                ));
-            }
+    let identity = image.identity;
+    match process_id::identity_of_pid(identity) {
+        Identity::Same => {}
+        // The process ended. An empty window is how attach has always learnt
+        // that, and a live view closes on it.
+        Identity::Gone => {
+            image.held = release_held(std::mem::take(&mut image.held));
+            return Ok(Vec::new());
+        }
+        // Same number, different starttime: sampling this against the
+        // original symbols would name the wrong program.
+        Identity::Replaced => {
+            image.held = release_held(std::mem::take(&mut image.held));
+            return Err(format!(
+                "pid {} is no longer the process this attach started with; \
+                 the kernel reused the pid",
+                identity.pid
+            ));
         }
     }
     // Each process brings its own bias and its own threads; they share the
@@ -692,9 +686,10 @@ fn keep_after_seize(seize_ok: bool, still_ours: impl FnOnce() -> bool) -> bool {
     seize_ok || still_ours()
 }
 
-/// Whether `/proc/<tid>/status` names this process as the tracer.
+/// Whether `/proc/<tid>/status` names the current thread as the tracer.
 fn still_traced_by_us(tid: u32) -> bool {
-    tracer_pid(tid) == Some(std::process::id())
+    // ptrace relationships belong to the tracer thread, which may not be main.
+    tracer_pid(tid) == Some(unsafe { libc::syscall(libc::SYS_gettid) } as u32)
 }
 
 /// Reads `TracerPid` for a live tid, or `None` when `/proc` has no such task.
@@ -819,36 +814,6 @@ mod tests {
         assert_eq!(pending_signal(1 << 8), 0);
     }
 
-    /// PAC bits on a saved LR must not survive into the address we symbolize.
-    ///
-    /// The mask is architecture-shaped: aarch64 clears the high byte, everyone
-    /// else leaves the value alone. Both sides are asserted here so an x86_64
-    /// host still pins the aarch64 behaviour the walk depends on.
-    #[test]
-    fn pointer_authentication_bits_are_stripped_only_on_aarch64() {
-        let signed = 0xAA00_0010_0000_1234;
-        let canonical = 0x0010_0000_1234;
-        assert_eq!(strip_pointer_auth_on(true, signed), canonical);
-        assert_eq!(strip_pointer_auth_on(false, signed), signed);
-        assert_eq!(
-            strip_pointer_auth_on(true, canonical),
-            canonical,
-            "a canonical user address must survive the mask"
-        );
-        let (next, lr) = decode_frame({
-            let mut bytes = [0u8; 16];
-            bytes[0..8].copy_from_slice(&0x1000u64.to_le_bytes());
-            bytes[8..16].copy_from_slice(&signed.to_le_bytes());
-            bytes
-        });
-        assert_eq!(next, 0x1000);
-        if cfg!(target_arch = "aarch64") {
-            assert_eq!(lr, canonical);
-        } else {
-            assert_eq!(lr, signed);
-        }
-    }
-
     /// The wording was split out from reading `/proc` precisely so it could be
     /// tested, and then was not. Each setting has to name itself and say what to
     /// do, because a bare `EPERM` reads as a bug in this tool rather than as one
@@ -945,11 +910,8 @@ mod tests {
     #[test]
     fn a_target_that_cannot_be_seized_is_an_error_not_an_empty_window() {
         let me = std::process::id();
-        let Ok(mut image) = super::super::attach::image_for(me) else {
-            // A host whose own `/proc` this cannot read says nothing about the
-            // branch under test, and failing here would report the wrong thing.
-            return;
-        };
+        let mut image = super::super::attach::image_for(me)
+            .unwrap_or_else(|error| panic!("{}", error.reason));
         match attach_window(&[me], 1, &mut image) {
             Err(reason) => assert!(
                 reason.starts_with("cannot attach to the target"),
@@ -1051,16 +1013,13 @@ mod tests {
     #[test]
     fn a_reused_pid_is_refused_instead_of_profiled() {
         let me = std::process::id();
-        let Ok(mut image) = super::super::attach::image_for(me) else {
-            return;
-        };
-        let Some(identity) = image.identity else {
-            return;
-        };
-        image.identity = Some(super::super::process_id::ProcessIdentity {
+        let mut image = super::super::attach::image_for(me)
+            .unwrap_or_else(|error| panic!("{}", error.reason));
+        let identity = image.identity;
+        image.identity = super::super::process_id::ProcessIdentity {
             pid: identity.pid,
             starttime: identity.starttime.wrapping_add(1),
-        });
+        };
         match attach_window(&[me], 1, &mut image) {
             Err(reason) => {
                 assert!(reason.contains("reused the pid"), "{reason}");
@@ -1080,13 +1039,12 @@ mod tests {
     #[test]
     fn a_vanished_pid_is_an_empty_window_not_reuse() {
         let me = std::process::id();
-        let Ok(mut image) = super::super::attach::image_for(me) else {
-            return;
-        };
-        image.identity = Some(super::super::process_id::ProcessIdentity {
+        let mut image = super::super::attach::image_for(me)
+            .unwrap_or_else(|error| panic!("{}", error.reason));
+        image.identity = super::super::process_id::ProcessIdentity {
             pid: 4294967295,
             starttime: 1,
-        });
+        };
         match attach_window(&[4294967295], 1, &mut image) {
             Ok(window) => assert!(window.is_empty(), "a gone target is an empty window: {window:?}"),
             Err(reason) => panic!("a gone pid must not be reported as reuse: {reason}"),
@@ -1096,4 +1054,8 @@ mod tests {
 
 #[cfg(test)]
 #[path = "ptrace_process_tests.rs"]
-mod process_tests;
+pub(crate) mod process_tests;
+
+#[cfg(test)]
+#[path = "ptrace_test_faults.rs"]
+pub(crate) mod test_faults;

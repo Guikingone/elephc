@@ -14,15 +14,15 @@ use std::os::fd::AsRawFd;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-struct Tracee {
-    child: Child,
+pub(crate) struct Tracee {
+    pub(crate) child: Child,
     directory: std::path::PathBuf,
-    seized: bool,
+    pub(crate) seized: bool,
 }
 
 impl Tracee {
     /// Builds and starts a traceable process, waiting for its handlers to be ready.
-    fn start() -> Self {
+    pub(crate) fn start() -> Self {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let directory = std::env::temp_dir().join(format!("elephc-signal-{}-{id}", std::process::id()));
@@ -151,6 +151,50 @@ fn detach_releases_a_runnable_tracee_so_it_can_be_seized_again() {
     tracee.seized = false;
     seize(pid).expect("a released thread must be seizable again");
     tracee.seized = true;
+}
+
+/// Exercises all-stuck cleanup and adoption through two real attach windows.
+#[test]
+fn a_stuck_window_retains_the_tracee_until_the_next_window_can_detach() {
+    let mut tracee = Tracee::start();
+    let pid = tracee.child.id();
+    let mut image = super::super::attach::image_for(pid)
+        .unwrap_or_else(|error| panic!("{}", error.reason));
+    tracee.seized = true;
+    // One sample stop and the cleanup stop time out. Later ticks must skip it.
+    let delayed = test_faults::DelayedStops::new(pid, 2);
+    let first = attach_window(&[pid], 1, &mut image).unwrap();
+    assert!(first.is_empty(), "a withheld stop cannot produce a sample");
+    assert_eq!(image.held, vec![pid], "cleanup must retain the seized task");
+    assert!(still_traced_by_us(pid), "the kernel relationship must survive");
+    assert_eq!(delayed.detach_attempts(), 0, "no DETACH against a running task");
+
+    let second = attach_window(&[pid], 1, &mut image).unwrap();
+    assert!(!second.is_empty(), "a held tracee must be sampled next window");
+    assert!(image.held.is_empty());
+    assert_eq!(delayed.detach_attempts(), 1, "the stopped tracee must be released");
+    assert_eq!(tracer_pid(pid), Some(0));
+    seize(pid).expect("the recovered window must leave the target seizable");
+}
+
+/// A real stopped target supplies the register mask used by both PC and LR walks.
+#[test]
+fn frame_decoding_uses_the_registers_instruction_mask() {
+    let mut tracee = Tracee::start();
+    let pid = tracee.child.id();
+    seize(pid).unwrap();
+    tracee.seized = true;
+    stop_for_sample(pid).unwrap();
+    let regs = registers(pid).unwrap();
+    assert!(!walk(pid, &regs).is_empty());
+    let mut bytes = [0u8; 16];
+    let signed = 0xAA7F_0010_0000_1234u64;
+    bytes[..8].copy_from_slice(&0x1000u64.to_le_bytes());
+    bytes[8..].copy_from_slice(&signed.to_le_bytes());
+    let (fp, lr) = decode_frame(bytes, 0x007f_0000_0000_0000);
+    assert_eq!(fp, 0x1000);
+    assert_eq!(lr, if cfg!(target_arch = "aarch64") { 0x0010_0000_1234 } else { signed });
+    resume(pid, 0);
 }
 
 /// A pending handled SIGUSR1 cannot stall a process for the capture window.

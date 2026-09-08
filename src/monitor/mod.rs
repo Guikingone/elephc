@@ -759,6 +759,7 @@ pub(crate) struct Frame {
 pub(crate) fn is_php_symbol(symbol: &str) -> bool {
     let stem = symbol.trim_start_matches('_');
     stem == "main" || stem.starts_with("fn_") || stem.starts_with("method_")
+        || stem.starts_with("static_")
 }
 
 /// What a runtime helper is doing, in words a PHP developer can act on.

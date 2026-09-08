@@ -80,6 +80,7 @@ fn kind_of(symbol: &str) -> Kind {
     } else if bare.starts_with("php_")
         || bare.starts_with("fn_")
         || bare.starts_with("method_")
+        || bare.starts_with("static_")
         || bare == "main"
     {
         Kind::Php
@@ -127,7 +128,7 @@ pub(crate) struct Image {
     /// Who this image was built for. A later window that finds a different
     /// starttime at the same pid is looking at a reused number, not the
     /// program these symbols describe.
-    pub(crate) identity: Option<super::process_id::ProcessIdentity>,
+    pub(crate) identity: super::process_id::ProcessIdentity,
     /// Tids this process is still tracing because the last window could not
     /// stop them. `PTRACE_DETACH` needs a stopped tracee; a D-state one
     /// leaves the relationship in place. The next window still tries to
@@ -174,12 +175,15 @@ impl ImageError {
     }
 }
 
-/// which of the four learns what to do about it.
+/// Loads symbols only after identifying the target, then rechecks its identity.
 #[cfg(target_os = "linux")]
 pub(crate) fn image_for(pid: u32) -> Result<Image, ImageError> {
     use super::elf;
     use super::ptrace;
 
+    let identity = super::process_id::identity_of(pid).ok_or_else(|| {
+        ImageError::plain(format!("cannot identify the target from /proc/{pid}/stat"))
+    })?;
     let exe = ptrace::executable_path(pid)
         .map_err(|error| ImageError::from_read(format!("cannot read /proc/{pid}/exe"), &error))?;
     let bytes = std::fs::read(&exe).map_err(|error| {
@@ -210,11 +214,14 @@ pub(crate) fn image_for(pid: u32) -> Result<Image, ImageError> {
             exe.display()
         )));
     }
+    if super::process_id::identity_of_pid(identity) != super::process_id::Identity::Same {
+        return Err(ImageError::plain(format!("pid {pid} changed while reading its image")));
+    }
     Ok(Image {
         symbols,
         exe: exe.to_string_lossy().into_owned(),
         first_vaddr,
-        identity: super::process_id::identity_of(pid),
+        identity,
         held: Vec::new(),
     })
 }
@@ -375,6 +382,23 @@ mod tests {
                 ],
                 7
             )]
+        );
+    }
+
+    /// Static-only hot paths remain PHP through naming, display and folded exports.
+    #[test]
+    fn static_method_frames_are_php_and_exported_as_source() {
+        let symbols = vec![FuncSymbol {
+            value: 0x1000,
+            size: 0x100,
+            name: "_static_My_u_Class_run_u_hot".to_string(),
+        }];
+        assert!(super::super::is_php_symbol(&symbols[0].name));
+        let named = display_stack(&[0x1010], &symbols, 0);
+        assert_eq!(named, vec![("My_Class::run_hot".to_string(), Kind::Php)]);
+        assert_eq!(
+            super::super::php_folded_stacks(&[(named, 7)]),
+            vec![(vec!["My_Class::run_hot".to_string()], 7)]
         );
     }
 

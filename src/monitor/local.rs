@@ -26,6 +26,10 @@ pub(crate) fn run_once(
 ) -> i32 {
     let pids = discover_pids(root);
     let window = match capture_display(&pids, cmd.duration_secs, binary, php_source, image) {
+        Ok(Some(window)) if window.display.is_empty() => {
+            eprintln!("elephc monitor: no samples captured; target threads did not stop within the window");
+            return 1;
+        }
         Ok(Some(window)) => window,
         // Said plainly, and never as "it may have exited": the target was there,
         // the kernel would not let this process read it, and the message carries
@@ -345,9 +349,9 @@ fn target_has_exited(pid: u32) -> bool {
 /// Linux. `image` is what says which: it exists only for `--attach`, and only
 /// where reading a process from the outside is this tool's own job.
 ///
-/// `None` means the window is empty, which is the same thing both ways: no
-/// samples landed, and for `--attach` that is how the target's disappearance is
-/// noticed at all.
+/// An empty display with held Linux tracees remains a window: a later live
+/// capture must consume their pending stops. `None` means no samples and no
+/// held tracees, so the caller checks whether the target has exited.
 pub(crate) struct Window {
     /// What every consumer downstream reads: named stacks and their weights.
     pub(crate) display: Vec<(Vec<(String, Kind)>, u64)>,
@@ -376,7 +380,10 @@ fn capture_display(
     #[cfg(target_os = "linux")]
     if let Some(image) = image {
         let display = super::ptrace::attach_window(pids, duration_secs, image)?;
-        return Ok((!display.is_empty()).then_some(Window { display, source: None }));
+        // A timed-out tracee is still attached. Keep the live view open so the
+        // next window can consume its pending stop and release the relationship.
+        return Ok((!display.is_empty() || !image.held.is_empty())
+            .then_some(Window { display, source: None }));
     }
     // Bound so the macOS build does not warn on an argument only Linux reads.
     let _ = &image;
@@ -748,7 +755,7 @@ pub(crate) fn live_frame(
     let cumulative_stats = table_stats(&cumulative_samples);
     let elapsed_secs = elapsed.as_secs();
     let mut out = format!(
-        "elephc monitor — live · {processes} process{} · window {window_secs}s · total {}m{:02}s · {} samples\n",
+        "elephc monitor - live · {processes} discovered process{} · window {window_secs}s · total {}m{:02}s · {} samples\n",
         if processes > 1 { "es" } else { "" },
         elapsed_secs / 60,
         elapsed_secs % 60,

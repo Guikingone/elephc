@@ -1308,7 +1308,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
             3,
             std::time::Duration::from_secs(63),
         );
-        assert!(first.contains("live · 2 processes · window 3s · total 1m03s"));
+        assert!(first.contains("live · 2 discovered processes · window 3s · total 1m03s"));
         assert!(first.contains("CUMUL"));
         assert!(!first.contains('▲') && !first.contains('▼'), "{first}");
         // Second window identical to the first: flat trends.
