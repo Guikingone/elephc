@@ -10791,7 +10791,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -37675,7 +37675,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1114,
+      "codegen_line": 1113,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38606,7 +38606,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1113,
+      "codegen_line": 1112,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -118832,7 +118832,7 @@
       "checker_line": null,
       "codegen_file": "src/tz_prelude.rs",
       "codegen_function": "timezone_abbreviations_list",
-      "codegen_line": 540,
+      "codegen_line": 541,
       "notes": [
         "Implemented by the compiler-injected tz prelude."
       ],
@@ -118968,7 +118968,7 @@
       "checker_line": null,
       "codegen_file": "src/tz_prelude.rs",
       "codegen_function": "timezone_location_get",
-      "codegen_line": 526,
+      "codegen_line": 527,
       "notes": [
         "Implemented by the compiler-injected tz prelude."
       ],
@@ -119124,7 +119124,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1115,
+      "codegen_line": 1114,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -119195,7 +119195,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1187,
+      "codegen_line": 1186,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -119346,7 +119346,7 @@
       "checker_line": null,
       "codegen_file": "src/tz_prelude.rs",
       "codegen_function": "timezone_transitions_get",
-      "codegen_line": 530,
+      "codegen_line": 531,
       "notes": [
         "Implemented by the compiler-injected tz prelude."
       ],

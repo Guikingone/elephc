@@ -3271,147 +3271,26 @@ method("format")
     .returns(TypeExpr::Str)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
-        s_assign("saved", e_call("date_default_timezone_get", vec![])),
-        s_expr(e_call("date_default_timezone_set", vec![e_static_call("DateTime", "__elephc_runtime_timezone_name", vec![e_this_prop("timezone_name")])])),
         s_if(
             e_this_prop("__elephc_civil_override"),
             vec![
                 s_assign("civil", e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_this_prop("timezone_name"), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_year")), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_month")), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_day"))),
                 s_assign("raw", e_call("elephc_tz_format_civil", vec![e_this_prop("timestamp"), e_this_prop("microsecond"), e_var("format"), e_call("strlen", vec![e_var("format")]), e_var("civil"), e_call("strlen", vec![e_var("civil")])])),
                 s_assign("r", e_call("__elephc_ptr_read_string", vec![e_var("raw"), e_call("elephc_tz_format_civil_length", vec![])])),
-                s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
                 s_return(e_var("r")),
             ],
             vec![],
             None,
         ),
-        s_assign("us", e_this_prop("microsecond")),
-        s_assign("fmt", e_str("")),
-        s_assign("flen", e_call("strlen", vec![e_var("format")])),
-        s_assign("k", e_int(0)),
-        s_while(e_binop(e_var("k"), BinOp::Lt, e_var("flen")), vec![
-            s_assign("ch", e_index(e_var("format"), e_var("k"))),
-            s_if(
-                e_binop(e_var("ch"), BinOp::StrictEq, e_str("\\")),
-                vec![
-                    s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("ch"))),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_if(
-                        e_binop(e_var("k"), BinOp::Lt, e_var("flen")),
-                        vec![
-                            s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_index(e_var("format"), e_var("k")))),
-                            s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("ch"), BinOp::StrictEq, e_str("u")),
-                vec![
-                    s_assign("s", e_binop(e_str(""), BinOp::Concat, e_var("us"))),
-                    s_while(e_binop(e_call("strlen", vec![e_var("s")]), BinOp::Lt, e_int(6)), vec![
-                        s_assign("s", e_binop(e_str("0"), BinOp::Concat, e_var("s"))),
-                    ]),
-                    s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("s"))),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("ch"), BinOp::StrictEq, e_str("v")),
-                vec![
-                    s_assign("ms", e_call("intdiv", vec![e_var("us"), e_int(1000)])),
-                    s_assign("s", e_binop(e_str(""), BinOp::Concat, e_var("ms"))),
-                    s_while(e_binop(e_call("strlen", vec![e_var("s")]), BinOp::Lt, e_int(3)), vec![
-                        s_assign("s", e_binop(e_str("0"), BinOp::Concat, e_var("s"))),
-                    ]),
-                    s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("s"))),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("T")), BinOp::And, e_binop(e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")]), BinOp::StrictEq, e_int(1))),
-                vec![
-                    s_assign("zoneLiteral", e_binop(e_binop(e_str("GMT"), BinOp::Concat, e_call("substr", vec![e_this_prop("timezone_name"), e_int(0), e_int(3)])), BinOp::Concat, e_call("substr", vec![e_this_prop("timezone_name"), e_int(4), e_int(2)]))),
-                    s_assign("zoneLength", e_call("strlen", vec![e_var("zoneLiteral")])),
-                    s_assign("zoneIndex", e_int(0)),
-                    s_while(e_binop(e_var("zoneIndex"), BinOp::Lt, e_var("zoneLength")), vec![
-                        s_assign("fmt", e_binop(e_binop(e_var("fmt"), BinOp::Concat, e_str("\\")), BinOp::Concat, e_index(e_var("zoneLiteral"), e_var("zoneIndex")))),
-                        s_assign("zoneIndex", e_binop(e_var("zoneIndex"), BinOp::Add, e_int(1))),
-                    ]),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("e")), BinOp::Or, e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("T")), BinOp::And, e_binop(e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")]), BinOp::StrictEq, e_int(2)))),
-                vec![
-                    s_assign("zoneLiteral", e_this_prop("timezone_name")),
-                    s_assign("zoneLength", e_call("strlen", vec![e_var("zoneLiteral")])),
-                    s_assign("zoneIndex", e_int(0)),
-                    s_while(e_binop(e_var("zoneIndex"), BinOp::Lt, e_var("zoneLength")), vec![
-                        s_assign("fmt", e_binop(e_binop(e_var("fmt"), BinOp::Concat, e_str("\\")), BinOp::Concat, e_index(e_var("zoneLiteral"), e_var("zoneIndex")))),
-                        s_assign("zoneIndex", e_binop(e_var("zoneIndex"), BinOp::Add, e_int(1))),
-                    ]),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("X")), BinOp::Or, e_binop(e_var("ch"), BinOp::StrictEq, e_str("x"))),
-                vec![
-                    s_assign("year", e_call("intval", vec![e_call("date", vec![e_str("Y"), e_this_prop("timestamp")])])),
-                    s_if(
-                        e_binop(e_var("year"), BinOp::Lt, e_int(0)),
-                        vec![
-                            s_assign("year", e_neg(e_var("year"))),
-                            s_assign("sign", e_str("-")),
-                        ],
-                        vec![],
-                        Some(vec![
-                        s_assign("sign", e_str("+")),
-                    ]),
-                    ),
-                    s_assign("s", e_binop(e_str(""), BinOp::Concat, e_var("year"))),
-                    s_while(e_binop(e_call("strlen", vec![e_var("s")]), BinOp::Lt, e_int(4)), vec![
-                        s_assign("s", e_binop(e_str("0"), BinOp::Concat, e_var("s"))),
-                    ]),
-                    s_if(
-                        e_binop(e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("x")), BinOp::And, e_binop(e_var("sign"), BinOp::StrictEq, e_str("+"))), BinOp::And, e_binop(e_call("strlen", vec![e_var("s")]), BinOp::LtEq, e_int(4))),
-                        vec![
-                            s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("s"))),
-                        ],
-                        vec![],
-                        Some(vec![
-                        s_assign("fmt", e_binop(e_binop(e_var("fmt"), BinOp::Concat, e_var("sign")), BinOp::Concat, e_var("s"))),
-                    ]),
-                    ),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("ch"))),
-            s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-        ]),
-        s_assign("r", e_call("date", vec![e_var("fmt"), e_this_prop("timestamp")])),
-        s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
-        s_return(e_var("r")),
+        s_assign("raw", e_call("elephc_tz_format", vec![
+            e_this_prop("timestamp"), e_this_prop("microsecond"),
+            e_var("format"), e_call("strlen", vec![e_var("format")]),
+            e_this_prop("timezone_name"), e_call("strlen", vec![e_this_prop("timezone_name")]),
+            e_cast(CastType::Int, e_this_prop("__elephc_is_localtime")), e_null(),
+        ])),
+        s_return(e_call("__elephc_ptr_read_string", vec![
+            e_var("raw"), e_call("elephc_tz_format_civil_length", vec![]),
+        ])),
     ])
 }
 
@@ -3421,11 +3300,7 @@ method("getOffset")
     .returns(TypeExpr::Int)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
-        s_assign("__saved", e_call("date_default_timezone_get", vec![])),
-        s_expr(e_call("date_default_timezone_set", vec![e_static_call("DateTime", "__elephc_runtime_timezone_name", vec![e_this_prop("timezone_name")])])),
-        s_assign("__off", e_call("intval", vec![e_call("date", vec![e_str("Z"), e_this_prop("timestamp")])])),
-        s_expr(e_call("date_default_timezone_set", vec![e_var("__saved")])),
-        s_return(e_var("__off")),
+        s_return(e_cast(CastType::Int, e_static_call("DateTime", "__elephc_date_format", vec![e_this(), e_str("Z")]))),
     ])
 }
 
@@ -8891,147 +8766,26 @@ method("format")
     .returns(TypeExpr::Str)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
-        s_assign("saved", e_call("date_default_timezone_get", vec![])),
-        s_expr(e_call("date_default_timezone_set", vec![e_static_call("DateTime", "__elephc_runtime_timezone_name", vec![e_this_prop("timezone_name")])])),
         s_if(
             e_this_prop("__elephc_civil_override"),
             vec![
                 s_assign("civil", e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_this_prop("timezone_name"), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_year")), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_month")), BinOp::Concat, e_str("\t")), BinOp::Concat, e_this_prop("__elephc_civil_day"))),
                 s_assign("raw", e_call("elephc_tz_format_civil", vec![e_this_prop("timestamp"), e_this_prop("microsecond"), e_var("format"), e_call("strlen", vec![e_var("format")]), e_var("civil"), e_call("strlen", vec![e_var("civil")])])),
                 s_assign("r", e_call("__elephc_ptr_read_string", vec![e_var("raw"), e_call("elephc_tz_format_civil_length", vec![])])),
-                s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
                 s_return(e_var("r")),
             ],
             vec![],
             None,
         ),
-        s_assign("us", e_this_prop("microsecond")),
-        s_assign("fmt", e_str("")),
-        s_assign("flen", e_call("strlen", vec![e_var("format")])),
-        s_assign("k", e_int(0)),
-        s_while(e_binop(e_var("k"), BinOp::Lt, e_var("flen")), vec![
-            s_assign("ch", e_index(e_var("format"), e_var("k"))),
-            s_if(
-                e_binop(e_var("ch"), BinOp::StrictEq, e_str("\\")),
-                vec![
-                    s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("ch"))),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_if(
-                        e_binop(e_var("k"), BinOp::Lt, e_var("flen")),
-                        vec![
-                            s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_index(e_var("format"), e_var("k")))),
-                            s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("ch"), BinOp::StrictEq, e_str("u")),
-                vec![
-                    s_assign("s", e_binop(e_str(""), BinOp::Concat, e_var("us"))),
-                    s_while(e_binop(e_call("strlen", vec![e_var("s")]), BinOp::Lt, e_int(6)), vec![
-                        s_assign("s", e_binop(e_str("0"), BinOp::Concat, e_var("s"))),
-                    ]),
-                    s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("s"))),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("ch"), BinOp::StrictEq, e_str("v")),
-                vec![
-                    s_assign("ms", e_call("intdiv", vec![e_var("us"), e_int(1000)])),
-                    s_assign("s", e_binop(e_str(""), BinOp::Concat, e_var("ms"))),
-                    s_while(e_binop(e_call("strlen", vec![e_var("s")]), BinOp::Lt, e_int(3)), vec![
-                        s_assign("s", e_binop(e_str("0"), BinOp::Concat, e_var("s"))),
-                    ]),
-                    s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("s"))),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("T")), BinOp::And, e_binop(e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")]), BinOp::StrictEq, e_int(1))),
-                vec![
-                    s_assign("zoneLiteral", e_binop(e_binop(e_str("GMT"), BinOp::Concat, e_call("substr", vec![e_this_prop("timezone_name"), e_int(0), e_int(3)])), BinOp::Concat, e_call("substr", vec![e_this_prop("timezone_name"), e_int(4), e_int(2)]))),
-                    s_assign("zoneLength", e_call("strlen", vec![e_var("zoneLiteral")])),
-                    s_assign("zoneIndex", e_int(0)),
-                    s_while(e_binop(e_var("zoneIndex"), BinOp::Lt, e_var("zoneLength")), vec![
-                        s_assign("fmt", e_binop(e_binop(e_var("fmt"), BinOp::Concat, e_str("\\")), BinOp::Concat, e_index(e_var("zoneLiteral"), e_var("zoneIndex")))),
-                        s_assign("zoneIndex", e_binop(e_var("zoneIndex"), BinOp::Add, e_int(1))),
-                    ]),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("e")), BinOp::Or, e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("T")), BinOp::And, e_binop(e_static_call("DateTime", "__elephc_timezone_type", vec![e_this_prop("timezone_name")]), BinOp::StrictEq, e_int(2)))),
-                vec![
-                    s_assign("zoneLiteral", e_this_prop("timezone_name")),
-                    s_assign("zoneLength", e_call("strlen", vec![e_var("zoneLiteral")])),
-                    s_assign("zoneIndex", e_int(0)),
-                    s_while(e_binop(e_var("zoneIndex"), BinOp::Lt, e_var("zoneLength")), vec![
-                        s_assign("fmt", e_binop(e_binop(e_var("fmt"), BinOp::Concat, e_str("\\")), BinOp::Concat, e_index(e_var("zoneLiteral"), e_var("zoneIndex")))),
-                        s_assign("zoneIndex", e_binop(e_var("zoneIndex"), BinOp::Add, e_int(1))),
-                    ]),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("X")), BinOp::Or, e_binop(e_var("ch"), BinOp::StrictEq, e_str("x"))),
-                vec![
-                    s_assign("year", e_call("intval", vec![e_call("date", vec![e_str("Y"), e_this_prop("timestamp")])])),
-                    s_if(
-                        e_binop(e_var("year"), BinOp::Lt, e_int(0)),
-                        vec![
-                            s_assign("year", e_neg(e_var("year"))),
-                            s_assign("sign", e_str("-")),
-                        ],
-                        vec![],
-                        Some(vec![
-                        s_assign("sign", e_str("+")),
-                    ]),
-                    ),
-                    s_assign("s", e_binop(e_str(""), BinOp::Concat, e_var("year"))),
-                    s_while(e_binop(e_call("strlen", vec![e_var("s")]), BinOp::Lt, e_int(4)), vec![
-                        s_assign("s", e_binop(e_str("0"), BinOp::Concat, e_var("s"))),
-                    ]),
-                    s_if(
-                        e_binop(e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("x")), BinOp::And, e_binop(e_var("sign"), BinOp::StrictEq, e_str("+"))), BinOp::And, e_binop(e_call("strlen", vec![e_var("s")]), BinOp::LtEq, e_int(4))),
-                        vec![
-                            s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("s"))),
-                        ],
-                        vec![],
-                        Some(vec![
-                        s_assign("fmt", e_binop(e_binop(e_var("fmt"), BinOp::Concat, e_var("sign")), BinOp::Concat, e_var("s"))),
-                    ]),
-                    ),
-                    s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-                    s_continue(1),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("ch"))),
-            s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
-        ]),
-        s_assign("r", e_call("date", vec![e_var("fmt"), e_this_prop("timestamp")])),
-        s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
-        s_return(e_var("r")),
+        s_assign("raw", e_call("elephc_tz_format", vec![
+            e_this_prop("timestamp"), e_this_prop("microsecond"),
+            e_var("format"), e_call("strlen", vec![e_var("format")]),
+            e_this_prop("timezone_name"), e_call("strlen", vec![e_this_prop("timezone_name")]),
+            e_cast(CastType::Int, e_this_prop("__elephc_is_localtime")), e_null(),
+        ])),
+        s_return(e_call("__elephc_ptr_read_string", vec![
+            e_var("raw"), e_call("elephc_tz_format_civil_length", vec![]),
+        ])),
     ])
 }
 
@@ -9041,11 +8795,7 @@ method("getOffset")
     .returns(TypeExpr::Int)
     .body_exact(vec![
         s_expr(e_method_call(e_this(), "__elephc_assert_initialized", vec![])),
-        s_assign("__saved", e_call("date_default_timezone_get", vec![])),
-        s_expr(e_call("date_default_timezone_set", vec![e_static_call("DateTime", "__elephc_runtime_timezone_name", vec![e_this_prop("timezone_name")])])),
-        s_assign("__off", e_call("intval", vec![e_call("date", vec![e_str("Z"), e_this_prop("timestamp")])])),
-        s_expr(e_call("date_default_timezone_set", vec![e_var("__saved")])),
-        s_return(e_var("__off")),
+        s_return(e_cast(CastType::Int, e_static_call("DateTime", "__elephc_date_format", vec![e_this(), e_str("Z")]))),
     ])
 }
 

@@ -1760,10 +1760,21 @@ pub(super) const CIVIL_FORMAT_SRC: &str = r#"if ($this->__elephc_civil_override)
 /// the object's own timezone, with `u`/`v` reflecting the stored microseconds. The timelib-only
 /// civil-overflow branch is included only when the timezone prelude declares its bridge symbol.
 pub(super) fn datetime_immutable_format(uses_timelib: bool) -> ClassMethod {
-    let source = FORMAT_SRC.replace(
-        "__CIVIL_FORMAT__",
-        if uses_timelib { CIVIL_FORMAT_SRC } else { "" },
-    );
+    let source = if uses_timelib {
+        let civil = CIVIL_FORMAT_SRC.replace("    date_default_timezone_set($saved);\n", "");
+        format!(r#"<?php
+{civil}
+$raw = elephc_tz_format(
+    $this->timestamp, $this->microsecond,
+    $format, strlen($format),
+    $this->timezone_name, strlen($this->timezone_name),
+    (int) $this->__elephc_is_localtime, null
+);
+return __elephc_ptr_read_string($raw, elephc_tz_format_civil_length());
+"#)
+    } else {
+        FORMAT_SRC.replace("__CIVIL_FORMAT__", "")
+    };
     let tokens = crate::lexer::tokenize(&source).expect("format() body source must tokenize");
     let body = crate::parser::parse(&tokens).expect("format() body source must parse");
     method(

@@ -45,14 +45,15 @@ pub(super) fn release_argument_index(emitter: &mut Emitter) {
 }
 
 /// Releases a fetched by-value cell when the result cannot reuse its box.
-/// The bridge argument array retains Mixed inputs throughout the native invocation.
+/// The bridge argument array retains boxed inputs throughout the native invocation.
 pub(super) fn release_staged_scalar_box(
     emitter: &mut Emitter,
     parameter: &PhpType,
     returned: &PhpType,
 ) {
     let scalar_parameter = matches!(parameter.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::TaggedScalar | PhpType::Mixed);
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::TaggedScalar
+            | PhpType::Mixed | PhpType::Object(_));
     let fresh_result_box = matches!(returned.codegen_repr(),
         PhpType::Void | PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
             | PhpType::TaggedScalar | PhpType::Object(_) | PhpType::Callable);
@@ -76,6 +77,15 @@ fn load_cached_cell(emitter: &mut Emitter) {
 
 #[cfg(test)]
 mod tests {
+    /// The internal pointer-read alias copies bytes with the public helper's ownership contract.
+    #[test]
+    fn internal_pointer_string_alias_preserves_owned_result_contract() {
+        assert_eq!(
+            crate::ir::RuntimeFnId::ElephcPtrReadString.result_ownership(),
+            crate::ir::RuntimeFnId::PtrReadString.result_ownership(),
+        );
+    }
+
     use super::*;
     use crate::codegen::platform::{Platform, Target};
 

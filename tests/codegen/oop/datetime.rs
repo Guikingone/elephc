@@ -1193,6 +1193,79 @@ eval(substr($code, $argc - 1));
     assert_eq!(out, format!("{}7", "BorrowedDebugDate Object\n(\n    [kept] => 7\n)\n".repeat(2)));
 }
 
+/// Procedural date/ISO/timezone setters bypass subclass overrides in AOT and eval.
+#[test]
+fn test_datetime_procedural_calendar_setters_bypass_overrides() {
+    let out = compile_and_run(r#"<?php
+class CalendarOverride extends DateTime {
+    public function setDate(int $year, int $month, int $day): DateTime { echo 'D'; return $this; }
+    public function setISODate(int $year, int $week, int $dayOfWeek = 1): DateTime { echo 'I'; return $this; }
+    public function setTimezone(DateTimeZone $timezone): DateTime { echo 'Z'; return $this; }
+}
+$date = new CalendarOverride('@0');
+$zone = new DateTimeZone('+02:00');
+$result = date_date_set($date, 2024, 2, 29);
+echo $date->format('Y-m-d') . '|';
+$result = date_isodate_set($date, 2025, 1);
+echo $date->format('Y-m-d') . '|';
+$result = date_timezone_set($date, $zone);
+echo $date->format('H:iP') . '|';
+echo $result === $date ? 'same|' : 'wrong|';
+$code = '$result = date_date_set($date, 2024, 2, 29); echo $date->format("Y-m-d") . "|"; $result = date_isodate_set($date, 2025, 1); echo $date->format("Y-m-d") . "|"; $result = date_timezone_set($date, $zone); echo $date->format("H:iP") . "|"; echo $result === $date ? "same|" : "wrong|";';
+eval(substr($code, $argc - 1));
+$date->setDate(2000, 1, 1);
+$date->setISODate(2000, 1);
+$date->setTimezone($zone);
+"#);
+    assert_eq!(out, "2024-02-29|2024-12-30|02:00+02:00|same|2024-02-29|2024-12-30|02:00+02:00|same|DIZ");
+}
+
+/// The post-eval retention scan must not invoke user debug hooks on native objects.
+#[test]
+fn test_datetime_eval_retention_scan_does_not_call_debug_info() {
+    let out = compile_and_run(r#"<?php
+class RetentionDate extends DateTime {
+    public function __debugInfo(): array { echo 'unexpected-debug|'; return []; }
+}
+$date = new RetentionDate('@0');
+eval(substr('echo "body|";', $argc - 1));
+echo 'after';
+"#);
+    assert_eq!(out, "body|after");
+}
+
+/// Scanning an eval-declared property reference preserves its source value and bypasses debug hooks.
+#[test]
+fn test_datetime_eval_retention_scan_preserves_reference_source() {
+    let out = compile_and_run(r#"<?php
+$code = 'class RetainedReference { public $value; public function __debugInfo(): array { echo "unexpected-debug"; return []; } } $text = "retained"; $box = new RetainedReference(); $box->value =& $text;';
+eval(substr($code, $argc - 1));
+unset($box);
+$noise = str_repeat('x', 8);
+echo $text;
+"#);
+    assert_eq!(out, "retained");
+}
+
+/// Repeated procedural calendar mutations release eval arguments and borrowed timezone owners.
+#[test]
+fn test_datetime_procedural_calendar_setters_heap() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$date = new DateTime('@0');
+$zone = new DateTimeZone('+02:00');
+$code = 'for ($i = 0; $i < 4; $i++) { date_date_set($date, 2024, 2, 29); date_isodate_set($date, 2025, 1); date_timezone_set($date, $zone); }';
+eval(substr($code, $argc - 1));
+echo $date->format('Y-m-d H:iP');
+unset($date, $zone, $code);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "2024-12-30 02:00+02:00");
+    assert!(!output.stderr.contains("Notice:"), "{}", output.stderr);
+    let summary = output.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .unwrap_or_else(|| panic!("missing heap summary: {}", output.stderr));
+    assert!(summary.ends_with("clean"), "{}", output.stderr);
+}
+
 /// Procedural time mutation bypasses overrides while explicit method calls remain virtual.
 #[test]
 fn test_datetime_procedural_time_set_bypasses_override() {

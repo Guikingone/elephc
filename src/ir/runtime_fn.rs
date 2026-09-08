@@ -2044,6 +2044,7 @@ impl RuntimeFnId {
                 // skip its release, leaking one block per `print_r($v, true)` call.
                 | RuntimeFnId::PrintR
                 | RuntimeFnId::PtrReadString
+                | RuntimeFnId::ElephcPtrReadString
                 | RuntimeFnId::Range
                 | RuntimeFnId::Setlocale
                 | RuntimeFnId::StrSplit

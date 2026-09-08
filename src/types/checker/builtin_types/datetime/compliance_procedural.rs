@@ -2384,7 +2384,14 @@ pub(super) fn datetime_interface_methods() -> Vec<ClassMethod> {
 ///
 /// Like `DateTimeZone::getOffset` but reads `$this->timezone_name`/`$this->timestamp`: temporarily
 /// applies the object's zone, reads the `date()` `Z` specifier, then restores the previous default.
-pub(super) fn datetime_get_offset() -> ClassMethod {
+pub(super) fn datetime_get_offset(uses_timelib: bool) -> ClassMethod {
+    if uses_timelib {
+        use crate::synthetic_class::{e_cast, e_static_call, e_this, e_str, s_return};
+        return method("getOffset", Vec::new(), Some(TypeExpr::Int), vec![
+            s_return(e_cast(crate::parser::ast::CastType::Int,
+                e_static_call("DateTime", "__elephc_date_format", vec![e_this(), e_str("Z")]))),
+        ]);
+    }
     let call = |name: &str, args: Vec<Expr>| {
         Expr::new(ExprKind::FunctionCall { name: Name::unqualified(name), args }, dummy())
     };

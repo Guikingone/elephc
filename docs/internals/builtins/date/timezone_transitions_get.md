@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/tz_prelude.rs`:530](https://github.com/illegalstudio/elephc/blob/main/src/tz_prelude.rs#L530) (`timezone_transitions_get`)
+- **Lowering**: [`src/tz_prelude.rs`:531](https://github.com/illegalstudio/elephc/blob/main/src/tz_prelude.rs#L531) (`timezone_transitions_get`)
 - **Function symbol**: `timezone_transitions_get()`
 
 

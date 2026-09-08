@@ -50,6 +50,7 @@ const TIMELIB_PRELUDE_SRC: &str = r#"<?php
 extern "elephc_tz" {
     function elephc_tz_mktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int;
     function elephc_tz_gmmktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int;
+    function elephc_tz_format(int $timestamp, int $microsecond, string $format, int $format_length, string $timezone, int $timezone_length, int $localtime, ptr $output_length): ptr;
     function elephc_tz_format_civil(int $timestamp, int $microsecond, string $format, int $format_length, string $payload, int $payload_length): ptr;
     function elephc_tz_format_civil_length(): int;
     function elephc_tz_date_parse(string $datetime, int $datetime_length): string;

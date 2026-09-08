@@ -1105,11 +1105,10 @@ fn rewrite_date_procedural_alias(
             })
         }
         "date_timezone_get" if args.len() == 1 => Some(static_call("DateTime", "__elephc_date_timezone_get")),
-        "date_timezone_set" if args.len() == 2 => Some(method(0, "setTimezone", &[1])),
+        "date_timezone_set" if args.len() == 2 => Some(static_call("DateTime", "__elephc_date_timezone_set")),
         "date_offset_get" if args.len() == 1 => Some(static_call("DateTime", "__elephc_date_offset_get")),
-        "date_date_set" if args.len() == 4 => Some(method(0, "setDate", &[1, 2, 3])),
-        "date_isodate_set" if args.len() == 4 => Some(method(0, "setISODate", &[1, 2, 3])),
-        "date_isodate_set" if args.len() == 3 => Some(method(0, "setISODate", &[1, 2])),
+        "date_date_set" if args.len() == 4 => Some(static_call("DateTime", "__elephc_date_date_set")),
+        "date_isodate_set" if (3..=4).contains(&args.len()) => Some(static_call("DateTime", "__elephc_date_isodate_set")),
         "date_time_set" if (3..=5).contains(&args.len()) => Some(static_call("DateTime", "__elephc_date_time_set")),
         "date_interval_format" if args.len() == 2 => Some(method(0, "format", &[1])),
         "timezone_name_get" if args.len() == 1 => Some(method(0, "getName", &[])),

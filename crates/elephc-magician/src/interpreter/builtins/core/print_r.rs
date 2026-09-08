@@ -308,6 +308,36 @@ pub(in crate::interpreter) fn eval_debug_object_properties(
     eval_debug_public_object_properties(object, values)
 }
 
+/// Collects stored object properties without user debug hooks or native date projections.
+/// Reference-target reads keep their existing semantics and require separate storage auditing.
+pub(in crate::interpreter) fn eval_object_storage_properties(
+    object: RuntimeCellHandle,
+    identity: u64,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
+    if let Some(target) = context.closure_object_target(identity).cloned() {
+        return eval_debug_closure_properties(&target, context, values);
+    }
+    if context.dynamic_object_class(identity).is_some() {
+        return eval_dynamic_object_properties_with_virtuals(object, identity, class_name, context, values, false);
+    }
+    let date_base = if values.object_is_a(object, "DateTimeImmutable", false)? {
+        Some("DateTimeImmutable")
+    } else if values.object_is_a(object, "DateTime", false)? {
+        Some("DateTime")
+    } else {
+        None
+    };
+    if let Some(base) = date_base {
+        return super::native_date_debug::native_user_properties(
+            object, class_name, base, context, values,
+        );
+    }
+    eval_debug_public_object_properties(object, values)
+}
+
 /// Builds php-src-style debug properties for one eval first-class callable object.
 fn eval_debug_closure_properties(
     target: &EvalClosureObjectTarget,
@@ -471,13 +501,25 @@ pub(super) fn eval_debug_dynamic_object_properties(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
+    eval_dynamic_object_properties_with_virtuals(object, identity, class_name, context, values, true)
+}
+
+/// Collects declared dynamic storage, optionally including virtual debug properties.
+fn eval_dynamic_object_properties_with_virtuals(
+    object: RuntimeCellHandle,
+    identity: u64,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    include_virtual: bool,
+) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
     let mut properties = Vec::new();
     let mut storage_keys = HashSet::new();
     let mut emitted_public_names = HashSet::new();
 
     for class in context.class_chain(class_name) {
         for property in class.properties() {
-            if property.is_static() {
+            if property.is_static() || (!include_virtual && property.is_virtual()) {
                 continue;
             }
             let storage_name = eval_instance_property_storage_name(class.name(), property);
@@ -489,6 +531,15 @@ pub(super) fn eval_debug_dynamic_object_properties(
             }
             let alias = context.dynamic_property_alias(identity, &storage_name).cloned();
             let value = match &alias {
+                Some(EvalReferenceTarget::Variable { scope, name }) if !include_virtual => {
+                    // The retention walk consumes its read owner, not the variable's owner.
+                    let scope = unsafe { scope.as_ref() }.ok_or(EvalStatus::RuntimeFatal)?;
+                    match visible_scope_cell(context, scope, name) {
+                        Some(value) => values.retain(value)?,
+                        None => values.null()?,
+                    }
+                }
+                Some(EvalReferenceTarget::Cell { cell }) if !include_virtual => values.retain(*cell)?,
                 Some(target) => eval_reference_target_value(target, context, values)?,
                 None => values.property_get(object, &storage_name)?,
             };

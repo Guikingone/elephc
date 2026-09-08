@@ -36,6 +36,21 @@ fn decl_extern_elephc_tz_gmmktime() -> Stmt {
         .build()
 }
 
+/// Formats native timestamps with an explicit timezone and optional output-length pointer.
+fn decl_extern_elephc_tz_format() -> Stmt {
+    extern_fn("elephc_tz_format", "elephc_tz")
+        .param("timestamp", CType::Int)
+        .param("microsecond", CType::Int)
+        .param("format", CType::Str)
+        .param("format_length", CType::Int)
+        .param("timezone", CType::Str)
+        .param("timezone_length", CType::Int)
+        .param("localtime", CType::Int)
+        .param("output_length", CType::Ptr)
+        .returns(CType::Ptr)
+        .build()
+}
+
 /// `elephc_tz_format_civil` — transcribed from the PHP form.
 fn decl_extern_elephc_tz_format_civil() -> Stmt {
     extern_fn("elephc_tz_format_civil", "elephc_tz")
@@ -695,7 +710,8 @@ pub(crate) fn timelib_declarations() -> Program {
     vec![
             decl_extern_elephc_tz_mktime(),
             decl_extern_elephc_tz_gmmktime(),
-            decl_extern_elephc_tz_format_civil(),
+        decl_extern_elephc_tz_format(),
+        decl_extern_elephc_tz_format_civil(),
             decl_extern_elephc_tz_format_civil_length(),
             decl_extern_elephc_tz_date_parse(),
             decl_extern_elephc_tz_date_parse_from_format(),

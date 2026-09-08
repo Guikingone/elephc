@@ -115,7 +115,7 @@ fn property_names(class_name: &str, values: &mut impl RuntimeValueOps) -> Result
 }
 
 /// Reads declared native user properties in base-to-derived order, then dynamic public properties.
-fn native_user_properties(
+pub(super) fn native_user_properties(
     object: RuntimeCellHandle, class_name: &str, base: &str,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {

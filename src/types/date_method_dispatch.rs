@@ -23,6 +23,9 @@ pub(crate) const NATIVE_PROCEDURAL_READS: &[(&str, &str)] = &[
 
 /// Native procedural mutators whose result aliases their first argument.
 pub(crate) const NATIVE_PROCEDURAL_MUTATORS: &[(&str, &str)] = &[
+    ("__elephc_date_date_set", "setDate"),
+    ("__elephc_date_isodate_set", "setISODate"),
+    ("__elephc_date_timezone_set", "setTimezone"),
     ("__elephc_date_time_set", "setTime"),
 ];
 

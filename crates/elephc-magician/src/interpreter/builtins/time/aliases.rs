@@ -223,11 +223,11 @@ fn eval_date_alias_result(
         }
         "date_timezone_get" => eval_static_alias("DateTime", "__elephc_date_timezone_get", args, context, values),
         "date_timezone_set" => {
-            eval_method_alias(args, 0, "setTimezone", &[1], context, values)
+            eval_static_alias("DateTime", "__elephc_date_timezone_set", args, context, values)
         }
         "date_offset_get" => eval_static_alias("DateTime", "__elephc_date_offset_get", args, context, values),
-        "date_date_set" => eval_method_alias(args, 0, "setDate", &[1, 2, 3], context, values),
-        "date_isodate_set" => eval_method_alias_tail(args, 0, "setISODate", context, values),
+        "date_date_set" => eval_static_alias("DateTime", "__elephc_date_date_set", args, context, values),
+        "date_isodate_set" => eval_static_alias("DateTime", "__elephc_date_isodate_set", args, context, values),
         "date_time_set" => eval_static_alias("DateTime", "__elephc_date_time_set", args, context, values),
         "date_interval_format" => eval_method_alias(args, 0, "format", &[1], context, values),
         "timezone_name_get" => eval_method_alias(args, 0, "getName", &[], context, values),

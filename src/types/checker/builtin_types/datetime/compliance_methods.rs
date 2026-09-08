@@ -696,7 +696,7 @@ pub(super) fn datetime_shared_methods(uses_timelib: bool) -> Vec<ClassMethod> {
         datetime_set_microsecond_raw(),
         datetime_immutable_get_timezone(),
         datetime_immutable_format(uses_timelib),
-        datetime_get_offset(),
+        datetime_get_offset(uses_timelib),
         datetime_diff_method(uses_timelib),
     ]
 }

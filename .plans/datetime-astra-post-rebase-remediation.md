@@ -24,6 +24,142 @@
 
 ## Locked audit
 
+### 2026-09-08 checkpoint: second origin/main synchronization validated
+
+- Calendar/formatting lot was committed as fcde7f791f and preserved by
+  backup/datetime-before-main-640380cf. Rebased all 13 branch commits onto
+  640380cf8856379228db77e48c142d7613ed4e48. The sole conflict combined main's nullable
+  getenv signature with the get_extension_funcs result shape; neither was discarded.
+- Post-rebase exporter build is warning-free; strict calendar mutation test PASSes
+  clean (session 39336, 34.35s). Docs were regenerated on the rebased source and
+  match the tree: 1022 builtins, 194 classes, 1090 constants, 1939 rendered pages.
+  Docs audit zero errors, 1960 site pages valid, EIR boundary zero structural errors.
+- Before this rebase, retention no-hook/reference-source tests both passed, as did
+  explicit-zone declaration models, pointer alias ownership, big/minimum ISO years
+  and five-target assembly emission. These are focused evidence, not full PHPT or
+  target execution closure. Other reference alias/container traversal remains open.
+- PR #866 stays draft. Final Astra audit, remaining parity fixes and final squash
+  are still required. Local-only tool directories remain untracked and backups kept.
+
+### 2026-09-08 checkpoint: calendar formatting and retention preparation
+
+- Stored dynamic properties aliased to Variable/Cell now acquire their own read
+  reference before the PCNTL scanner consumes it. The no-debug-hook and reference
+  source-survival native regressions both PASS (2 tests, session 30015, 71.94s).
+  Other alias targets/private container traversal remain explicitly unclosed.
+- Exporter rebuilt warning-free after this change. Regenerated 1022 builtins,
+  194 classes and 1090 constants / 1939 rendered pages. Final docs audit has
+  917 public and 911 internals pages, zero errors; 1960 pages validate. EIR boundary
+  has 632 registry AOT entries and zero structural errors. git diff --check PASS.
+- Fresh fetch shows origin/main advanced to 640380cf8856379228db77e48c142d7613ed4e48,
+  31 commits beyond the previous base. Commit this validated incremental lot before
+  the next rebase, retain backups, then resolve/validate before the next PR push.
+- Final Astra, full PHPT/matrix acceptance and the other tracked gaps remain open.
+
+### 2026-09-08 continuation: pointer-read alias ownership closes calendar heap regression
+
+- LLDB confirmed the final 48-byte block contained the formatted calendar result.
+  Internal __elephc_ptr_read_string shared the public helper's copying implementation
+  but not its RuntimeFnId result-ownership classification. Added ElephcPtrReadString
+  to the same owned-result bucket as PtrReadString, with an alias-contract unit test.
+- Strict calendar mutation regression now PASSes, including absence of Notice
+  output and clean heap (session 52535, 20.86s). Alias ownership unit PASSes;
+  big-year PHPT regression and minimum ISO-year regression both PASS.
+- Five-target assembly validation PASSes (session 20981, 48.54s). All task sessions
+  completed. Docs refresh and broader formatter/scanner alias checks remain before
+  next publication. No final audit or full parity closure.
+
+### 2026-09-08 continuation: separate retention traversal from debug projection
+
+- Added eval_object_storage_properties and routed PCNTL's post-eval scan through it.
+  It bypasses user __debugInfo and native DateTime virtual snapshots. Native date
+  subclasses still expose stored user properties; dynamic traversal excludes virtual
+  properties. Explicit debug rendering keeps its original projection path.
+- Native no-debug-hook regression PASSes (session 18131, 31.88s). Calendar mutation
+  regression emits no unexpected notices now, but still FAILS strict heap with one
+  block / 48 bytes (session 6064, 20.45s). Do not weaken the clean assertion.
+- This is not a complete physical-GC walker: dynamic reference-target reads retain
+  legacy semantics and ownership, generic native private/container references need
+  further audit, and closure capture traversal must preserve foreign-context detection.
+  These remain explicit follow-ups before claiming the retention walk is fully inert.
+- git diff --check PASS before the final validation. No task process remains active;
+  all changes after checkpoint 5fcbbbb216 remain local pending the outstanding gates.
+
+### 2026-09-08 continuation: explicit-zone AST model validation
+
+- Ran the two generated-declaration versus audited-model tests. The new test-only
+  timelib format source first lacked its PHP opening tag, then duplicated the
+  initialization guard already injected by the model builder. Corrected both
+  reference-model issues without removing the production initialization guard.
+- Both match_audited tests now PASS (session 78040, 4.02s): timezone extern
+  declarations and both DateTime declaration variants remain structurally aligned
+  with their cfg(test) models. No production PHP parsing was introduced.
+- The post-eval PCNTL storage walk remains the active blocker for the strict
+  calendar test; do not route it through debug projections or hooks. Native raw
+  property reads own their boxed results, whereas reference-target readers mix
+  borrowed and owned values and can execute access hooks. Builtin compact/container
+  layouts also preclude blindly treating reflection metadata as raw GC layout.
+- No task process remains active. Latest published checkpoint remains 5fcbbbb216;
+  native/target/formatter breadth and scanner corrections are still required.
+
+### 2026-09-08 continuation: PCNTL retention scan invokes debug hooks
+
+- Local timelib DateTime/Immutable format bodies now use elephc_tz_format with an
+  explicit timezone, localtime flag and null output-length pointer; existing civil
+  formatting remains. Added AST extern declaration and updated cfg(test) reference
+  models. getOffset uses the native format wrapper's Z token. Model/target/full
+  formatting validation still pending; these changes are not published yet.
+- Calendar heap regression still has one notice and one 48-byte allocation. LLDB
+  proves the unexpected caller is NOT the explicit format/getOffset operation:
+  execute_parsed_eval -> value_contains_foreign_pcntl_callable ->
+  eval_debug_object_properties -> eval_native_date_debug_properties ->
+  DateTime::__elephc_debug_properties (cloned serialization body).
+- Added test_datetime_eval_retention_scan_does_not_call_debug_info. Native run
+  FAILS: body|unexpected-debug|after instead of body|after. Session 32125 completed.
+  The retention scanner must inspect stored references, not execute user __debugInfo
+  or DateTime's virtual debug projection. Do not suppress notices or skip arbitrary
+  objects merely to green the test.
+- Raw property_get bridge inspected: native slots box values directly; stdClass
+  reads retain the stored Mixed cell. Neither needs debug projection. Dynamic
+  reference targets need care: eval_reference_target_value has mixed ownership and
+  ObjectProperty resolution can invoke PHP access hooks, so do not reuse it blindly
+  for a side-effect-free owning graph walk. Include private/backed/reference fields
+  and retain PCNTL foreign-closure detection while making the walk non-observable.
+- Public DateTime serialization/debug still needs explicit-zone parity separately;
+  fixing the scanner alone is not proof those surfaces emit correct fixed-offset data.
+- No task process remains active. Other worktree builds observed were unrelated and
+  left untouched. Existing draft PR checkpoint remains 5fcbbbb216.
+
+### 2026-09-08 continuation: calendar mutation heap and fixed-offset notices
+
+- Added strict calendar setter heap regression (four eval rounds, including a
+  borrowed DateTimeZone argument). Initial result had 6 blocks / 600 bytes plus
+  unexpected notices for internal timezone ID UTC-2.
+- Extended fetched argument-box cleanup to Object parameters, under the existing
+  independent-return-box guard and argument-array lifetime guarantee. Strict test
+  improves to 1 block / 48 bytes (session 60657, 28.73s); notices remain unchanged.
+  The regression now explicitly rejects Notice output as well as requiring clean heap.
+- Native DateTime::setTimezone already uses private DateTimeZone::__elephc_export_name,
+  not virtual getName; do not invent an argument-getName override gap here.
+- Confirmed timelib generated DateTime::format/getOffset still temporarily call
+  date_default_timezone_set(__elephc_runtime_timezone_name(timezone_name)); this
+  exposes POSIX UTC-2 to public PHP validation. Both mutable/immutable bodies share
+  the issue. Investigate explicit-zone bridge operations rather than suppress notices.
+- Last block still requires direct inspection. No task build active; new wrappers
+  and Object-argument cleanup remain local after published 5fcbbbb216. Final gates open.
+
+### 2026-09-08 continuation: procedural calendar and timezone mutation wrappers
+
+- Extended the existing AST/native mutable-receiver wrapper inventory to date_date_set,
+  date_isodate_set and date_timezone_set. AOT rewriting, eval aliases and eval-reachable
+  methods now use those wrappers rather than virtual calls on the receiver.
+- Native combined regression PASSes for AOT and opaque eval (53.86s): leap-day setting,
+  ISO week default day, timezone adjustment, returned receiver identity and explicit
+  virtual override calls. Exact output also verified with the frozen php-src oracle.
+- git diff --check PASS. These changes are local after published checkpoint 5fcbbbb216;
+  memory/argument-edge/target checks and docs refresh remain before the next push.
+  Other R03 mutations and all remaining campaign gates stay open. No task build active.
+
 ### 2026-09-08 checkpoint: rebased PR branch ready for incremental publication
 
 - Local branch now feat/datetime-php-src-compliance-v2, tracking fork/v2 for PR #866.
