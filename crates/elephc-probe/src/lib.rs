@@ -1166,7 +1166,7 @@ fn start_control_channel(
         }
         // The descriptor is gone; a later atfork must not close whatever now
         // occupies fd 3.
-        CONTROL_OWNED.store(false, Ordering::Relaxed);
+        forget_control_fd();
     }
 }
 
@@ -1234,12 +1234,12 @@ fn serve_control_channel() {
             if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
-            return;
+            break;
         }
         if read == 0 {
             // A real EOF: the monitor is gone, which is the end of the reason
             // this thread exists.
-            return;
+            break;
         }
         if request[0] != CONTROL_SNAPSHOT_REQUEST {
             continue;
@@ -1248,9 +1248,12 @@ fn serve_control_channel() {
         let bytes = profile.as_bytes();
         let header = (bytes.len() as u32).to_le_bytes();
         if !control_send_all(&header) || !control_send_all(bytes) {
-            return;
+            break;
         }
     }
+    // The monitor is gone. Forget so a later close of fd 3 cannot leave a
+    // stale claim that would close whatever the process opens there next.
+    forget_control_fd();
 }
 
 /// Writes every byte of `data` to the control channel, or reports that it could
@@ -1379,14 +1382,56 @@ extern "C" fn disarm_after_fork() {
 ///
 /// Called only from the atfork child hook. The child's `CONTROL_OWNED` is a
 /// copied word, so clearing it here does not change the parent.
+///
+/// The flag is not enough: a long-lived process can lose the channel, close
+/// fd 3, and reuse that number for a file or socket. Closing then would
+/// drop an unrelated descriptor in every later fork child. The recorded
+/// device and inode have to still match.
 fn drop_inherited_control_channel() {
-    if CONTROL_OWNED.swap(false, Ordering::Relaxed) {
-        // SAFETY: CONTROL_OWNED is set only after this process consumed the
-        // monitor marker on fd 3. close is async-signal-safe.
-        unsafe {
-            libc::close(CONTROL_FD);
-        }
+    if !CONTROL_OWNED.swap(false, Ordering::Relaxed) {
+        return;
     }
+    let Some((dev, ino)) = control_identity(CONTROL_FD) else {
+        return;
+    };
+    if !same_control_identity(dev, ino) {
+        return;
+    }
+    // SAFETY: fstat says this is still the socket we claimed. close is
+    // async-signal-safe.
+    unsafe {
+        libc::close(CONTROL_FD);
+    }
+}
+
+/// Device and inode of an open descriptor, or `None` if it is already closed.
+fn control_identity(fd: i32) -> Option<(u64, u64)> {
+    unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut st) != 0 {
+            return None;
+        }
+        Some((st.st_dev as u64, st.st_ino as u64))
+    }
+}
+
+/// Whether `dev`/`ino` are the control socket this process claimed.
+fn same_control_identity(dev: u64, ino: u64) -> bool {
+    dev == CONTROL_DEV.load(Ordering::Relaxed) && ino == CONTROL_INO.load(Ordering::Relaxed)
+}
+
+/// Records that fd 3 is the live-control socket, by its current inode.
+fn remember_control_fd() {
+    if let Some((dev, ino)) = control_identity(CONTROL_FD) {
+        CONTROL_DEV.store(dev, Ordering::Relaxed);
+        CONTROL_INO.store(ino, Ordering::Relaxed);
+        CONTROL_OWNED.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Forgets a control-socket claim so a later atfork will not close fd 3.
+fn forget_control_fd() {
+    CONTROL_OWNED.store(false, Ordering::Relaxed);
 }
 
 /// Disarms the profiling timer. A host that calls `execve` WITHOUT forking (a
@@ -1612,6 +1657,11 @@ static POLLED: AtomicBool = AtomicBool::new(false);
 /// inherited fd when this flag is set, and only then — fd 3 is an ordinary
 /// number on an unmonitored binary.
 static CONTROL_OWNED: AtomicBool = AtomicBool::new(false);
+/// Device of the claimed control socket. Compared at fork so a reused fd 3
+/// is not closed.
+static CONTROL_DEV: AtomicU64 = AtomicU64::new(0);
+/// Inode of the claimed control socket. Paired with `CONTROL_DEV`.
+static CONTROL_INO: AtomicU64 = AtomicU64::new(0);
 
 /// Whether this process was started by `elephc monitor`.
 ///
@@ -1681,7 +1731,7 @@ fn control_fd_present() -> bool {
         // the credential. CLOEXEC covers fork+exec (`popen`); the atfork
         // child hook closes the fd for fork-only `--web` workers.
         set_cloexec(CONTROL_FD);
-        CONTROL_OWNED.store(true, Ordering::Relaxed);
+        remember_control_fd();
         acked
     }
 }
@@ -2553,7 +2603,10 @@ mod tests {
             let (ours, theirs) = (fds[0], fds[1]);
             let saved = libc::dup(super::CONTROL_FD);
             libc::dup2(theirs, super::CONTROL_FD);
-            let owned = super::CONTROL_OWNED.swap(true, super::Ordering::Relaxed);
+            let owned = super::CONTROL_OWNED.load(super::Ordering::Relaxed);
+            let prev_dev = super::CONTROL_DEV.load(super::Ordering::Relaxed);
+            let prev_ino = super::CONTROL_INO.load(super::Ordering::Relaxed);
+            super::remember_control_fd();
 
             super::drop_inherited_control_channel();
 
@@ -2580,6 +2633,8 @@ mod tests {
                 libc::close(original);
             }
             super::CONTROL_OWNED.store(owned, super::Ordering::Relaxed);
+            super::CONTROL_DEV.store(prev_dev, super::Ordering::Relaxed);
+            super::CONTROL_INO.store(prev_ino, super::Ordering::Relaxed);
 
             assert!(gone < 0, "the child's copy of the credential must be gone");
             assert!(parent_still >= 0, "close, not shutdown: the other end stays up");
@@ -2618,6 +2673,55 @@ mod tests {
             super::CONTROL_OWNED.store(owned, super::Ordering::Relaxed);
 
             assert!(flags >= 0, "an unclaimed fd 3 must not be closed on fork");
+        }
+    }
+
+    /// A stale claim must not close a reused fd 3.
+    ///
+    /// After the monitor leaves, the process can close the control socket and
+    /// open a file or socket on the same number. The atfork hook would then
+    /// drop that resource in every later `--web` worker.
+    #[test]
+    fn a_stale_claim_does_not_close_a_reused_fd_3() {
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            let mut fds = [0i32; 2];
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()),
+                0
+            );
+            let (ours, theirs) = (fds[0], fds[1]);
+            let saved = libc::dup(super::CONTROL_FD);
+            libc::dup2(theirs, super::CONTROL_FD);
+            let owned = super::CONTROL_OWNED.load(super::Ordering::Relaxed);
+            let prev_dev = super::CONTROL_DEV.load(super::Ordering::Relaxed);
+            let prev_ino = super::CONTROL_INO.load(super::Ordering::Relaxed);
+            super::remember_control_fd();
+            libc::close(super::CONTROL_FD);
+            let replacement = libc::open(b"/dev/null\0".as_ptr().cast(), libc::O_RDONLY);
+            assert!(replacement >= 0, "must open a stand-in for the reused fd");
+            if replacement != super::CONTROL_FD {
+                libc::dup2(replacement, super::CONTROL_FD);
+                libc::close(replacement);
+            }
+
+            super::drop_inherited_control_channel();
+
+            let flags = libc::fcntl(super::CONTROL_FD, libc::F_GETFD);
+
+            if saved >= 0 {
+                libc::dup2(saved, super::CONTROL_FD);
+                libc::close(saved);
+            } else {
+                libc::close(super::CONTROL_FD);
+            }
+            libc::close(ours);
+            libc::close(theirs);
+            super::CONTROL_OWNED.store(owned, super::Ordering::Relaxed);
+            super::CONTROL_DEV.store(prev_dev, super::Ordering::Relaxed);
+            super::CONTROL_INO.store(prev_ino, super::Ordering::Relaxed);
+
+            assert!(flags >= 0, "a reused fd 3 must survive a stale control claim");
         }
     }
 
