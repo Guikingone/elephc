@@ -140,6 +140,7 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_dom",
         package: "elephc-dom",
+        // The archive exposes the three PHP extension surfaces together.
         php_extensions: &["dom", "libxml", "SimpleXML"],
     },
 ];
@@ -322,10 +323,11 @@ mod bridge_extension_tests {
             "elephc_iconv".to_string(),
             "elephc_pcntl".to_string(),
             "elephc_curl".to_string(),
+            "elephc_dom".to_string(),
         ];
         assert_eq!(
             test_linked_extensions(&linked),
-            ["iconv", "pcntl", "posix", "curl"]
+            ["iconv", "pcntl", "posix", "curl", "dom", "libxml", "SimpleXML"]
         );
     }
 }
