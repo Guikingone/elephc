@@ -1604,8 +1604,8 @@ try {
     );
 }
 
-/// Verifies direct, nested, and user-subclass SimpleXML serialization are all
-/// prohibited, even when the subclass defines a PHP `__serialize()` method.
+/// Verifies direct, child-view, and nested SimpleXML serialization always uses
+/// the effective wrapper class in PHP's denied-serialization `Exception`.
 #[test]
 fn simplexml_serialization_restrictions_ignore_subclass_serialize_hooks_and_are_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1618,15 +1618,27 @@ class SerializeOverrideXml extends SimpleXMLElement {
 
 $base = simplexml_load_string('<root><child/></root>');
 if ($base === false) { exit(2); }
-$subclass = new SerializeOverrideXml('<subclass/>');
-foreach ([$base, $subclass, ['nested' => $base]] as $value) {
+$subclass = new SerializeOverrideXml('<subclass><child/></subclass>');
+$baseChild = $base->child;
+$subclassChild = $subclass->child;
+echo get_class($base) . '|' . get_class($baseChild) . '|';
+echo get_class($subclass) . '|' . get_class($subclassChild) . "\n";
+foreach ([
+    $base,
+    $baseChild,
+    $subclass,
+    $subclassChild,
+    ['nested' => $base],
+    (object) ['nested' => $subclassChild],
+] as $value) {
     try {
         serialize($value);
     } catch (Throwable $error) {
-        echo get_class($error) . '|' . $error->getMessage() . "\n";
+        echo get_class($error) . '|' . $error->getCode() . '|';
+        echo $error->getMessage() . "\n";
     }
 }
-unset($base, $subclass);
+unset($base, $baseChild, $subclass, $subclassChild, $value);
 "#,
     );
     assert!(
@@ -1638,9 +1650,13 @@ unset($base, $subclass);
     assert_eq!(
         out.stdout,
         concat!(
-            "Exception|Serialization of 'SimpleXMLElement' is not allowed\n",
-            "Exception|Serialization of 'SerializeOverrideXml' is not allowed\n",
-            "Exception|Serialization of 'SimpleXMLElement' is not allowed\n",
+            "SimpleXMLElement|SimpleXMLElement|SerializeOverrideXml|SerializeOverrideXml\n",
+            "Exception|0|Serialization of 'SimpleXMLElement' is not allowed\n",
+            "Exception|0|Serialization of 'SimpleXMLElement' is not allowed\n",
+            "Exception|0|Serialization of 'SerializeOverrideXml' is not allowed\n",
+            "Exception|0|Serialization of 'SerializeOverrideXml' is not allowed\n",
+            "Exception|0|Serialization of 'SimpleXMLElement' is not allowed\n",
+            "Exception|0|Serialization of 'SerializeOverrideXml' is not allowed\n",
         )
     );
     assert!(
