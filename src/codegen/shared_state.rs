@@ -156,7 +156,6 @@ impl SharedCodegenState {
         self.dom_xpath_callable_resolver_emitted = true;
         true
     }
-    }
 
     /// Returns cached runtime string-callable cases for the requested specialization.
     pub(super) fn runtime_string_descriptor_cases(
