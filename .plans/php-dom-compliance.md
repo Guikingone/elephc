@@ -476,6 +476,11 @@ Legend:
   access-level error, while public `?array` remains accepted. Deeper descendants
   remain a separate open diagnostic case; focused execution remains under the
   disk gate.
+  `c192d8aeaf` closes the descendant diagnostic case: the checker follows
+  `extends` during class construction and uses the actual inherited method
+  declarant, matching PHP 8.5.8 protected/private warning+fatal chains and
+  incompatible-return fatals for native and userland ancestors. Focused
+  execution remains under the disk gate.
   `09c20c07c9` adds `ReflectionFunction::getExtensionName()` and
   `getExtension()` for all 13 DOM/libxml/SimpleXML functions via the immutable
   extension registry, including case-insensitive lookup and the runtime
