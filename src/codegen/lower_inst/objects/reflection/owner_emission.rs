@@ -67,6 +67,17 @@ pub(super) fn emit_reflection_owner_object(
                 "__class_names",
                 &metadata.interface_names,
             )?;
+            let classes = extension
+                .classes
+                .iter()
+                .map(|class| class.exported_name.clone())
+                .collect::<Vec<_>>();
+            emit_reflection_class_array_property_by_name(
+                ctx,
+                class_name,
+                "__classes",
+                &classes,
+            )?;
             emit_reflection_extension_function_array_property_by_name(
                 ctx,
                 class_name,

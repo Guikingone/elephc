@@ -411,6 +411,12 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__classes",
+                Visibility::Private,
+                Some(object_array_type("ReflectionClass")),
+                empty_array(),
+            ),
+            builtin_property(
                 "__functions",
                 Visibility::Private,
                 Some(object_array_type("ReflectionFunction")),
@@ -465,6 +471,11 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
                 "getClassNames",
                 "__class_names",
                 string_array_type(),
+            ),
+            builtin_reflection_class_array_method(
+                "getClasses",
+                "__classes",
+                object_array_type("ReflectionClass"),
             ),
             builtin_reflection_class_array_method(
                 "getFunctions",

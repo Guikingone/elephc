@@ -352,6 +352,99 @@ foreach (["dom", "libxml", "SimpleXML"] as $extension) {
     );
 }
 
+/// Verifies `ReflectionExtension::getClasses()` preserves PHP 8.5.8's ordered,
+/// string-keyed map of internal `ReflectionClass` objects for DOM-family extensions.
+#[test]
+fn reflection_extension_classes_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+foreach (["dom", "libxml", "SimpleXML"] as $extension) {
+    $reflection = new ReflectionExtension($extension);
+    $classes = $reflection->getClasses();
+    echo "extension|", $reflection->getName(), "|", count($classes), "|";
+    echo implode(",", array_keys($classes)), "\n";
+    foreach ($classes as $key => $class) {
+        echo "class|", $key, "|", get_class($class), "|", $class->getName(), "|";
+        echo $class->getExtensionName(), "|";
+        echo $class->isInternal() ? "internal" : "user", "|";
+        echo $class->isUserDefined() ? "user" : "internal", "\n";
+    }
+}
+
+try {
+    (new ReflectionExtension("not-an-extension"))->getClasses();
+    echo "missing|none\n";
+} catch (ReflectionException $error) {
+    echo "missing|", get_class($error), "|", $error->getCode(), "|", $error->getMessage(), "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "extension|dom|51|Dom\\AdjacentPosition,DOMException,dom\\domexception,DOMParentNode,Dom\\ParentNode,DOMChildNode,Dom\\ChildNode,DOMImplementation,Dom\\Implementation,DOMNode,Dom\\Node,DOMNameSpaceNode,Dom\\NamespaceInfo,DOMDocumentFragment,Dom\\DocumentFragment,Dom\\Document,DOMDocument,Dom\\HTMLDocument,Dom\\XMLDocument,DOMNodeList,Dom\\NodeList,DOMNamedNodeMap,Dom\\NamedNodeMap,Dom\\DtdNamedNodeMap,Dom\\HTMLCollection,DOMCharacterData,Dom\\CharacterData,DOMAttr,Dom\\Attr,DOMElement,Dom\\Element,DOMHTMLElement,DOMText,Dom\\Text,DOMComment,Dom\\Comment,DOMCdataSection,Dom\\CDATASection,DOMDocumentType,Dom\\DocumentType,DOMNotation,Dom\\Notation,DOMEntity,Dom\\Entity,DOMEntityReference,Dom\\EntityReference,DOMProcessingInstruction,Dom\\ProcessingInstruction,DOMXPath,Dom\\XPath,Dom\\TokenList\n",
+            "class|Dom\\AdjacentPosition|ReflectionEnum|Dom\\AdjacentPosition|dom|internal|internal\n",
+            "class|DOMException|ReflectionClass|DOMException|dom|internal|internal\n",
+            "class|dom\\domexception|ReflectionClass|DOMException|dom|internal|internal\n",
+            "class|DOMParentNode|ReflectionClass|DOMParentNode|dom|internal|internal\n",
+            "class|Dom\\ParentNode|ReflectionClass|Dom\\ParentNode|dom|internal|internal\n",
+            "class|DOMChildNode|ReflectionClass|DOMChildNode|dom|internal|internal\n",
+            "class|Dom\\ChildNode|ReflectionClass|Dom\\ChildNode|dom|internal|internal\n",
+            "class|DOMImplementation|ReflectionClass|DOMImplementation|dom|internal|internal\n",
+            "class|Dom\\Implementation|ReflectionClass|Dom\\Implementation|dom|internal|internal\n",
+            "class|DOMNode|ReflectionClass|DOMNode|dom|internal|internal\n",
+            "class|Dom\\Node|ReflectionClass|Dom\\Node|dom|internal|internal\n",
+            "class|DOMNameSpaceNode|ReflectionClass|DOMNameSpaceNode|dom|internal|internal\n",
+            "class|Dom\\NamespaceInfo|ReflectionClass|Dom\\NamespaceInfo|dom|internal|internal\n",
+            "class|DOMDocumentFragment|ReflectionClass|DOMDocumentFragment|dom|internal|internal\n",
+            "class|Dom\\DocumentFragment|ReflectionClass|Dom\\DocumentFragment|dom|internal|internal\n",
+            "class|Dom\\Document|ReflectionClass|Dom\\Document|dom|internal|internal\n",
+            "class|DOMDocument|ReflectionClass|DOMDocument|dom|internal|internal\n",
+            "class|Dom\\HTMLDocument|ReflectionClass|Dom\\HTMLDocument|dom|internal|internal\n",
+            "class|Dom\\XMLDocument|ReflectionClass|Dom\\XMLDocument|dom|internal|internal\n",
+            "class|DOMNodeList|ReflectionClass|DOMNodeList|dom|internal|internal\n",
+            "class|Dom\\NodeList|ReflectionClass|Dom\\NodeList|dom|internal|internal\n",
+            "class|DOMNamedNodeMap|ReflectionClass|DOMNamedNodeMap|dom|internal|internal\n",
+            "class|Dom\\NamedNodeMap|ReflectionClass|Dom\\NamedNodeMap|dom|internal|internal\n",
+            "class|Dom\\DtdNamedNodeMap|ReflectionClass|Dom\\DtdNamedNodeMap|dom|internal|internal\n",
+            "class|Dom\\HTMLCollection|ReflectionClass|Dom\\HTMLCollection|dom|internal|internal\n",
+            "class|DOMCharacterData|ReflectionClass|DOMCharacterData|dom|internal|internal\n",
+            "class|Dom\\CharacterData|ReflectionClass|Dom\\CharacterData|dom|internal|internal\n",
+            "class|DOMAttr|ReflectionClass|DOMAttr|dom|internal|internal\n",
+            "class|Dom\\Attr|ReflectionClass|Dom\\Attr|dom|internal|internal\n",
+            "class|DOMElement|ReflectionClass|DOMElement|dom|internal|internal\n",
+            "class|Dom\\Element|ReflectionClass|Dom\\Element|dom|internal|internal\n",
+            "class|DOMHTMLElement|ReflectionClass|DOMHTMLElement|dom|internal|internal\n",
+            "class|DOMText|ReflectionClass|DOMText|dom|internal|internal\n",
+            "class|Dom\\Text|ReflectionClass|Dom\\Text|dom|internal|internal\n",
+            "class|DOMComment|ReflectionClass|DOMComment|dom|internal|internal\n",
+            "class|Dom\\Comment|ReflectionClass|Dom\\Comment|dom|internal|internal\n",
+            "class|DOMCdataSection|ReflectionClass|DOMCdataSection|dom|internal|internal\n",
+            "class|Dom\\CDATASection|ReflectionClass|Dom\\CDATASection|dom|internal|internal\n",
+            "class|DOMDocumentType|ReflectionClass|DOMDocumentType|dom|internal|internal\n",
+            "class|Dom\\DocumentType|ReflectionClass|Dom\\DocumentType|dom|internal|internal\n",
+            "class|DOMNotation|ReflectionClass|DOMNotation|dom|internal|internal\n",
+            "class|Dom\\Notation|ReflectionClass|Dom\\Notation|dom|internal|internal\n",
+            "class|DOMEntity|ReflectionClass|DOMEntity|dom|internal|internal\n",
+            "class|Dom\\Entity|ReflectionClass|Dom\\Entity|dom|internal|internal\n",
+            "class|DOMEntityReference|ReflectionClass|DOMEntityReference|dom|internal|internal\n",
+            "class|Dom\\EntityReference|ReflectionClass|Dom\\EntityReference|dom|internal|internal\n",
+            "class|DOMProcessingInstruction|ReflectionClass|DOMProcessingInstruction|dom|internal|internal\n",
+            "class|Dom\\ProcessingInstruction|ReflectionClass|Dom\\ProcessingInstruction|dom|internal|internal\n",
+            "class|DOMXPath|ReflectionClass|DOMXPath|dom|internal|internal\n",
+            "class|Dom\\XPath|ReflectionClass|Dom\\XPath|dom|internal|internal\n",
+            "class|Dom\\TokenList|ReflectionClass|Dom\\TokenList|dom|internal|internal\n",
+            "extension|libxml|1|LibXMLError\n",
+            "class|LibXMLError|ReflectionClass|LibXMLError|libxml|internal|internal\n",
+            "extension|SimpleXML|2|SimpleXMLElement,SimpleXMLIterator\n",
+            "class|SimpleXMLElement|ReflectionClass|SimpleXMLElement|SimpleXML|internal|internal\n",
+            "class|SimpleXMLIterator|ReflectionClass|SimpleXMLIterator|SimpleXML|internal|internal\n",
+            "missing|ReflectionException|0|Extension \"not-an-extension\" does not exist\n",
+        ),
+    );
+}
+
 /// Verifies `ReflectionExtension::getConstants()` preserves PHP 8.5.8's ordered,
 /// typed DOM-family constant registries without inventing `getConstant()`.
 #[test]

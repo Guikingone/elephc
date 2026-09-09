@@ -116,13 +116,18 @@ pub(super) fn emit_reflection_constant_array(
     Ok(())
 }
 
-/// Allocates and populates a name-keyed map of full ReflectionClass objects.
+/// Allocates and populates a name-keyed map of full ReflectionClass or ReflectionEnum objects.
 pub(super) fn emit_reflection_class_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
     emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Object("ReflectionClass".to_string()));
     for name in names {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         let metadata = reflection_class_metadata_for_name(ctx, name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+        let reflector_class = if metadata.is_enum {
+            "ReflectionEnum"
+        } else {
+            "ReflectionClass"
+        };
+        emit_reflection_owner_object(ctx, reflector_class, &metadata)?;
         emit_reflection_class_hash_insert(ctx, name);
     }
     Ok(())
