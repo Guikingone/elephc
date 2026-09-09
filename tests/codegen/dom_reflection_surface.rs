@@ -422,6 +422,44 @@ try {
     );
 }
 
+/// Verifies `ReflectionExtension::getDependencies()` preserves PHP 8.5.8's ordered,
+/// string-keyed DOM-family dependency maps and unknown-extension constructor error.
+#[test]
+fn reflection_extension_dependencies_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+foreach (["dom", "libxml", "SimpleXML"] as $extension) {
+    $reflection = new ReflectionExtension($extension);
+    $dependencies = $reflection->getDependencies();
+    echo "extension|", $reflection->getName(), "|";
+    echo method_exists($reflection, "getDependencies") ? "method" : "no-method", "|";
+    echo gettype($dependencies), "|", count($dependencies), "|";
+    foreach ($dependencies as $name => $kind) {
+        echo gettype($name), ":", $name, "=", gettype($kind), ":", $kind, ";";
+    }
+    echo "\n";
+}
+
+try {
+    (new ReflectionExtension("not-an-extension"))->getDependencies();
+    echo "missing|none\n";
+} catch (ReflectionException $error) {
+    echo "missing|", get_class($error), "|", $error->getCode(), "|", $error->getMessage(), "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "extension|dom|method|array|3|string:libxml=string:Required;string:lexbor=string:Required;string:domxml=string:Conflicts;\n",
+            "extension|libxml|method|array|1|string:standard=string:Required;\n",
+            "extension|SimpleXML|method|array|2|string:libxml=string:Required;string:spl=string:Required;\n",
+            "missing|ReflectionException|0|Extension \"not-an-extension\" does not exist\n",
+        ),
+    );
+}
+
 /// Verifies `ReflectionExtension`'s DOM-family metadata predicates and versions retain the
 /// PHP 8.5.8 value and scalar-type contracts without inventing `isInternal()`.
 #[test]

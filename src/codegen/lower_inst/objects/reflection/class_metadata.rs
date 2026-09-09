@@ -82,6 +82,20 @@ pub(super) fn reflection_extension_function_names(name: &str) -> Option<&'static
     }
 }
 
+/// Returns PHP 8.5.8's ordered DOM-family dependency maps for one extension.
+pub(super) fn reflection_extension_dependencies(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    match php_symbol_key(name).as_str() {
+        "dom" => Some(&[
+            ("libxml", "Required"),
+            ("lexbor", "Required"),
+            ("domxml", "Conflicts"),
+        ]),
+        "libxml" => Some(&[("standard", "Required")]),
+        "simplexml" => Some(&[("libxml", "Required"), ("spl", "Required")]),
+        _ => None,
+    }
+}
+
 /// Returns PHP 8.5.8's ordered, typed DOM-family extension constants.
 pub(super) fn reflection_extension_constant_members(
     name: &str,

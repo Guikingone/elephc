@@ -85,6 +85,22 @@ pub(super) fn emit_reflection_owner_object(
                 "__ini_entries",
                 &[],
             )?;
+            let dependencies = reflection_extension_dependencies(reflected_name)
+                .ok_or_else(|| {
+                    CodegenIrError::unsupported(format!(
+                        "ReflectionExtension::getDependencies for unknown extension {}",
+                        reflected_name
+                    ))
+                })?
+                .iter()
+                .map(|(name, kind)| ((*name).to_string(), (*kind).to_string()))
+                .collect::<Vec<_>>();
+            emit_reflection_string_assoc_property_by_name(
+                ctx,
+                class_name,
+                "__dependencies",
+                &dependencies,
+            )?;
         }
         if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
