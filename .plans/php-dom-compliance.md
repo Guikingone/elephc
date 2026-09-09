@@ -411,9 +411,12 @@ Legend:
   constructibility/clone metadata, signatures and parameters, readonly and
   virtual properties, `Dom\\AdjacentPosition`, class/interface/trait and
   extension registration, DOM/libxml/SimpleXML function signatures, plus exact
-  arity/named/type failures. Reflection/ReflectionEnum completeness, registry
-  visibility, and exact runtime exception transport are retained as deliberate
-  reds. The parser/diagnostics/stream/entity/validation tranche is also now
+  arity/named/type failures. `17a2ad529b` closes the ReflectionEnum portion for
+  `Dom\AdjacentPosition`: metadata, inherited interface names, extension,
+  backed cases/modifiers, and the catchable non-enum/case-missing
+  `ReflectionException` behavior are fixed by the PHP 8.5.8 oracle. Broader
+  reflection registry visibility and exact runtime exception transport remain
+  deliberate reds. The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
   diagnostics, PHP stream contexts and re-entrant entity callbacks, validation
@@ -454,11 +457,14 @@ Legend:
   libxml2 2.15.3 archive were restored and verified at the locked SHA-256
   values (libxml tag commit `c94eb0210`). The serialized `-j1` oracle build is
   complete at `/private/tmp/php-dom-oracle-build-8.5.8/sapi/cli/php`; it reports
-  `PHP 8.5.8`, `libxml2 2.15.3`, statically linked libxml, and binary SHA-256
-  `6253fe2a063a1368d4a821878afebe946a604b73715f4069f687e72502ee9f79`.
-  Every expectation added in the newest XPath, GC/cache, SimpleXML, entity-
-  loader, and uncovered-route tests has now been replayed byte-for-byte against
-  that exact oracle. Elephc Cargo/heap-debug execution remains pending while
+  `PHP 8.5.8`, `libxml2 2.15.3`, statically linked libxml. The historical plan
+  recorded binary SHA-256 `6253fe2a063a1368d4a821878afebe946a604b73715f4069f687e72502ee9f79`,
+  while the currently executed binary reports
+  `39dbcea54ad34fb05672b966400e69ca4907ec95f0b81c2903180dd8b744d6fc`.
+  Version/source and library provenance are confirmed, but strict binary-hash
+  identity must be re-attested before final oracle closure. Expectations
+  replayed through the current executable are version-correct evidence, not a
+  substitute for that final identity attestation. Elephc Cargo/heap-debug execution remains pending while
   unrelated Cargo work is consuming memory after two earlier OOMs.
   Post-rebase validation on 2026-08-21 now builds the `elephc-dom` crate and a
   fresh complete bridge run passes 175 tests with zero failures. One-shot
