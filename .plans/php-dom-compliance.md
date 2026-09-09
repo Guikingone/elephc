@@ -476,6 +476,10 @@ Legend:
   inputs throw the PHP 8.5.8 catchable `ReflectionException`, code `-1`, with
   the raw input preserved in the message. Its focused codegen execution remains
   under the disk gate.
+  `b32e135116` adds `ReflectionMethod::getExtensionName()` and `getExtension()`
+  for legacy/modern DOM and SimpleXML methods, hydrating from the declaring
+  class registry while preserving the user-method `false`/`null` fallback.
+  Its focused codegen execution remains under the disk gate.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
