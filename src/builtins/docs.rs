@@ -62,6 +62,7 @@ fn area_str(area: Area) -> &'static str {
         Area::Web => "web",
         Area::Image => "image",
         Area::Opcache => "opcache",
+        Area::Xml => "xml",
     }
 }
 
@@ -192,6 +193,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::ReverseKeySort => "reverse_key_sort",
         BuiltinArgumentLowering::OpensslEncrypt => "openssl_encrypt",
         BuiltinArgumentLowering::ArraySplice => "array_splice",
+        BuiltinArgumentLowering::XmlHandlerSetter => "xml_handler_setter",
         BuiltinArgumentLowering::ArrayInternalPointer(_) => "array_internal_pointer",
     };
     let callable = match semantics.callable {
