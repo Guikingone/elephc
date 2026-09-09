@@ -333,7 +333,7 @@ pub(super) fn emit_ref_arg_cell_block(
     let pushed = writebacks.len();
     for (index, cell) in temp_cells.iter_mut().enumerate() {
         let source_ty = ctx.load_value_to_result(cell.source_value)?;
-        coerce_ref_cell_store_value(ctx, &source_ty, &cell.cell_ty)?;
+        coerce_ref_cell_store_value(ctx, &source_ty, &cell.cell_ty, true)?;
         abi::emit_push_result_value(ctx.emitter, &cell.cell_ty);
         // A push writes ONE word for every representation except `Str`/`TaggedScalar`, so
         // the cell's second word is whatever the stack happened to hold. The heap path this

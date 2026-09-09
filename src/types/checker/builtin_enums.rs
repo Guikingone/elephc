@@ -18,6 +18,7 @@ use super::Checker;
 
 const SORT_DIRECTION: &str = "SortDirection";
 const PROPERTY_HOOK_TYPE: &str = "PropertyHookType";
+const PCNTL_QOS_CLASS: &str = "Pcntl\\QosClass";
 
 /// Injects all builtin enum declarations into the checker.
 ///

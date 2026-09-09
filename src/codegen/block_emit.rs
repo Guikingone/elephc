@@ -202,7 +202,12 @@ fn emit_cdylib_dom_xpath_callable_resolver_fallback(
                 "DOM bridge cdylib has no function available for resolver metadata",
             )
         })?;
-    let layout = frame::layout_for_function(anchor_function, emitter.target, regalloc_linear);
+    let layout = frame::layout_for_function(
+        anchor_function,
+        emitter.target,
+        regalloc_linear,
+        emitter.cdylib_boundary,
+    );
     let mut ctx = FunctionContext::new(
         module,
         anchor_function,

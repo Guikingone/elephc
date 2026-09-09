@@ -363,7 +363,7 @@ pub(super) fn emit_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
     emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "Error");
-    emit_dynamic_throwable_object(ctx, "_spl_error_class_id");
+    emit_dynamic_throwable_object(ctx, "_spl_error_class_id", 0);
 }
 
 /// Throws a catchable PHP `ValueError` whose message already sits in the string-result registers.

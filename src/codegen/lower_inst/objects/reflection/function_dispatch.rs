@@ -10,6 +10,7 @@
 //!   and their raw PHP input preserved in the message on every supported target.
 
 use super::*;
+use super::owner_dispatch::emit_reflection_dispatch_jump;
 
 /// Allocates ReflectionFunction metadata from a known function or a bounded runtime extension name.
 pub(super) fn lower_reflection_function_new(

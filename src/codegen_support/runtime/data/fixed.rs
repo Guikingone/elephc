@@ -1721,7 +1721,7 @@ mod tests {
             (Platform::Linux, Arch::X86_64, "8"),
         ] {
             let target = Target::new(platform, arch);
-            let asm = emit_runtime_data_fixed(8_388_608, target);
+            let asm = emit_runtime_data_fixed(8_388_608, target, RuntimeFeatures::all());
 
             let mut seen = 0usize;
             for line in asm.lines().filter(|line| line.starts_with(".comm ")) {
@@ -1749,6 +1749,7 @@ mod tests {
         let asm = emit_runtime_data_fixed(
             8_388_608,
             Target::new(Platform::Linux, Arch::AArch64),
+            RuntimeFeatures::all(),
         );
 
         assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
@@ -1781,7 +1782,7 @@ mod tests {
             (Platform::Linux, Arch::X86_64, ""),
         ] {
             let target = Target::new(platform, arch);
-            let asm = emit_runtime_data_fixed(8_388_608, target);
+            let asm = emit_runtime_data_fixed(8_388_608, target, RuntimeFeatures::all());
             for slot in &bridge_slots {
                 let wanted = format!(".comm {prefix}{slot}, 8, ");
                 assert!(

@@ -921,7 +921,7 @@ fn emit_runtime_string_descriptor_value_impl(
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(callable, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    emit_string_name_descriptor_value_cases_loop(ctx, &cases, dest_reg, op_name)
+    emit_string_name_descriptor_value_cases_loop(ctx, &cases, dest_reg, op_name, type_error)
 }
 
 /// Selects one callable descriptor from a string name saved at the top of the stack.
@@ -930,6 +930,7 @@ fn emit_string_name_descriptor_value_cases_loop(
     cases: &[callable_dispatch::RuntimeCallableCase],
     dest_reg: &str,
     op_name: &str,
+    type_error: Option<&'static str>,
 ) -> Result<()> {
     let done_label = ctx.next_label(&format!("{}_runtime_string_descriptor_done", op_name));
     let miss_label = ctx.next_label(&format!("{}_runtime_string_descriptor_missing", op_name));
@@ -1127,6 +1128,7 @@ pub(super) fn emit_boxed_callable_descriptor_value(
             &string_cases,
             abi::int_result_reg(ctx.emitter),
             op_name,
+            None,
         )?;
     }
     abi::emit_load_int_immediate(ctx.emitter, owned_descriptor_reg, 0);
