@@ -428,6 +428,13 @@ Legend:
   `ReflectionException`, code `0`, and exact message. Mandatory builtin-doc
   regeneration/audits and focused Cargo tests remain blocked by the disk gate
   and must run before readiness or PR review.
+  `1e7f2d0ca8` additionally lowers dynamic `ReflectionExtension` names through
+  case-insensitive runtime selection, initializes its INI-entry property, and
+  composes the exact dynamic unknown-extension exception message. PHP 8.5.8
+  confirms `getINIEntries()` returns an empty array for DOM/libxml/SimpleXML.
+  The focused codegen test was started twice with one job; its cold rebuild was
+  interrupted cleanly when free disk fell to 1.8 GiB, before a verdict. It must
+  be rerun only with materially more disk headroom.
   `ac3c6df5ca` adds `ReflectionExtension::getFunctions()` with PHP 8.5.8
   ordered associative maps of internal `ReflectionFunction` objects: DOM (2),
   libxml (8), and SimpleXML (3), including canonical casing. This is
