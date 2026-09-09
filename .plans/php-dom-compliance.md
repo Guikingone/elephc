@@ -423,9 +423,11 @@ Legend:
   extension accessors. `dcfda04b09` closes dynamic `get_extension_funcs()`:
   case-insensitive dynamic names resolve the same DOM/libxml/SimpleXML tables,
   unknown names and scalar coercions return `false`, and arrays retain the
-  exact `TypeError` path. Exact unknown-ReflectionExtension exceptions, the
-  mandatory builtin-doc regeneration/audits, and focused Cargo tests remain
-  blocked by the disk gate and must run before readiness or PR review.
+  exact `TypeError` path. `5dfe86081f` also closes unknown
+  `ReflectionExtension`: the constructor emits the catchable PHP 8.5.8
+  `ReflectionException`, code `0`, and exact message. Mandatory builtin-doc
+  regeneration/audits and focused Cargo tests remain blocked by the disk gate
+  and must run before readiness or PR review.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
