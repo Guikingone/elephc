@@ -420,9 +420,11 @@ Legend:
   `feat/php-dom-compliance` with an oracle-pinned
   `ReflectionExtension`/`get_extension_funcs()` matrix: DOM (51 classes, 2
   functions), libxml (1, 8), and SimpleXML (2, 3), plus `ReflectionClass`
-  extension accessors. Its current implementation is deliberately WIP: dynamic
-  extension names and exact unknown-ReflectionExtension exceptions remain open;
-  the mandatory builtin-doc regeneration/audits and focused Cargo test are
+  extension accessors. `dcfda04b09` closes dynamic `get_extension_funcs()`:
+  case-insensitive dynamic names resolve the same DOM/libxml/SimpleXML tables,
+  unknown names and scalar coercions return `false`, and arrays retain the
+  exact `TypeError` path. Exact unknown-ReflectionExtension exceptions, the
+  mandatory builtin-doc regeneration/audits, and focused Cargo tests remain
   blocked by the disk gate and must run before readiness or PR review.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
