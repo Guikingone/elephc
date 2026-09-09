@@ -60,6 +60,62 @@ echo $made->documentElement->childNodes->length, ":", $fragment->childNodes->len
     }]);
 }
 
+/// Verifies `LIBXML_NSCLEAN` removes only redundant XML namespace declarations.
+#[test]
+fn modern_xml_document_nsclean_matches_php_8_5_8() {
+    let output = compile_and_run_capture(
+        r#"<?php
+libxml_use_internal_errors(true);
+libxml_clear_errors();
+$source = '<r xmlns="urn:root"><c xmlns="urn:root" xmlns:p="urn:p"><p:x xmlns:p="urn:p"/></c></r>';
+foreach ([0, LIBXML_NSCLEAN] as $options) {
+    $document = Dom\XMLDocument::createFromString($source, $options);
+    $root = $document->documentElement;
+    $child = $root->firstElementChild;
+    $leaf = $child->firstElementChild;
+    echo $options, "|", $document->saveXml(), "|";
+    echo $root->namespaceURI, ",", $child->namespaceURI, ",", $leaf->namespaceURI, "|";
+    echo $child->getAttribute("xmlns"), ",", $child->getAttribute("xmlns:p"), ",",
+        $leaf->getAttribute("xmlns:p"), "\n";
+}
+try {
+    Dom\XMLDocument::createFromString("<r><a></r>", LIBXML_NSCLEAN);
+} catch (Throwable $error) {
+    echo get_class($error), "|", $error->getCode(), "|", $error->getMessage(), "|";
+}
+$errors = libxml_get_errors();
+echo count($errors), "|", $errors[0]->level, "/", $errors[0]->code, "/", $errors[0]->line, "\n";
+libxml_clear_errors();
+try {
+    Dom\XMLDocument::createFromString("<r/>", 1 << 30);
+} catch (Throwable $error) {
+    echo get_class($error), "|", $error->getCode(), "|", $error->getMessage(), "|";
+    echo count(libxml_get_errors()), "\n";
+}
+"#,
+    );
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "0|<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<r xmlns=\"urn:root\"><c xmlns=\"urn:root\" xmlns:p=\"urn:p\"><p:x/></c></r>|",
+            "urn:root,urn:root,urn:p|urn:root,urn:p,urn:p\n",
+            "8192|<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<r xmlns=\"urn:root\"><c xmlns:p=\"urn:p\"><p:x/></c></r>|",
+            "urn:root,urn:root,urn:p|,urn:p,\n",
+            "DOMException|12|XML fragment is not well-formed|1|3/76/1\n",
+            "ValueError|0|Dom\\XMLDocument::createFromString(): Argument #2 ($options) contains invalid flags ",
+            "(allowed flags: LIBXML_RECOVER, LIBXML_NOENT, LIBXML_NO_XXE, LIBXML_DTDLOAD, LIBXML_DTDATTR, ",
+            "LIBXML_DTDVALID, LIBXML_NOERROR, LIBXML_NOWARNING, LIBXML_NOBLANKS, LIBXML_XINCLUDE, LIBXML_NSCLEAN, ",
+            "LIBXML_NOCDATA, LIBXML_NONET, LIBXML_PEDANTIC, LIBXML_COMPACT, LIBXML_PARSEHUGE, LIBXML_BIGLINES)|0\n",
+        ),
+        "stdout mismatch; stderr={}",
+        output.stderr,
+    );
+    assert_eq!(output.stderr, "");
+}
+
 /// Pins HTML document element properties, class token mutation, live collections, and serialization.
 #[test]
 fn modern_html_document_token_list_collection_and_property_matrix_matches_php_8_5_8() {
