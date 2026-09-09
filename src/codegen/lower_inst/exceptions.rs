@@ -73,6 +73,17 @@ pub(super) fn emit_reflection_exception(ctx: &mut FunctionContext<'_>, message: 
     );
 }
 
+/// Throws the PHP `ReflectionClass` missing-class exception with its required `-1` code.
+pub(super) fn emit_reflection_class_exception(ctx: &mut FunctionContext<'_>, message: &str) {
+    emit_static_exception_with_code(
+        ctx,
+        "ReflectionException",
+        "_spl_reflection_exception_class_id",
+        message,
+        -1,
+    );
+}
+
 /// Throws a catchable `ReflectionException` whose message is in the string-result registers.
 ///
 /// Dynamic reflection constructor errors interpolate the rejected runtime name, so their message
@@ -81,7 +92,15 @@ pub(super) fn emit_reflection_exception_from_string_result(ctx: &mut FunctionCon
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
     emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "ReflectionException");
-    emit_dynamic_throwable_object(ctx, "_spl_reflection_exception_class_id");
+    emit_dynamic_throwable_object(ctx, "_spl_reflection_exception_class_id", 0);
+}
+
+/// Throws the PHP `ReflectionClass` missing-class exception from a dynamic message result.
+pub(super) fn emit_reflection_class_exception_from_string_result(ctx: &mut FunctionContext<'_>) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "ReflectionException");
+    emit_dynamic_throwable_object(ctx, "_spl_reflection_exception_class_id", -1);
 }
 
 /// The register condition a materialized builtin argument must satisfy to skip its
@@ -305,6 +324,7 @@ pub(super) fn emit_argument_count_error(
         "_spl_argument_count_error_class_id",
         message,
         location,
+        0,
     );
 }
 
@@ -318,7 +338,14 @@ pub(super) fn emit_type_error_at(
     message: &str,
     location: Option<(String, u32)>,
 ) {
-    emit_static_exception_at(ctx, "TypeError", "_spl_type_error_class_id", message, location);
+    emit_static_exception_at(
+        ctx,
+        "TypeError",
+        "_spl_type_error_class_id",
+        message,
+        location,
+        0,
+    );
 }
 
 /// Throws a catchable PHP `Error` whose message is a runtime string value.
@@ -327,7 +354,7 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
     ctx.load_string_value_to_regs(message, message_ptr_reg, message_len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
     emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "Error");
-    emit_dynamic_throwable_object(ctx, "_spl_error_class_id");
+    emit_dynamic_throwable_object(ctx, "_spl_error_class_id", 0);
     Ok(())
 }
 
@@ -352,7 +379,7 @@ pub(super) fn emit_value_error_from_string_result(ctx: &mut FunctionContext<'_>)
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
     emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "ValueError");
-    emit_dynamic_throwable_object(ctx, "_spl_value_error_class_id");
+    emit_dynamic_throwable_object(ctx, "_spl_value_error_class_id", 0);
 }
 
 /// Throws a catchable PHP `TypeError` whose message already sits in the string-result registers.
@@ -370,7 +397,7 @@ pub(super) fn emit_type_error_from_current_string(ctx: &mut FunctionContext<'_>)
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
     emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "TypeError");
-    emit_dynamic_throwable_object(ctx, "_spl_type_error_class_id");
+    emit_dynamic_throwable_object(ctx, "_spl_type_error_class_id", 0);
 }
 
 /// Throws a catchable `DOMException` from message and code fields in a native result frame.
@@ -638,7 +665,18 @@ fn emit_static_exception(
     class_id_symbol: &str,
     message: &str,
 ) {
-    emit_static_exception_at(ctx, class_name, class_id_symbol, message, None);
+    emit_static_exception_with_code(ctx, class_name, class_id_symbol, message, 0);
+}
+
+/// Allocates a static throwable with an explicit public exception code.
+fn emit_static_exception_with_code(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    class_id_symbol: &str,
+    message: &str,
+    exception_code: i64,
+) {
+    emit_static_exception_at(ctx, class_name, class_id_symbol, message, None, exception_code);
 }
 
 /// Same, for an emitter that KNOWS the source location the throwable belongs to.
@@ -658,6 +696,7 @@ fn emit_static_exception_at(
     class_id_symbol: &str,
     message: &str,
     location: Option<(String, u32)>,
+    exception_code: i64,
 ) {
     let suffix = match &location {
         Some((file, line)) => format!(" in {}:{}", file, line),
@@ -685,7 +724,8 @@ fn emit_static_exception_at(
             ctx.emitter.instruction("str x9, [x0, #8]");                        // store the static exception message pointer
             abi::emit_load_int_immediate(ctx.emitter, "x9", message_len as i64);
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the exception message length
-            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            abi::emit_load_int_immediate(ctx.emitter, "x9", exception_code);
+            ctx.emitter.instruction("str x9, [x0, #24]");                       // store the PHP-visible exception code
             super::objects::throwable_new::emit_throwable_creation_line_aarch64(
                 ctx,
                 "x0",
@@ -708,7 +748,8 @@ fn emit_static_exception_at(
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the static exception message pointer
             abi::emit_load_int_immediate(ctx.emitter, "r10", message_len as i64);
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the exception message length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            abi::emit_load_int_immediate(ctx.emitter, "r10", exception_code);
+            ctx.emitter.instruction("mov QWORD PTR [rax + 24], r10");           // store the PHP-visible exception code
             super::objects::throwable_new::emit_throwable_creation_line_x86_64(
                 ctx,
                 "rax",
@@ -844,7 +885,11 @@ fn emit_uncaught_exit(ctx: &mut FunctionContext<'_>) {
 /// `class_id_symbol` selects the built-in class the object reports (`_spl_error_class_id`,
 /// `_spl_value_error_class_id`, …). The message pointer/length come from the 16-byte temporary
 /// the caller pushed, which is released once both words have been copied into the object.
-fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol: &str) {
+fn emit_dynamic_throwable_object(
+    ctx: &mut FunctionContext<'_>,
+    class_id_symbol: &str,
+    exception_code: i64,
+) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
@@ -858,7 +903,8 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction("str x9, [x0, #8]");                        // store the runtime exception message pointer
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the runtime exception message length
-            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            abi::emit_load_int_immediate(ctx.emitter, "x9", exception_code);
+            ctx.emitter.instruction("str x9, [x0, #24]");                       // store the PHP-visible exception code
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -877,7 +923,8 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the runtime exception message pointer
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the runtime exception message length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            abi::emit_load_int_immediate(ctx.emitter, "r10", exception_code);
+            ctx.emitter.instruction("mov QWORD PTR [rax + 24], r10");           // store the PHP-visible exception code
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);

@@ -36,6 +36,9 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
     if class_name == "ReflectionExtension" {
         return lower_reflection_extension_new(ctx, inst);
     }
+    if class_name == "ReflectionClass" {
+        return lower_reflection_class_new(ctx, inst);
+    }
     if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
         emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
     } else {
@@ -46,6 +49,135 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Allocates `ReflectionClass` from an object, a static name, or a bounded DOM runtime name.
+fn lower_reflection_class_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let Some(value) = inst.operands.first().copied() else {
+        let metadata = empty_reflection_metadata();
+        emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+        let result = inst.result.ok_or_else(|| {
+            CodegenIrError::invalid_module("reflection object_new missing result")
+        })?;
+        return ctx.store_result_value(result);
+    };
+
+    if let Some(object_operand) = reflection_object_operand(ctx, "ReflectionClass", inst)? {
+        emit_reflection_owner_from_runtime_object(ctx, "ReflectionClass", object_operand)?;
+    } else if let Some(name) = const_optional_string_operand(ctx, value, "ReflectionClass")? {
+        let metadata = reflection_class_metadata_for_name(ctx, &name)?;
+        if metadata.reflected_name.is_none() {
+            super::super::super::exceptions::emit_reflection_class_exception(
+                ctx,
+                &format!("Class \"{}\" does not exist", name),
+            );
+            return Ok(());
+        }
+        emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+    } else {
+        emit_runtime_dom_reflection_class(ctx, value)?;
+    }
+
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
+    ctx.store_result_value(result)
+}
+
+/// Selects static DOM ReflectionClass metadata from a case-insensitive runtime class name.
+fn emit_runtime_dom_reflection_class(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let mut classes = ctx
+        .module
+        .class_infos
+        .keys()
+        .filter(|name| reflection_extension_name_for_class(name) == Some("dom"))
+        .cloned()
+        .collect::<Vec<_>>();
+    classes.sort_unstable();
+    let done_label = ctx.next_label("reflection_class_done");
+    let case_labels = classes
+        .iter()
+        .map(|_| ctx.next_label("reflection_class_case"))
+        .collect::<Vec<_>>();
+
+    for (class, label) in classes.iter().zip(case_labels.iter()) {
+        emit_reflection_class_name_compare(ctx, value, class, label)?;
+        emit_reflection_class_name_compare(ctx, value, &format!("\\{}", class), label)?;
+    }
+    emit_runtime_reflection_class_exception(ctx, value)?;
+
+    for (class, label) in classes.iter().zip(case_labels.iter()) {
+        ctx.emitter.label(label);
+        let metadata = reflection_class_metadata_for_name(ctx, class)?;
+        emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+        emit_reflection_dispatch_jump(ctx, &done_label);
+    }
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Builds PHP's missing-class message from the rejected dynamic ReflectionClass name.
+fn emit_runtime_reflection_class_exception(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    const PREFIX: &str = "Class \"";
+    const SUFFIX: &str = "\" does not exist";
+
+    let (prefix_label, prefix_len) = ctx.data.add_string(PREFIX.as_bytes());
+    let (suffix_label, suffix_len) = ctx.data.add_string(SUFFIX.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
+            ctx.load_string_value_to_regs(value, "x3", "x4")?;
+            abi::emit_call_label(ctx.emitter, "__rt_concat");
+            abi::emit_symbol_address(ctx.emitter, "x3", &suffix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", suffix_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_concat");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", &prefix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
+            ctx.load_string_value_to_regs(value, "rdi", "rsi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_concat");
+            abi::emit_symbol_address(ctx.emitter, "rdi", &suffix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", suffix_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_concat");
+        }
+    }
+    super::super::super::exceptions::emit_reflection_class_exception_from_string_result(ctx);
+    Ok(())
+}
+
+/// Branches to a DOM ReflectionClass metadata case for a case-insensitive runtime name.
+fn emit_reflection_class_name_compare(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    class_name: &str,
+    matched_label: &str,
+) -> Result<()> {
+    let (label, len) = ctx.data.add_string(class_name.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(value, "x1", "x2")?;
+            abi::emit_symbol_address(ctx.emitter, "x3", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter.instruction("cmp x0, #0");                              // compare the runtime class name without PHP case sensitivity
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // select the matching DOM ReflectionClass metadata
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(value, "rdi", "rsi")?;
+            abi::emit_symbol_address(ctx.emitter, "rdx", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter.instruction("test rax, rax");                           // compare the runtime class name without PHP case sensitivity
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // select the matching DOM ReflectionClass metadata
+        }
+    }
+    Ok(())
 }
 
 /// Allocates a bounded DOM-family ReflectionExtension from literal or runtime string input.
