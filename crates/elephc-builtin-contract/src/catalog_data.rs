@@ -12986,6 +12986,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("get_extension_funcs"),
         name: "get_extension_funcs",
         area: Area::System,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12996,6 +12998,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
         ],
         variadic: None,
+        variadic_by_ref: false,
         min_args: None,
         max_args: None,
         arity_error: None,
