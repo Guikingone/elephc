@@ -100,6 +100,20 @@ echo count($nodes);
     );
 }
 
+/// Verifies direct XPath indexing type-checks after excluding its documented false and null cases.
+#[test]
+fn simplexml_xpath_direct_index_passes_checker() {
+    expect_no_error(
+        r#"<?php
+$xml = simplexml_load_string('<root><child>first</child></root>');
+if ($xml === false) { exit(2); }
+$nodes = $xml->xpath('/root/child');
+if ($nodes === false || $nodes === null) { exit(3); }
+echo (string) $nodes[0];
+"#,
+    );
+}
+
 /// Verifies the XPath exception does not admit unrelated scalar union arms.
 #[test]
 fn simplexml_xpath_count_does_not_widen_unrelated_unions() {

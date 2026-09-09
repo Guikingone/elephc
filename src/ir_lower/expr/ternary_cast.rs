@@ -157,12 +157,18 @@ fn lower_object_cast(
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
             };
-            let hash = coerce_container_to_mixed_payload(
-                ctx,
-                cloned,
-                &source_type,
-                &hash_type,
-                expr.span,
+            // A hash whose static value type is `Mixed` can still contain
+            // scalar entries tagged as their concrete runtime forms. `stdClass`
+            // property reads require every entry to be a boxed Mixed cell, so
+            // normalize the private clone even when its nominal payload is
+            // already Mixed.
+            let hash = ctx.emit_value(
+                Op::HashToMixed,
+                vec![cloned.value],
+                None,
+                hash_type,
+                Op::HashToMixed.default_effects(),
+                Some(expr.span),
             );
             release_cast_source_if_owned(ctx, value, expr.span);
             ctx.emit_value(

@@ -415,15 +415,36 @@ fn lower_dom_collection_method_from_value(
     let mut operands = Vec::with_capacity(arguments.len() + 1);
     operands.push(receiver.value);
     operands.extend(arguments.iter().copied());
-    let result = crate::ir_lower::internal_extensions::emit_call(
-        ctx,
-        opcode,
-        crate::ir_lower::internal_extensions::FLAG_RECEIVER
-            | internal_extension_result_flags(&result_type),
-        operands,
-        result_type,
-        expr.span,
-    );
+    // A legacy XPath query has a `DOMNodeList|false` receiver. Keep that boxed
+    // union on the object arm and let the existing mixed MethodCall dispatcher
+    // prove its runtime class before entering the native ABI. Emitting a direct
+    // InternalExtensionCall here would ask the bridge materializer to interpret
+    // the widened receiver without the class dispatch that established the
+    // object arm. Concrete collections retain the direct typed fast path.
+    let result = if matches!(
+        ctx.builder.value_php_type(receiver.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        let method_data = ctx.intern_string(method);
+        ctx.emit_value(
+            Op::MethodCall,
+            operands,
+            Some(Immediate::Data(method_data)),
+            result_type,
+            Op::MethodCall.default_effects(),
+            Some(expr.span),
+        )
+    } else {
+        crate::ir_lower::internal_extensions::emit_call(
+            ctx,
+            opcode,
+            crate::ir_lower::internal_extensions::FLAG_RECEIVER
+                | internal_extension_result_flags(&result_type),
+            operands,
+            result_type,
+            expr.span,
+        )
+    };
     release_owned_call_arg_temporaries_with_signature(
         ctx,
         &arguments,

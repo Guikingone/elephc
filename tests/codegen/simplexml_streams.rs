@@ -8,7 +8,7 @@
 //! - Stream callbacks re-enter SimpleXML without retaining the native context borrow.
 //! - Zero-byte writes are successful for SimpleXML, while explicit false remains failure.
 
-use crate::support::{compile_and_run, compile_and_run_capture};
+use crate::support::{compile_and_run, compile_and_run_capture, compile_and_run_with_heap_debug};
 
 /// Verifies `asXML()` and `saveXML()` use registered streams with PHP boolean results.
 #[test]

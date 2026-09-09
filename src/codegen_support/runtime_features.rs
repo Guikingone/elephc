@@ -133,6 +133,9 @@ impl RuntimeFeatures {
             | ((self.generator as u64) << 9)
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
+            // Keep this newly-added feature at the end: cache-key positions are persistent,
+            // and moving the existing bits would alias objects produced by older compilers.
+            | ((self.dom_bridge as u64) << 12)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.

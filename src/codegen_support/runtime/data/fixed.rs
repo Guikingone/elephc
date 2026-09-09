@@ -1391,8 +1391,6 @@ pub(crate) fn emit_runtime_data_fixed(
     // newline, the `1` rendered for boolean true, and a 64-space pad used by
     // the recursive indentation helper (written in <=64-byte chunks).
     out.push_str(".globl _pr_array_hdr\n_pr_array_hdr:\n    .ascii \"Array\\n\"\n");
-    out.push_str(".globl _pr_object_suffix\n_pr_object_suffix:\n    .ascii \" Object\\n\"\n");
-    out.push_str(".globl _pr_recursion\n_pr_recursion:\n    .ascii \" *RECURSION*\"\n");
     out.push_str(".globl _debug_info_null_prefix\n_debug_info_null_prefix:\n    .ascii \"Deprecated: Returning null from \"\n");
     out.push_str(".globl _debug_info_null_suffix\n_debug_info_null_suffix:\n    .ascii \"::__debugInfo() is deprecated, return an empty array instead\\n\"\n");
     out.push_str(".globl _debug_info_invalid_return\n_debug_info_invalid_return:\n    .ascii \"Fatal error: __debuginfo() must return an array\\n\"\n");
@@ -1649,6 +1647,25 @@ mod dom_internal_extension_tests {
         assert!(included.contains("_elephc_dom_xpath_object_type_error"));
         assert!(included.contains("_elephc_dom_loader_context_directory"));
         assert!(included.contains("_elephc_dom_loader_context_ext_sub_system"));
+    }
+
+    /// Verifies the object walker has one canonical definition for each shared print_r literal.
+    #[test]
+    fn test_fixed_runtime_data_defines_print_r_object_literals_once() {
+        let asm = emit_runtime_data_fixed(
+            1024,
+            Target::new(Platform::MacOS, Arch::AArch64),
+            RuntimeFeatures::none(),
+        );
+
+        for symbol in ["_pr_object_suffix", "_pr_recursion"] {
+            let definition = format!(".globl {symbol}\n{symbol}:");
+            assert_eq!(
+                asm.match_indices(&definition).count(),
+                1,
+                "{symbol} must have exactly one fixed-runtime definition"
+            );
+        }
     }
 }
 

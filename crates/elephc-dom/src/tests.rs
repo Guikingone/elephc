@@ -5011,6 +5011,107 @@ fn native_xpath_context_namespace_registration_is_per_call() {
     }
 }
 
+/// Verifies modern HTML XPath preserves PHP's default-namespace selection rules.
+///
+/// PHP's Lexbor bridge gives ordinary modern HTML elements the XHTML default
+/// namespace, so the unprefixed XPath name test `//p` intentionally matches no
+/// nodes. `Dom\HTML_NO_DEFAULT_NS` disables that conversion, whereupon the same
+/// expression selects the HTML paragraph and returns its text content. Invalid
+/// expressions remain modern XPath errors on both native document variants.
+#[test]
+fn native_modern_html_xpath_honors_default_namespace_and_invalid_query_contracts() {
+    const HTML_NO_DEFAULT_NS: u32 = 2_147_483_648;
+    const SOURCE: &[u8] = b"<!doctype html><html><body><p>C</p></body></html>";
+
+    let default_document = crate::native::document_parse_html5(
+        SOURCE,
+        0,
+        None,
+        b"native-modern-html-xpath-default",
+    )
+    .expect("default modern HTML parsing succeeds")
+    .document
+    .expect("default modern HTML document exists");
+    let default_result = crate::native::xpath_evaluate(
+        default_document,
+        None,
+        true,
+        true,
+        true,
+        b"//p",
+        &[],
+        0,
+        None,
+        0,
+        &[],
+    )
+    .expect("default modern HTML XPath evaluation returns an outcome");
+    assert_eq!(default_result.status, 0);
+    assert!(matches!(
+        default_result.value,
+        crate::native::XPathValue::Nodes(ref pointers) if pointers.is_empty()
+    ));
+
+    let no_default_document = crate::native::document_parse_html5(
+        SOURCE,
+        HTML_NO_DEFAULT_NS,
+        None,
+        b"native-modern-html-xpath-no-default",
+    )
+    .expect("namespace-free modern HTML parsing succeeds")
+    .document
+    .expect("namespace-free modern HTML document exists");
+    let no_default_result = crate::native::xpath_evaluate(
+        no_default_document,
+        None,
+        true,
+        true,
+        true,
+        b"//p",
+        &[],
+        0,
+        None,
+        0,
+        &[],
+    )
+    .expect("namespace-free modern HTML XPath evaluation returns an outcome");
+    assert_eq!(no_default_result.status, 0);
+    let crate::native::XPathValue::Nodes(pointers) = no_default_result.value else {
+        panic!("namespace-free modern HTML XPath query must return a node set");
+    };
+    assert_eq!(pointers.len(), 1);
+    assert_eq!(
+        crate::native::node_name(pointers[0]).as_deref(),
+        Some(b"p".as_slice())
+    );
+    assert_eq!(
+        crate::native::node_content(pointers[0]).as_deref(),
+        Some(b"C".as_slice())
+    );
+
+    let invalid = crate::native::xpath_evaluate(
+        no_default_document,
+        None,
+        true,
+        true,
+        true,
+        b"//*[",
+        &[],
+        0,
+        None,
+        0,
+        &[],
+    )
+    .expect("invalid modern HTML XPath returns an outcome");
+    assert_eq!(invalid.status, 3);
+    assert!(!invalid.errors.is_empty());
+
+    unsafe {
+        crate::native::document_free(default_document);
+        crate::native::document_free(no_default_document);
+    }
+}
+
 /// Verifies modern XPath state, scalar results, and node-list snapshots through the public ABI.
 #[test]
 fn xpath_round_trips_through_public_bridge_operations() {

@@ -33,7 +33,8 @@ use super::builtin_interfaces::{apply_implicit_stringable_interfaces, inject_bui
 use super::builtin_iterators::{inject_builtin_iterators, patch_builtin_generator_signatures};
 use super::builtin_json::{inject_builtin_json_interfaces, patch_builtin_json_signatures};
 use super::builtin_spl_classes::{
-    inject_builtin_spl_classes, patch_builtin_spl_storage_signatures,
+    inject_builtin_internal_iterator, inject_builtin_spl_classes,
+    patch_builtin_spl_storage_signatures,
 };
 use super::builtin_spl_exceptions::inject_builtin_spl_exceptions;
 use super::builtin_stdclass::inject_builtin_stdclass;
@@ -238,6 +239,9 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_spl_classes(&mut interface_map, &mut class_map, register_spl)
     {
         errors.extend(error.flatten());
+    }
+    if !register_spl {
+        inject_builtin_internal_iterator(&mut class_map);
     }
     if let Err(error) = inject_builtin_stdclass(&mut class_map) {
         errors.extend(error.flatten());

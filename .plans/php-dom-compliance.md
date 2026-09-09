@@ -1,21 +1,22 @@
 # PHP DOM 8.5 compliance plan
 
-Last verified: 2026-08-21
+Last verified: 2026-09-08
 
 Authoritative branch: `feat/php-dom-compliance`
 
 Authoritative worktree:
 `/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/php-dom-compliance`
 
-Current committed implementation checkpoint: `65727371d`
-(`test(dom): checkpoint coverage and safety hardening`), containing rebased
-implementation checkpoint `dfacafcf1`.
+Current committed implementation checkpoint: `a7eedb639`
+(`fix(dom): harden ownership and coverage after rebase`), containing test
+checkpoint `65727371d` and rebased implementation checkpoint `dfacafcf1`.
 
-Current branch head before this plan-only synchronization update: `65727371d`.
+Current branch implementation head before this plan-only update: `a7eedb639`.
 
-Current published synchronization checkpoint: `19ca0cddd`
-(`docs(dom): record main synchronization`), containing implementation/test
-checkpoint `65727371d`.
+Current published synchronization checkpoint: `38c954cfd`
+(`docs(dom): record synchronized publication`). The newer implementation
+checkpoint `a7eedb639` remains local until the final compiler check is
+warning-free.
 
 Current synchronized upstream baseline: `1c6bb5e34`
 (`chore: update repository stats`)
@@ -96,6 +97,264 @@ Legend:
 - [x] Add compiler lowering and runtime materialization for native DOM wrappers,
   structured `DOMException`/`ValueError`/`Error`, and `LibXMLError` values.
 - [~] Implement the complete PHP 8.5.8 DOM/libxml/SimpleXML behavior.
+- [~] Integrate the shared catalog libxml2 architecture requested in PR #654
+  review comment `5575789261`. PR #913 (`feat/xml`, currently open at
+  `f3385c2e`) supplies the authoritative libxml2 2.15.3 package and opaque shim;
+  it is not yet on `main`, so the migration is isolated in the dedicated
+  `feat/php-dom-libxml2-catalog` worktree rather than making the active DOM PR
+  depend on an unmerged branch. The isolated transplant at `ccc03c7c34` removes
+  DOM's vendored libxml/CMake build, deduplicates DOM/XML package requirements,
+  preserves the `DOM -> shim -> libxml2` link order and Apple `iconv`, and
+  provisions CI/examples without system fallback. A fresh independent audit on
+  2026-09-08 is a strict **NO-GO**: production DOM C adapters still access
+  libxml2 structure members directly (rather than only through the versioned
+  catalog shim); `ELEPHC_DOM_LIBXML2_PREFIX` checks file presence but not the
+  receipt identity; and the automatic bridge build detects the host and omits
+  Cargo's complete cross target, which can produce a host archive for iOS. The
+  integration must eliminate or precisely account for every direct-layout
+  access, authenticate the managed receipt, and make cross-target builds
+  target-safe before its build/link, iOS DOM matrix, and independent re-review
+  gates can run. It must not be rebased into the active DOM PR before #913 is
+  merged and those gates are green. A narrow, non-published follow-up adds the
+  installed opaque header, receipt SHA-256 verification, shim archive linkage,
+  and migrates `document_metadata.c`; its C shim compiles warning-free with
+  `-Werror -fsyntax-only` against the pinned libxml2 2.15.3 headers. This is
+  only a coherent first slice: the remaining DOM adapters still have direct
+  layout accesses and preserve the integration NO-GO.
+  A second bounded slice migrates the `engine.c` DOM-navigation helpers
+  (children, siblings, parent and descendant traversal) through the opaque
+  `elephc_libxml2_v1_node_*` API. `scripts/check_dom_native_archives.sh` now
+  checks that covered helpers do not regress to direct layout reads, and
+  `crates/elephc-dom/native/LIBXML2_OPAQUE_ACCESS_LEDGER.md` records the
+  remaining real libxml2 families (parser/errors, documents, nodes/attributes/
+  namespaces, XPath, DTD/entities, mutation/clone). `git diff --check`, shell
+  syntax, and the bounded guard pass; the catalog prefix and Lexbor headers
+  were unavailable for a full C syntax check, so no compile claim is made.
+  A third bounded slice migrates the layout-sensitive `xmlNode`, `xmlAttr`,
+  `xmlNs`, and document-encoding reads/writes in `simplexml.c`, adding only
+  `node_document` and `node_namespace_definitions` to the opaque v1 ABI. Its
+  targeted static guard, ledger update, shell syntax, and direct-access scan
+  pass without counting Elephc-local structs. The remaining `engine.c` parser,
+  error, XPath, DTD/entity, and mutation/clone families are still open, so this
+  is not an opaque-boundary completion claim.
+  A fourth bounded slice moves the parser resource-loader state and structured
+  error capture in `engine.c` behind four parser-context getters, seven
+  `xmlError` getters, and a synthetic-error initializer. The native recipe
+  dispatcher, catalog, locks, examples, and provider test now consistently use
+  recipe revision 2, preventing a cached r1 shim from satisfying a newer ABI.
+  The complete shim compiles warning-free with `-Werror -fsyntax-only` against
+  the pinned 2.15.3 headers; its shell guard and the 24 managed-provider tests
+  pass. This validation covers the migrated slices only, not the still-open
+  document, namespace, XPath, mutation, DTD/entity, clone, and legacy-declaration
+  families.
+  A fifth bounded slice moves document URL/encoding access, modern-XML marker
+  storage, conversion-child traversal, and `oldNs` insertion through the shim.
+  Its opaque URL and `_private` operations are guarded over the exact affected
+  `engine.c` ranges; the shim is again syntax-checked with `-Werror` against
+  libxml2 2.15.3. Namespace lookup/repair, XPath, mutators, DTD/entity,
+  clone/template, and legacy-declaration removal remain explicitly open.
+  A sixth bounded slice moves namespace lookup, repair, and validation-guard
+  operations through six additional opaque ABI calls (link/property/nsDef
+  setters, namespace-private access, and local-namespace construction). The
+  targeted two-range guard, diff hygiene, and `-Werror` shim syntax check against
+  libxml2 2.15.3 pass. XInclude/conversion, XPath, general mutators, DTD/entity,
+  clone/template, enumeration, and legacy declaration removal remain open in the
+  ledger.
+  A seventh bounded slice moves XInclude collection plus modern-HTML/XML
+  construction and `xmlns` conversion through the shim, adding only
+  `node_set_private` for the synthetic namespace attribute. Its exact-range
+  guard, shim `-Werror` syntax check against the pinned headers, and diff/shell
+  checks pass. XPath, general mutations, DTD/entities, clone/template,
+  namespace enumeration, and legacy declarations are still open.
+  An eighth bounded slice moves XPath context/parser-context, objects,
+  node-sets, callback conversion, C14N XPath execution, and namespace-node
+  materialization through the opaque catalog ABI. A const-correct node-set item
+  view aligns the C header, consumer, and Rust ABI struct. The full shim passes
+  `-Werror -fsyntax-only` against libxml2 2.15.3 after the change. General
+  mutators, DTD/entities, clone/template, enumeration, and legacy declaration
+  removal remain open and prohibit a completion claim.
+  A ninth bounded slice migrates the structural DOM mutators `append_child`,
+  `unlink_child`, `insert_before`, and `replace_child` using opaque child/last/
+  parent setters. Its exact structural-link scan is zero and the shim again
+  passes the pinned-header `-Werror` syntax check. Attributes, text/character
+  data, template and other mutators remain open; 461 lexical candidates in the
+  broader mutation ranges are recorded as unresolved rather than treated as
+  coverage.
+  A tenth bounded slice moves attribute setters, attachment/detachment,
+  adoption, `set/removeAttributeNode`, and `removeAttribute` through the
+  existing opaque node/namespace ABI. Its exact range has zero direct layout
+  accesses and is guarded without adding duplicate ABI symbols. CharacterData,
+  templates, DTD/entities, clone/template, enumeration, and legacy namespace
+  operations remain pending.
+  An eleventh bounded slice routes the shared CharacterData content helper
+  through the existing opaque `node_content` getter, covering length,
+  substring, append, insert, delete, and replace operations. The guard ends
+  before the separate `wholeText` family and confirms zero direct content
+  layout reads in the covered range. Templates, `wholeText`, DTD/entities,
+  clone/template, enumeration, and legacy namespace work remain pending.
+  A twelfth bounded slice routes DTD tables and identifiers, entity metadata,
+  and notation payloads through a dedicated opaque ABI. Its guarded `engine.c`
+  ranges no longer read the relevant layout members directly; the C shim passes
+  `-Werror` against the pinned headers. Template/clone, enumeration, legacy
+  declarations, `wholeText`, and the remaining general mutators are still open.
+  A thirteenth bounded slice routes cloned template-fragment initialization
+  through `document_adopt_node` using existing opaque operations. Its range
+  guard, shell syntax, diff hygiene, and pinned-header shim syntax check pass.
+  Enumeration, legacy declarations, `wholeText`, and the remaining mutator
+  families are still open.
+  A fourteenth bounded slice migrates public namespace/attribute enumeration
+  and legacy `oldNs` declaration removal behind opaque operations, adding only
+  identity-clear and namespace-link setters. Its three guarded ranges report
+  zero direct libxml2 accesses (Elephc-local structs excluded), and the shim
+  passes the pinned-header syntax check. `wholeText` and other residual mutator
+  families remain open.
+  A fifteenth bounded slice routes `wholeText` neighbour traversal and content
+  aggregation through existing opaque next/previous/type/content operations.
+  Its range guard has zero direct layout accesses and ends before `splitText`;
+  `splitText` and the remaining mutator families stay open.
+  A sixteenth bounded slice routes `splitText` through opaque document/parent
+  accessors and a new node-type setter. Its targeted scan has no direct
+  document/parent/type layout reads; other mutator families remain pending.
+  On 2026-09-08 the catalog integration was rebased onto the live #913 head
+  `11826c34ff7914a6438cf2a455d939a654afd943`, preserving #913's authoritative
+  XML implementation and retaining 22 DOM/catalog commits at local head
+  `edc799a0ac` before the CI follow-up. The rebased CI now provisions the
+  locked libxml2 artifact before the workspace build and inspects JSON-reported
+  DOM/XML archives; its 24 provider tests, shell syntax, pinned-header shim
+  syntax check, and diff hygiene pass at local head `8fc04fafd8`. #913 remains
+  open, so the integration remains unpublished and cannot yet be made a
+  dependency of PR #654.
+  On 2026-09-09 #913 advanced again, so the integration was rebased a second
+  time onto `800885e1f1fb3a4d81039e802ca2b45202e4cd72`. The XML bridge remains
+  exactly #913's implementation; 34 DOM/catalog commits replay at local head
+  `cc2847c771995024d3b8910fd92e3ce45d6dbc56`. The exact rebased tree passes
+  `git diff --check`, pinned-header shim `-Werror` syntax, shell syntax, and
+  all 24 provider tests. It remains unpublished while #913 is open and the
+  DOM completion gates are unresolved.
+  Per user direction on 2026-09-09, `feat/php-dom-compliance` is the only
+  development and publication branch. The mistakenly created remote integration
+  branch was deleted immediately; the #913-dependent catalog work remains a
+  local integration reference only until it can be reconciled into this branch
+  after #913 merges. No checkpoint may be pushed to a second feature branch.
+  The main DOM worktree's fail-closed coverage/bootstrap/PHPT-runner contract
+  was re-run on 2026-09-09: all 55 Python tests pass. This is evidence for the
+  coverage tooling only; it does not close native-archive, upstream-PHPT,
+  supported-target, or implementation-consensus gates.
+  A seventeenth bounded slice routes `nodeValue` and `textContent` through new
+  opaque content get/set exports, with a range guard that rejects direct
+  `xmlNodeGetContent`/`xmlNodeSetContentLen` use. The remaining-family ledger
+  now correctly omits the already migrated `splitText`; the full shim passes
+  the pinned-header `-Werror` syntax check at local head `c633c24bb5`.
+  An eighteenth bounded slice routes `renameNode` and `setPrefix` through an
+  atomic opaque name-and-namespace replacement operation. This preserves the
+  libxml dictionary lookup, name ownership, and namespace assignment order;
+  the two-function guard and pinned-header shim check pass at local head
+  `b99da5d519`.
+  A nineteenth bounded slice routes attribute `isId` state through dedicated
+  opaque get/set operations, eliminating direct `type`, `atype`, document, and
+  `xmlRemoveID()` manipulation from the two adapters. The range guard and
+  pinned-header shim check pass at local head `f9b3d70679`; other mutations
+  remain pending.
+  A twentieth bounded slice routes `compareDocumentPosition()` through one
+  opaque shim operation, so the adapter passes only node pointers and does not
+  inspect libxml links or document ancestry. Its range guard and pinned-header
+  shim check pass at local head `e6b0bcba23`; further mutator families remain
+  pending.
+  A twenty-first bounded slice routes `text_is_blank` through an opaque
+  `node_is_blank` operation that owns `xmlIsBlankNode` in the shim. Its guard
+  rejects the direct public call in the adapter and the pinned-header syntax
+  check passes at local head `17cf970461`; other mutator families remain open.
+  A twenty-second bounded slice moves the full `isEqualNode` structural
+  comparison — including node, namespace, DTD, and entity layout reads — into
+  one opaque shim operation. The adapter now passes only two node pointers and
+  the modern flag; the isolated guard and pinned-header syntax check pass at
+  local head `39a56c9b5a`. Remaining mutator families stay open.
+  A twenty-third bounded slice moves `DOMNode::normalize()` into one opaque
+  shim operation while returning its detached-node list through an aligned Rust
+  ABI structure, preserving wrapper invalidation. The adapter no longer walks
+  libxml links directly; the isolated guard and pinned-header syntax check pass
+  at local head `8a9d9db51c`. Other mutator families remain open.
+  A twenty-fourth bounded slice moves `Document::getElementById()` behind the
+  existing opaque child/type/property/next and attribute-ID accessors. Its
+  strict lookup-range guard confirms the five former direct member reads are
+  absent at local head `6216f478d8`; other mutator families remain open.
+  A twenty-fifth bounded slice routes namespace binding in fresh
+  `createElement*` and `createAttribute*` constructors through the existing
+  opaque node-namespace setter. Its construction-range guard confirms the
+  three former direct namespace assignments are absent at local head
+  `ae5a3a1deb`; other mutator families remain open.
+  A twenty-sixth bounded slice routes text, CDATA, comment, and fragment
+  construction through four opaque document constructors. Its exact guard
+  rejects direct `xmlNew*` use in those adapters and the pinned-header shim
+  check passes at local head `0048962095`; other mutator families remain open.
+  A twenty-seventh bounded slice routes `createProcessingInstruction()` through
+  an opaque document constructor. Its guard rejects direct `xmlNewDocPI` use
+  in the adapter and the pinned-header shim check passes at local head
+  `c2dd038b71`; remaining mutator families stay open.
+  A twenty-eighth bounded slice routes `createEntityReference()` through an
+  opaque document constructor. Its exact guard rejects direct `xmlNewReference`
+  use and the pinned-header shim check passes at local head `769195e477`;
+  remaining mutator families stay open.
+  A twenty-ninth bounded slice routes DocumentType construction through an
+  opaque DTD constructor that retains explicit-length copying and NUL/overflow
+  validation. Its guard rejects direct `xmlCreateIntSubset` use and the
+  pinned-header shim check passes at local head `4e83542763`; remaining mutator
+  families stay open.
+  A thirtieth bounded slice routes entity-reference synchronization during
+  clone/import/adopt and first/last-child exposure through one opaque operation
+  that owns node/entity reads and child/content writes. Its guard and
+  pinned-header shim check pass at local head `1565031365`; remaining mutator
+  families stay open.
+  A thirty-first bounded slice routes XML declaration version and standalone
+  metadata through four opaque document operations. Its declaration range is
+  guarded against direct `xmlDoc` metadata reads/writes and the pinned-header
+  shim check passes at local head `d4cf0082ff`; remaining mutator families
+  stay open.
+  A thirty-second bounded slice routes detached DocumentType attachment/adoption
+  through an opaque document operation that owns unlink/tree-document/link
+  updates. Its guard and pinned-header shim check pass at local head
+  `a964bcab1d`; remaining mutator families stay open.
+  A thirty-third bounded slice routes `DocumentFragment::appendXML()` through
+  an opaque operation that owns fragment/document validation, parser globals,
+  structured callback, parse, and list attachment while leaving PHP error
+  ownership/status mapping in the adapter. Its guard and pinned-header shim
+  check pass at local head `870002aa97`; remaining mutator families stay open.
+  A thirty-fourth bounded slice routes lazy HTML `<template>` content-fragment
+  materialization through an opaque operation that owns type/document/
+  namespace/name/private/parent access. Its guard and pinned-header shim check
+  pass at local head `dc5b160a13`; remaining mutator families stay open.
+  A thirty-fifth bounded slice routes node-release dispatch through an opaque
+  kind classifier, preserving specialized attribute and DTD-document-type
+  destructors without exposing `xmlNode::type` to the adapter. Its guard and
+  pinned-header shim check pass at local head `e08e4bc2ae`; remaining mutator
+  families stay open.
+  A read-only residual audit on 2026-09-09 replaces the remaining aggregate
+  with concrete families: template/private and serialization markers;
+  temporary attribute/namespace detach-restore; recursive XML well-formedness;
+  XML/HTML serialization; implementation-root construction; general node
+  relations; and node metadata/base URI. Its next migration priority is the
+  general relation family, which can reuse opaque node getters or expose small
+  semantic root/connectivity/containment operations. This is an inventory, not
+  a completion claim.
+  A thirty-sixth bounded slice routes general parent/document/sibling/child
+  relationships plus root, connectivity, and containment through opaque node
+  operations. The three new semantic operations (`root`, `is_connected`, and
+  `contains`) avoid exposing ancestor loops in the adapter; its guard and
+  pinned-header shim check pass at local head `ac2318fe92`.
+  A thirty-seventh bounded slice routes nodeName, namespaceURI, prefix,
+  localName, and baseURI projections through the existing opaque node,
+  namespace, and document getters. Its exact guard confirms no direct layout
+  reads in these metadata adapters at local head `1f09c5bbb7`; no new ABI
+  export was needed.
+  A thirty-eighth bounded slice moves recursive XML well-formedness validation
+  (characters, nodes, attributes, namespaces, traversal, inner/outer mode)
+  into one opaque operation while preserving the existing C/Rust adapter ABI.
+  Its guard and pinned-header shim check pass at local head `822614e430`.
+  A thirty-ninth bounded slice routes XML and HTML4 serialization layout access
+  through an opaque element-document operation plus existing node getters,
+  preserving adapter-owned buffers, output/flush, and PHP status mapping. The
+  added ABI advances the managed libxml2 recipe from r2 to r3; the pinned-header
+  shim check and all 24 provider tests pass at local head `6eb6de3bab`.
 - [x] Reach zero unimplemented generated operation routes (603/603 explicit;
   reproducible `comm` inventory empty on 2026-08-01).
 - [ ] Reach zero DOM-behavior exclusions across the complete upstream PHPT ledgers.

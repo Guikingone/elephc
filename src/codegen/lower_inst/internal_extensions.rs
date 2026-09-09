@@ -3383,7 +3383,10 @@ fn emit_result(
                     MODERN_DOM_XPATH_QUERY_OPCODE | LEGACY_DOM_XPATH_QUERY_OPCODE
                 );
                 if eager_xpath_nodeset {
-                    materialize_xpath_nodeset_members(ctx)?;
+                    materialize_xpath_nodeset_members(
+                        ctx,
+                        opcode == MODERN_DOM_XPATH_QUERY_OPCODE,
+                    )?;
                 }
                 let context_reg = abi::secondary_scratch_reg(ctx.emitter).to_string();
                 let handle_reg = abi::tertiary_scratch_reg(ctx.emitter).to_string();
@@ -3584,8 +3587,15 @@ fn emit_result(
     Ok(())
 }
 
-/// Materializes php-src's eager XPath member wrappers before the `DOMNodeList`.
-fn materialize_xpath_nodeset_members(ctx: &mut FunctionContext<'_>) -> Result<()> {
+/// Materializes eager XPath member wrappers using their legacy or modern DOM family.
+///
+/// The bridge returns concrete member kinds (101-118 for legacy and 201-313 for modern)
+/// independently of the outer list wrapper.  The eager member owner must dispatch those
+/// kinds through the same family-specific class table before it materializes the list.
+fn materialize_xpath_nodeset_members(
+    ctx: &mut FunctionContext<'_>,
+    modern: bool,
+) -> Result<()> {
     let capacity_ready = ctx.next_label("dom_xpath_eager_capacity_ready");
     let pointer_ready = ctx.next_label("dom_xpath_eager_pointer_ready");
     let loop_head = ctx.next_label("dom_xpath_eager_loop");
@@ -3637,7 +3647,9 @@ fn materialize_xpath_nodeset_members(ctx: &mut FunctionContext<'_>) -> Result<()
     crate::codegen::emit_array_value_type_stamp(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        &PhpType::Object("DOMNode".to_string()),
+        &PhpType::Object(
+            if modern { "Dom\\Node" } else { "DOMNode" }.to_string(),
+        ),
     );
     abi::emit_store_to_sp(
         ctx.emitter,
@@ -3708,7 +3720,7 @@ fn materialize_xpath_nodeset_members(ctx: &mut FunctionContext<'_>) -> Result<()
     abi::emit_load_temporary_stack_slot(ctx.emitter, &handle_reg, OBJECT_FIELDS_OFFSET);
     emit_typed_wrapper_result(
         ctx,
-        "DOMNode",
+        if modern { "Dom\\Node" } else { "DOMNode" },
         &context_reg,
         &handle_reg,
         true,
@@ -5551,7 +5563,10 @@ fn materialize_mixed_result(
             MODERN_DOM_XPATH_QUERY_OPCODE | LEGACY_DOM_XPATH_QUERY_OPCODE
         );
         if eager_xpath_nodeset {
-            materialize_xpath_nodeset_members(ctx)?;
+            materialize_xpath_nodeset_members(
+                ctx,
+                opcode == MODERN_DOM_XPATH_QUERY_OPCODE,
+            )?;
         }
         let (class_name, requires_concrete_kind) =
             union_wrapper_class(result_contract)?;

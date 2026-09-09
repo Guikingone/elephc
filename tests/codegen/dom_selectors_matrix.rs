@@ -38,7 +38,7 @@ fn assert_selector_cases(cases: &[SelectorCase]) {
 fn living_dom_selector_escape_order_snapshot_scope_and_closest_matrix_matches_php_8_5_8() {
     assert_selector_cases(&[SelectorCase {
         id: "selector_escape_order_snapshot_scope_closest_and_matches",
-        source: r#"<?php
+        source: r###"<?php
 $document = Dom\HTMLDocument::createFromString(
     '<!doctype html><div id="scope"><p id="a:b" class="item first" data-value="a,b">one</p><p id="two" class="item">two<span class="inside">x</span></p><p id="three" class="item">three</p></div>'
 );
@@ -59,7 +59,7 @@ try {
 } catch (DOMException $error) {
     echo $error->code, ":", $error->getMessage();
 }
-"#,
+"###,
         stdout: concat!(
             "4:a:b:two:two|one:T:two|3:a:b:2|12:",
             "Invalid selector (Selectors. Not supported: scope)",
@@ -72,7 +72,7 @@ try {
 fn living_dom_selector_pseudo_class_matrix_matches_php_8_5_8() {
     assert_selector_cases(&[SelectorCase {
         id: "selector_nth_has_not_and_where",
-        source: r#"<?php
+        source: r###"<?php
 $document = Dom\HTMLDocument::createFromString(
     '<!doctype html><main><p id="one" class="item">one</p><p id="two" class="item">two<span class="inside">x</span></p><p id="three" class="item">three</p></main>'
 );
@@ -85,7 +85,7 @@ foreach ([
     $nodes = $document->querySelectorAll($selector);
     echo $selector, ":", $nodes->length, ":", $nodes->item(0)->id, "|";
 }
-"#,
+"###,
         stdout: ".item:nth-child(2n+1):2:one|.item:has(.inside):1:two|.item:not(:has(.inside)):2:one|.item:where(#two, #none):1:two|",
     }]);
 }
@@ -94,7 +94,7 @@ foreach ([
 #[test]
 fn living_dom_selector_snapshot_is_heap_clean() {
     let output = compile_and_run_with_heap_debug(
-        r#"<?php
+        r###"<?php
 $document = Dom\HTMLDocument::createFromString(
     '<!doctype html><main><p id="one" class="item"></p><p id="two" class="item"></p></main>'
 );
@@ -103,7 +103,7 @@ $snapshot = $main->querySelectorAll(".item");
 $main->firstElementChild->remove();
 echo $snapshot->length, ":", $snapshot->item(0)->id, "\n";
 unset($snapshot, $main, $document);
-"#,
+"###,
     );
     assert!(output.success, "program failed: {}", output.stderr);
     assert_eq!(output.stdout, "2:one\n");

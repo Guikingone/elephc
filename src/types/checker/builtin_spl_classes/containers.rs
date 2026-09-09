@@ -3,7 +3,7 @@
 //! Keeps runtime-backed container declarations separate from phase-5 iterator decorators.
 //!
 //! Called from:
-//! - `super::inject_builtin_spl_classes()`.
+//! - `super::inject_builtin_spl_classes()` and `super::inject_builtin_internal_iterator()`.
 //!
 //! Key details:
 //! - Runtime-backed methods stay bodyless so codegen intrinsics own their behavior.
@@ -84,6 +84,12 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         },
     );
 
+    insert_spl_fixed_array(class_map);
+    insert_internal_iterator(class_map);
+}
+
+/// Inserts the fixed-size container required by the shared iterator's owner schema.
+pub(super) fn insert_spl_fixed_array(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "SplFixedArray".to_string(),
         FlattenedClass {
@@ -107,7 +113,10 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             trait_aliases: Vec::new(),
         },
     );
+}
 
+/// Inserts the shared iterator wrapper independently of the broader SPL container surface.
+pub(super) fn insert_internal_iterator(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "InternalIterator".to_string(),
         FlattenedClass {

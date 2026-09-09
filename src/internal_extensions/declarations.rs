@@ -454,4 +454,32 @@ mod tests {
                 .sum::<usize>();
         assert_eq!(direct_method_count, 332);
     }
+
+    /// Verifies the locked SimpleXML declaration preserves its nullable covariant iterator return.
+    #[test]
+    fn simplexml_recursive_iterator_contract_keeps_nullable_element_return() {
+        let mut interfaces = HashMap::new();
+        let mut classes = HashMap::new();
+        inject_checker_declarations(&mut interfaces, &mut classes, &HashSet::new())
+            .expect("locked declarations");
+
+        let simplexml = classes
+            .get("SimpleXMLElement")
+            .expect("locked SimpleXMLElement declaration");
+        assert!(simplexml
+            .implements
+            .iter()
+            .any(|interface| interface == "RecursiveIterator"));
+        let get_children = simplexml
+            .methods
+            .iter()
+            .find(|method| method.name == "getChildren")
+            .expect("locked SimpleXMLElement::getChildren declaration");
+        assert_eq!(
+            get_children.return_type,
+            Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(
+                Name::unqualified("SimpleXMLElement")
+            ))))
+        );
+    }
 }

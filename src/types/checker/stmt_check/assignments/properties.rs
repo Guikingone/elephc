@@ -620,6 +620,13 @@ fn resolve_object_array_property(
     property: &str,
     span: Span,
 ) -> Result<(PhpType, bool), CompileError> {
+    // `stdClass` has no declared slots, but PHP permits arbitrary dynamic
+    // properties to be used as array lvalues. The runtime routes this shape
+    // through a boxed Mixed property cell, so use an unconstrained array here
+    // only to validate the indexed-write syntax; no class schema is refined.
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        return Ok((PhpType::Array(Box::new(PhpType::Mixed)), false));
+    }
     let class_info = checker
         .classes
         .get(class_name)

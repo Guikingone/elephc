@@ -41,6 +41,118 @@ echo $document->saveXML();
     }
 }
 
+/// Verifies a mixed DOM object cast retains the synthetic iterator class metadata on all targets.
+///
+/// DOM live-collection interface tables materialize `InternalIterator` even though this fixture
+/// spells no SPL class. The mixed cast exercises the runtime object-metadata path that made the
+/// missing class descriptor surface as an unsupported backend feature.
+#[test]
+fn mixed_dom_object_cast_keeps_internal_iterator_metadata() {
+    let mut module = lower_source(
+        r#"<?php
+function boxed(mixed $value): mixed {
+    return $value;
+}
+
+$document = new DOMDocument();
+$document->loadXML('<root><item/></root>');
+$nodes = $document->getElementsByTagName('item');
+$properties = (array) boxed($nodes);
+echo count($properties);
+"#,
+    );
+    assert!(module.required_runtime_features.dom_bridge);
+    assert!(
+        module.class_infos.contains_key("InternalIterator"),
+        "DOM collection bodies require the shared iterator class metadata"
+    );
+    assert!(
+        module.class_methods.iter().any(|function| {
+            function.name
+                == "InternalIterator::__elephcInternalIteratorCountLegacyNodeList"
+        }),
+        "InternalIterator's synthetic DOM owner helper must have an emitted EIR body"
+    );
+    let helper_symbol = crate::names::method_symbol(
+        "InternalIterator",
+        "__elephcInternalIteratorCountLegacyNodeList",
+    );
+    let internal_iterator_id = module
+        .class_infos
+        .get("InternalIterator")
+        .expect("assertion above must leave the iterator descriptor available")
+        .class_id;
+
+    for target in [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ] {
+        module.target = target;
+        let assembly = generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target:?} mixed DOM cast failed: {error}"));
+        assert!(
+            assembly.contains(&format!("_class_interfaces_{internal_iterator_id}:")),
+            "{target:?} omitted InternalIterator from concrete runtime class tables"
+        );
+        assert!(
+            assembly.contains("Traversable"),
+            "{target:?} omitted the InternalIterator interface ancestry metadata"
+        );
+        assert!(
+            assembly.contains(&format!("{helper_symbol}:")),
+            "{target:?} omitted the emitted InternalIterator DOM owner helper body"
+        );
+    }
+}
+
+/// Verifies an ordinary userland `Mixed` scalar does not emit the dormant iterator schema.
+///
+/// `InternalIterator` must exist in checker metadata before DOM bridge activation can lower a
+/// synthetic collection body. That availability alone must not make a scalar dynamic value retain
+/// the iterator's runtime class or interface tables.
+#[test]
+fn userland_mixed_scalar_does_not_emit_internal_iterator_metadata() {
+    let mut module = lower_source(
+        r#"<?php
+function boxed(mixed $value): mixed {
+    return $value;
+}
+
+echo boxed(1);
+"#,
+    );
+    assert!(!module.required_runtime_features.dom_bridge);
+    let internal_iterator_id = module
+        .class_infos
+        .get("InternalIterator")
+        .expect("the pre-lowering shared iterator schema must always be available")
+        .class_id;
+    let fixed_array_id = module
+        .class_infos
+        .get("SplFixedArray")
+        .expect("InternalIterator owner slots require the narrow SplFixedArray dependency")
+        .class_id;
+
+    for target in [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ] {
+        module.target = target;
+        let assembly = generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target:?} scalar Mixed codegen failed: {error}"));
+        assert!(
+            !assembly.contains(&format!("_class_interfaces_{internal_iterator_id}:")),
+            "{target:?} emitted unreachable InternalIterator runtime metadata"
+        );
+        assert!(
+            !assembly.contains(&format!("_class_interfaces_{fixed_array_id}:")),
+            "{target:?} emitted unreachable SplFixedArray runtime metadata"
+        );
+    }
+}
+
 /// Verifies manual internal constructors lower as null-returning calls on every target.
 #[test]
 fn lowers_manual_internal_constructor_calls_as_null_on_every_target() {
@@ -1228,6 +1340,48 @@ var_dump($node->parentElement === $document->documentElement);
                 .any(|line| line.contains("prop_get") && line.contains(&format!("php={php_type}"))),
             "DOMNodeList::item()->{property} lost wrapper materialization: {text}"
         );
+    }
+}
+
+/// Verifies legacy XPath query lowering keeps its precise node-list-or-false result contract.
+#[test]
+fn preserves_legacy_xpath_query_result_union_for_direct_indexing() {
+    let mut module = lower_source(
+        r#"<?php
+$document = new DOMDocument();
+$document->loadXML("<root><child/></root>");
+$node = (new DOMXPath($document))->query("//child")->item(0);
+var_dump($node->nodeValue);
+"#,
+    );
+    let text = print_module(&module);
+    assert!(
+        text.lines().any(|line| {
+            line.contains("internal_extension#4420 flags=3")
+                && line.contains("php=DOMNodeList|false")
+        }),
+        "legacy DOMXPath::query() collapsed its compiler-side result override to Mixed: {text}"
+    );
+    assert!(
+        text.lines().any(|line| {
+            line.contains("method_call")
+                && line.contains("php=DOMElement|DOMNode|DOMNameSpaceNode|null")
+        }),
+        "legacy XPath collection item() must retain its explicit wrapper union: {text}"
+    );
+    assert!(
+        !text.contains("internal_extension#4409"),
+        "legacy XPath collection item() must use boxed method dispatch for its widened receiver: {text}"
+    );
+    for target in [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ] {
+        module.target = target;
+        generate_user_asm_from_ir(&module, false, false).unwrap_or_else(|error| {
+            panic!("{target:?} legacy XPath boxed item dispatch failed: {error}")
+        });
     }
 }
 

@@ -7176,6 +7176,29 @@ echo $iterator->current()->getAttribute("id");
     assert_eq!(out, "first");
 }
 
+/// Regression: a DOM collection cast through `mixed` keeps its synthetic iterator metadata.
+///
+/// The source spells no SPL class, but DOM's generated `getIterator()` body still allocates the
+/// shared `InternalIterator`. The object-to-array cast forces runtime object metadata emission,
+/// so this would fail during backend lowering when the iterator class was pruned.
+#[test]
+fn dom_mixed_collection_array_cast_keeps_internal_iterator_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+function boxed(mixed $value): mixed {
+    return $value;
+}
+
+$document = new DOMDocument();
+$document->loadXML('<root><item/></root>');
+$nodes = $document->getElementsByTagName('item');
+$properties = (array) boxed($nodes);
+echo is_array($properties) ? "array" : "not-array";
+"#,
+    );
+    assert_eq!(out, "array");
+}
+
 /// Verifies a mixed DOM candidate rejects a colliding userland object argument exactly like PHP.
 #[test]
 fn dom_mixed_method_collision_reports_internal_parameter_type_error() {

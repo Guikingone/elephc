@@ -157,6 +157,21 @@ echo get_class($customNodes[0]);
     );
 }
 
+/// Verifies direct XPath indexing survives SimpleXML's nullable covariant iterator contract.
+#[test]
+fn simplexml_xpath_direct_index_typechecks_through_recursive_iterator_covariance() {
+    let out = compile_and_run(
+        r#"<?php
+$xml = simplexml_load_string('<root><entry>first</entry><entry>second</entry></root>');
+if ($xml === false) { exit(2); }
+$entries = $xml->xpath('/root/entry');
+if ($entries === false || $entries === null) { exit(3); }
+echo (string) $entries[0];
+"#,
+    );
+    assert_eq!(out, "first");
+}
+
 /// Verifies public count, empty selectors, registration failure, and XPath node filtering.
 #[test]
 fn simplexml_public_method_edge_contracts_match_php() {

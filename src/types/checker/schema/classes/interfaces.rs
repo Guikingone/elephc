@@ -109,7 +109,8 @@ fn class_can_implement_throwable_contract(
 ///
 /// Class metadata is not registered yet while interface contracts are validated, so
 /// this derives the subtype relationship from the interface currently being checked
-/// and the interfaces declared directly on the class.
+/// and the interfaces declared directly on the class. Union members are checked
+/// independently, so nullable covariant returns retain their null member contract.
 fn interface_self_return_conforms(
     checker: &Checker,
     class: &FlattenedClass,
@@ -117,7 +118,45 @@ fn interface_self_return_conforms(
     required_return: &PhpType,
     actual_return: &PhpType,
 ) -> bool {
+    if required_return == actual_return {
+        return true;
+    }
     match (required_return, actual_return) {
+        (PhpType::Union(required_members), PhpType::Union(actual_members)) => actual_members
+            .iter()
+            .all(|actual_member| {
+                required_members.iter().any(|required_member| {
+                    interface_self_return_conforms(
+                        checker,
+                        class,
+                        interface_name,
+                        required_member,
+                        actual_member,
+                    )
+                })
+            }),
+        (PhpType::Union(required_members), actual_member) => required_members
+            .iter()
+            .any(|required_member| {
+                interface_self_return_conforms(
+                    checker,
+                    class,
+                    interface_name,
+                    required_member,
+                    actual_member,
+                )
+            }),
+        (required_member, PhpType::Union(actual_members)) => actual_members
+            .iter()
+            .all(|actual_member| {
+                interface_self_return_conforms(
+                    checker,
+                    class,
+                    interface_name,
+                    required_member,
+                    actual_member,
+                )
+            }),
         (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
             actual_name == &class.name
                 && (expected_name == interface_name
