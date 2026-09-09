@@ -466,6 +466,11 @@ Legend:
   DOM/libxml/SimpleXML stdout blocks, a `null` return, and a runtime catchable
   exact `ArgumentCountError` before output for surplus arguments. Its focused
   codegen execution remains under the disk gate.
+  `09c20c07c9` adds `ReflectionFunction::getExtensionName()` and
+  `getExtension()` for all 13 DOM/libxml/SimpleXML functions via the immutable
+  extension registry, including case-insensitive lookup and the runtime
+  unknown-function error path. Its focused codegen execution remains under the
+  disk gate.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
