@@ -446,6 +446,12 @@ Legend:
   and types. `getConstant()` is deliberately absent because PHP 8.5.8 does not
   expose that ReflectionExtension method. Its focused codegen execution remains
   under the disk gate.
+  `270390dc22` adds the remaining PHP-visible ReflectionExtension flags:
+  `isPersistent() === true`, `isTemporary() === false`, and versions
+  `20031129` (DOM) / `8.5.8` (libxml, SimpleXML) from the locked snapshot.
+  `isInternal()` is deliberately absent because PHP does not expose that method
+  on ReflectionExtension. These TDD cases await focused codegen execution under
+  the same disk gate.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
