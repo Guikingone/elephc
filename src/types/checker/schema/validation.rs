@@ -15,6 +15,27 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
 
+/// Returns whether `class` inherits from the native SimpleXML element wrapper.
+///
+/// The class currently being constructed is not yet in `checker.classes`, so the
+/// walk starts at its direct parent and then follows the already-registered chain.
+pub(crate) fn inherits_simplexml_element(
+    checker: &Checker,
+    class: &crate::types::traits::FlattenedClass,
+) -> bool {
+    let mut current = class.extends.clone();
+    while let Some(parent_name) = current {
+        if parent_name.eq_ignore_ascii_case("SimpleXMLElement") {
+            return true;
+        }
+        current = checker
+            .classes
+            .get(&parent_name)
+            .and_then(|parent| parent.parent.clone());
+    }
+    false
+}
+
 /// Builds a `FunctionSig` from a parsed class method, resolving parameter and return type
 /// annotations through the checker. Parameters without type hints default to `PhpType::Int`,
 /// except fixed userspace-wrapper callbacks, whose runtime inputs remain dynamic PHP values.
@@ -445,10 +466,7 @@ pub(crate) fn validate_override_signature(
     if parent_sig.declared_return && !return_compatible {
         if !is_static
             && php_symbol_key(&method.name) == "__debuginfo"
-            && class
-                .extends
-                .as_deref()
-                .is_some_and(|parent| parent.eq_ignore_ascii_case("SimpleXMLElement"))
+            && inherits_simplexml_element(checker, class)
         {
             return Err(CompileError::new(
                 method.span,

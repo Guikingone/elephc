@@ -257,6 +257,95 @@ class PublicDebugXml extends SimpleXMLElement {
     );
 }
 
+/// Verifies descendants retain SimpleXML's magic debug visibility diagnostic, while a
+/// userland override names its declaring ancestor just as PHP 8.5.8 does.
+#[test]
+fn simplexml_debug_info_descendant_visibility_matches_native_contract() {
+    expect_error(
+        r#"<?php
+class NativeDebugParent extends SimpleXMLElement {}
+class NativeDebugGrandchild extends NativeDebugParent {
+    protected function __debugInfo(): ?array { return []; }
+}
+"#,
+        "Access level to NativeDebugGrandchild::__debugInfo() must be public (as in class SimpleXMLElement)",
+    );
+    expect_error(
+        r#"<?php
+class NativeDebugParent extends SimpleXMLElement {}
+class NativeDebugGrandchild extends NativeDebugParent {
+    private function __debugInfo(): ?array { return []; }
+}
+"#,
+        "Access level to NativeDebugGrandchild::__debugInfo() must be public (as in class SimpleXMLElement)",
+    );
+    expect_error(
+        r#"<?php
+class UserDebugParent extends SimpleXMLElement {
+    public function __debugInfo(): ?array { return []; }
+}
+class UserDebugGrandchild extends UserDebugParent {
+    protected function __debugInfo(): ?array { return []; }
+}
+"#,
+        "Access level to UserDebugGrandchild::__debugInfo() must be public (as in class UserDebugParent)",
+    );
+    expect_error(
+        r#"<?php
+class UserDebugParent extends SimpleXMLElement {
+    public function __debugInfo(): ?array { return []; }
+}
+class UserDebugGrandchild extends UserDebugParent {
+    private function __debugInfo(): ?array { return []; }
+}
+"#,
+        "Access level to UserDebugGrandchild::__debugInfo() must be public (as in class UserDebugParent)",
+    );
+    expect_no_error(
+        r#"<?php
+class NativeDebugParent extends SimpleXMLElement {}
+class NativeDebugGrandchild extends NativeDebugParent {
+    public function __debugInfo(): ?array { return []; }
+}
+"#,
+    );
+    expect_no_error(
+        r#"<?php
+class UserDebugParent extends SimpleXMLElement {
+    public function __debugInfo(): ?array { return []; }
+}
+class UserDebugGrandchild extends UserDebugParent {
+    public function __debugInfo(): ?array { return []; }
+}
+"#,
+    );
+}
+
+/// Verifies descendants retain SimpleXML's exact `?array` magic-method contract.
+#[test]
+fn simplexml_debug_info_descendant_return_type_matches_native_contract() {
+    expect_error(
+        r#"<?php
+class NativeDebugParent extends SimpleXMLElement {}
+class NativeDebugGrandchild extends NativeDebugParent {
+    public function __debugInfo(): int { return 1; }
+}
+"#,
+        "NativeDebugGrandchild::__debugInfo(): Return type must be ?array when declared",
+    );
+    expect_error(
+        r#"<?php
+class UserDebugParent extends SimpleXMLElement {
+    public function __debugInfo(): ?array { return []; }
+}
+class UserDebugGrandchild extends UserDebugParent {
+    public function __debugInfo(): int { return 1; }
+}
+"#,
+        "UserDebugGrandchild::__debugInfo(): Return type must be ?array when declared",
+    );
+}
+
 /// Verifies `ReturnTypeWillChange` applies to SimpleXML's tentative iterator
 /// methods only and cannot waive the explicit `?array` debug-info contract.
 #[test]
