@@ -58,6 +58,18 @@ Legend:
   `ls-remote` verification both confirmed the intended publication.
 - [x] Read `CONTRIBUTING.md` and the repository target/test/ownership rules;
   the referenced `RTK.md` is not present in this checkout.
+- [x] Rebase the sole publication branch `feat/php-dom-compliance` onto current
+  `origin/main` `cb6ce296a2b2ebb0020dfac55d05d4737267ee62` on 2026-09-09.
+  A local backup `backup/php-dom-compliance-pre-main-rebase-20260909` preserves
+  the old published tip; Terra resolved 29 semantic conflicts across Cargo/CI,
+  bridge/linker/runtime/checker/test homes, retaining `main`'s modern bridge
+  topology and DOM additions. All 60 DOM commits replayed, the resulting tip
+  `aa192bdee8` is `0 behind / 60 ahead`, and `git diff --check
+  origin/main...HEAD` passes. It was force-pushed with an explicit lease to
+  `fork/feat/php-dom-compliance`; PR #654 now names this rebased head. The
+  fail-closed Python coverage/bootstrap/PHPT-runner suite was re-run after the
+  rebase with 55/55 passing. GitHub has not yet supplied a validation CI run for
+  that rewritten fork head, so no CI-green claim is made.
 - [x] Freeze PHP `8.5.8`, php-src commit
   `26b97507444c4fbda072f57dda1820f7b7d5e467`, libxml2 `2.15.3`, and
   bundled Lexbor `2.7.0`.
