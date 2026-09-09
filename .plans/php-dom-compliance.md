@@ -457,6 +457,11 @@ Legend:
   (`standard` required), and SimpleXML (`libxml`/`spl` required), preserving
   ordered string-key/string-value maps. Its focused codegen execution remains
   under the disk gate.
+  `f312426ec2` adds `ReflectionExtension::getClasses()` from the same snapshot:
+  ordered associative maps of 51 DOM, 1 libxml, and 2 SimpleXML reflected
+  classes, including aliases and internal/extension metadata. `Dom\AdjacentPosition`
+  correctly materializes as `ReflectionEnum`; focused execution remains under
+  the disk gate.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
