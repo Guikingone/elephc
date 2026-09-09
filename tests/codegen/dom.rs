@@ -4195,6 +4195,59 @@ echo "|" . libxml_get_last_error()->code;
     );
 }
 
+/// Verifies modern XML recovery returns a usable tree while retaining its parse diagnostic.
+#[test]
+fn modern_xml_recover_preserves_tree_diagnostics_and_error_queue() {
+    let out = compile_and_run(
+        r#"<?php
+libxml_clear_errors();
+libxml_use_internal_errors(true);
+
+try {
+    Dom\XMLDocument::createFromString("<root>");
+    echo "B:none";
+} catch (DOMException $error) {
+    echo "B:" . $error->code;
+}
+$error = libxml_get_last_error();
+echo ":" . count(libxml_get_errors());
+echo ":" . $error->level;
+echo ":" . $error->code;
+echo ":" . $error->line;
+echo ":" . $error->column;
+echo $error->message === "Premature end of data in tag root line 1\n" ? ":m" : ":M";
+echo $error->file === "" ? ":f" : ":F";
+
+libxml_clear_errors();
+$document = Dom\XMLDocument::createFromString("<root>", LIBXML_RECOVER);
+$error = libxml_get_last_error();
+echo "|R:" . get_class($document);
+echo ":" . $document->documentElement->tagName;
+echo ":" . $document->saveXml($document->documentElement);
+echo ":" . count(libxml_get_errors());
+echo ":" . $error->level;
+echo ":" . $error->code;
+echo ":" . $error->line;
+echo ":" . $error->column;
+echo $error->message === "Premature end of data in tag root line 1\n" ? ":m" : ":M";
+echo $error->file === "" ? ":f" : ":F";
+
+try {
+    Dom\XMLDocument::createFromString("<root/>", 512);
+    echo "|V:none";
+} catch (ValueError $error) {
+    echo "|V:" . get_class($error);
+}
+echo ":Q" . count(libxml_get_errors());
+echo ":" . libxml_get_last_error()->code;
+"#,
+    );
+    assert_eq!(
+        out,
+        "B:12:1:3:77:1:7:m:f|R:Dom\\XMLDocument:root:<root/>:1:3:77:1:7:m:f|V:ValueError:Q1:77"
+    );
+}
+
 /// Verifies malformed XML produces PHP-visible `LibXMLError` values and ordered state.
 #[test]
 fn malformed_xml_materializes_libxml_error_objects() {
