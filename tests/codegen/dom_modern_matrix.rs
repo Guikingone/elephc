@@ -116,6 +116,44 @@ try {
     assert_eq!(output.stderr, "");
 }
 
+/// Pins internal and external DTD default-attribute injection through `LIBXML_DTDATTR`.
+///
+/// The frozen PHP 8.5.8 DOM source applies this option through `xmlCtxtUseOptions`.
+/// Existing parsing-limit coverage retains the separate `LIBXML_NO_XXE` and
+/// invalid-option diagnostic contracts for both modern XML factories.
+#[test]
+fn modern_xml_document_dtdattr_injects_internal_and_external_defaults() {
+    let output = compile_and_run_capture(
+        r#"<?php
+libxml_use_internal_errors(true);
+libxml_clear_errors();
+$internal = '<!DOCTYPE root [<!ELEMENT root EMPTY><!ATTLIST root internal CDATA "internal">]><root/>';
+$without = Dom\XMLDocument::createFromString($internal);
+$with = Dom\XMLDocument::createFromString($internal, LIBXML_DTDATTR);
+echo "internal|", $without->documentElement->getAttribute("internal"), "|";
+echo $with->documentElement->getAttribute("internal"), "|", count(libxml_get_errors()), "\n";
+
+file_put_contents("dom-dtdattr-default.dtd", '<!ELEMENT root EMPTY><!ATTLIST root external CDATA "external">');
+$external = '<!DOCTYPE root SYSTEM "dom-dtdattr-default.dtd"><root/>';
+libxml_clear_errors();
+$string = Dom\XMLDocument::createFromString($external, LIBXML_DTDATTR);
+echo "string|", $string->documentElement->getAttribute("external"), "|", count(libxml_get_errors()), "\n";
+file_put_contents("dom-dtdattr-default.xml", $external);
+libxml_clear_errors();
+$file = Dom\XMLDocument::createFromFile("dom-dtdattr-default.xml", LIBXML_DTDATTR);
+echo "file|", $file->documentElement->getAttribute("external"), "|", count(libxml_get_errors()), "\n";
+unlink("dom-dtdattr-default.dtd");
+unlink("dom-dtdattr-default.xml");
+"#,
+    );
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        output.stdout,
+        "internal||internal|0\nstring|external|0\nfile|external|0\n",
+    );
+    assert_eq!(output.stderr, "");
+}
+
 /// Pins HTML document element properties, class token mutation, live collections, and serialization.
 #[test]
 fn modern_html_document_token_list_collection_and_property_matrix_matches_php_8_5_8() {
