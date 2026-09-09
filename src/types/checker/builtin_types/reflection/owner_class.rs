@@ -37,35 +37,26 @@ pub(super) fn builtin_reflection_owner_class(
         ));
     }
     if reflection_owner_has_extension_methods(name) {
-        if name == "ReflectionMethod" {
-            properties.push(builtin_property(
-                "__extension_name",
-                Visibility::Private,
-                Some(mixed_type()),
-                false_bool(),
-            ));
-            properties.push(builtin_property(
-                "__extension",
-                Visibility::Private,
-                Some(mixed_type()),
-                null_expr(),
-            ));
-            methods.push(builtin_reflection_class_mixed_method(
-                "getExtensionName",
-                "__extension_name",
-            ));
-            methods.push(builtin_reflection_class_mixed_method(
-                "getExtension",
-                "__extension",
-            ));
-        } else {
-            methods.push(builtin_reflection_constant_false_union_method(
-                "getExtensionName",
-            ));
-            methods.push(builtin_reflection_constant_null_mixed_method(
-                "getExtension",
-            ));
-        }
+        properties.push(builtin_property(
+            "__extension_name",
+            Visibility::Private,
+            Some(mixed_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__extension",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getExtensionName",
+            "__extension_name",
+        ));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getExtension",
+            "__extension",
+        ));
     }
     add_reflection_function_method_origin_methods(name, &mut properties, &mut methods);
     add_reflection_member_flag_methods(name, &mut properties, &mut methods);

@@ -39,6 +39,9 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
     if class_name == "ReflectionClass" {
         return lower_reflection_class_new(ctx, inst);
     }
+    if class_name == "ReflectionEnum" {
+        return lower_reflection_enum_new(ctx, inst);
+    }
     if class_name == "ReflectionFunction" {
         return lower_reflection_function_new(ctx, inst);
     }
@@ -76,7 +79,9 @@ fn lower_reflection_class_new(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             );
             return Ok(());
         }
-        emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+        if !emit_shared_reflection_owner_factory(ctx, "ReflectionClass", &name, false)? {
+            emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+        }
     } else {
         emit_runtime_dom_reflection_class(ctx, value)?;
     }
@@ -85,6 +90,71 @@ fn lower_reflection_class_new(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Allocates `ReflectionEnum` from a static name or one of the bounded DOM runtime names.
+fn lower_reflection_enum_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let Some(value) = inst.operands.first().copied() else {
+        let metadata = empty_reflection_metadata();
+        emit_reflection_owner_object(ctx, "ReflectionEnum", &metadata)?;
+        let result = inst.result.ok_or_else(|| {
+            CodegenIrError::invalid_module("reflection object_new missing result")
+        })?;
+        return ctx.store_result_value(result);
+    };
+
+    if const_optional_string_operand(ctx, value, "ReflectionEnum")?.is_some() {
+        let metadata = reflection_enum_metadata(ctx, inst)?;
+        if let Some(reflected_name) = metadata.reflected_name.as_deref() {
+            if !emit_shared_reflection_owner_factory(ctx, "ReflectionEnum", reflected_name, false)? {
+                emit_reflection_owner_object(ctx, "ReflectionEnum", &metadata)?;
+            }
+        } else {
+            emit_reflection_owner_object(ctx, "ReflectionEnum", &metadata)?;
+        }
+    } else {
+        emit_runtime_dom_reflection_enum(ctx, value)?;
+    }
+
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
+    ctx.store_result_value(result)
+}
+
+/// Selects bounded DOM enum metadata from a case-insensitive runtime enum name.
+fn emit_runtime_dom_reflection_enum(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let mut enums = ctx
+        .module
+        .enum_infos
+        .keys()
+        .filter(|name| reflection_extension_name_for_class(name).is_some())
+        .cloned()
+        .collect::<Vec<_>>();
+    enums.sort_unstable();
+    let done_label = ctx.next_label("reflection_enum_done");
+    let case_labels = enums
+        .iter()
+        .map(|_| ctx.next_label("reflection_enum_case"))
+        .collect::<Vec<_>>();
+
+    for (enum_name, label) in enums.iter().zip(case_labels.iter()) {
+        emit_reflection_class_name_compare(ctx, value, enum_name, label)?;
+        emit_reflection_class_name_compare(ctx, value, &format!("\\{}", enum_name), label)?;
+    }
+    emit_runtime_reflection_class_exception(ctx, value)?;
+
+    for (enum_name, label) in enums.iter().zip(case_labels.iter()) {
+        ctx.emitter.label(label);
+        if !emit_shared_reflection_owner_factory(ctx, "ReflectionEnum", enum_name, false)? {
+            let metadata = reflection_enum_metadata_for_name(ctx, enum_name)?;
+            emit_reflection_owner_object(ctx, "ReflectionEnum", &metadata)?;
+        }
+        emit_reflection_dispatch_jump(ctx, &done_label);
+    }
+
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Selects static DOM ReflectionClass metadata from a case-insensitive runtime class name.
@@ -111,8 +181,10 @@ fn emit_runtime_dom_reflection_class(ctx: &mut FunctionContext<'_>, value: Value
 
     for (class, label) in classes.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
-        let metadata = reflection_class_metadata_for_name(ctx, class)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+        if !emit_shared_reflection_owner_factory(ctx, "ReflectionClass", class, false)? {
+            let metadata = reflection_class_metadata_for_name(ctx, class)?;
+            emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+        }
         emit_reflection_dispatch_jump(ctx, &done_label);
     }
 
@@ -203,7 +275,7 @@ fn lower_reflection_extension_new(ctx: &mut FunctionContext<'_>, inst: &Instruct
             );
             return Ok(());
         }
-        emit_reflection_owner_object(ctx, "ReflectionExtension", &metadata)?;
+        emit_reflection_extension_factory(ctx, &name)?;
     } else {
         emit_runtime_reflection_extension(ctx, value)?;
     }
@@ -230,8 +302,7 @@ fn emit_runtime_reflection_extension(ctx: &mut FunctionContext<'_>, value: Value
 
     for (extension, label) in extensions.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
-        let metadata = reflection_extension_metadata_for_name(extension)?;
-        emit_reflection_owner_object(ctx, "ReflectionExtension", &metadata)?;
+        emit_reflection_extension_factory(ctx, extension)?;
         emit_reflection_dispatch_jump(ctx, &done_label);
     }
 
@@ -348,14 +419,18 @@ pub(super) fn emit_reflection_owner_from_runtime_object(
 
     emit_runtime_object_class_dispatch(ctx, object_operand, &candidates, &case_labels, &fallback_label)?;
 
-    let fallback_metadata = reflection_class_metadata_for_name(ctx, &candidates[0].class_name)?;
-    emit_reflection_owner_object(ctx, class_name, &fallback_metadata)?;
+    if !emit_shared_reflection_owner_factory(ctx, class_name, &candidates[0].class_name, false)? {
+        let fallback_metadata = reflection_class_metadata_for_name(ctx, &candidates[0].class_name)?;
+        emit_reflection_owner_object(ctx, class_name, &fallback_metadata)?;
+    }
     emit_reflection_dispatch_jump(ctx, &done_label);                            // skip runtime reflection candidates after fallback allocation
 
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
-        let metadata = reflection_class_metadata_for_name(ctx, &candidate.class_name)?;
-        emit_reflection_owner_object(ctx, class_name, &metadata)?;
+        if !emit_shared_reflection_owner_factory(ctx, class_name, &candidate.class_name, false)? {
+            let metadata = reflection_class_metadata_for_name(ctx, &candidate.class_name)?;
+            emit_reflection_owner_object(ctx, class_name, &metadata)?;
+        }
         emit_reflection_dispatch_jump(ctx, &done_label);                        // finish after materializing the matched runtime class
     }
 

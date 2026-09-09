@@ -45,41 +45,6 @@ pub(super) fn emit_reflection_member_array_property_by_name(
     Ok(())
 }
 
-/// Replaces `ReflectionExtension`'s private function slot with its keyed reflectors.
-pub(super) fn emit_reflection_extension_function_array_property_by_name(
-    ctx: &mut FunctionContext<'_>,
-    owner_class_name: &str,
-    property_name: &str,
-    extension_name: &str,
-) -> Result<()> {
-    let class_info = ctx
-        .module
-        .class_infos
-        .get(owner_class_name)
-        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
-    let low_offset = reflection_property_offset(class_info, property_name)?;
-    let high_offset = low_offset + 8;
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
-    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
-    emit_reflection_extension_function_array(ctx, extension_name)?;
-    abi::emit_pop_reg(ctx.emitter, object_reg);
-    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_load_int_immediate(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter), 4);
-    abi::emit_store_to_address(
-        ctx.emitter,
-        abi::secondary_scratch_reg(ctx.emitter),
-        object_reg,
-        high_offset,
-    );
-    abi::emit_push_reg(ctx.emitter, object_reg);
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    Ok(())
-}
-
 /// Replaces a ReflectionProperty private slot with string-keyed hook ReflectionMethod objects.
 pub(super) fn emit_reflection_property_hook_array_property_by_name(
     ctx: &mut FunctionContext<'_>,
@@ -200,8 +165,10 @@ pub(super) fn emit_reflection_parent_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(parent_class_name) = parent_class_name {
-        let parent_metadata = reflection_class_metadata_for_name(ctx, parent_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &parent_metadata)?;
+        if !emit_shared_reflection_owner_factory(ctx, "ReflectionClass", parent_class_name, false)? {
+            let parent_metadata = reflection_class_metadata_for_name(ctx, parent_class_name)?;
+            emit_reflection_owner_object(ctx, "ReflectionClass", &parent_metadata)?;
+        }
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
@@ -240,9 +207,16 @@ pub(super) fn emit_reflection_declaring_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = declaring_class_name {
-        let declaring_metadata =
-            reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
+        if !emit_shared_reflection_owner_factory(
+            ctx,
+            "ReflectionClass",
+            declaring_class_name,
+            true,
+        )? {
+            let declaring_metadata =
+                reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
+            emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
+        }
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
@@ -277,8 +251,10 @@ pub(super) fn emit_reflection_enum_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(enum_name) = enum_name {
-        let enum_metadata = reflection_enum_metadata_for_name(ctx, enum_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionEnum", &enum_metadata)?;
+        if !emit_shared_reflection_owner_factory(ctx, "ReflectionEnum", enum_name, false)? {
+            let enum_metadata = reflection_enum_metadata_for_name(ctx, enum_name)?;
+            emit_reflection_owner_object(ctx, "ReflectionEnum", &enum_metadata)?;
+        }
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionEnum".to_string()),

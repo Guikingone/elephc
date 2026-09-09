@@ -119,6 +119,8 @@ use runtime_wrappers::*;
 use static_method_calls::*;
 use throwable_methods::*;
 
+pub(in crate::codegen) use objects::emit_shared_reflection_extension_factories;
+
 pub(super) use array_access_runtime::lower_runtime_object_method_call;
 pub(super) use call_operands::{
     direct_call_stack_pad_bytes, emit_mixed_string_for_persistent_store,

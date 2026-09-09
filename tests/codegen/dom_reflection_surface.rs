@@ -10,7 +10,9 @@
 //! - Reflection checks make hierarchy, signatures, virtual-property metadata, and
 //!   extension registration independently observable from native DOM behaviour.
 
-use crate::support::compile_and_run;
+use std::fs;
+
+use crate::support::{compile_and_run, compile_source_to_asm_with_options, make_cli_test_dir};
 
 /// Verifies legacy and modern DOM hierarchy, interfaces, finality, construction, and cloning metadata.
 #[test]
@@ -498,6 +500,78 @@ foreach (["dom", "libxml", "SimpleXML"] as $extension) {
     );
 }
 
+/// Verifies nested class, function, method, and enum owners retain complete DOM collections.
+#[test]
+fn nested_dom_reflection_extension_collections_and_enum_owner_remain_complete() {
+    let output = compile_and_run(
+        r#"<?php
+$owners = [
+    "class" => (new ReflectionClass(DOMDocument::class))->getExtension(),
+    "function" => (new ReflectionFunction("dom_import_simplexml"))->getExtension(),
+    "method" => (new ReflectionMethod(DOMDocument::class, "createElement"))->getExtension(),
+    "enum" => (new ReflectionEnum(Dom\AdjacentPosition::class))->getExtension(),
+];
+
+foreach ($owners as $kind => $owner) {
+    $classes = $owner->getClasses();
+    $functions = $owner->getFunctions();
+    echo $kind, "|", $owner->getName(), "|", count($owner->getClassNames()), "|";
+    echo count($classes), "|", get_class($classes["Dom\\AdjacentPosition"]), "|";
+    echo count($functions), "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "class|dom|51|51|ReflectionEnum|2\n",
+            "function|dom|51|51|ReflectionEnum|2\n",
+            "method|dom|51|51|ReflectionEnum|2\n",
+            "enum|dom|51|51|ReflectionEnum|2\n",
+        ),
+    );
+}
+
+/// Guards the lazy extension collection path against re-inlining DOM registry payloads.
+///
+/// The fixture stops after user assembly generation: the historical regression fed more than
+/// four GiB of text to `cc1as`, so assembling it would make the size assertion too late.
+#[test]
+fn dom_reflection_extension_collection_assembly_stays_bounded() {
+    let dir = make_cli_test_dir("elephc_dom_reflection_extension_assembly_bound");
+    let (user_asm, _runtime_asm, _requirements) = compile_source_to_asm_with_options(
+        r#"<?php
+$extension = new ReflectionExtension("dom");
+$classes = $extension->getClasses();
+$functions = $extension->getFunctions();
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let _ = fs::remove_dir_all(&dir);
+
+    for label in [
+        "_eir_shared_reflection_extension_dom",
+        "_eir_shared_reflection_extension_libxml",
+        "_eir_shared_reflection_extension_simplexml",
+    ] {
+        let definition = format!("{label}:\n");
+        assert_eq!(
+            user_asm.matches(definition.as_str()).count(),
+            1,
+            "expected exactly one shared factory body for {label}",
+        );
+    }
+    assert!(
+        user_asm.len() < 128 * 1024 * 1024,
+        "DOM ReflectionExtension collection codegen emitted {} MiB of user assembly",
+        user_asm.len() / (1024 * 1024),
+    );
+}
+
 /// Verifies `ReflectionExtension::getClasses()` preserves PHP 8.5.8's ordered,
 /// string-keyed map of internal `ReflectionClass` objects for DOM-family extensions.
 #[test]
@@ -647,6 +721,10 @@ try {
 } catch (ReflectionException $error) {
     echo "missing|", get_class($error), "|", $error->getMessage(), "\n";
 }
+
+$owner = (new ReflectionClass(DOMDocument::class))->getExtension();
+$entries = $owner->getINIEntries();
+echo "owner|", $owner->getName(), "|", gettype($entries), "|", count($entries), "\n";
 "#,
     );
 
@@ -657,6 +735,7 @@ try {
             "extension|libxml|method|array|0|\n",
             "extension|SimpleXML|method|array|0|\n",
             "missing|ReflectionException|Extension \"not-an-extension\" does not exist\n",
+            "owner|dom|array|0\n",
         ),
     );
 }

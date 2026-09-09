@@ -74,22 +74,28 @@ pub(super) fn emit_reflection_owner_object(
                 "__class_names",
                 &metadata.interface_names,
             )?;
-            let classes = extension
+            let enum_names = extension
                 .classes
                 .iter()
+                .filter(|class| class.enum_type)
                 .map(|class| class.exported_name.clone())
                 .collect::<Vec<_>>();
-            emit_reflection_class_array_property_by_name(
+            emit_reflection_owner_string_array_property_by_name(
                 ctx,
                 class_name,
-                "__classes",
-                &classes,
+                "__enum_names",
+                &enum_names,
             )?;
-            emit_reflection_extension_function_array_property_by_name(
+            let function_names = extension
+                .functions
+                .iter()
+                .map(|function| function.exported_name.clone())
+                .collect::<Vec<_>>();
+            emit_reflection_owner_string_array_property_by_name(
                 ctx,
                 class_name,
-                "__functions",
-                reflected_name,
+                "__function_names",
+                &function_names,
             )?;
             emit_reflection_constant_array_property_by_name(
                 ctx,
@@ -230,8 +236,7 @@ pub(super) fn emit_reflection_owner_object(
                     extension_name,
                 )?;
                 abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-                let extension_metadata = reflection_extension_metadata_for_name(extension_name)?;
-                emit_reflection_owner_object(ctx, "ReflectionExtension", &extension_metadata)?;
+                emit_reflection_extension_factory(ctx, extension_name)?;
                 emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
             }
             emit_reflection_member_array_property_by_name(
@@ -252,8 +257,7 @@ pub(super) fn emit_reflection_owner_object(
                     extension_name,
                 )?;
                 abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-                let extension_metadata = reflection_extension_metadata_for_name(extension_name)?;
-                emit_reflection_owner_object(ctx, "ReflectionExtension", &extension_metadata)?;
+                emit_reflection_extension_factory(ctx, extension_name)?;
                 emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
             }
         } else if class_name == "ReflectionMethod" {
@@ -269,12 +273,22 @@ pub(super) fn emit_reflection_owner_object(
                     extension_name,
                 )?;
                 abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-                let extension_metadata = reflection_extension_metadata_for_name(extension_name)?;
-                emit_reflection_owner_object(ctx, "ReflectionExtension", &extension_metadata)?;
+                emit_reflection_extension_factory(ctx, extension_name)?;
                 emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
             }
         }
         if class_name == "ReflectionEnum" {
+            if let Some(extension_name) = reflection_extension_name_for_class(reflected_name) {
+                emit_reflection_owner_string_property_by_name(
+                    ctx,
+                    class_name,
+                    "__extension_name",
+                    extension_name,
+                )?;
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                emit_reflection_extension_factory(ctx, extension_name)?;
+                emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
+            }
             let case_names = metadata
                 .enum_case_members
                 .iter()

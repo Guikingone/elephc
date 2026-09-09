@@ -57,6 +57,8 @@ use crate::codegen::{CodegenIrError, Result};
 
 mod reflection;
 
+pub(in crate::codegen) use reflection::emit_shared_reflection_extension_factories;
+
 const RUNTIME_NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
     "Class to downcast to not found or not base class or does not implement Traversable";

@@ -35,7 +35,9 @@ pub(super) fn lower_reflection_function_new(
             );
             return Ok(());
         }
-        emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
+        if !emit_shared_reflection_owner_factory(ctx, "ReflectionFunction", &name, false)? {
+            emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
+        }
     } else {
         emit_runtime_extension_reflection_function(ctx, value)?;
     }
@@ -68,8 +70,10 @@ fn emit_runtime_extension_reflection_function(
 
     for (function, label) in functions.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
-        let metadata = reflection_function_metadata_for_name(ctx, function)?;
-        emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
+        if !emit_shared_reflection_owner_factory(ctx, "ReflectionFunction", function, false)? {
+            let metadata = reflection_function_metadata_for_name(ctx, function)?;
+            emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
+        }
         emit_reflection_dispatch_jump(ctx, &done_label);
     }
 

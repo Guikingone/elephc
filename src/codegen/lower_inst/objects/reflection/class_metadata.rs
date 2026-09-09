@@ -45,7 +45,7 @@ pub(super) fn reflection_extension_metadata(
 
 /// Returns the PHP 8.5.8 DOM, libxml, or SimpleXML class-name registry.
 pub(super) fn reflection_extension_metadata_for_name(name: &str) -> Result<ReflectionOwnerMetadata> {
-    let (canonical, classes): (&str, &[&str]) = match php_symbol_key(name).as_str() {
+    let (canonical, _legacy_classes): (&str, &[&str]) = match php_symbol_key(name).as_str() {
         "dom" => ("dom", &[
             "DOMAttr", "DOMCdataSection", "DOMCharacterData", "DOMChildNode", "DOMComment", "DOMDocument", "DOMDocumentFragment", "DOMDocumentType", "DOMElement", "DOMEntity", "DOMEntityReference", "DOMException", "DOMImplementation", "DOMNameSpaceNode", "DOMNamedNodeMap", "DOMNode", "DOMNodeList", "DOMNotation", "DOMParentNode", "DOMProcessingInstruction", "DOMText", "DOMXPath", "Dom\\AdjacentPosition", "Dom\\Attr", "Dom\\CDATASection", "Dom\\CharacterData", "Dom\\ChildNode", "Dom\\Comment", "Dom\\Document", "Dom\\DocumentFragment", "Dom\\DocumentType", "Dom\\DtdNamedNodeMap", "Dom\\Element", "Dom\\Entity", "Dom\\EntityReference", "Dom\\HTMLCollection", "Dom\\HTMLDocument", "Dom\\HTMLElement", "Dom\\Implementation", "Dom\\NamedNodeMap", "Dom\\NamespaceInfo", "Dom\\Node", "Dom\\NodeList", "Dom\\Notation", "Dom\\ParentNode", "Dom\\ProcessingInstruction", "Dom\\Text", "Dom\\TokenList", "Dom\\XMLDocument", "Dom\\XPath", "dom\\domexception",
         ]),
@@ -55,31 +55,19 @@ pub(super) fn reflection_extension_metadata_for_name(name: &str) -> Result<Refle
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(canonical.to_string());
-    metadata.interface_names = classes.iter().map(|name| (*name).to_string()).collect();
+    metadata.interface_names = crate::internal_extensions::registry()
+        .extension(canonical)
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "ReflectionExtension metadata for unknown extension {}",
+                canonical
+            ))
+        })?
+        .classes
+        .iter()
+        .map(|class| class.exported_name.clone())
+        .collect();
     Ok(metadata)
-}
-
-/// Returns PHP 8.5.8's ordered DOM-family function registry for one extension.
-pub(super) fn reflection_extension_function_names(name: &str) -> Option<&'static [&'static str]> {
-    match php_symbol_key(name).as_str() {
-        "dom" => Some(&["dom_import_simplexml", "Dom\\import_simplexml"]),
-        "libxml" => Some(&[
-            "libxml_set_streams_context",
-            "libxml_use_internal_errors",
-            "libxml_get_last_error",
-            "libxml_get_errors",
-            "libxml_clear_errors",
-            "libxml_disable_entity_loader",
-            "libxml_set_external_entity_loader",
-            "libxml_get_external_entity_loader",
-        ]),
-        "simplexml" => Some(&[
-            "simplexml_load_file",
-            "simplexml_load_string",
-            "simplexml_import_dom",
-        ]),
-        _ => None,
-    }
 }
 
 /// Returns PHP 8.5.8's `ReflectionExtension::info()` module block for one DOM-family extension.

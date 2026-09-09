@@ -38,6 +38,7 @@ use super::super::super::context::FunctionContext;
 
 mod owner_dispatch;
 mod function_dispatch;
+mod extension_factories;
 mod owner_emission;
 mod class_metadata;
 mod callable_metadata;
@@ -63,6 +64,9 @@ mod flags_offsets;
 
 use owner_emission::*;
 use function_dispatch::*;
+use extension_factories::{
+    emit_reflection_extension_factory, emit_shared_reflection_owner_factory,
+};
 use class_metadata::*;
 use callable_metadata::*;
 use property_metadata::*;
@@ -86,6 +90,7 @@ use type_object_emit::*;
 use flags_offsets::*;
 
 pub(super) use owner_dispatch::{is_reflection_owner_class, lower_reflection_owner_new};
+pub(in crate::codegen) use extension_factories::emit_shared_reflection_extension_factories;
 
 /// Compile-time metadata used to populate one Reflection owner object.
 struct ReflectionOwnerMetadata {

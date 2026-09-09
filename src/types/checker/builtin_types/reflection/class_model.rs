@@ -411,15 +411,27 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__enum_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
                 "__classes",
                 Visibility::Private,
-                Some(object_array_type("ReflectionClass")),
+                Some(array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__function_names",
+                Visibility::Private,
+                Some(string_array_type()),
                 empty_array(),
             ),
             builtin_property(
                 "__functions",
                 Visibility::Private,
-                Some(object_array_type("ReflectionFunction")),
+                Some(array_type()),
                 empty_array(),
             ),
             builtin_property(
@@ -478,16 +490,8 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
                 "__class_names",
                 string_array_type(),
             ),
-            builtin_reflection_class_array_method(
-                "getClasses",
-                "__classes",
-                object_array_type("ReflectionClass"),
-            ),
-            builtin_reflection_class_array_method(
-                "getFunctions",
-                "__functions",
-                object_array_type("ReflectionFunction"),
-            ),
+            builtin_reflection_extension_classes_method(),
+            builtin_reflection_extension_functions_method(),
             builtin_reflection_class_mixed_method("getConstants", "__constants"),
             builtin_reflection_class_mixed_method("getINIEntries", "__ini_entries"),
             builtin_reflection_class_mixed_method("getDependencies", "__dependencies"),
