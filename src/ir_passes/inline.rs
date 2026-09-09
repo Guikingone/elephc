@@ -55,6 +55,8 @@ use crate::ir::{
     Terminator, Value, ValueDef, ValueId,
 };
 use crate::ir_passes::cfg::has_exception_handlers;
+use crate::ir_passes::dominance::compute_dominance;
+use crate::ir_passes::loops::compute_loops;
 use crate::ir_passes::rewrite::neutralize_to_nop;
 use crate::types::PhpType; // used for void stores and plain-scalar checks
 
@@ -1026,6 +1028,10 @@ fn inline_into_function(
     let mut any = false;
     let mut fuel = MAX_INLINES_PER_FUNCTION;
     loop {
+        // Recompute after every splice because an inlined body can add blocks to
+        // an existing loop and can itself contain further eligible call sites.
+        let dominance = compute_dominance(host);
+        let loops = compute_loops(host, &dominance);
         let mut site: Option<(usize, InstId, String, usize)> = None; // (block_idx, inst_id, name, callee_idx)
         'search: for (bidx, block) in host.blocks.iter().enumerate() {
             for &iid in &block.instructions {
@@ -1036,6 +1042,8 @@ fn inline_into_function(
                             if let Some(&cidx) = name_to_idx.get(&tname) {
                                 let callee = &all_functions[cidx];
                                 if is_eligible_callee(callee, recursive)
+                                    && (loops.loop_depth(block.id) == 0
+                                        || !callee_stores_a_refcounted_local(callee))
                                     && site_is_inlinable(callee, has_result)
                                     && call_args_bind_directly(host, inst, callee)
                                     && call_string_args_are_stable(host, inst, callee)
@@ -1122,6 +1130,34 @@ pub(crate) fn inline_small_functions(module: &mut Module) -> bool {
 #[cfg(test)]
 mod tests {
     // Real tests are in src/ir_passes/tests/inline_test.rs (Builder-driven, per repo policy).
+}
+
+/// Whether the callee stores release-requiring refcounted storage into one of its locals.
+///
+/// A call site inside a loop refuses such a callee because its store carries no
+/// release-of-previous: it was lowered outside any loop in the original callee.
+/// Splicing the store into the caller loop would overwrite the transplanted slot
+/// on every iteration and abandon its previous value. Calls outside loops remain
+/// eligible, preserving the established inline cleanup path for ordinary calls.
+///
+/// Deliberately shaped on the store rather than on the local's declared type: a
+/// slot whose type is `mixed` can still hold a hash at run time, while a string
+/// local carries refcounted storage directly. The stored value's ownership and
+/// storage type decide whether an overwrite can abandon anything.
+///
+/// `may_require_release()` rather than an exact `Owned`, so `MaybeOwned` values
+/// are refused too. `is_refcounted_storage()` keeps the storage classification
+/// shared with EIR instead of duplicating a partial list here.
+fn callee_stores_a_refcounted_local(callee: &Function) -> bool {
+    callee.instructions.iter().any(|inst| {
+        inst.op == Op::StoreLocal
+            && inst.operands.iter().any(|operand| {
+                callee.value(*operand).is_some_and(|value| {
+                    value.ownership.may_require_release()
+                        && value.ir_type.is_refcounted_storage()
+                })
+            })
+    })
 }
 
 /// Returns whether a callee takes a by-value array or associative-array parameter.
