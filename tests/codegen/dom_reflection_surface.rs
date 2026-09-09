@@ -333,6 +333,67 @@ echo $user->getExtension() === null ? "null" : "value", "\n";
     );
 }
 
+/// Verifies ReflectionProperty has no extension accessors and that its declaring-class fallback is exact.
+///
+/// PHP 8.5.8 exposes `getExtensionName()` and `getExtension()` on ReflectionFunction
+/// and ReflectionMethod, but not ReflectionProperty. Extension provenance for a property
+/// is consequently obtained through its declaring ReflectionClass.
+#[test]
+fn dom_reflection_property_extension_fallback_matches_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+class DomReflectionPropertyExtensionUserTarget {
+    public int $value = 1;
+}
+
+function property_origin_row(string $class, string $property): void {
+    $reflection = new ReflectionProperty($class, $property);
+    $declaring = $reflection->getDeclaringClass();
+    $extension = $declaring->getExtension();
+    echo get_class($reflection), "|", $reflection->getName(), "|", $declaring->getName(), "|";
+    echo method_exists($reflection, "getExtensionName") ? "yes" : "no", "|";
+    echo method_exists($reflection, "GETEXTENSION") ? "yes" : "no", "|";
+    echo $declaring->getExtensionName(), "|", get_class($extension), "|";
+    echo $extension->getName(), "|", $extension->getVersion(), "\n";
+}
+
+property_origin_row("domdocument", "documentElement");
+property_origin_row("dom\\namespaceinfo", "prefix");
+property_origin_row("libxmlerror", "level");
+
+$user = new ReflectionProperty(DomReflectionPropertyExtensionUserTarget::class, "value");
+$declaring = $user->getDeclaringClass();
+echo "user|", $user->getName(), "|", $declaring->getName(), "|";
+echo method_exists($user, "getExtensionName") ? "yes" : "no", "|";
+echo method_exists($user, "GETEXTENSION") ? "yes" : "no", "|";
+echo $declaring->getExtensionName() === false ? "false" : "value", "|";
+echo $declaring->getExtension() === null ? "null" : "value", "\n";
+
+echo "simplexml|", count((new ReflectionClass(SimpleXMLElement::class))->getProperties()), "\n";
+
+$property = $argc === 1 ? "missing" : "not-reached";
+try {
+    new ReflectionProperty(DOMDocument::class, $property);
+    echo "missing|none\n";
+} catch (ReflectionException $error) {
+    echo "missing|", get_class($error), "|", $error->getCode(), "|", $error->getMessage(), "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "ReflectionProperty|documentElement|DOMDocument|no|no|dom|ReflectionExtension|dom|20031129\n",
+            "ReflectionProperty|prefix|Dom\\NamespaceInfo|no|no|dom|ReflectionExtension|dom|20031129\n",
+            "ReflectionProperty|level|LibXMLError|no|no|libxml|ReflectionExtension|libxml|8.5.8\n",
+            "user|value|DomReflectionPropertyExtensionUserTarget|no|no|false|null\n",
+            "simplexml|0\n",
+            "missing|ReflectionException|0|Property DOMDocument::$missing does not exist\n",
+        ),
+    );
+}
+
 /// Verifies every public extension registry reports the same DOM/libxml/SimpleXML surface.
 ///
 /// The extension table is intentionally bounded to the DOM bridge's PHP-visible families.

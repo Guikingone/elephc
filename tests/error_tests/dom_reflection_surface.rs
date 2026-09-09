@@ -65,3 +65,23 @@ fn dom_reflection_surface_rejects_non_string_extension_function_registry_name() 
         "get_extension_funcs() first argument must be a string in AOT mode",
     );
 }
+
+/// Verifies the checker never invents ReflectionProperty extension accessors.
+///
+/// PHP 8.5.8 fails these calls at runtime with `Error`; Elephc's static subset
+/// reports the corresponding undefined-method diagnostic before code generation.
+#[test]
+fn dom_reflection_property_extension_accessors_remain_undefined() {
+    for (class, property, method) in [
+        ("DOMDocument", "documentElement", "getExtensionName"),
+        ("Dom\\NamespaceInfo", "prefix", "GETEXTENSIONNAME"),
+        ("LibXMLError", "level", "getExtension"),
+    ] {
+        expect_error(
+            &format!(
+                "<?php $property = new ReflectionProperty({class}::class, \"{property}\"); $property->{method}();"
+            ),
+            &format!("Undefined method: ReflectionProperty::{method}"),
+        );
+    }
+}
