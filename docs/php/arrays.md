@@ -329,6 +329,26 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 
 Unannotated callback parameters are typed from the array in every array builtin that takes a callback — `array_all()`, `array_any()`, `array_filter()`, `array_find()`, `array_map()`, `array_reduce()`, `array_udiff()`, `array_uintersect()`, `array_walk()`, `array_walk_recursive()`, `uasort()`, `uksort()` and `usort()`. Value parameters get the element type and key parameters get the key type, so `array_filter($words, fn($v) => strlen($v) > 3)`, `uksort($byName, fn($a, $b) => strlen($a) <=> strlen($b))` and `array_walk($byName, function ($v, $k) { echo strlen($k); })` all check without hand-written type hints. Explicit hints stay authoritative.
 
+### Sorting runtime-typed indexed arrays
+
+In compiled (AOT) code, [`sort()`](./builtins/array/sort.md) and
+[`rsort()`](./builtins/array/rsort.md) accept indexed arrays whose elements use
+boxed `mixed` storage (`Array(Mixed)` internally). Scalars (`bool`, `int`,
+`float`, and `string`) and `null` are supported and use the runtime's PHP scalar
+comparison helper.
+
+Before sorting, elephc checks every element. If any element is non-scalar, such
+as a nested array, object, resource, or boxed callable, execution terminates
+with:
+
+```text
+Fatal error: sorting Mixed arrays containing non-scalar values is not supported
+```
+
+This is a deliberate AOT restriction: full PHP container ordering is not yet
+implemented, so these values produce an explicit fatal error instead of a
+silently incorrect order.
+
 ### Sorting an associative array
 
 `ksort()`, `krsort()`, `asort()` and `arsort()` reorder an associative array by rewriting its

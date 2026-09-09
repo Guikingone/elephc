@@ -27677,7 +27677,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "Sorts an array in descending order.",
+        summary: "Sorts an array in descending order. In compiled (AOT) code, indexed arrays with runtime-typed (`mixed`) elements are accepted when every element is `null`, `bool`, `int`, `float`, or `string`. A non-scalar element (nested array, object, resource, or boxed callable) terminates execution before sorting with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported`. This deliberate restriction does not implement full PHP container ordering.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.rsort.php"),
@@ -28859,7 +28859,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "Sorts an array in ascending order.",
+        summary: "Sorts an array in ascending order. In compiled (AOT) code, indexed arrays with runtime-typed (`mixed`) elements are accepted when every element is `null`, `bool`, `int`, `float`, or `string`. A non-scalar element (nested array, object, resource, or boxed callable) terminates execution before sorting with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported`. This deliberate restriction does not implement full PHP container ordering.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.sort.php"),
