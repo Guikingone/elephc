@@ -553,7 +553,13 @@ Legend:
   Version/source and library provenance are confirmed, but strict binary-hash
   identity must be re-attested before final oracle closure. Expectations
   replayed through the current executable are version-correct evidence, not a
-  substitute for that final identity attestation. Elephc Cargo/heap-debug execution remains pending while
+  substitute for that final identity attestation. `df570b9d45` adds the PHP
+  8.5.8 tree-shaping parser-options TDD for
+  `Dom\XMLDocument::createFromString`: `NOENT|NOCDATA|NOBLANKS` changes the
+  document tree exactly as oracle-pinned and invalid bits produce the exact
+  whitelist `ValueError`. Inspection confirms existing routes already carry
+  these flags to `xmlCtxtReadMemory`; focused codegen execution remains under
+  the disk gate. Elephc Cargo/heap-debug execution remains pending while
   unrelated Cargo work is consuming memory after two earlier OOMs.
   Post-rebase validation on 2026-08-21 now builds the `elephc-dom` crate and a
   fresh complete bridge run passes 175 tests with zero failures. One-shot
