@@ -68,6 +68,39 @@ libxml_set_external_entity_loader(null);
             "flags|T|T|0|0",
         ),
         (
+            "DOM-PARSEHUGE-DEPTH-03",
+            r#"<?php
+$source = str_repeat("<node>", 257) . "payload" . str_repeat("</node>", 257);
+libxml_use_internal_errors(true);
+libxml_clear_errors();
+try {
+    Dom\XMLDocument::createFromString($source);
+} catch (DOMException $error) {
+    $parseError = libxml_get_last_error();
+    echo "limit|" . get_class($error) . "|" . $error->getMessage() . "|"
+        . $parseError->level . "/" . $parseError->code . "|"
+        . $parseError->line . "/" . $parseError->column . "\n";
+}
+
+libxml_clear_errors();
+$document = Dom\XMLDocument::createFromString($source, LIBXML_PARSEHUGE);
+$node = $document->documentElement;
+$depth = 1;
+while ($node->firstElementChild !== null) {
+    $node = $node->firstElementChild;
+    $depth++;
+}
+echo "huge|" . $depth . "|" . $node->textContent . "|" . count(libxml_get_errors()) . "\n";
+
+try {
+    Dom\XMLDocument::createFromString("<node/>", LIBXML_PARSEHUGE | (1 << 30));
+} catch (ValueError $error) {
+    echo "invalid|" . $error->getMessage();
+}
+"#,
+            "limit|DOMException|XML fragment is not well-formed|3/114|1/1542\nhuge|257|payload|0\ninvalid|Dom\\XMLDocument::createFromString(): Argument #2 ($options) contains invalid flags (allowed flags: LIBXML_RECOVER, LIBXML_NOENT, LIBXML_NO_XXE, LIBXML_DTDLOAD, LIBXML_DTDATTR, LIBXML_DTDVALID, LIBXML_NOERROR, LIBXML_NOWARNING, LIBXML_NOBLANKS, LIBXML_XINCLUDE, LIBXML_NSCLEAN, LIBXML_NOCDATA, LIBXML_NONET, LIBXML_PEDANTIC, LIBXML_COMPACT, LIBXML_PARSEHUGE, LIBXML_BIGLINES)",
+        ),
+        (
             "DOM-PARSE-RECOVERY-03",
             r#"<?php
 libxml_use_internal_errors(true);
