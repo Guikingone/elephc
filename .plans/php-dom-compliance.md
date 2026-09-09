@@ -571,6 +571,12 @@ Legend:
   whitelist ValueError. Inspection confirms 524288 is already whitelisted and
   reaches `xmlCtxtReadMemory`; focused codegen execution remains under the
   disk gate.
+  `028e9aca34` adds the modern `LIBXML_NSCLEAN` TDD: redundant descendant
+  declarations are removed while namespace URIs remain stable, malformed input
+  reports DOMException 12 with libxml `3/76/1`, and invalid bits retain the
+  canonical ValueError without libxml errors. Inspection confirms the bit is
+  already routed to `xmlCtxtReadMemory` and modern conversion does not restore
+  cleaned declarations; focused execution remains under the disk gate.
   `a1cb8f85be` adds the modern `LIBXML_RECOVER` TDD: strict parsing throws
   DOMException 12 with structured libxml `3/77/1/7`, recovery returns the
   repaired tree while retaining that diagnostic, and invalid options leave the
