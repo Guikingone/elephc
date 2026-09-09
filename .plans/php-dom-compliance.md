@@ -471,6 +471,11 @@ Legend:
   extension registry, including case-insensitive lookup and the runtime
   unknown-function error path. Its focused codegen execution remains under the
   disk gate.
+  `3a72cc52ba` closes dynamic/literal `ReflectionFunction` construction for
+  DOM/libxml/SimpleXML functions: canonical names and extension metadata are
+  preserved, while unknown inputs throw the catchable PHP 8.5.8
+  `ReflectionException`, code `0`, with the raw name in the message. Its
+  focused codegen execution remains under the disk gate.
   `81b6d0f009` closes dynamic/literal `ReflectionClass` construction for DOM
   classes: canonical case/one-leading-slash handling succeeds, while unknown
   inputs throw the PHP 8.5.8 catchable `ReflectionException`, code `-1`, with
