@@ -59,6 +59,20 @@ pub(super) fn emit_value_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "ValueError", "_spl_value_error_class_id", message);
 }
 
+/// Throws a catchable PHP `ReflectionException` carrying a static message.
+///
+/// Reflection owner constructors are lowered directly from their compile-time metadata, so an
+/// invalid owner name must enter the normal throwable unwinder here instead of becoming a
+/// code-generation diagnostic.
+pub(super) fn emit_reflection_exception(ctx: &mut FunctionContext<'_>, message: &str) {
+    emit_static_exception(
+        ctx,
+        "ReflectionException",
+        "_spl_reflection_exception_class_id",
+        message,
+    );
+}
+
 /// The register condition a materialized builtin argument must satisfy to skip its
 /// `ValueError`.
 ///

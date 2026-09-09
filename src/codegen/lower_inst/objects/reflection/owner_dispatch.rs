@@ -36,6 +36,19 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
     if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
         emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
     } else {
+        if class_name == "ReflectionExtension" {
+            if let Some(value) = inst.operands.first().copied() {
+                let name = const_required_string_operand(ctx, value, "ReflectionExtension")?;
+                let metadata = reflection_extension_metadata_for_name(&name)?;
+                if metadata.reflected_name.is_none() {
+                    super::super::super::exceptions::emit_reflection_exception(
+                        ctx,
+                        &format!("Extension \"{}\" does not exist", name),
+                    );
+                    return Ok(());
+                }
+            }
+        }
         let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
         emit_reflection_owner_object(ctx, class_name, &metadata)?;
     }

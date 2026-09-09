@@ -309,6 +309,44 @@ foreach (["DOMDocument", "Dom\\XMLDocument", "LibXMLError", "SimpleXMLElement"] 
     );
 }
 
+/// Verifies `ReflectionExtension` canonicalizes known DOM-family names and throws PHP's
+/// catchable `ReflectionException` for an unknown extension.
+#[test]
+fn reflection_extension_unknown_name_matches_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+$dom = new ReflectionExtension("DOM");
+echo "known|DOM|", get_class($dom), "|", $dom->getName(), "\n";
+
+$libxml = new ReflectionExtension("LiBxMl");
+echo "known|LiBxMl|", get_class($libxml), "|", $libxml->getName(), "\n";
+
+$simplexml = new ReflectionExtension("simplexml");
+echo "known|simplexml|", get_class($simplexml), "|", $simplexml->getName(), "\n";
+
+try {
+    new ReflectionExtension("not-an-extension");
+    echo "missing|none\n";
+} catch (ReflectionException $error) {
+    echo "missing|", get_class($error), "|", $error->getCode(), "|";
+    echo $error->getMessage(), "|";
+    echo $error instanceof Exception ? "Exception" : "no", "|";
+    echo $error instanceof Throwable ? "Throwable" : "no", "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "known|DOM|ReflectionExtension|dom\n",
+            "known|LiBxMl|ReflectionExtension|libxml\n",
+            "known|simplexml|ReflectionExtension|SimpleXML\n",
+            "missing|ReflectionException|0|Extension \"not-an-extension\" does not exist|Exception|Throwable\n",
+        ),
+    );
+}
+
 /// Verifies `get_extension_funcs()` resolves runtime strings and non-strict scalar coercion
 /// through PHP's case-insensitive DOM bridge registry while preserving unknown `false`.
 #[test]

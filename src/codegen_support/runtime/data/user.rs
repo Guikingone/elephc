@@ -227,6 +227,8 @@ pub(crate) fn emit_runtime_data_user(
         ),
         ("_spl_value_error_class_id", "ValueError"),
         ("_spl_arithmetic_error_class_id", "ArithmeticError"),
+        // Reflection owner lowering raises this directly for a missing reflected extension.
+        ("_spl_reflection_exception_class_id", "ReflectionException"),
         ("_dom_exception_class_id", "DOMException"),
         // Emitted for the `intdiv($a, 0)` / `$a % 0` zero-divisor guards, which
         // raise reference PHP's catchable DivisionByZeroError from codegen with
