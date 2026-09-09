@@ -433,6 +433,12 @@ Legend:
   libxml (8), and SimpleXML (3), including canonical casing. This is
   oracle-pinned but awaits its focused codegen execution under the same disk
   gate.
+  `191501679f` adds `ReflectionExtension::getConstants()` from the frozen
+  extension registry: DOM (61 constants), libxml (29, including the libxml
+  2.15.3 baseline), and SimpleXML (empty), preserving PHP 8.5.8 order, values,
+  and types. `getConstant()` is deliberately absent because PHP 8.5.8 does not
+  expose that ReflectionExtension method. Its focused codegen execution remains
+  under the disk gate.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
