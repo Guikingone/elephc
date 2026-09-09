@@ -480,6 +480,11 @@ Legend:
   for legacy/modern DOM and SimpleXML methods, hydrating from the declaring
   class registry while preserving the user-method `false`/`null` fallback.
   Its focused codegen execution remains under the disk gate.
+  `4ba8eb5732` pins the normative negative ReflectionProperty surface: PHP 8.5.8
+  exposes neither `getExtensionName()` nor `getExtension()` on properties.
+  Extension fallback is instead verified through `getDeclaringClass()` for DOM,
+  modern DOM, libxml, SimpleXML, user, case, and missing-property paths. Its
+  focused execution remains under the disk gate.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
