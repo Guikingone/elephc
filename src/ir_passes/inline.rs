@@ -55,6 +55,8 @@ use crate::ir::{
     Terminator, Value, ValueDef, ValueId,
 };
 use crate::ir_passes::cfg::has_exception_handlers;
+use crate::ir_passes::dominance::compute_dominance;
+use crate::ir_passes::loops::compute_loops;
 use crate::ir_passes::rewrite::neutralize_to_nop;
 use crate::types::PhpType; // used for void stores and plain-scalar checks
 
@@ -283,23 +285,6 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
     if callee_has_by_value_container_param(callee) {
         return false;
     }
-    // The same leak from the other source. The comment above is about a
-    // PARAMETER's shadow slot; an ordinary LOCAL holding refcounted storage has
-    // the identical problem, and for the identical reason: its `StoreLocal` was
-    // lowered where the callee's loop stack was empty, so it carries no
-    // release-of-previous. Spliced into a host loop, every iteration overwrites
-    // the slot and abandons what it held. Strings need this guard too, not just
-    // heap pointer containers.
-    //
-    // Measured before this guard, `function f() { $x = ["a" => 1]; ... }` called
-    // in a loop: 1 call `allocs=5 frees=5`, 5 calls `frees=9` of 21, 50 calls
-    // `frees=54` of 201 — about three blocks per iteration, unbounded. Unrolled
-    // calls were clean, and so was the same loop with the literal inlined by
-    // hand, which is what isolates it to splicing a body into a loop.
-    if callee_stores_a_refcounted_local(callee) {
-        return false;
-    }
-
     if has_exception_handlers(callee) {
         return false;
     }
@@ -1043,6 +1028,10 @@ fn inline_into_function(
     let mut any = false;
     let mut fuel = MAX_INLINES_PER_FUNCTION;
     loop {
+        // Recompute after every splice because an inlined body can add blocks to
+        // an existing loop and can itself contain further eligible call sites.
+        let dominance = compute_dominance(host);
+        let loops = compute_loops(host, &dominance);
         let mut site: Option<(usize, InstId, String, usize)> = None; // (block_idx, inst_id, name, callee_idx)
         'search: for (bidx, block) in host.blocks.iter().enumerate() {
             for &iid in &block.instructions {
@@ -1053,6 +1042,8 @@ fn inline_into_function(
                             if let Some(&cidx) = name_to_idx.get(&tname) {
                                 let callee = &all_functions[cidx];
                                 if is_eligible_callee(callee, recursive)
+                                    && (loops.loop_depth(block.id) == 0
+                                        || !callee_stores_a_refcounted_local(callee))
                                     && site_is_inlinable(callee, has_result)
                                     && call_args_bind_directly(host, inst, callee)
                                     && call_string_args_are_stable(host, inst, callee)
@@ -1143,11 +1134,11 @@ mod tests {
 
 /// Whether the callee stores release-requiring refcounted storage into one of its locals.
 ///
-/// Sibling of [`callee_has_by_value_container_param`], and refused for the same
-/// reason: the store carries no release-of-previous, because it was lowered
-/// outside any loop. The parameter case was guarded when it was found; this is
-/// the local case, found later by measuring a heap that grew with the iteration
-/// count.
+/// A call site inside a loop refuses such a callee because its store carries no
+/// release-of-previous: it was lowered outside any loop in the original callee.
+/// Splicing the store into the caller loop would overwrite the transplanted slot
+/// on every iteration and abandon its previous value. Calls outside loops remain
+/// eligible, preserving the established inline cleanup path for ordinary calls.
 ///
 /// Deliberately shaped on the store rather than on the local's declared type: a
 /// slot whose type is `mixed` can still hold a hash at run time, while a string
