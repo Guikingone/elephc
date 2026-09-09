@@ -18,8 +18,16 @@ pub(super) fn reflection_function_metadata(
         return Ok(empty_reflection_metadata());
     };
     let function_name = const_required_string_operand(ctx, function_operand, "ReflectionFunction")?;
-    if ctx.function_by_name(&function_name).is_some() {
-        return reflection_registered_function_metadata(ctx, &function_name);
+    reflection_function_metadata_for_name(ctx, &function_name)
+}
+
+/// Resolves ReflectionFunction metadata for a literal or runtime-dispatch candidate name.
+pub(super) fn reflection_function_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    function_name: &str,
+) -> Result<ReflectionOwnerMetadata> {
+    if ctx.function_by_name(function_name).is_some() {
+        return reflection_registered_function_metadata(ctx, function_name);
     }
     if let Some((builtin_name, signature)) = reflection_builtin_function_signature(&function_name) {
         return reflection_builtin_function_metadata(ctx, &builtin_name, &signature);

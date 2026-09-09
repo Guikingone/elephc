@@ -451,32 +451,24 @@ impl Checker {
         Ok((class_name, method_name.to_string()))
     }
 
-    /// Validates `new ReflectionFunction(function)` for supported static function metadata.
+    /// Validates `new ReflectionFunction(function)` while leaving runtime lookup failures catchable.
     fn validate_reflection_function_constructor(
         &mut self,
         args: &[Expr],
         expr: &Expr,
-        env: &TypeEnv,
+        _env: &TypeEnv,
     ) -> Result<(), CompileError> {
-        let function_name = self.reflection_string_literal_arg(
-            "ReflectionFunction",
-            "function name",
-            args.first(),
-            env,
-        )?;
-        if self
-            .reflection_function_signature(&function_name)?
-            .is_some()
-        {
+        let Some(Expr {
+            kind: ExprKind::StringLiteral(function_name),
+            ..
+        }) = args.first()
+        else {
+            return Ok(());
+        };
+        if self.reflection_function_signature(function_name)?.is_some() {
             return self.validate_reflection_function_attrs(&function_name, expr);
         }
-        Err(CompileError::new(
-            expr.span,
-            &format!(
-                "ReflectionFunction::__construct(): Function {}() does not exist",
-                function_name
-            ),
-        ))
+        Ok(())
     }
 
     /// Validates `new ReflectionParameter(target, param)`.

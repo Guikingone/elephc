@@ -39,6 +39,9 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
     if class_name == "ReflectionClass" {
         return lower_reflection_class_new(ctx, inst);
     }
+    if class_name == "ReflectionFunction" {
+        return lower_reflection_function_new(ctx, inst);
+    }
     if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
         emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
     } else {
