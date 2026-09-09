@@ -447,6 +447,12 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
                 empty_string(),
             ),
             builtin_property(
+                "__info",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
                 "__is_persistent",
                 Visibility::Private,
                 Some(TypeExpr::Bool),
@@ -486,6 +492,7 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
             builtin_reflection_class_mixed_method("getINIEntries", "__ini_entries"),
             builtin_reflection_class_mixed_method("getDependencies", "__dependencies"),
             builtin_reflection_class_string_method("getVersion", "__version"),
+            builtin_reflection_extension_info_method(),
             builtin_reflection_class_bool_method("isPersistent", "__is_persistent"),
             builtin_reflection_class_bool_method("isTemporary", "__is_temporary"),
         ],
@@ -493,6 +500,74 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
         constants: Vec::new(),
         used_traits: Vec::new(),
         trait_aliases: Vec::new(),
+    }
+}
+
+/// Builds PHP's parameterless `ReflectionExtension::info()` writer over its populated module block.
+pub(super) fn builtin_reflection_extension_info_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let argument_count = function_call(
+        "count",
+        vec![variable_expr("args", dummy_span)],
+        dummy_span,
+    );
+    let arity_message = concat_expr(
+        string_lit(
+            "ReflectionExtension::info() expects exactly 0 arguments, ",
+            dummy_span,
+        ),
+        concat_expr(
+            argument_count.clone(),
+            string_lit(" given", dummy_span),
+            dummy_span,
+        ),
+        dummy_span,
+    );
+    ClassMethod {
+        name: "info".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: Some("args".to_string()),
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: None,
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: binary_expr(
+                        argument_count,
+                        BinOp::Gt,
+                        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+                        dummy_span,
+                    ),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Throw(Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::unqualified("ArgumentCountError"),
+                                args: vec![arity_message],
+                            },
+                            dummy_span,
+                        )),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Echo(reflection_this_property("__info", dummy_span)),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
     }
 }
 

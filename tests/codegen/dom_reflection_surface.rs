@@ -580,6 +580,65 @@ foreach (["dom", "libxml", "SimpleXML"] as $extension) {
     );
 }
 
+/// Verifies `ReflectionExtension::info()` exists, returns `null`, and writes PHP 8.5.8's
+/// DOM-family module blocks without adding an implicit trailing line.
+#[test]
+fn reflection_extension_info_matches_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+foreach (["dom", "libxml", "SimpleXML"] as $extension) {
+    $reflection = new ReflectionExtension($extension);
+    echo "exists|", $extension, "|", method_exists($reflection, "info") ? "yes" : "no", "\n";
+    $result = $reflection->info();
+    echo "return|", $extension, "|", $result === null ? "null" : "not-null", "\n";
+}
+
+try {
+    (new ReflectionExtension("dom"))->info("unexpected");
+    echo "arity|none\n";
+} catch (ArgumentCountError $error) {
+    echo "arity|", get_class($error), "|", $error->getMessage(), "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "exists|dom|yes\n",
+            "\n",
+            "dom\n",
+            "\n",
+            "DOM/XML => enabled\n",
+            "DOM/XML API Version => 20031129\n",
+            "libxml Version => 2.15.3\n",
+            "HTML Support => enabled\n",
+            "XPath Support => enabled\n",
+            "XPointer Support => enabled\n",
+            "Schema Support => enabled\n",
+            "RelaxNG Support => enabled\n",
+            "return|dom|null\n",
+            "exists|libxml|yes\n",
+            "\n",
+            "libxml\n",
+            "\n",
+            "libXML support => active\n",
+            "libXML Compiled Version => 2.15.3\n",
+            "libXML Loaded Version => 21503\n",
+            "libXML streams => enabled\n",
+            "return|libxml|null\n",
+            "exists|SimpleXML|yes\n",
+            "\n",
+            "SimpleXML\n",
+            "\n",
+            "SimpleXML support => enabled\n",
+            "Schema support => enabled\n",
+            "return|SimpleXML|null\n",
+            "arity|ArgumentCountError|ReflectionExtension::info() expects exactly 0 arguments, 1 given\n",
+        ),
+    );
+}
+
 /// Verifies `ReflectionExtension` canonicalizes known names and reports literal and runtime
 /// unknown extensions through PHP's catchable, name-bearing `ReflectionException`.
 #[test]

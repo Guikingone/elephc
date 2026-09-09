@@ -82,6 +82,20 @@ pub(super) fn reflection_extension_function_names(name: &str) -> Option<&'static
     }
 }
 
+/// Returns PHP 8.5.8's `ReflectionExtension::info()` module block for one DOM-family extension.
+pub(super) fn reflection_extension_info(name: &str) -> Option<&'static str> {
+    match php_symbol_key(name).as_str() {
+        "dom" => Some(
+            "\ndom\n\nDOM/XML => enabled\nDOM/XML API Version => 20031129\nlibxml Version => 2.15.3\nHTML Support => enabled\nXPath Support => enabled\nXPointer Support => enabled\nSchema Support => enabled\nRelaxNG Support => enabled\n",
+        ),
+        "libxml" => Some(
+            "\nlibxml\n\nlibXML support => active\nlibXML Compiled Version => 2.15.3\nlibXML Loaded Version => 21503\nlibXML streams => enabled\n",
+        ),
+        "simplexml" => Some("\nSimpleXML\n\nSimpleXML support => enabled\nSchema support => enabled\n"),
+        _ => None,
+    }
+}
+
 /// Returns PHP 8.5.8's ordered DOM-family dependency maps for one extension.
 pub(super) fn reflection_extension_dependencies(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
     match php_symbol_key(name).as_str() {

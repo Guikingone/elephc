@@ -59,6 +59,13 @@ pub(super) fn emit_reflection_owner_object(
                 "__version",
                 version,
             )?;
+            let info = reflection_extension_info(reflected_name).ok_or_else(|| {
+                CodegenIrError::unsupported(format!(
+                    "ReflectionExtension::info has no module block for {}",
+                    reflected_name
+                ))
+            })?;
+            emit_reflection_owner_string_property_by_name(ctx, class_name, "__info", info)?;
             emit_reflection_owner_bool_property(ctx, class_name, "__is_persistent", true)?;
             emit_reflection_owner_bool_property(ctx, class_name, "__is_temporary", false)?;
             emit_reflection_owner_string_array_property_by_name(
