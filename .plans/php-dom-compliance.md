@@ -503,6 +503,13 @@ Legend:
   preserved, while unknown inputs throw the catchable PHP 8.5.8
   `ReflectionException`, code `0`, with the raw name in the message. Its
   focused codegen execution remains under the disk gate.
+  `f7b0d5a5e6` replaces recursive inline ReflectionExtension owner graphs with
+  three shared fresh-object factories (DOM/libxml/SimpleXML) and shared
+  class/enum/function factories. The codegen-only size guard passes at
+  131,559,831 bytes (125.47 MiB), below the 128 MiB cap, versus the prior
+  >4.4 GiB cc1as expansion. Nested Extension collections, enum owners, and
+  fresh identities are TDD-covered. The fixture's full assembler/executable
+  run remains pending until disk headroom exceeds the current 3.3 GiB.
   `81b6d0f009` closes dynamic/literal `ReflectionClass` construction for DOM
   classes: canonical case/one-leading-slash handling succeeds, while unknown
   inputs throw the PHP 8.5.8 catchable `ReflectionException`, code `-1`, with
