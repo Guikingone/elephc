@@ -33,6 +33,18 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
                 empty_string(),
             ),
             builtin_property(
+                "__extension_name",
+                Visibility::Private,
+                Some(mixed_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__extension",
+                Visibility::Private,
+                Some(mixed_type()),
+                false_bool(),
+            ),
+            builtin_property(
                 "__attrs",
                 Visibility::Private,
                 Some(array_type()),
@@ -247,8 +259,8 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_string_method("getName", "__name"),
             builtin_reflection_class_string_method("__toString", "__string"),
             builtin_reflection_constant_false_union_method("getDocComment"),
-            builtin_reflection_constant_false_union_method("getExtensionName"),
-            builtin_reflection_constant_null_mixed_method("getExtension"),
+            builtin_reflection_class_mixed_method("getExtensionName", "__extension_name"),
+            builtin_reflection_class_mixed_method("getExtension", "__extension"),
             builtin_reflection_class_string_method("getShortName", "__short_name"),
             builtin_reflection_class_string_method("getNamespaceName", "__namespace_name"),
             builtin_reflection_class_bool_method("inNamespace", "__in_namespace"),
@@ -373,6 +385,51 @@ pub(super) fn builtin_reflection_object_class() -> FlattenedClass {
         )]);
     }
     class
+}
+
+/// Builds the bounded `ReflectionExtension` shell used for DOM bridge registry visibility.
+pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionExtension".to_string(),
+        span: dummy(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties: vec![
+            builtin_property(
+                "__name",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__class_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+        ],
+        methods: vec![
+            builtin_reflection_owner_constructor_method(vec![(
+                "name",
+                Some(TypeExpr::Str),
+                None,
+                false,
+            )]),
+            builtin_reflection_class_string_method("getName", "__name"),
+            builtin_reflection_class_array_method(
+                "getClassNames",
+                "__class_names",
+                string_array_type(),
+            ),
+        ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
 }
 
 /// Builds the synthetic `ReflectionEnum` class with flattened ReflectionClass members.

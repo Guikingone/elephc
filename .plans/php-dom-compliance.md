@@ -416,7 +416,15 @@ Legend:
   backed cases/modifiers, and the catchable non-enum/case-missing
   `ReflectionException` behavior are fixed by the PHP 8.5.8 oracle. Broader
   reflection registry visibility and exact runtime exception transport remain
-  deliberate reds. The parser/diagnostics/stream/entity/validation tranche is also now
+  deliberate reds. The reflection registry work is now expanded in
+  `feat/php-dom-compliance` with an oracle-pinned
+  `ReflectionExtension`/`get_extension_funcs()` matrix: DOM (51 classes, 2
+  functions), libxml (1, 8), and SimpleXML (2, 3), plus `ReflectionClass`
+  extension accessors. Its current implementation is deliberately WIP: dynamic
+  extension names and exact unknown-ReflectionExtension exceptions remain open;
+  the mandatory builtin-doc regeneration/audits and focused Cargo test are
+  blocked by the disk gate and must run before readiness or PR review.
+  The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
   diagnostics, PHP stream contexts and re-entrant entity callbacks, validation

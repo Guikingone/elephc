@@ -15,6 +15,7 @@ pub(in crate::codegen::lower_inst::objects) fn is_reflection_owner_class(class_n
         class_name,
         "ReflectionClass"
             | "ReflectionObject"
+            | "ReflectionExtension"
             | "ReflectionFunction"
             | "ReflectionMethod"
             | "ReflectionProperty"
@@ -277,4 +278,3 @@ pub(super) fn reflection_interface_extends_interface(
         .iter()
         .any(|parent| reflection_interface_extends_interface(ctx, parent, target_interface))
 }
-

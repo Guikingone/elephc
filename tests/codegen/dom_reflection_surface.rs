@@ -248,6 +248,67 @@ echo "|", function_exists("simplexml_load_file") ? "yes" : "no", "\n";
     );
 }
 
+/// Verifies every public extension registry reports the same DOM/libxml/SimpleXML surface.
+///
+/// The extension table is intentionally bounded to the DOM bridge's PHP-visible families.
+#[test]
+fn dom_extension_registry_visibility_matches_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+function sorted_functions(string $extension): string {
+    $functions = get_extension_funcs($extension);
+    sort($functions);
+    return implode(",", $functions);
+}
+
+$loaded = get_loaded_extensions();
+echo "loaded|", extension_loaded("dom") ? "yes" : "no";
+echo "|", extension_loaded("libxml") ? "yes" : "no";
+echo "|", extension_loaded("simplexml") ? "yes" : "no";
+echo "|", in_array("dom", $loaded, true) ? "dom" : "-";
+echo "|", in_array("libxml", $loaded, true) ? "libxml" : "-";
+echo "|", in_array("SimpleXML", $loaded, true) ? "SimpleXML" : "-", "\n";
+
+foreach (["dom", "libxml", "SimpleXML"] as $extension) {
+    echo "functions|", $extension, "|", sorted_functions($extension), "\n";
+    $reflection = new ReflectionExtension($extension);
+    $classes = $reflection->getClassNames();
+    echo "extension|", $reflection->getName(), "|", count($classes), "|";
+    echo in_array("DOMDocument", $classes, true) ? "DOMDocument" : "-", "|";
+    echo in_array("Dom\\XMLDocument", $classes, true) ? "Dom\\XMLDocument" : "-", "|";
+    echo in_array("LibXMLError", $classes, true) ? "LibXMLError" : "-", "|";
+    echo in_array("SimpleXMLElement", $classes, true) ? "SimpleXMLElement" : "-", "\n";
+}
+
+echo "missing|", get_extension_funcs("not-an-extension") === false ? "false" : "bad", "\n";
+
+foreach (["DOMDocument", "Dom\\XMLDocument", "LibXMLError", "SimpleXMLElement"] as $class) {
+    $reflection = new ReflectionClass($class);
+    echo "class|", $reflection->getName(), "|", $reflection->getExtensionName(), "|";
+    echo $reflection->getExtension()->getName(), "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "loaded|yes|yes|yes|dom|libxml|SimpleXML\n",
+            "functions|dom|Dom\\import_simplexml,dom_import_simplexml\n",
+            "extension|dom|51|DOMDocument|Dom\\XMLDocument|-|-\n",
+            "functions|libxml|libxml_clear_errors,libxml_disable_entity_loader,libxml_get_errors,libxml_get_external_entity_loader,libxml_get_last_error,libxml_set_external_entity_loader,libxml_set_streams_context,libxml_use_internal_errors\n",
+            "extension|libxml|1|-|-|LibXMLError|-\n",
+            "functions|SimpleXML|simplexml_import_dom,simplexml_load_file,simplexml_load_string\n",
+            "extension|SimpleXML|2|-|-|-|SimpleXMLElement\n",
+            "missing|false\n",
+            "class|DOMDocument|dom|dom\n",
+            "class|Dom\\XMLDocument|dom|dom\n",
+            "class|LibXMLError|libxml|libxml\n",
+            "class|SimpleXMLElement|SimpleXML|SimpleXML\n",
+        ),
+    );
+}
+
 /// Verifies arity, unknown named parameters, and type errors remain catchable PHP runtime exceptions.
 #[test]
 fn dom_public_surface_argument_errors_match_php_8_5_8() {

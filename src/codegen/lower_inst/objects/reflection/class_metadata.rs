@@ -18,6 +18,7 @@ pub(super) fn reflection_owner_metadata(
     match class_name {
         "ReflectionClass" => reflection_class_metadata(ctx, inst),
         "ReflectionEnum" => reflection_enum_metadata(ctx, inst),
+        "ReflectionExtension" => reflection_extension_metadata(ctx, inst),
         "ReflectionFunction" => reflection_function_metadata(ctx, inst),
         "ReflectionMethod" => reflection_method_metadata(ctx, inst),
         "ReflectionProperty" => reflection_property_metadata(ctx, inst),
@@ -27,6 +28,49 @@ pub(super) fn reflection_owner_metadata(
             reflection_enum_case_metadata(ctx, class_name, inst)
         }
         _ => Ok(empty_reflection_metadata()),
+    }
+}
+
+/// Resolves the frozen DOM bridge registry exposed through `ReflectionExtension`.
+pub(super) fn reflection_extension_metadata(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some(value) = inst.operands.first().copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let name = const_required_string_operand(ctx, value, "ReflectionExtension")?;
+    reflection_extension_metadata_for_name(&name)
+}
+
+/// Returns the PHP 8.5.8 DOM, libxml, or SimpleXML class-name registry.
+pub(super) fn reflection_extension_metadata_for_name(name: &str) -> Result<ReflectionOwnerMetadata> {
+    let (canonical, classes): (&str, &[&str]) = match php_symbol_key(name).as_str() {
+        "dom" => ("dom", &[
+            "DOMAttr", "DOMCdataSection", "DOMCharacterData", "DOMChildNode", "DOMComment", "DOMDocument", "DOMDocumentFragment", "DOMDocumentType", "DOMElement", "DOMEntity", "DOMEntityReference", "DOMException", "DOMImplementation", "DOMNameSpaceNode", "DOMNamedNodeMap", "DOMNode", "DOMNodeList", "DOMNotation", "DOMParentNode", "DOMProcessingInstruction", "DOMText", "DOMXPath", "Dom\\AdjacentPosition", "Dom\\Attr", "Dom\\CDATASection", "Dom\\CharacterData", "Dom\\ChildNode", "Dom\\Comment", "Dom\\Document", "Dom\\DocumentFragment", "Dom\\DocumentType", "Dom\\DtdNamedNodeMap", "Dom\\Element", "Dom\\Entity", "Dom\\EntityReference", "Dom\\HTMLCollection", "Dom\\HTMLDocument", "Dom\\HTMLElement", "Dom\\Implementation", "Dom\\NamedNodeMap", "Dom\\NamespaceInfo", "Dom\\Node", "Dom\\NodeList", "Dom\\Notation", "Dom\\ParentNode", "Dom\\ProcessingInstruction", "Dom\\Text", "Dom\\TokenList", "Dom\\XMLDocument", "Dom\\XPath", "dom\\domexception",
+        ]),
+        "libxml" => ("libxml", &["LibXMLError"]),
+        "simplexml" => ("SimpleXML", &["SimpleXMLElement", "SimpleXMLIterator"]),
+        _ => return Ok(empty_reflection_metadata()),
+    };
+    let mut metadata = empty_reflection_metadata();
+    metadata.reflected_name = Some(canonical.to_string());
+    metadata.interface_names = classes.iter().map(|name| (*name).to_string()).collect();
+    Ok(metadata)
+}
+
+/// Maps the bounded DOM bridge classes to their PHP extension names.
+pub(super) fn reflection_extension_name_for_class(class_name: &str) -> Option<&'static str> {
+    if class_name.eq_ignore_ascii_case("LibXMLError") {
+        Some("libxml")
+    } else if class_name.eq_ignore_ascii_case("SimpleXMLElement")
+        || class_name.eq_ignore_ascii_case("SimpleXMLIterator")
+    {
+        Some("SimpleXML")
+    } else if class_name.starts_with("DOM") || class_name.starts_with("Dom\\") {
+        Some("dom")
+    } else {
+        None
     }
 }
 
@@ -340,4 +384,3 @@ pub(super) fn reflection_enum_metadata_for_name(
     metadata.parent_class_name = None;
     Ok(metadata)
 }
-
