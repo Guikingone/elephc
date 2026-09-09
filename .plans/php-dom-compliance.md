@@ -376,10 +376,15 @@ Legend:
   unmapped bootstrap; exhaustive bridge/ABI adversarial cases; DOM surface,
   EIR-family, and runtime-GC matrices; then legacy/modern mutation, selectors,
   XPath, parser/diagnostic/stream/entity, validation/C14N/XInclude, and the
-  SimpleXML/libxml handler/loader/interop/override matrices. One existing
-  production branch still says legacy XPath namespace-node results are not
-  implemented, and SimpleXMLElement serialization denial appears uncovered;
-  both require oracle-pinned red tests before any production correction.
+  SimpleXML/libxml handler/loader/interop/override matrices. Legacy XPath
+  namespace-node results were implemented on 2026-09-09: the previously ignored
+  TDD now expects the PHP 8.5.8 sequence `DOMNodeList:6` followed by six
+  `DOMNameSpaceNode` values, and the pinned oracle
+  `/private/tmp/php-dom-oracle-build-8.5.8/sapi/cli/php` matches it exactly.
+  The obsolete dispatch refusal was removed in `539f1f0a4d`; Elephc's focused
+  codegen test remains pending until disk space permits Cargo. SimpleXMLElement
+  serialization denial remains uncovered and requires its own oracle-pinned
+  red test before production correction.
   The coverage-gate TDD tranche now has twelve Python contract tests covering
   all of the above inventory/provenance/orphan/target rules. Its first deliberate
   red run completed in 1.042 seconds with 12 tests and 15 failed assertions,
