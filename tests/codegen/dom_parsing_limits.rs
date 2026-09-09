@@ -119,6 +119,39 @@ try {
 "#,
             "plain|<root> \n <![CDATA[cdata]]>&e;</root>|3|3|5\nshaped|<root>cdataexpanded</root>|1|3|3\ninvalid|Dom\\XMLDocument::createFromString(): Argument #2 ($options) contains invalid flags (allowed flags: LIBXML_RECOVER, LIBXML_NOENT, LIBXML_NO_XXE, LIBXML_DTDLOAD, LIBXML_DTDATTR, LIBXML_DTDVALID, LIBXML_NOERROR, LIBXML_NOWARNING, LIBXML_NOBLANKS, LIBXML_XINCLUDE, LIBXML_NSCLEAN, LIBXML_NOCDATA, LIBXML_NONET, LIBXML_PEDANTIC, LIBXML_COMPACT, LIBXML_PARSEHUGE, LIBXML_BIGLINES)",
         ),
+        (
+            "DOM-PARSE-NO-XXE-MODERN-05",
+            r#"<?php
+class NoXxeLoader {
+    public mixed $context;
+    public static int $calls = 0;
+
+    public function __invoke($public, $system, $context): mixed {
+        self::$calls++;
+        return null;
+    }
+}
+
+file_put_contents("dom-noxxe.dtd", '<!ELEMENT root EMPTY><!ATTLIST root external CDATA "yes">');
+$source = '<!DOCTYPE root SYSTEM "dom-noxxe.dtd"><root/>';
+libxml_use_internal_errors(true);
+libxml_clear_errors();
+libxml_set_external_entity_loader(new NoXxeLoader());
+$string = Dom\XMLDocument::createFromString($source, LIBXML_DTDLOAD | LIBXML_DTDATTR | LIBXML_NO_XXE);
+echo "string|" . ($string->documentElement->hasAttribute("external") ? "T" : "F") . "|" . NoXxeLoader::$calls . "|" . count(libxml_get_errors()) . "\n";
+libxml_set_external_entity_loader(null);
+file_put_contents("dom-noxxe.xml", $source);
+libxml_clear_errors();
+$file = Dom\XMLDocument::createFromFile("dom-noxxe.xml", LIBXML_DTDLOAD | LIBXML_DTDATTR | LIBXML_NO_XXE);
+echo "file|" . ($file->documentElement->hasAttribute("external") ? "T" : "F") . "|" . count(libxml_get_errors()) . "\n";
+libxml_clear_errors();
+$inline = Dom\XMLDocument::createFromString('<!DOCTYPE root [<!ENTITY payload "inline">]><root>&payload;</root>', LIBXML_NOENT | LIBXML_NO_XXE);
+echo "inline|" . $inline->documentElement->textContent . "|" . $inline->documentElement->firstChild->nodeType . "|" . count(libxml_get_errors());
+unlink("dom-noxxe.dtd");
+unlink("dom-noxxe.xml");
+"#,
+            "string|F|0|0\nfile|F|0\ninline|inline|3|0",
+        ),
     ] {
         assert_eq!(compile_and_run(source), expected, "{case}");
     }
