@@ -297,6 +297,42 @@ try {
     );
 }
 
+/// Verifies DOM-family ReflectionMethod extension accessors preserve PHP 8.5.8 metadata.
+#[test]
+fn dom_reflection_method_extension_accessors_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+class DomReflectionMethodUserTarget {
+    public function run(): void {}
+}
+
+$legacy = new ReflectionMethod(DOMDocument::class, "LOADxml");
+$modern = new ReflectionMethod(Dom\XMLDocument::class, "createFromString");
+$simple = new ReflectionMethod(SimpleXMLElement::class, "xpath");
+
+foreach ([$legacy, $modern, $simple] as $method) {
+    $extension = $method->getExtension();
+    echo $method->getName(), "|", $method->getExtensionName(), "|";
+    echo get_class($extension), "|", $extension->getName(), "|", $extension->getVersion(), "\n";
+}
+
+$user = new ReflectionMethod(DomReflectionMethodUserTarget::class, "run");
+echo "user|", $user->getExtensionName() === false ? "false" : "value", "|";
+echo $user->getExtension() === null ? "null" : "value", "\n";
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "loadXML|dom|ReflectionExtension|dom|20031129\n",
+            "createFromString|dom|ReflectionExtension|dom|20031129\n",
+            "xpath|SimpleXML|ReflectionExtension|SimpleXML|8.5.8\n",
+            "user|false|null\n",
+        ),
+    );
+}
+
 /// Verifies every public extension registry reports the same DOM/libxml/SimpleXML surface.
 ///
 /// The extension table is intentionally bounded to the DOM bridge's PHP-visible families.

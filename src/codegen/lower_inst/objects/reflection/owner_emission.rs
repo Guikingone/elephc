@@ -256,6 +256,23 @@ pub(super) fn emit_reflection_owner_object(
                 emit_reflection_owner_object(ctx, "ReflectionExtension", &extension_metadata)?;
                 emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
             }
+        } else if class_name == "ReflectionMethod" {
+            if let Some(extension_name) = metadata
+                .parent_class_name
+                .as_deref()
+                .and_then(reflection_extension_name_for_class)
+            {
+                emit_reflection_owner_string_property_by_name(
+                    ctx,
+                    class_name,
+                    "__extension_name",
+                    extension_name,
+                )?;
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                let extension_metadata = reflection_extension_metadata_for_name(extension_name)?;
+                emit_reflection_owner_object(ctx, "ReflectionExtension", &extension_metadata)?;
+                emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
+            }
         }
         if class_name == "ReflectionEnum" {
             let case_names = metadata
