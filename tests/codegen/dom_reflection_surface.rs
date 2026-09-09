@@ -248,6 +248,55 @@ echo "|", function_exists("simplexml_load_file") ? "yes" : "no", "\n";
     );
 }
 
+/// Verifies DOM-family ReflectionFunction extension accessors reuse the locked registry.
+#[test]
+fn dom_reflection_function_extension_accessors_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+foreach (["dom", "libxml", "SimpleXML"] as $extension) {
+    foreach ((new ReflectionExtension($extension))->getFunctions() as $function) {
+        $owner = $function->getExtension();
+        echo $function->getName(), "|", $function->getExtensionName(), "|";
+        echo get_class($owner), "|", $owner->getName(), "|", $owner->getVersion(), "\n";
+    }
+}
+
+$caseInsensitive = new ReflectionFunction("LIBXML_GET_ERRORS");
+echo "case|", $caseInsensitive->getName(), "|";
+echo $caseInsensitive->getExtension()->getName(), "\n";
+
+$unknown = $argc === 1 ? "dynamic-missing-function" : "not-reached";
+try {
+    new ReflectionFunction($unknown);
+    echo "missing|none\n";
+} catch (ReflectionException $error) {
+    echo "missing|", get_class($error), "|", $error->getCode(), "|", $error->getMessage(), "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "dom_import_simplexml|dom|ReflectionExtension|dom|20031129\n",
+            "Dom\\import_simplexml|dom|ReflectionExtension|dom|20031129\n",
+            "libxml_set_streams_context|libxml|ReflectionExtension|libxml|8.5.8\n",
+            "libxml_use_internal_errors|libxml|ReflectionExtension|libxml|8.5.8\n",
+            "libxml_get_last_error|libxml|ReflectionExtension|libxml|8.5.8\n",
+            "libxml_get_errors|libxml|ReflectionExtension|libxml|8.5.8\n",
+            "libxml_clear_errors|libxml|ReflectionExtension|libxml|8.5.8\n",
+            "libxml_disable_entity_loader|libxml|ReflectionExtension|libxml|8.5.8\n",
+            "libxml_set_external_entity_loader|libxml|ReflectionExtension|libxml|8.5.8\n",
+            "libxml_get_external_entity_loader|libxml|ReflectionExtension|libxml|8.5.8\n",
+            "simplexml_load_file|SimpleXML|ReflectionExtension|SimpleXML|8.5.8\n",
+            "simplexml_load_string|SimpleXML|ReflectionExtension|SimpleXML|8.5.8\n",
+            "simplexml_import_dom|SimpleXML|ReflectionExtension|SimpleXML|8.5.8\n",
+            "case|libxml_get_errors|libxml\n",
+            "missing|ReflectionException|0|Function dynamic-missing-function() does not exist\n",
+        ),
+    );
+}
+
 /// Verifies every public extension registry reports the same DOM/libxml/SimpleXML surface.
 ///
 /// The extension table is intentionally bounded to the DOM bridge's PHP-visible families.

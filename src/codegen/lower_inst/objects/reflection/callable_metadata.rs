@@ -112,6 +112,22 @@ pub(super) fn reflection_builtin_function_signature(function_name: &str) -> Opti
         .map(|signature| (builtin_key, signature))
 }
 
+/// Resolves a reflected internal function to its locked PHP extension registry entry.
+pub(super) fn reflection_extension_name_for_function(
+    function_name: &str,
+) -> Option<&'static str> {
+    let function_key = php_symbol_key(function_name);
+    crate::internal_extensions::registry()
+        .extensions()
+        .find(|extension| {
+            extension
+                .functions
+                .iter()
+                .any(|function| php_symbol_key(&function.exported_name) == function_key)
+        })
+        .map(|extension| extension.name.as_str())
+}
+
 /// Returns whether a reflected function or method represents compiler builtin metadata.
 pub(super) fn reflection_function_or_method_is_internal(
     class_name: &str,
