@@ -571,6 +571,13 @@ Legend:
   whitelist ValueError. Inspection confirms 524288 is already whitelisted and
   reaches `xmlCtxtReadMemory`; focused codegen execution remains under the
   disk gate.
+  `a1cb8f85be` adds the modern `LIBXML_RECOVER` TDD: strict parsing throws
+  DOMException 12 with structured libxml `3/77/1/7`, recovery returns the
+  repaired tree while retaining that diagnostic, and invalid options leave the
+  shared queue unchanged. Existing routing already preserves `RECOVER` and
+  records errors. This vector is corroborated by the locked php-src 8.5.8 PHPT
+  and PHP 8.5.6 execution, but remains pending re-attestation against the
+  missing PHP 8.5.8/libxml2 2.15.3 CLI.
   unrelated Cargo work is consuming memory after two earlier OOMs.
   Post-rebase validation on 2026-08-21 now builds the `elephc-dom` crate and a
   fresh complete bridge run passes 175 tests with zero failures. One-shot
