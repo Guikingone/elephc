@@ -125,8 +125,7 @@ echo "recover|" . ($recoverResult ? "T" : "F") . "|"
         (
             "DOM-PARSE-TREE-SHAPING-04",
             r#"<?php
-$source = '<!DOCTYPE root [<!ENTITY e "expanded">]><root> 
- <![CDATA[cdata]]>&e;</root>';
+$source = '<!DOCTYPE root [<!ENTITY e "expanded">]><root>' . "\x20\n <![CDATA[cdata]]>&e;</root>";
 $plain = Dom\XMLDocument::createFromString($source);
 $plainRoot = $plain->documentElement;
 echo "plain|" . $plain->saveXml($plainRoot) . "|"

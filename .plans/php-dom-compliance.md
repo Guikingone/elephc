@@ -577,6 +577,12 @@ Legend:
   canonical ValueError without libxml errors. Inspection confirms the bit is
   already routed to `xmlCtxtReadMemory` and modern conversion does not restore
   cleaned declarations; focused execution remains under the disk gate.
+  `537a9f5eda` adds the modern `LIBXML_DTDATTR` TDD: internal defaults appear
+  only with the flag, external defaults are injected for String/File factories,
+  and existing NO_XXE/invalid-bit tests cover the complementary paths. PHP 8.5.8
+  `document.c` and libxml2 2.15.3 `parser.c` source locks attest
+  `xmlCtxtUseOptions`/`XML_COMPLETE_ATTRS`; CLI oracle re-attestation remains
+  pending under the disk gate.
   `a1cb8f85be` adds the modern `LIBXML_RECOVER` TDD: strict parsing throws
   DOMException 12 with structured libxml `3/77/1/7`, recovery returns the
   repaired tree while retaining that diagnostic, and invalid options leave the
