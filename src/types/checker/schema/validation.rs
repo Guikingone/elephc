@@ -443,6 +443,21 @@ pub(crate) fn validate_override_signature(
         )
     });
     if parent_sig.declared_return && !return_compatible {
+        if !is_static
+            && php_symbol_key(&method.name) == "__debuginfo"
+            && class
+                .extends
+                .as_deref()
+                .is_some_and(|parent| parent.eq_ignore_ascii_case("SimpleXMLElement"))
+        {
+            return Err(CompileError::new(
+                method.span,
+                &format!(
+                    "{}::__debugInfo(): Return type must be ?array when declared",
+                    class_name
+                ),
+            ));
+        }
         return Err(CompileError::new(
             method.span,
             &format!(
