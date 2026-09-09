@@ -82,6 +82,48 @@ pub(super) fn reflection_extension_function_names(name: &str) -> Option<&'static
     }
 }
 
+/// Returns PHP 8.5.8's ordered, typed DOM-family extension constants.
+pub(super) fn reflection_extension_constant_members(
+    name: &str,
+) -> Result<Vec<ReflectionConstantMember>> {
+    let extension = crate::internal_extensions::registry()
+        .extension(name)
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "ReflectionExtension::getConstants for unknown extension {}",
+                name
+            ))
+        })?;
+    extension
+        .constants
+        .iter()
+        .map(|(name, value)| {
+            let value = match value {
+                serde_json::Value::Number(value) => value
+                    .as_i64()
+                    .map(ReflectionConstantValue::Int)
+                    .ok_or_else(|| {
+                        CodegenIrError::unsupported(format!(
+                            "ReflectionExtension::getConstants has non-integer numeric {}",
+                            name
+                        ))
+                    })?,
+                serde_json::Value::String(value) => ReflectionConstantValue::Str(value.clone()),
+                _ => {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "ReflectionExtension::getConstants has unsupported constant {}",
+                        name
+                    )));
+                }
+            };
+            Ok(ReflectionConstantMember {
+                name: name.clone(),
+                value,
+            })
+        })
+        .collect()
+}
+
 /// Maps the bounded DOM bridge classes to their PHP extension names.
 pub(super) fn reflection_extension_name_for_class(class_name: &str) -> Option<&'static str> {
     if class_name.eq_ignore_ascii_case("LibXMLError") {

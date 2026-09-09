@@ -416,6 +416,12 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
                 Some(object_array_type("ReflectionFunction")),
                 empty_array(),
             ),
+            builtin_property(
+                "__constants",
+                Visibility::Private,
+                Some(mixed_type()),
+                empty_array(),
+            ),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
@@ -435,6 +441,7 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
                 "__functions",
                 object_array_type("ReflectionFunction"),
             ),
+            builtin_reflection_class_mixed_method("getConstants", "__constants"),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),

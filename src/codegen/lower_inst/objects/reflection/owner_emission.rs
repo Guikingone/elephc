@@ -51,6 +51,12 @@ pub(super) fn emit_reflection_owner_object(
                 "__functions",
                 reflected_name,
             )?;
+            emit_reflection_constant_array_property_by_name(
+                ctx,
+                class_name,
+                "__constants",
+                &reflection_extension_constant_members(reflected_name)?,
+            )?;
         }
         if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;

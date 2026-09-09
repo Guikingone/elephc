@@ -352,6 +352,38 @@ foreach (["dom", "libxml", "SimpleXML"] as $extension) {
     );
 }
 
+/// Verifies `ReflectionExtension::getConstants()` preserves PHP 8.5.8's ordered,
+/// typed DOM-family constant registries without inventing `getConstant()`.
+#[test]
+fn reflection_extension_constants_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+function extension_constants(ReflectionExtension $reflection): string {
+    $entries = [];
+    foreach ($reflection->getConstants() as $name => $value) {
+        $entries[] = $name . ":" . gettype($value) . ":" . $value;
+    }
+    return implode(",", $entries);
+}
+
+foreach (["dom", "libxml", "SimpleXML"] as $extension) {
+    $reflection = new ReflectionExtension($extension);
+    echo $reflection->getName(), "|", extension_constants($reflection), "|";
+    echo method_exists($reflection, "getConstant") ? "getConstant" : "no-getConstant", "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "dom|XML_ELEMENT_NODE:integer:1,XML_ATTRIBUTE_NODE:integer:2,XML_TEXT_NODE:integer:3,XML_CDATA_SECTION_NODE:integer:4,XML_ENTITY_REF_NODE:integer:5,XML_ENTITY_NODE:integer:6,XML_PI_NODE:integer:7,XML_COMMENT_NODE:integer:8,XML_DOCUMENT_NODE:integer:9,XML_DOCUMENT_TYPE_NODE:integer:10,XML_DOCUMENT_FRAG_NODE:integer:11,XML_NOTATION_NODE:integer:12,XML_HTML_DOCUMENT_NODE:integer:13,XML_DTD_NODE:integer:14,XML_ELEMENT_DECL_NODE:integer:15,XML_ATTRIBUTE_DECL_NODE:integer:16,XML_ENTITY_DECL_NODE:integer:17,XML_NAMESPACE_DECL_NODE:integer:18,XML_LOCAL_NAMESPACE:integer:18,XML_ATTRIBUTE_CDATA:integer:1,XML_ATTRIBUTE_ID:integer:2,XML_ATTRIBUTE_IDREF:integer:3,XML_ATTRIBUTE_IDREFS:integer:4,XML_ATTRIBUTE_ENTITY:integer:6,XML_ATTRIBUTE_NMTOKEN:integer:7,XML_ATTRIBUTE_NMTOKENS:integer:8,XML_ATTRIBUTE_ENUMERATION:integer:9,XML_ATTRIBUTE_NOTATION:integer:10,DOM_PHP_ERR:integer:0,DOM_INDEX_SIZE_ERR:integer:1,DOMSTRING_SIZE_ERR:integer:2,DOM_HIERARCHY_REQUEST_ERR:integer:3,DOM_WRONG_DOCUMENT_ERR:integer:4,DOM_INVALID_CHARACTER_ERR:integer:5,DOM_NO_DATA_ALLOWED_ERR:integer:6,DOM_NO_MODIFICATION_ALLOWED_ERR:integer:7,DOM_NOT_FOUND_ERR:integer:8,DOM_NOT_SUPPORTED_ERR:integer:9,DOM_INUSE_ATTRIBUTE_ERR:integer:10,DOM_INVALID_STATE_ERR:integer:11,DOM_SYNTAX_ERR:integer:12,DOM_INVALID_MODIFICATION_ERR:integer:13,DOM_NAMESPACE_ERR:integer:14,DOM_INVALID_ACCESS_ERR:integer:15,DOM_VALIDATION_ERR:integer:16,Dom\\INDEX_SIZE_ERR:integer:1,Dom\\STRING_SIZE_ERR:integer:2,Dom\\HIERARCHY_REQUEST_ERR:integer:3,Dom\\WRONG_DOCUMENT_ERR:integer:4,Dom\\INVALID_CHARACTER_ERR:integer:5,Dom\\NO_DATA_ALLOWED_ERR:integer:6,Dom\\NO_MODIFICATION_ALLOWED_ERR:integer:7,Dom\\NOT_FOUND_ERR:integer:8,Dom\\NOT_SUPPORTED_ERR:integer:9,Dom\\INUSE_ATTRIBUTE_ERR:integer:10,Dom\\INVALID_STATE_ERR:integer:11,Dom\\SYNTAX_ERR:integer:12,Dom\\INVALID_MODIFICATION_ERR:integer:13,Dom\\NAMESPACE_ERR:integer:14,Dom\\VALIDATION_ERR:integer:16,Dom\\HTML_NO_DEFAULT_NS:integer:2147483648|no-getConstant\n",
+            "libxml|LIBXML_VERSION:integer:21503,LIBXML_DOTTED_VERSION:string:2.15.3,LIBXML_LOADED_VERSION:string:21503,LIBXML_RECOVER:integer:1,LIBXML_NOENT:integer:2,LIBXML_NO_XXE:integer:8388608,LIBXML_DTDLOAD:integer:4,LIBXML_DTDATTR:integer:8,LIBXML_DTDVALID:integer:16,LIBXML_NOERROR:integer:32,LIBXML_NOWARNING:integer:64,LIBXML_NOBLANKS:integer:256,LIBXML_XINCLUDE:integer:1024,LIBXML_NSCLEAN:integer:8192,LIBXML_NOCDATA:integer:16384,LIBXML_NONET:integer:2048,LIBXML_PEDANTIC:integer:128,LIBXML_COMPACT:integer:65536,LIBXML_NOXMLDECL:integer:2,LIBXML_PARSEHUGE:integer:524288,LIBXML_BIGLINES:integer:4194304,LIBXML_NOEMPTYTAG:integer:4,LIBXML_SCHEMA_CREATE:integer:1,LIBXML_HTML_NOIMPLIED:integer:8192,LIBXML_HTML_NODEFDTD:integer:4,LIBXML_ERR_NONE:integer:0,LIBXML_ERR_WARNING:integer:1,LIBXML_ERR_ERROR:integer:2,LIBXML_ERR_FATAL:integer:3|no-getConstant\n",
+            "SimpleXML||no-getConstant\n",
+        ),
+    );
+}
+
 /// Verifies `ReflectionExtension` canonicalizes known DOM-family names and throws PHP's
 /// catchable `ReflectionException` for an unknown extension.
 #[test]
