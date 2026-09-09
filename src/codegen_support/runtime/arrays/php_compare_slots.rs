@@ -74,6 +74,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
         }
         Arch::X86_64 => {
             // -- scan every boxed Mixed slot before the sorter can mutate the array --
+            emitter.instruction("sub rsp, 8");                                  // align the stack for the fatal path's output-buffer flush
             emitter.instruction("mov rax, rdi");                                // preserve the array pointer as the helper result
             emitter.instruction("mov rcx, QWORD PTR [rax]");                    // load the indexed-array element count
             emitter.instruction("xor edx, edx");                                // start at the first Mixed slot
@@ -91,6 +92,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             emitter.instruction("add rdx, 1");                                  // advance to the next Mixed slot
             emitter.instruction("jmp __rt_mixed_sort_scalar_scan_x86");         // continue validating runtime tags
             emitter.label("__rt_mixed_sort_scalar_done_x86");
+            emitter.instruction("add rsp, 8");                                  // release the alignment slot before returning
             emitter.instruction("ret");                                         // return the unchanged array pointer in rax
 
             // -- report an unsupported runtime value before terminating --
@@ -100,7 +102,11 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             emitter.instruction(&format!("mov edx, {}", MIXED_SORT_NON_SCALAR_MSG.len())); // pass the diagnostic byte length to write()
             emitter.instruction("mov eax, 1");                                  // select the Linux x86_64 write syscall
             emitter.instruction("syscall");                                     // write the explicit Mixed-sort diagnostic
-            abi::emit_exit(emitter, 1);
+            abi::emit_cdylib_exit_escape(emitter);
+            emitter.instruction("call __rt_ob_flush_all");                      // flush buffered output from the aligned helper frame
+            emitter.instruction("mov edi, 1");                                  // select process failure status
+            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 is exit_group
+            emitter.instruction("syscall");                                     // terminate after reporting the unsupported value
         }
     }
 }
