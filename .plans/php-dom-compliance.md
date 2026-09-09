@@ -560,6 +560,11 @@ Legend:
   whitelist `ValueError`. Inspection confirms existing routes already carry
   these flags to `xmlCtxtReadMemory`; focused codegen execution remains under
   the disk gate. Elephc Cargo/heap-debug execution remains pending while
+  `d0b553e5c3` adds the modern `LIBXML_NO_XXE` TDD: external DTD attributes
+  and loader calls are blocked without diagnostics for String/File factories,
+  while internal `NOENT` expansion remains valid. Inspection confirms both
+  routes already transmit `NO_XXE` unchanged to `xmlCtxtReadMemory`; focused
+  codegen execution remains under the disk gate.
   unrelated Cargo work is consuming memory after two earlier OOMs.
   Post-rebase validation on 2026-08-21 now builds the `elephc-dom` crate and a
   fresh complete bridge run passes 175 tests with zero failures. One-shot
