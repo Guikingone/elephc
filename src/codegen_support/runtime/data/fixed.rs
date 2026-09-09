@@ -13,7 +13,7 @@ use super::{
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
-    MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    MB_STRLEN_UNKNOWN_ENCODING_MSG, MIXED_SORT_NON_SCALAR_MSG,
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
@@ -476,6 +476,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(
         ".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii {:?}\n",
         ARRAY_ALLOC_SIZE_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _mixed_sort_non_scalar_msg\n_mixed_sort_non_scalar_msg:\n    .ascii {:?}\n",
+        MIXED_SORT_NON_SCALAR_MSG
     ));
     out.push_str(&format!(
         ".globl _range_size_err_msg\n_range_size_err_msg:\n    .ascii {:?}\n",

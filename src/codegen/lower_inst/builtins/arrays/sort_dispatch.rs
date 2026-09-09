@@ -236,7 +236,7 @@ pub(super) fn lower_indexed_array_sort(
     }
     if elem_ty == PhpType::Mixed {
         // A boxed cell has no ordering of its own, so this is the slot permuter
-        // driven by PHP's ordering table — the same one `<` and `<=>` use. The
+        // driven by PHP's ordering table, the same one `<` and `<=>` use. The
         // array is already in the first argument register; `__rt_usort` wants it
         // second, behind the comparator address, and takes no capture
         // environment.
@@ -559,6 +559,8 @@ pub(super) fn lower_array_key_sort(
 ///
 /// The comparator is a runtime callback rather than a user function, so no
 /// capture environment is passed and `__rt_usort` keeps its two-argument path.
+/// A runtime guard first rejects container, object, resource, and callable tags,
+/// whose PHP ordering is not implemented by the shared comparator.
 fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
     let comparator = match name {
         "sort" => "__rt_php_compare_slots",
@@ -569,6 +571,7 @@ fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()>
             )))
         }
     };
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_sort_require_scalars");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // the array moves behind the comparator address
@@ -576,7 +579,7 @@ fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()>
             ctx.emitter.instruction("mov x2, #0");                              // no capture environment
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, rdi");                            // the array moves behind the comparator address
+            ctx.emitter.instruction("mov rsi, rax");                            // the validated array moves behind the comparator address
             abi::emit_symbol_address(ctx.emitter, "rdi", comparator);
             ctx.emitter.instruction("xor edx, edx");                            // no capture environment
         }
@@ -588,10 +591,11 @@ fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()>
 /// Returns the indexed-array element type accepted by the selected sort helper.
 ///
 /// `Mixed` is accepted wherever strings are, because those are the two sorts that
-/// have an ordering for a value whose type is only known at run time: the slot is
-/// permuted by `__rt_usort` and the ordering comes from `__rt_php_compare`, which
-/// is what `<` and `<=>` already use. The sorts that pass `allow_strings = false`
-/// (`asort`, `natsort`, …) keep refusing it — they have no comparator to hand a
+/// have an ordering for scalar values whose type is only known at run time: the
+/// slot is permuted by `__rt_usort`, after a runtime guard rejects non-scalars,
+/// and the ordering comes from `__rt_php_compare`, which is what `<` and `<=>`
+/// already use. The sorts that pass `allow_strings = false`
+/// (`asort`, `natsort`, etc.) keep refusing it because they have no comparator to hand a
 /// boxed cell to, and a loud refusal is the right answer until they do.
 pub(super) fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: bool) -> Result<PhpType> {
     match ty.codegen_repr() {

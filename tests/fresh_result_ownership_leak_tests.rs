@@ -250,6 +250,25 @@ echo $total, "\n";
     assert_output_and_clean_heap("elephc_leak_inlined_loop_local", source, "100\n");
 }
 
+/// Verifies an inlined callee cannot abandon an owned string local in a caller loop.
+///
+/// `getcwd()` returns a fresh string. Before the string storage joined the inliner
+/// guard, each transplanted `StoreLocal` overwrote the previous iteration without
+/// releasing it, leaving nineteen live blocks after twenty calls. Disabling EIR
+/// optimization kept the callee frame and released all twenty values.
+#[test]
+fn a_callee_with_a_string_local_does_not_leak_when_called_in_a_loop() {
+    let source = r#"<?php
+function cwd_length(): int { $path = getcwd(); return strlen($path); }
+$total = 0;
+for ($i = 0; $i < 20; $i++) {
+    $total += cwd_length();
+}
+echo $total > 0 ? "ok\n" : "bad\n";
+"#;
+    assert_output_and_clean_heap("elephc_leak_inlined_string_local", source, "ok\n");
+}
+
 /// Verifies a builtin that boxes a FRESH hash into a Mixed cell reclaims it.
 ///
 /// `__rt_mixed_from_value` increfs the child it boxes, which is right for a

@@ -284,18 +284,19 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
         return false;
     }
     // The same leak from the other source. The comment above is about a
-    // PARAMETER's shadow slot; an ordinary LOCAL holding a container has the
-    // identical problem, and for the identical reason: its `StoreLocal` was
+    // PARAMETER's shadow slot; an ordinary LOCAL holding refcounted storage has
+    // the identical problem, and for the identical reason: its `StoreLocal` was
     // lowered where the callee's loop stack was empty, so it carries no
     // release-of-previous. Spliced into a host loop, every iteration overwrites
-    // the slot and abandons what it held.
+    // the slot and abandons what it held. Strings need this guard too, not just
+    // heap pointer containers.
     //
     // Measured before this guard, `function f() { $x = ["a" => 1]; ... }` called
     // in a loop: 1 call `allocs=5 frees=5`, 5 calls `frees=9` of 21, 50 calls
     // `frees=54` of 201 — about three blocks per iteration, unbounded. Unrolled
     // calls were clean, and so was the same loop with the literal inlined by
     // hand, which is what isolates it to splicing a body into a loop.
-    if callee_stores_a_container_local(callee) {
+    if callee_stores_a_refcounted_local(callee) {
         return false;
     }
 
@@ -1140,7 +1141,7 @@ mod tests {
     // Real tests are in src/ir_passes/tests/inline_test.rs (Builder-driven, per repo policy).
 }
 
-/// Whether the callee stores a container into one of its own locals.
+/// Whether the callee stores release-requiring refcounted storage into one of its locals.
 ///
 /// Sibling of [`callee_has_by_value_container_param`], and refused for the same
 /// reason: the store carries no release-of-previous, because it was lowered
@@ -1148,27 +1149,21 @@ mod tests {
 /// the local case, found later by measuring a heap that grew with the iteration
 /// count.
 ///
-/// Deliberately shaped on the STORE rather than on the local's declared type: a
-/// slot whose type is `mixed` can still hold a hash at run time — `getdate()`
-/// and `getenv()` return exactly that — and it is the stored VALUE's ownership
-/// that decides whether anything was abandoned.
+/// Deliberately shaped on the store rather than on the local's declared type: a
+/// slot whose type is `mixed` can still hold a hash at run time, while a string
+/// local carries refcounted storage directly. The stored value's ownership and
+/// storage type decide whether an overwrite can abandon anything.
 ///
-/// `may_require_release()` rather than an exact `Owned`, so a `MaybeOwned` heap
-/// store is refused too. I could not build a case that leaks through the narrower
-/// check: a callee storing a MaybeOwned heap value also stores an Owned one in
-/// every shape I tried — an aliased local, a reassignment from a builtin, an
-/// alias behind a branch — and the Owned store already refuses it. The wider test
-/// is kept anyway because it costs nothing measurable (both only fire on HEAP
-/// values, so scalar callees inline exactly as before) and because being wrong in
-/// this direction only loses an inline, while being wrong in the other loses
-/// memory on every iteration.
-fn callee_stores_a_container_local(callee: &Function) -> bool {
+/// `may_require_release()` rather than an exact `Owned`, so `MaybeOwned` values
+/// are refused too. `is_refcounted_storage()` keeps the storage classification
+/// shared with EIR instead of duplicating a partial list here.
+fn callee_stores_a_refcounted_local(callee: &Function) -> bool {
     callee.instructions.iter().any(|inst| {
         inst.op == Op::StoreLocal
             && inst.operands.iter().any(|operand| {
                 callee.value(*operand).is_some_and(|value| {
                     value.ownership.may_require_release()
-                        && matches!(value.ir_type, crate::ir::IrType::Heap(_))
+                        && value.ir_type.is_refcounted_storage()
                 })
             })
     })

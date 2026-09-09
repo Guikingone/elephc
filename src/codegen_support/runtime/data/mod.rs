@@ -111,6 +111,10 @@ pub(crate) const STACK_OVERFLOW_MSG: &str =
 /// per-call-site context inside `__rt_array_new`, so it reports the shared cause.
 pub(crate) const ARRAY_ALLOC_SIZE_MSG: &str =
     "Fatal error: requested array size exceeds the maximum allowed array size\n";
+/// Fatal error emitted when `sort()` or `rsort()` receives a runtime-typed array
+/// containing values whose PHP ordering is not implemented by the Mixed sorter.
+pub(crate) const MIXED_SORT_NON_SCALAR_MSG: &str =
+    "Fatal error: sorting Mixed arrays containing non-scalar values is not supported\n";
 /// Fatal error message when `range()` cannot represent the requested interval,
 /// because `end - start + 1` overflows a signed 64-bit element count. Matches
 /// PHP's `ValueError: The supplied range exceeds the maximum array size`.

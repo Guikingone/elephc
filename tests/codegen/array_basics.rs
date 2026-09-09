@@ -948,6 +948,29 @@ foreach ($a as $v) { echo var_export($v, true), ","; }
     assert_eq!(mixed, "2,'9',10,");
 }
 
+/// Verifies Mixed sorting rejects nested arrays instead of silently treating them as equal.
+///
+/// `__rt_php_compare` currently implements full PHP ordering only for scalars and
+/// null. The sort guard must inspect the whole array before mutation so even a
+/// single unsupported value produces an explicit runtime diagnostic.
+#[test]
+fn sort_rejects_runtime_typed_non_scalar_elements() {
+    let error = compile_and_run_expect_failure(
+        r#"<?php
+$decoded = json_decode("[[2],[1],[]]", true);
+$values = [];
+foreach ($decoded as $value) {
+    $values[] = $value;
+}
+sort($values);
+"#,
+    );
+    assert!(
+        error.contains("sorting Mixed arrays containing non-scalar values is not supported"),
+        "unexpected runtime diagnostic: {error}"
+    );
+}
+
 /// Verifies array keys.
 #[test]
 fn test_array_keys() {
