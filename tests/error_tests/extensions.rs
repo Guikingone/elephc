@@ -228,6 +228,35 @@ class InvalidDebugXml extends SimpleXMLElement {
     );
 }
 
+/// Verifies direct SimpleXML debug overrides preserve PHP 8.5.8's visibility fatal
+/// while a public `?array` override remains a legal control case.
+#[test]
+fn simplexml_debug_info_visibility_matches_direct_native_contract() {
+    expect_error(
+        r#"<?php
+class ProtectedDebugXml extends SimpleXMLElement {
+    protected function __debugInfo(): ?array { return []; }
+}
+"#,
+        "Access level to ProtectedDebugXml::__debugInfo() must be public (as in class SimpleXMLElement)",
+    );
+    expect_error(
+        r#"<?php
+class PrivateDebugXml extends SimpleXMLElement {
+    private function __debugInfo(): ?array { return []; }
+}
+"#,
+        "Access level to PrivateDebugXml::__debugInfo() must be public (as in class SimpleXMLElement)",
+    );
+    expect_no_error(
+        r#"<?php
+class PublicDebugXml extends SimpleXMLElement {
+    public function __debugInfo(): ?array { return []; }
+}
+"#,
+    );
+}
+
 /// Verifies `ReturnTypeWillChange` applies to SimpleXML's tentative iterator
 /// methods only and cannot waive the explicit `?array` debug-info contract.
 #[test]

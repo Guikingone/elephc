@@ -247,6 +247,20 @@ fn apply_instance_method(
     if method_key != "__construct" {
         if let Some(parent_visibility) = state.method_visibilities.get(&method_key) {
             if visibility_rank(&method.visibility) < visibility_rank(parent_visibility) {
+                if method_key == "__debuginfo"
+                    && class
+                        .extends
+                        .as_deref()
+                        .is_some_and(|parent| parent.eq_ignore_ascii_case("SimpleXMLElement"))
+                {
+                    return Err(CompileError::new(
+                        method.span,
+                        &format!(
+                            "Access level to {}::__debugInfo() must be public (as in class SimpleXMLElement)",
+                            class.name
+                        ),
+                    ));
+                }
                 return Err(CompileError::new(
                     method.span,
                     &format!(
