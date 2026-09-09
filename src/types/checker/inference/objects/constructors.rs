@@ -179,7 +179,7 @@ impl Checker {
                 };
                 self.check_user_declared_call(
                     &effective_sig,
-                    &normalized_args,
+                    args,
                     expr.span,
                     env,
                     &constructor_label,
@@ -297,7 +297,7 @@ impl Checker {
         )?;
         self.check_user_declared_call(
             &sig,
-            &normalized_args,
+            args,
             expr.span,
             env,
             &format!("Constructor '{}::__construct'", class_name),
