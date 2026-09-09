@@ -12,7 +12,8 @@ use super::{
     ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
-    HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
+    MB_STRLEN_UNKNOWN_ENCODING_MSG,
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
@@ -312,6 +313,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // it. One check, in one place: repeating it would consume the control
     // channel's marker twice and the second reader would see nothing.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_monitor_active"), 8, target));
+    // elephc_monitor_event_active_fn: optional callback for a monitoring
+    // consumer whose shared event window is not represented by the exact-slice
+    // word above. The sampled probe installs it so bridges can avoid clock reads
+    // while dormant without losing remote-probe wait measurements.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_monitor_event_active_fn"),
+        8,
+        target,
+    ));
     // elephc_probe_allocs_ptr: the ADDRESS of `_gc_allocs`, published under
     // --probe so the sampler can read the allocation counter without declaring
     // that symbol itself. `_gc_allocs` is spelled with a hardcoded underscore
@@ -334,6 +344,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // reports the nanoseconds through it, which separates recorded DB wait from
     // each function's remaining wall time. Zero (inert) in a normal binary.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_wait_fn"), 8, target));
+    // elephc_instr_network_fn: category-specific companion used by outgoing
+    // network bridges. Keeping this separate from the DB slot preserves query
+    // budgets and N+1 analysis when a request also performs HTTP calls.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_network_fn"), 8, target));
+    // elephc_instr_network_wait_fn: blocked network duration reported without
+    // folding it into the DB-driver wait metric.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_instr_network_wait_fn"),
+        8,
+        target,
+    ));
     // elephc_instr_trace_fn: fourth companion slot, filled with
     // elephc_instr_trace_begin under --instrument. The web bridge calls it at
     // the start of every request with the inbound W3C `traceparent`, so a
@@ -499,6 +520,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         SPRINTF_UNKNOWN_SPEC_MSG
     ));
     out.push_str(&format!(
+        ".globl _iconv_strpos_offset_msg\n_iconv_strpos_offset_msg:\n    .ascii {:?}\n",
+        ICONV_STRPOS_OFFSET_MSG
+    ));
+    out.push_str(&format!(
         ".globl _hash_unknown_algo_msg\n_hash_unknown_algo_msg:\n    .ascii {:?}\n",
         HASH_UNKNOWN_ALGO_MSG
     ));
@@ -648,6 +673,22 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii \"Warning: Trying to access array offset on null\\n\"\n");
+    // -- curl_setopt()'s unsupported-option warning, split around the option number --
+    // `__rt_curl_warn_unsupported_option` derives both `write()` lengths from the same
+    // two constants the bytes below are built from, so the message and the immediates
+    // cannot drift apart.
+    out.push_str(&format!(
+        ".globl _diag_curl_setopt_unsupported_prefix\n_diag_curl_setopt_unsupported_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::data::CURL_SETOPT_UNSUPPORTED_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _diag_curl_multi_setopt_unsupported_prefix\n_diag_curl_multi_setopt_unsupported_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::data::CURL_MULTI_SETOPT_UNSUPPORTED_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _diag_curl_setopt_unsupported_suffix\n_diag_curl_setopt_unsupported_suffix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::data::CURL_SETOPT_UNSUPPORTED_SUFFIX
+    ));
     // -- one complete message per foreach() argument type, shared with the helper emitter --
     // `__rt_warn_foreach_non_iterable` derives every `write()` length from the same table,
     // so the bytes here and the immediates there can never drift apart.
@@ -687,6 +728,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fiber_msg_suspend_unserialize\n_fiber_msg_suspend_unserialize:\n    .ascii \"Cannot suspend a fiber while unserialize() is active\"\n");
     out.push_str(".globl _fiber_msg_unsupported_callable\n_fiber_msg_unsupported_callable:\n    .ascii \"Fiber callable is not supported by this compiler\"\n");
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
+    out.push_str(".globl _fiber_msg_switch_signal\n_fiber_msg_switch_signal:\n    .ascii \"Cannot switch fibers in current execution context\"\n");
     out.push_str(&emit_builtin_callable_data(target));
     out.push_str(&comm_directive("_gc_allocs", 8, target));
     out.push_str(&comm_directive("_gc_frees", 8, target));
@@ -778,6 +820,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // only at a hash() call site so the shared runtime __rt_hash can call through
     // it without the runtime itself naming elephc-crypto. Programs that never
     // call hash() leave the slot null and do not pull in -lelephc_crypto.
+    // _elephc_iconv_call_fn / _elephc_iconv_release_fn: indirect pointers to the iconv
+    // bridge, published only at an iconv*() call site so the shared runtime never names
+    // elephc-iconv. Programs that never call one leave the slots null and do not pull in
+    // -lelephc_iconv.
+    out.push_str(&comm_directive("_elephc_iconv_call_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_iconv_release_fn", 8, target));
     out.push_str(&comm_directive("_elephc_crypto_hash_fn", 8, target));
     // _elephc_crypto_hmac_fn: indirect pointer to elephc_crypto_hmac, published
     // only at a hash_hmac() call site so the shared runtime __rt_hash_hmac can call
@@ -794,6 +842,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // shared runtime can release unfinalized HashContext handles without naming
     // elephc-crypto directly.
     out.push_str(&comm_directive("_elephc_crypto_free_fn", 8, target));
+    // ext/curl bridge slots, published together by every curl call site
+    // (`codegen_support::curl::publish_elephc_curl_function_pointers`) and read by the
+    // `__rt_curl_*` helpers. A curl-free program leaves all of them null and therefore
+    // names no `elephc_curl_*` symbol, links no `-lelephc_curl`, and needs no managed
+    // native `curl` package. `_elephc_curl_easy_free_fn` is the one whose publication is
+    // load-bearing beyond its own call site: `__rt_mixed_free_deep` reads it when a
+    // resource-kind-6 cell is released, which can happen anywhere a `CurlHandle` object
+    // goes out of scope.
+    for slot in crate::codegen_support::runtime::curl_abi_slots() {
+        out.push_str(&comm_directive(slot.1, 8, target));
+    }
     // _elephc_crypto_is_finalized_fn: indirect pointer to elephc_crypto_is_finalized.
     // __rt_hash_update / __rt_hash_final / __rt_hash_copy ask through it whether the
     // incoming context was already consumed by a previous hash_final(), which is the
@@ -1399,6 +1458,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&system::emit_json_data());
     out.push_str(&system::emit_date_data());
     out.push_str(&system::emit_strtotime_data());
+    out.push_str(&system::emit_pcntl_data());
     out.push_str(&emit_php_uname_data());
 
     out
@@ -1492,7 +1552,7 @@ mod tests {
             (Platform::Linux, Arch::AArch64, "8"),
             (Platform::Linux, Arch::X86_64, "8"),
         ] {
-            let target = Target { platform, arch };
+            let target = Target::new(platform, arch);
             let asm = emit_runtime_data_fixed(8_388_608, target);
 
             let mut seen = 0usize;
@@ -1520,10 +1580,7 @@ mod tests {
     fn test_stack_limit_is_eight_byte_aligned_on_elf() {
         let asm = emit_runtime_data_fixed(
             8_388_608,
-            Target {
-                platform: Platform::Linux,
-                arch: Arch::AArch64,
-            },
+            Target::new(Platform::Linux, Arch::AArch64),
         );
 
         assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
@@ -1555,7 +1612,7 @@ mod tests {
             (Platform::Linux, Arch::AArch64, ""),
             (Platform::Linux, Arch::X86_64, ""),
         ] {
-            let target = Target { platform, arch };
+            let target = Target::new(platform, arch);
             let asm = emit_runtime_data_fixed(8_388_608, target);
             for slot in &bridge_slots {
                 let wanted = format!(".comm {prefix}{slot}, 8, ");

@@ -110,3 +110,142 @@ run(3);
 
     assert_eq!(out, "a!bc!c!");
 }
+
+/// A `switch` without `default` still runs the code after it when no case matches. The tail is
+/// sunk into every `break` path, and the no-match path (and the last case falling off the
+/// switch) must reach it as well; before the fix both lost the tail, so `run(3)` printed nothing
+/// (issue #877).
+#[test]
+fn test_dead_code_elimination_keeps_tail_on_switch_no_match_path_without_default() {
+    let out = compile_and_run(
+        r#"<?php
+function run(int $flag) {
+    switch ($flag) {
+        case 1:
+            echo "a";
+            break;
+        case 2:
+            echo "b";
+            break;
+    }
+    echo "!";
+}
+function fall(int $flag) {
+    switch ($flag) {
+        case 1:
+            echo "a";
+            break;
+        case 2:
+            echo "b";
+    }
+    echo "!";
+}
+$x = $argc + 2;
+switch ($x) {
+    case 1:
+        echo "a";
+        break;
+    case 2:
+        echo "b";
+        break;
+}
+echo "|";
+run(1);
+run(2);
+run(3);
+echo "|";
+fall(1);
+fall(2);
+fall(3);
+"#,
+    );
+
+    assert_eq!(out, "|a!b!!|a!b!!");
+}
+
+/// A loop `break` / `continue` that follows a `switch` must keep targeting the loop: sunk into
+/// a case body it would target the switch instead. The first loop exits after one iteration,
+/// the second skips its echo only on the first iteration.
+#[test]
+fn test_dead_code_elimination_keeps_loop_exit_tail_outside_switch() {
+    let out = compile_and_run(
+        r#"<?php
+$i = 0;
+while ($i < 3) {
+    $i++;
+    switch ($argc) {
+        case 1: echo "a"; break;
+    }
+    break;
+}
+echo "|", $i, "|";
+$j = 0;
+while ($j < 3) {
+    $j++;
+    switch ($argc) {
+        case 1: echo "b"; break;
+        default: echo "e"; break;
+    }
+    if ($j == 1) { continue; }
+    echo $j;
+}
+echo "|", $j;
+"#,
+    );
+
+    assert_eq!(out, "a|1|bb2b3|3");
+}
+
+/// A `default` written between cases that falls through must continue into the next case, and
+/// the code after the switch must run only once control leaves it: for `$x = 3` PHP prints `db|`.
+/// Before the fix the optimizer sank the tail into the default's fallthrough path and printed
+/// `d|b|` (issue #881).
+#[test]
+fn test_dead_code_elimination_keeps_middle_default_fallthrough_into_next_case() {
+    let out = compile_and_run(
+        r#"<?php
+function f($x) {
+    switch ($x) {
+        case 1: echo "a"; break;
+        default: echo "d";
+        case 2: echo "b"; break;
+    }
+    echo "|";
+}
+function g($x) {
+    switch ($x) {
+        case 1:
+        default: echo "d";
+        case 2: echo "b";
+    }
+    echo "|";
+}
+f($argc); f($argc + 1); f($argc + 2);
+g($argc); g($argc + 1); g($argc + 2);
+"#,
+    );
+
+    assert_eq!(out, "a|b|db|db|b|db|");
+}
+
+/// An empty `default:` written before another case falls through into that case for any
+/// unmatched subject, exactly like PHP: `f(3)` prints `b|`. Before the fix the empty default had
+/// no position, was placed last, and an unmatched subject left the switch (issue #881).
+#[test]
+fn test_dead_code_elimination_keeps_empty_middle_default_fallthrough_into_next_case() {
+    let out = compile_and_run(
+        r#"<?php
+function f($x) {
+    switch ($x) {
+        case 1: echo "a"; break;
+        default:
+        case 2: echo "b"; break;
+    }
+    echo "|";
+}
+f($argc); f($argc + 1); f($argc + 2);
+"#,
+    );
+
+    assert_eq!(out, "a|b|b|");
+}

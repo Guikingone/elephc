@@ -18,7 +18,7 @@ use crate::types::PhpType;
 builtin! {
     contract: "popen",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    semantics: crate::builtins::semantics::host_only_runtime_fn_semantics(
         crate::ir::RuntimeFnId::Popen,
     ),
 }
@@ -28,6 +28,7 @@ builtin! {
 /// The arguments are command and mode strings, not stream resources; no resource
 /// validation is performed here. The common registry path pre-infers the arguments.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    crate::builtins::spec::reject_if_process_spawn_forbidden(cx)?;
     Ok(cx.checker.normalize_union_type(vec![
         PhpType::stream_resource(),
         PhpType::Bool,

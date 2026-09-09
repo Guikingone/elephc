@@ -70,7 +70,35 @@ def run_gen_builtins(repo: Path) -> list[dict]:
     blocks. Prefers a prebuilt binary under ``target/{release,debug}/examples/``
     when present (fast path for CI, which builds it first); otherwise falls back
     to ``cargo run``.
+
+    THE CANONICAL DOCUMENTATION CONFIGURATION IS ``--features curl`` (the root
+    package's relay; see ``Cargo.toml``). The PHP-visible ``curl_*`` contracts live
+    in ``elephc-builtin-contract``'s feature-gated ``catalog_curl`` module and
+    Magician's matching ``eval_builtin!`` homes behind its own ``curl`` feature, so
+    a default-feature exporter simply cannot see that surface — it would silently
+    emit a catalog thirty-four functions short. The committed registry and pages are
+    generated feature-on, and :func:`_require_canonical_configuration` below refuses
+    to continue against a default-feature build rather than let a stale prebuilt
+    binary regenerate a different, smaller catalog.
     """
+    cmd = list(_gen_builtins_command(repo))
+    proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.exit(
+            "gen_builtins failed "
+            "(build it with `cargo build --example gen_builtins --features curl`):\n"
+            + proc.stderr
+        )
+    try:
+        entries = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+        sys.exit(f"gen_builtins produced invalid JSON: {exc}")
+    _require_canonical_configuration(entries)
+    return entries
+
+
+def _gen_builtins_command(repo: Path) -> list[str]:
+    """Return the exporter command line (prebuilt binary if fresh, else ``cargo run``)."""
     cmd: list[str]
     source_inputs = [repo / "Cargo.toml", repo / "Cargo.lock", repo / "tools" / "gen_builtins.rs"]
     source_inputs.extend((repo / "crates").rglob("Cargo.toml"))
@@ -88,19 +116,49 @@ def run_gen_builtins(repo: Path) -> list[dict]:
             break
     else:
         cmd = [
-            "cargo", "run", "--quiet", "--example", "gen_builtins", "--",
+            "cargo", "run", "--quiet", "--features", "curl", "--example", "gen_builtins", "--",
             "--include-internal",
         ]
-    proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
-    if proc.returncode != 0:
+    return cmd
+
+
+# Every feature-gated catalog slice the canonical documentation configuration must
+# contain, as (label, matcher, expected count, cargo flag that publishes it). A
+# feature-gated slice is the only way the exporter can come back SHORT without failing
+# outright, so each one is pinned here.
+_REQUIRED_SURFACES = (
+    (
+        "PHP-visible curl_*",
+        lambda entry: entry["name"].startswith("curl_"),
+        34,
+        "--features curl",
+    ),
+)
+
+
+def _require_canonical_configuration(entries: list[dict]) -> None:
+    """Fail unless the exporter was built in the canonical documentation configuration."""
+    for label, matches, expected, flag in _REQUIRED_SURFACES:
+        found = sum(1 for entry in entries if matches(entry))
+        if found == expected:
+            continue
+        # Zero found is a wrong-configuration diagnosis; any other count means the
+        # surface really did change size and the constant above needs bumping. Saying
+        # "rebuild with the feature" for the second case sends the reader hunting a
+        # stale binary that is not there.
+        if found == 0:
+            sys.exit(
+                f"gen_builtins exported no {label} entries, expected {expected}.\n"
+                "The committed docs are generated in ONE canonical configuration; rebuild\n"
+                f"the exporter with `cargo build --example gen_builtins {flag}`\n"
+                "(a stale default-feature binary under target/*/examples/ is the usual cause)."
+            )
         sys.exit(
-            "gen_builtins failed (build it with `cargo build --example gen_builtins`):\n"
-            + proc.stderr
+            f"gen_builtins exported {found} {label} entries, expected {expected}.\n"
+            f"The {label} surface changed size. If that is intended, update the expected\n"
+            "count in _REQUIRED_SURFACES (scripts/docs/elephc_builtins/extract.py) and\n"
+            "regenerate; the constant exists so a shrinking catalog cannot pass silently."
         )
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-        sys.exit(f"gen_builtins produced invalid JSON: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +436,8 @@ def _render_default(value, optional: bool) -> Optional[str]:
     Required params (``optional`` false) have no default (``None``). Optional
     params render their default: ``null``, ``true``/``false``, integers/floats
     verbatim, strings single-quoted, the ``PHP_INT_MAX``/``PHP_INT_MIN`` sentinels
-    as constants, and the empty-array sentinel as ``[]``.
+    as constants, class-constant descriptors as ``Class::NAME``, and the empty-array
+    sentinel as ``[]``.
     """
     if not optional:
         return None
@@ -391,6 +450,14 @@ def _render_default(value, optional: bool) -> Optional[str]:
         return str(value)
     if isinstance(value, list):
         return "[]"
+    if isinstance(value, dict) and value.get("kind") == "class_constant":
+        class_name = value.get("class")
+        constant_name = value.get("name")
+        if isinstance(class_name, str) and isinstance(constant_name, str):
+            return f"{class_name}::{constant_name}"
+    if isinstance(value, dict):
+        # `{"constant": NAME}` names a global constant; `{"expr": SRC}` is verbatim PHP.
+        return value.get("constant") or value.get("expr") or str(value)
     if isinstance(value, str):
         if value in ("PHP_INT_MAX", "PHP_INT_MIN"):
             return value
@@ -464,6 +531,88 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # Orchestration
 # ---------------------------------------------------------------------------
 
+# Which injected prelude declares a ``prelude``-routed contract, keyed by the contract's
+# own area. Each value is (source file under src/, human name used in the page note,
+# contract module the signature lives in). The contract crate keeps the curl surface in a
+# feature-gated catalog module, so curl entries carry a different ``sig_file`` than the
+# always-on surfaces.
+#
+# THERE IS NO DEFAULT ENTRY ON PURPOSE. An unmapped area used to fall through to
+# hash_prelude.rs, and a missing declaration used to fall through to line 1, so a
+# prelude-provided contract added in a third area would have shipped a page naming the
+# wrong prelude and linking to an unrelated line — generated, committed, and plausible
+# enough to survive review. Both now raise. When a new prelude family lands, add its area
+# here; the prelude sources the compiler can inject are enumerated in
+# ``src/builtins/parity_tests.rs``'s ``injected_prelude_programs``, and its
+# ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
+# by exactly one of them.
+PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
+    "curl": (
+        "curl_prelude.rs",
+        "curl",
+        "crates/elephc-builtin-contract/src/catalog_curl.rs",
+    ),
+    # The four hash_* contracts (`Area::String`).
+    "string": (
+        "hash_prelude.rs",
+        "hash",
+        "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+    ),
+    # Prelude-provided contracts seeded from the built prelude declarations live in
+    # catalog_data.rs; each area maps to the prelude (or preludes) declaring it.
+    "image": ("image_prelude.rs", "image", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "web": ("web_prelude/build.rs", "web", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "mysqli": (
+        ("mysqli_prelude/build/procedural.rs", "mysqli_prelude/build/exception.rs"),
+        "mysqli",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "pdo": ("pdo_prelude/build.rs", "PDO", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "date": ("tz_prelude.rs", "tz", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "types": (
+        "var_export_prelude.rs",
+        "var_export",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "system": (
+        "version_prelude.rs",
+        "version",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "opcache": (
+        "opcache_prelude/build.rs",
+        "OPcache",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+}
+
+
+def find_prelude_declaration(source: str, canonical: str):
+    """Locate where an injected prelude declares ``canonical``, in either prelude form.
+
+    A prelude declares a PHP function in ONE OF TWO WAYS, and the generated page has to
+    link to whichever one this prelude actually uses:
+
+    * BUILT IN RUST — ``function("hash_copy")`` opening a ``synthetic_class`` builder
+      chain. This is every stdlib prelude now, and it is why matching only the PHP form
+      silently produced a line-1 anchor for all four ``hash_*`` pages.
+    * PHP SOURCE TEXT — ``function hash_copy(...)`` at the start of a line inside the
+      prelude's embedded source. ``curl_prelude.rs`` is the last one shaped this way
+      (see its injector for why, and the ROADMAP entry for the conversion).
+
+    Both patterns reject a longer identifier ending in the name, so
+    ``__elephc_curl_easy_body`` cannot answer for ``curl_easy_body``. Returns the match, or
+    ``None`` when neither form declares it — which the caller turns into a loud failure
+    rather than an anchor pointing at an unrelated place in the file.
+    """
+    built = re.search(
+        rf"(?<![A-Za-z0-9_])function\(\s*\"{re.escape(canonical)}\"\s*\)", source
+    )
+    if built is not None:
+        return built
+    return re.search(rf"^function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
+
+
 def resolve_non_registry_lowering(
     repo: Path,
     read,
@@ -471,6 +620,7 @@ def resolve_non_registry_lowering(
     lowering_dir: Path,
     canonical: str,
     aot_support: dict,
+    area: str,
 ) -> LoweringInfo:
     """Describe a compiler route that intentionally has no ``builtin!`` home."""
     contract_file = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
@@ -483,12 +633,46 @@ def resolve_non_registry_lowering(
     lowering = LoweringInfo(sig_file=contract_file)
     kind = aot_support.get("kind")
     if kind == "prelude":
-        prelude = repo / "src" / "hash_prelude.rs"
-        match = re.search(rf"^function\s+{re.escape(canonical)}\s*\(", read(prelude), re.MULTILINE)
+        try:
+            source, label, sig_file = PRELUDE_SOURCES[area]
+        except KeyError:
+            raise ValueError(
+                f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
+                f"PRELUDE_SOURCES does not map to a prelude. Add the area (see the constant's "
+                f"comment) — falling back to another area's prelude would publish a page "
+                f"pointing at the wrong file with the wrong prose."
+            ) from None
+        lowering.sig_file = sig_file
+        sources = (source,) if isinstance(source, str) else source
+        prelude, match = None, None
+        for candidate in sources:
+            prelude = repo / "src" / candidate
+            match = find_prelude_declaration(read(prelude), canonical)
+            if match is not None:
+                break
+        source = "/".join(sources) if match is None else str(prelude.relative_to(repo / "src"))
+        if match is None:
+            raise ValueError(
+                f"prelude-provided builtin {canonical!r} is not declared by src/{source}. "
+                f"Its contract area {area!r} maps there, so either the contract's area or "
+                f"PRELUDE_SOURCES is wrong; a line-1 fallback would ship a page linking to "
+                f"an unrelated place in the file."
+            )
         lowering.codegen_file = str(prelude.relative_to(repo))
-        lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1 if match else 1
+        lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1
         lowering.codegen_function = canonical
-        lowering.notes.append("Implemented by the compiler-injected hash prelude.")
+        lowering.notes.append(f"Implemented by the compiler-injected {label} prelude.")
+    elif kind == "name-resolver-rewrite":
+        rewriter = repo / "src" / "name_resolver" / "expressions.rs"
+        text = read(rewriter)
+        needle = re.search(rf'"{re.escape(canonical)}"', text)
+        lowering.codegen_file = str(rewriter.relative_to(repo))
+        lowering.codegen_line = text[: needle.start()].count("\n") + 1 if needle else None
+        lowering.codegen_function = "rewrite_date_procedural_call"
+        lowering.notes.append(
+            "Rewritten by the name resolver into a constructor or method call on the "
+            "corresponding builtin class before type checking."
+        )
     elif kind == "language-construct":
         lowering.notes.append("Lowered through the compiler's dedicated language-construct path.")
     elif kind == "dedicated-syntax":
@@ -571,7 +755,7 @@ def build_registry(repo: Path) -> list[Builtin]:
             lowering = resolve_registry_lowering(repo, read, entry, home_rel)
         else:
             lowering = resolve_non_registry_lowering(
-                repo, read, dispatch, lowering_dir, canonical, aot_support
+                repo, read, dispatch, lowering_dir, canonical, aot_support, entry["area"]
             )
         if canonical in RUNTIME_HELPER_OVERRIDES:
             lowering.runtime_helpers = RUNTIME_HELPER_OVERRIDES[canonical]
@@ -608,6 +792,8 @@ def build_registry(repo: Path) -> list[Builtin]:
                 eval_only=not bool(aot_support.get("supported")),
                 is_extension=bool(entry.get("extension")),
                 semantics=entry.get("semantics"),
+                module=entry["module"],
+                since=entry.get("since"),
             )
         )
 
@@ -616,8 +802,22 @@ def build_registry(repo: Path) -> list[Builtin]:
     return builtins
 
 
+def run_gen_symbols(repo: Path) -> dict:
+    """Return the shared class-like and constant catalogs via ``gen_builtins --symbols``."""
+    cmd = list(_gen_builtins_command(repo))
+    cmd[cmd.index("--include-internal")] = "--symbols"
+    proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.exit("gen_builtins --symbols failed:\n" + proc.stderr)
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+        sys.exit(f"gen_builtins --symbols produced invalid JSON: {exc}")
+
+
 def main_with(repo_root: Path, out: Path) -> int:
-    """Build the registry from ``repo_root`` and write the JSON registry to ``out``."""
+    """Build the registries from ``repo_root``: the function registry to ``out`` and the
+    class/constant symbol registry to ``symbol_registry.json`` beside it."""
     builtins = build_registry(repo_root)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
@@ -625,6 +825,14 @@ def main_with(repo_root: Path, out: Path) -> int:
         encoding="utf-8",
     )
     print(f"Wrote {len(builtins)} builtins to {out}", file=sys.stderr)
+    symbols = run_gen_symbols(repo_root)
+    symbols_out = out.parent / "symbol_registry.json"
+    symbols_out.write_text(json.dumps(symbols, indent=2, sort_keys=True), encoding="utf-8")
+    print(
+        f"Wrote {len(symbols['classes'])} classes and {len(symbols['constants'])} constants "
+        f"to {symbols_out}",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -650,6 +858,8 @@ def _builtin_to_dict(b: Builtin) -> dict:
         "in_catalog": b.in_catalog,
         "is_internal": b.is_internal,
         "is_extension": b.is_extension,
+        "module": b.module,
+        "since": b.since,
         "description": b.description,
         "examples": b.examples,
         "sig": {

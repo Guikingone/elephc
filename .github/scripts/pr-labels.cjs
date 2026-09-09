@@ -20,6 +20,8 @@ const supportedTargets = new Set([
   'target:linux-x86_64',
   'target:linux-aarch64',
   'target:macos-aarch64',
+  'target:ios-arm64',
+  'target:ios-sim-arm64',
 ]);
 
 /** Compile the regular expressions declared for one label rule. */

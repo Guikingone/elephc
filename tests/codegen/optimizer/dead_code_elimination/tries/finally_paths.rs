@@ -178,3 +178,126 @@ try {
 
     assert_eq!(out, "ab");
 }
+
+/// Verifies a guard write on an `exit`-only branch does not invalidate the guard seen by
+/// `finally`, because PHP does not execute finally blocks during process exit. Confirms "a".
+#[test]
+fn test_dead_code_elimination_ignores_exit_only_writes_before_finally() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_finally_exit_path_guards");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run(bool $flag, bool $quit): void {
+    if ($flag) {
+        try {
+            if ($quit) {
+                $flag = false;
+                exit();
+            }
+        } finally {
+            if ($flag) {
+                echo "a";
+            } else {
+                echo "dead-finally-guard";
+            }
+        }
+    }
+}
+run(true, false);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !asm_without_embedded_script_path(&user_asm).contains("dead-finally-guard"),
+        "writes on exit-only paths should not invalidate finally guards:\n{}",
+        user_asm
+    );
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "a");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an exception thrown while evaluating an `exit` argument still enters `finally`
+/// with by-reference argument writes reflected in its guard state. Confirms "fc".
+#[test]
+fn test_dead_code_elimination_preserves_throwing_exit_argument_path_to_finally() {
+    let out = compile_and_run(
+        r#"<?php
+class Boom extends Exception {}
+function mutate_then_throw(bool &$flag): int {
+    $flag = false;
+    throw new Boom("boom");
+}
+function run(bool $flag): void {
+    if ($flag) {
+        try {
+            exit(mutate_then_throw($flag));
+        } finally {
+            if ($flag) {
+                echo "stale";
+            } else {
+                echo "f";
+            }
+        }
+    }
+}
+try {
+    run(true);
+} catch (Boom $e) {
+    echo "c";
+}
+"#,
+    );
+
+    assert_eq!(out, "fc");
+}
+
+/// A `return` nested in a branch of a non-throwing `try` body must still run `finally`, and
+/// code after the `try` must not be sunk into that `finally` (it would then run on the return
+/// path too). Before the fix the `try` was flattened and `report(3)` skipped the separator
+/// (issue #878).
+#[test]
+fn test_dead_code_elimination_keeps_finally_for_nested_return_in_non_throwing_try() {
+    let out = compile_and_run(
+        r#"<?php
+function report(int $count): void {
+    try {
+        if ($count > 1) { echo $count . " items"; return; }
+        echo "1 item";
+    } finally {
+        echo "|";
+    }
+    echo "after;";
+}
+function scan(array $items): int {
+    $seen = 0;
+    foreach ($items as $item) {
+        try {
+            if ($item < 0) { break; }
+            $seen++;
+        } finally {
+            echo "f";
+        }
+        echo $item;
+    }
+    return $seen;
+}
+report($argc);
+report($argc + 2);
+echo scan([1, 2, -1, 3]);
+"#,
+    );
+
+    assert_eq!(out, "1 item|after;3 items|f1f2f2");
+}

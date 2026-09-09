@@ -8,20 +8,11 @@
 //! Key details:
 //! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
 
+use crate::types::predefined_constants::{php_type_of, registered_constants};
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::platform::Platform;
-use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::DATE_INT_CONSTANTS;
-use crate::types::ent_constants::ENT_INT_CONSTANTS;
-use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
-use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::math_constants::MATH_INT_CONSTANTS;
-use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
-use crate::types::session_constants::SESSION_INT_CONSTANTS;
-use crate::types::preg_constants::PREG_INT_CONSTANTS;
-use crate::types::stream_constants::STREAM_INT_CONSTANTS;
-use crate::types::string_constants::STRING_INT_CONSTANTS;
+use crate::codegen::platform::Target;
+use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -37,109 +28,25 @@ impl Checker {
     /// classes, interfaces, enums, etc.) are initialized empty.
     ///
     /// # Arguments
-    /// * `target_platform` - The compilation target platform, stored for use in platform-specific
+    /// * `target` - The full compilation target, stored for platform- and Apple-variant-specific
     ///   type checks and library requirements.
     ///
     /// # Returns
     /// A `Checker` instance ready for the program to be loaded into.
-    pub(super) fn new(target_platform: Platform) -> Self {
+    pub(super) fn new(target: Target) -> Self {
+        // Every unconditionally registered constant comes from the shared catalog; only its
+        // TYPE is declared here, the value is baked per compilation by
+        // `codegen_support::prescan::collect_constants`.
         let mut constants = HashMap::new();
-        constants.insert("PHP_OS".to_string(), PhpType::Str);
-        // The PHP version surface. Only the TYPES are declared here — the values are baked per
-        // compilation from `--php-version` / `--web` by `codegen::prescan::collect_constants`,
-        // exactly as `PHP_OS`'s value is baked from the target platform.
-        constants.insert("PHP_VERSION".to_string(), PhpType::Str);
-        constants.insert("PHP_VERSION_ID".to_string(), PhpType::Int);
-        constants.insert("PHP_MAJOR_VERSION".to_string(), PhpType::Int);
-        constants.insert("PHP_MINOR_VERSION".to_string(), PhpType::Int);
-        constants.insert("PHP_RELEASE_VERSION".to_string(), PhpType::Int);
-        constants.insert("PHP_EXTRA_VERSION".to_string(), PhpType::Str);
-        constants.insert("PHP_SAPI".to_string(), PhpType::Str);
-        // Deprecated session-id constant; elephc is cookie-only so it always
-        // resolves to the empty string (see `codegen::prescan::collect_constants`).
-        constants.insert("SID".to_string(), PhpType::Str);
-        constants.insert("PATHINFO_DIRNAME".to_string(), PhpType::Int);
-        constants.insert("PATHINFO_BASENAME".to_string(), PhpType::Int);
-        constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
-        constants.insert("PATHINFO_FILENAME".to_string(), PhpType::Int);
-        constants.insert("PATHINFO_ALL".to_string(), PhpType::Int);
-        for name in [
-            "PHP_URL_SCHEME",
-            "PHP_URL_HOST",
-            "PHP_URL_PORT",
-            "PHP_URL_USER",
-            "PHP_URL_PASS",
-            "PHP_URL_PATH",
-            "PHP_URL_QUERY",
-            "PHP_URL_FRAGMENT",
-        ] {
+        for constant in registered_constants() {
+            constants.insert(constant.name.to_string(), php_type_of(constant.value));
+        }
+        for (name, _) in pcntl_int_constants(target) {
             constants.insert(name.to_string(), PhpType::Int);
         }
-        for (name, _value) in ENT_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        constants.insert("FNM_NOESCAPE".to_string(), PhpType::Int);
-        constants.insert("FNM_PATHNAME".to_string(), PhpType::Int);
-        constants.insert("FNM_PERIOD".to_string(), PhpType::Int);
-        constants.insert("FNM_CASEFOLD".to_string(), PhpType::Int);
-        constants.insert("STDIN".to_string(), PhpType::stream_resource());
-        constants.insert("STDOUT".to_string(), PhpType::stream_resource());
-        constants.insert("STDERR".to_string(), PhpType::stream_resource());
-        constants.insert("LOCK_SH".to_string(), PhpType::Int);
-        constants.insert("LOCK_EX".to_string(), PhpType::Int);
-        constants.insert("LOCK_UN".to_string(), PhpType::Int);
-        constants.insert("LOCK_NB".to_string(), PhpType::Int);
-        for (name, _value) in ARRAY_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in JSON_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in MATH_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in OPENSSL_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in STREAM_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in STRING_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in PREG_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in DATE_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in SESSION_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in ERROR_LEVEL_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`
-        // aliases resolve through ConstRef rather than only via dedicated lexer tokens.
-        constants.insert("PHP_INT_MAX".to_string(), PhpType::Int);
-        constants.insert("PHP_INT_MIN".to_string(), PhpType::Int);
-        constants.insert("PHP_FLOAT_MAX".to_string(), PhpType::Float);
-        constants.insert("PHP_FLOAT_MIN".to_string(), PhpType::Float);
-        constants.insert("PHP_FLOAT_EPSILON".to_string(), PhpType::Float);
-        constants.insert("INF".to_string(), PhpType::Float);
-        constants.insert("NAN".to_string(), PhpType::Float);
-        constants.insert("M_PI".to_string(), PhpType::Float);
-        constants.insert("M_E".to_string(), PhpType::Float);
-        constants.insert("M_SQRT2".to_string(), PhpType::Float);
-        constants.insert("M_PI_2".to_string(), PhpType::Float);
-        constants.insert("M_PI_4".to_string(), PhpType::Float);
-        constants.insert("M_LOG2E".to_string(), PhpType::Float);
-        constants.insert("M_LOG10E".to_string(), PhpType::Float);
-        constants.insert("PHP_EOL".to_string(), PhpType::Str);
-        constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
 
         Self {
-            target_platform,
+            target,
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),

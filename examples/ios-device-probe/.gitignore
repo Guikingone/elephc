@@ -1,0 +1,11 @@
+*.a
+*.o
+*.s
+main
+libmain.h
+.cache/
+ElephcProbe
+ElephcProbe-*.app/
+probehost
+.entitlements.plist
+.profile.plist

@@ -13,45 +13,6 @@ use crate::parser::ast::{Stmt, StmtKind};
 
 use super::{canonical_builtin_function_name, namespace_name, Symbols};
 
-const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
-    "ArrayAccess",
-    "AppendIterator",
-    "ArrayIterator",
-    "ArrayObject",
-    "CachingIterator",
-    "CallbackFilterIterator",
-    "Countable",
-    "EmptyIterator",
-    "Throwable",
-    "Error",
-    "Exception",
-    "FilterIterator",
-    "InfiniteIterator",
-    "InternalIterator",
-    "Iterator",
-    "IteratorAggregate",
-    "IteratorIterator",
-    "LimitIterator",
-    "MultipleIterator",
-    "NoRewindIterator",
-    "OuterIterator",
-    "ParentIterator",
-    "RecursiveArrayIterator",
-    "RecursiveCallbackFilterIterator",
-    "RecursiveFilterIterator",
-    "RecursiveIterator",
-    "RecursiveIteratorIterator",
-    "SeekableIterator",
-    "SortDirection",
-    "SplDoublyLinkedList",
-    "SplFixedArray",
-    "SplObserver",
-    "SplQueue",
-    "SplStack",
-    "SplSubject",
-    "Stringable",
-    "Traversable",
-];
 
 impl Symbols {
     /// canonical_function
@@ -93,10 +54,7 @@ impl Symbols {
             .or_else(|| self.extern_classes.get(&key))
             .cloned()
             .or_else(|| {
-                BUILTIN_CLASS_LIKE_SYMBOLS
-                    .iter()
-                    .find(|builtin| php_symbol_key(builtin) == key)
-                    .map(|builtin| (*builtin).to_string())
+                elephc_builtin_contract::lookup_class(name).map(|builtin| builtin.name.to_string())
             })
     }
 
@@ -133,6 +91,32 @@ pub(super) fn collect_symbols(
             StmtKind::NamespaceBlock { name, body } => {
                 let block_namespace = Some(namespace_name(name));
                 collect_symbols(body, block_namespace.as_deref(), symbols);
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_conditional_function_symbols(
+                    then_body,
+                    namespace.as_deref(),
+                    symbols,
+                );
+                for (_, body) in elseif_clauses {
+                    collect_conditional_function_symbols(
+                        body,
+                        namespace.as_deref(),
+                        symbols,
+                    );
+                }
+                if let Some(body) = else_body {
+                    collect_conditional_function_symbols(
+                        body,
+                        namespace.as_deref(),
+                        symbols,
+                    );
+                }
             }
             StmtKind::FunctionDecl { name, .. } => {
                 insert_folded_symbol(
@@ -179,6 +163,74 @@ pub(super) fn collect_symbols(
                 symbols
                     .constants
                     .insert(canonical_name_for_decl(namespace.as_deref(), name));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collects function declarations from conditional branches without predeclaring class-like names.
+///
+/// PHP function polyfills need namespace resolution before target folding decides whether their
+/// branch survives. Conditional classes are different: treating one as an unconditional symbol
+/// can suppress builtin-class rewrites even after constant propagation removes its declaration.
+fn collect_conditional_function_symbols(
+    stmts: &[Stmt],
+    current_namespace: Option<&str>,
+    symbols: &mut Symbols,
+) {
+    let mut namespace = current_namespace.map(str::to_string);
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::NamespaceDecl { name } => {
+                namespace = Some(namespace_name(name));
+            }
+            StmtKind::NamespaceBlock { name, body } => {
+                let block_namespace = Some(namespace_name(name));
+                collect_conditional_function_symbols(body, block_namespace.as_deref(), symbols);
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_conditional_function_symbols(
+                    then_body,
+                    namespace.as_deref(),
+                    symbols,
+                );
+                for (_, body) in elseif_clauses {
+                    collect_conditional_function_symbols(
+                        body,
+                        namespace.as_deref(),
+                        symbols,
+                    );
+                }
+                if let Some(body) = else_body {
+                    collect_conditional_function_symbols(
+                        body,
+                        namespace.as_deref(),
+                        symbols,
+                    );
+                }
+            }
+            StmtKind::FunctionDecl { name, .. } => {
+                let canonical = canonical_name_for_decl(namespace.as_deref(), name);
+                symbols.conditional_functions.insert(php_symbol_key(&canonical));
+                insert_folded_symbol(
+                    &mut symbols.functions,
+                    canonical,
+                );
+            }
+            StmtKind::FunctionVariantGroup { name, .. } => {
+                insert_folded_symbol(&mut symbols.functions, name.clone());
+            }
+            StmtKind::ExternFunctionDecl { name, .. } => {
+                insert_folded_symbol(
+                    &mut symbols.extern_functions,
+                    canonical_name_for_decl(namespace.as_deref(), name),
+                );
             }
             _ => {}
         }

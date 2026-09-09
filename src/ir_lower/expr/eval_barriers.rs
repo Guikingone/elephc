@@ -30,6 +30,7 @@ pub(super) fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment
         && eval_literal_scope_read_params_supported_by_lowering(
             ctx,
             plan.reads(),
+            plan.quiet_reads(),
             plan.array_read_constraints(),
             plan.assoc_array_read_constraints(),
             plan.float_predicate_read_constraints(),
@@ -81,13 +82,20 @@ pub(super) fn eval_literal_scope_barrier_writes(
 pub(super) fn eval_literal_scope_read_params_supported_by_lowering(
     ctx: &LoweringContext<'_, '_>,
     read_names: &std::collections::BTreeSet<String>,
+    quiet_read_names: &std::collections::BTreeSet<String>,
     array_read_constraints: &std::collections::BTreeSet<String>,
     assoc_array_read_constraints: &std::collections::BTreeSet<String>,
     float_predicate_read_constraints: &std::collections::BTreeSet<String>,
 ) -> bool {
     read_names
         .iter()
-        .all(|name| eval_literal_scope_read_param_supported_by_lowering(ctx, name))
+        .all(|name| {
+            eval_literal_scope_read_param_supported_by_lowering(
+                ctx,
+                name,
+                quiet_read_names.contains(name),
+            )
+        })
         && array_read_constraints
             .iter()
             .all(|name| eval_literal_scope_read_array_param_supported_by_lowering(ctx, name))
@@ -117,10 +125,11 @@ pub(super) fn eval_literal_scope_constraints_supported_by_lowering(
         })
 }
 
-/// Returns true when one read variable has no eval runtime state dependency.
+/// Returns true when one read variable is initialized and needs no eval runtime state.
 pub(super) fn eval_literal_scope_read_param_supported_by_lowering(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
+    quiet: bool,
 ) -> bool {
     if crate::superglobals::is_superglobal(name)
         || (ctx.in_main && ctx.all_global_var_names.contains(name))
@@ -128,7 +137,7 @@ pub(super) fn eval_literal_scope_read_param_supported_by_lowering(
         return false;
     }
     let Some(slot) = ctx.local_slots.get(name) else {
-        return true;
+        return quiet;
     };
     if ctx.is_ref_bound_local(name) {
         return false;
@@ -409,8 +418,7 @@ pub(super) fn lower_eval_class_probe(
 /// Returns true when an AOT class already satisfies a native class_exists probe.
 pub(super) fn aot_class_exists_for_eval_probe(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
     let key = php_symbol_key(class_name.trim_start_matches('\\'));
-    ctx.classes
-        .keys()
-        .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+    let is_match = |candidate: &str| php_symbol_key(candidate.trim_start_matches('\\')) == key;
+    ctx.classes.keys().any(|candidate| is_match(candidate))
+        || crate::types::builtin_classes::intrinsic_class_names().any(is_match)
 }
-

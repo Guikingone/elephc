@@ -1,8 +1,8 @@
 ---
 title: "putenv()"
-description: "Sets an environment variable."
+description: "Sets an environment variable, or removes it when the argument has no equals sign."
 sidebar:
-  order: 149
+  order: 291
 ---
 
 ## putenv()
@@ -11,7 +11,7 @@ sidebar:
 function putenv(string $assignment): bool
 ```
 
-Sets an environment variable.
+Sets an environment variable, or removes it when the argument has no equals sign.
 
 **Parameters**:
 - `$assignment` (`string`)

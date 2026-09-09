@@ -35,9 +35,9 @@ requirements against the nearest project's `elephc.toml`, deterministic
 `elephc.lock`, and verified target/toolchain cache receipt. It passes exact
 static archive paths to the linker; compilation never downloads or builds them.
 
-The current catalog contains PCRE2 10.47 and zlib 1.3.2. Regex use links PCRE2's
-managed archives in the fixed shim/POSIX/8-bit order and has no production
-system-library fallback:
+The current catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, and curl
+8.21.0. Regex use links PCRE2's managed archives in the fixed shim/POSIX/8-bit
+order and has no production system-library fallback:
 
 ```bash
 elephc native add pcre2
@@ -48,8 +48,20 @@ Declaring PCRE2 does not force it into a program that does not use regex. Exact
 managed archives remain compatible with Linux's static-link preference. zlib is
 the second exact pure-C recipe; it is available for curated runtime/builtin
 integration, not an automatic replacement for arbitrary `extern "z"` and `-lz`
-workflows. See [Native dependencies](native-dependencies.md) for the full
-workflow.
+workflows.
+
+curl is the first catalog package with non-empty dependencies: adding it also
+declares OpenSSL (curl's TLS backend only — `openssl_encrypt()`/`hash()` stay
+on the separate `crypto` bridge) and zlib, and a final curl link resolves all
+three in the fixed `libcurl.a -> libssl.a -> libcrypto.a -> libz.a` order with
+the same no-system-fallback contract (no Homebrew/distro `-lcurl`/`-lssl`):
+
+```bash
+elephc native add curl
+elephc app.php --with-curl
+```
+
+See [Native dependencies](native-dependencies.md) for the full workflow.
 
 ### `--link` / `-l`
 
@@ -91,14 +103,16 @@ Some optional features are implemented as Rust *bridge crates* (`staticlib`
 archives) that elephc links into the program: `pdo` (database access), `tls`
 (`https://`/`ftps://` streams), `crypto` (the `hash()`/`md5()`/`sha1()` family),
 `bcmath` (exact arbitrary-precision decimal arithmetic),
+`iconv` (character-set conversion and the character-oriented `iconv_*` functions),
 `phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
-processing), `eval` (the Magician interpreter fallback for dynamic `eval()`),
-and `web` (the `--web` server).
+processing), `pcntl` (Unix process control and signals), `eval` (the Magician
+interpreter fallback for dynamic `eval()`), `web` (the `--web` server), and
+`curl` (the libcurl-backed `ext/curl` surface).
 
 By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
-calling a `bc*` function pulls in `bcmath`, referencing `PDO` pulls in `pdo`,
-and so on. An `eval()` call pulls in Magician
+calling a `bc*` function pulls in `bcmath`, calling an `iconv*` function pulls in
+`iconv`, referencing `PDO` pulls in `pdo`, and so on. An `eval()` call pulls in Magician
 only when it needs runtime parsing: eligible literal fragments can be parsed at
 compile time and lowered to native EIR without the interpreter bridge. Programs
 that do not need a feature never link its crate, so binaries stay small.
@@ -114,8 +128,15 @@ that detection cannot see. The flag is repeatable:
 elephc app.php --with-pdo
 elephc app.php --with-crypto --with-tls
 elephc app.php --with-bcmath
+elephc app.php --with-iconv
+elephc app.php --with-pcntl
 elephc app.php --with-eval
 ```
+
+`--with-pcntl` force-links the process-control bridge for indirect or opaque
+runtime calls. Statically visible `pcntl_*` calls auto-link it. See
+[PCNTL](../php/pcntl.md) for target availability, fork/signal semantics, and
+documented limits.
 
 `--with-eval` force-links `elephc_magician`; it does not enable new syntax or
 change which fragments are eligible for AOT lowering. Normal eval usage is
@@ -142,16 +163,32 @@ either trigger does not link it.
 mysqli prelude — which links the shared `elephc_pdo` archive — without
 injecting the PDO classes; there is no separate `elephc_mysqli` bridge.
 
+`--with-curl` is a bridge flag, like `--with-pdo`, but it is also the first one
+that itself needs a managed native package: force-linking the whole
+`elephc_curl` archive only satisfies the Rust side, and the final link also
+needs the `curl` package's `libcurl.a`/`libssl.a`/`libcrypto.a`/`libz.a`
+declared and installed with `elephc native add curl` (see
+[Managed native packages](#managed-native-packages) above). There is no
+`--with-regex`-style split between a runtime capability and the bridge here:
+`--with-curl` is the one flag that both force-links the crate and requires the
+package.
+
+```bash
+elephc native add curl
+elephc app.php --with-curl
+```
+
 `--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
 mode, which owns the program entry point). An unknown capability name is
 rejected with the list of valid names. Forcing a bridge increases binary size,
 since the whole archive is included.
 
 Bridge crates are Elephc's optional Rust workspace components. They are not
-installed or versioned by `elephc native`. Runtime-capability flags may require
-a separately declared managed package, as `--with-regex` requires `pcre2`;
-the flag itself does not install it. Composer dependencies are PHP source
-handled by the compile-time autoload pipeline and remain separate.
+installed or versioned by `elephc native`. A bridge or runtime-capability flag
+may require a separately declared managed package — `--with-regex` requires
+`pcre2`, `--with-curl` requires `curl` (which in turn declares `openssl` and
+`zlib`) — but the flag itself does not install it. Composer dependencies are
+PHP source handled by the compile-time autoload pipeline and remain separate.
 
 ## Heap size
 

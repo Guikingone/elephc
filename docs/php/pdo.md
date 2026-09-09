@@ -40,9 +40,11 @@ read them before porting security-sensitive or data-loading code.
 ## PHP compatibility version
 
 PDO's generated surface is selected with `--php-version=8.0` through
-`--php-version=8.6`; `ELEPHC_PHP_VERSION` provides the same selection for automation.
-The command-line option wins over the environment and the default is PHP 8.5.
-Patch versions and values outside this range are rejected.
+`--php-version=8.6`. Without the flag, the compiler walks upward from the entry
+file for a Composer platform pin, `.php-version`, or a narrowing Composer PHP
+constraint, then falls back to PHP 8.5. Patch versions are accepted in project
+pins, while the command-line flag requires one of the supported `major.minor`
+values.
 
 | Target | PDO differences selected by elephc |
 | --- | --- |
@@ -739,7 +741,8 @@ The implementation tracks stable PECL PDO_IBM 1.7.0. Its seven historical
 `PDO::SQL_ATTR_*` constants remain available on PHP 8.0–8.6. `Pdo\Ibm` and its
 shorter `ATTR_*` spellings exist from PHP 8.4; PHP 8.5 deprecates only the
 historical aliases. IBM i/PASE-only `I5_*` constants are deliberately absent
-because elephc's supported targets are macOS and Linux.
+because PDO_IBM targets the three executable/release hosts: macOS ARM64, Linux
+ARM64, and Linux x86_64. It does not claim iOS/unixODBC support.
 
 - **DSNs.** `ibm:<cataloged-database>` uses `SQLConnect`; a body containing `=`
   uses `SQLDriverConnect`. Constructor credentials are appended only when the
@@ -764,9 +767,11 @@ because elephc's supported targets are macOS and Linux.
 - **Connection information.** `ATTR_CLIENT_VERSION` reports `1.7.0` and
   `ATTR_SERVER_INFO` returns the DBMS name. On supported non-PASE targets,
   PDO_IBM does not expose `ATTR_SERVER_VERSION` or connection status.
-- **Targets.** The bridge builds on all three supported targets through unixODBC.
-  A live connection additionally needs a compatible IBM CLI/ODBC driver; IBM's
-  proprietary client is not redistributed by elephc or public CI images.
+- **Targets.** The bridge builds on the three executable/release hosts — macOS
+  ARM64, Linux ARM64, and Linux x86_64 — through unixODBC. It does not target
+  iOS libraries. A live connection additionally needs a compatible IBM CLI/ODBC
+  driver; IBM's proprietary client is not redistributed by elephc or public CI
+  images.
 
 ## PDO_SQLSRV notes
 
@@ -1408,3 +1413,47 @@ runs this fixture after the ordinary native and libpq suites.
   build and use rustls with the ring provider. mysql 28's `rustls-tls-ring` feature removes
   the former aws-lc-rs/C-toolchain cost. Custom `--no-default-features` builds still reject
   a requested TLS connection loudly rather than silently downgrading it.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+### PDO
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`pdo_drivers()`](./builtins/database/pdo_drivers.md) | `(): array` | `array` | ✓ | — |
+
+Classes: `PDO`, `PDOException`, `PDORow`, `PDOStatement`.
+
+### pdo_dblib
+
+Classes: `Pdo\Dblib`.
+
+### pdo_firebird
+
+Classes: `Pdo\Firebird`.
+
+### pdo_ibm (PECL)
+
+Classes: `Pdo\Ibm`.
+
+### pdo_mysql
+
+Classes: `Pdo\Mysql`.
+
+### pdo_odbc
+
+Classes: `Pdo\Odbc`.
+
+### pdo_pgsql
+
+Classes: `Pdo\Pgsql`.
+
+### pdo_sqlite
+
+Classes: `Pdo\Sqlite`.
+
+<!-- elephc:generated:symbols:end -->

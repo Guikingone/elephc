@@ -98,9 +98,10 @@ prints exactly like one built without it.
 
 A program monitor LAUNCHES (a source or a binary) is measured from inside: an
 exact per-function profile rooted at {main} — wall time, call counts,
-allocations, retained objects, SQL query counts and database-driver wait. The
-display derives wall-minus-recorded-DB-wait; it is not an OS CPU clock. File I/O
-is not counted or timed. Every local export is available.
+allocations, retained objects, SQL query counts, database-driver wait, outgoing
+network operations and network wait. The display derives
+wall-minus-recorded-DB-wait; it is not an OS CPU clock. File I/O is not counted
+or timed. Every local export is available.
 
 A service monitor CONNECTS to answers from its sample ring: CPU-time shares that
 sharpen as samples accumulate, sampled allocation attribution, and per-route
@@ -110,17 +111,24 @@ per-function table of the next request that completes; that answer is the table
 alone, so --exact cannot be combined with --out, --pprof, --dot or --html.
 
 --live refreshes the table window after window, top-style, until the target
-exits (or Ctrl-C). --attach reads an already-running local process; child worker
-processes (a --web prefork server's workers) are discovered and merged in both
-modes. Those two use an external sampler, which only macOS ships; elsewhere,
-point monitor at the program's endpoint instead. They report sampled CPU stacks
-only: no calls, allocation/retained counts, SQL/file-I/O counts, wait, or route
-tags. Everything else works on Linux and macOS alike.
+exits (or Ctrl-C). --attach reads an already-running local process, discovering
+its child worker processes (a --web prefork server's workers) each window and
+merging them. A launched --live asks the program it started over the channel it
+handed it. A --web binary fills one shared ring from every worker, so that
+answer includes worker samples and request route tags, as the endpoint does.
+The header counts discovered processes; it does not count ring contributors.
+--live needs no external tool and works wherever elephc does. --attach reads
+from the outside through /usr/bin/sample on macOS or ptrace on Linux; on other
+platforms, point monitor at the program's endpoint instead.
+Both report sampled CPU stacks without calls, allocation/retained counts,
+SQL/file-I/O counts or wait. Only launched --live of a --web binary carries
+route tags; --attach has none. Everything else works on Linux and macOS alike.
 
 --pprof writes the capture as a gzip pprof profile. --dot writes a Graphviz call
 graph (`dot -Tsvg`); --html writes a self-contained, interactive call graph (one
 node per function, caller->callee edges, hover metrics, search, zoom) that opens
-in any browser with no network, with a time/memory/retained/wait/SQL toggle, a
+in any browser with no network, with time, memory, retained, DB wait, SQL,
+network and network-wait dimensions, a
 flame view, a bottom-up callers/callees panel, a critical-path overlay, and —
 when DB queries ran — a Queries panel listing each distinct statement and how
 many times it ran, normalized so an N+1's repeated query folds into one x200
@@ -137,7 +145,8 @@ expose the profile).
 ui.perfetto.dev. The report prints recommendations, and --assert
 <metric>:<fn><op><value> (repeatable; op <= >= == < >) gates the build — any
 failed assertion exits 2, e.g. --assert calls:build<=1000. Metrics: calls,
-allocs, retained, queries, self_ms, incl_ms, wait_ms, time_pct. Use `*` as the
+allocs, retained, queries, self_ms, incl_ms, wait_ms, network,
+network_wait_ms, time_pct. Use `*` as the
 function to assert on the whole run, e.g. --assert queries:*<=50. A project can
 keep its budget in a `.elephc` file at its root (found by walking up from the
 source, or named with --assert-file): one assertion per line, `#` comments, and
@@ -166,7 +175,8 @@ and --pprof already feeds a Collector's pprof receiver.
 --stitch <file> (repeatable) captures nothing: it reads the stderr logs of
 services built with --web --with-monitoring and correlates their per-request
 slices into distributed traces by W3C Trace Context, printing one indented line
-per span (service, exact duration, function count, queries, waiting). A span
+per span (service, exact duration, function count, queries, DB waiting, network
+operations and network waiting). A span
 whose parent is not among the collected logs still renders, as a root, so a
 partial collection shows what it has. With --html it also writes a
 self-contained waterfall: each span placed by when it opened and sized by how

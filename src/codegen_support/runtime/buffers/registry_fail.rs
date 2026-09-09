@@ -26,6 +26,7 @@ pub fn emit_buffer_registry_fail(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #39");                                         // pass the exact diagnostic byte length
     emitter.instruction("mov x0, #2");                                          // write the diagnostic to standard error
     emitter.syscall(4);
+    abi::emit_cdylib_exit_escape(emitter);
     emitter.instruction("mov x0, #70");                                         // report a deterministic software failure status
     emitter.syscall(1);
 }
@@ -40,6 +41,7 @@ fn emit_buffer_registry_fail_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, 2");                                          // write the diagnostic to standard error
     emitter.instruction("mov rax, 1");                                          // select the Linux x86_64 write syscall
     emitter.instruction("syscall");                                             // emit the registry-exhaustion diagnostic
+    abi::emit_cdylib_exit_escape(emitter);
     emitter.instruction("mov rdi, 70");                                         // report a deterministic software failure status
     emitter.instruction("mov rax, 60");                                         // select the Linux x86_64 exit syscall
     emitter.instruction("syscall");                                             // terminate without returning to buffer allocation

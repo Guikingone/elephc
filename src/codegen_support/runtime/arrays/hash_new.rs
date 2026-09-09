@@ -100,6 +100,7 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_arr_cap_err_msg");
     emitter.instruction(&format!("mov x2, #{}", ARRAY_ALLOC_SIZE_MSG.len()));   // pass the exact array-size diagnostic byte count
     emitter.syscall(4);
+    abi::emit_cdylib_exit_escape(emitter);
     emitter.instruction("mov x0, #1");                                          // exit code 1
     emitter.syscall(1);
 }
@@ -166,6 +167,7 @@ fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov edx, {}", ARRAY_ALLOC_SIZE_MSG.len()));   // pass the exact array-size diagnostic byte count
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // print the fatal hash-size message to stderr
+    abi::emit_cdylib_exit_escape(emitter);
     emitter.instruction("mov edi, 1");                                          // exit code 1 for an unrepresentable hash size
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // terminate the process after reporting the hash-size failure

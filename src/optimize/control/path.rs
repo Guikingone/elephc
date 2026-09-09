@@ -130,8 +130,10 @@ pub(crate) fn analyze_switch_tail_paths(
 
 /// Analyzes the tail paths of a try/catch/finally statement and returns reachability
 /// information for the try body, each catch block, and the finally block. Sets
-/// `can_sink_into_finally` to true only when there are no catches, the try body may
-/// fall through, and the finally block also falls through.
+/// `can_sink_into_finally` to true only when there are no catches, the try body cannot
+/// throw or leave early (a nested `return` / `break` / `continue` runs `finally` but must
+/// not run a tail sunk into it), the try body falls through, and the finally block also
+/// falls through.
 pub(crate) fn analyze_try_tail_paths(
     try_body: &[Stmt],
     catches: &[crate::parser::ast::CatchClause],
@@ -153,6 +155,7 @@ pub(crate) fn analyze_try_tail_paths(
         finally_tail_path,
         can_sink_into_finally: catches.is_empty()
             && !block_may_throw(try_body)
+            && !block_has_early_exit(try_body, 0)
             && matches!(try_tail_path, TailPathKind::FallsThrough)
             && matches!(finally_tail_path, Some(TailPathKind::FallsThrough)),
     }

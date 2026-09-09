@@ -499,6 +499,26 @@ pub trait RuntimeValueOps {
     /// Emits or suppresses one PHP runtime warning through the target runtime.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus>;
 
+    /// Emits one unsuppressible PHP fatal diagnostic and stops eval execution.
+    fn fatal(&mut self, message: &str) -> Result<(), EvalStatus> {
+        self.warning(message)?;
+        Err(EvalStatus::RuntimeFatal)
+    }
+
+    /// Publishes whether eval is invoking a signal handler so Fiber switches can be rejected.
+    fn set_pcntl_dispatching(&mut self, active: bool) -> Result<(), EvalStatus> {
+        crate::context::pcntl_runtime::set_fiber_dispatching(active);
+        Ok(())
+    }
+
+    /// Retains an AOT-installed signal handler value for eval introspection when available.
+    fn pcntl_aot_signal_handler(
+        &mut self,
+        _signal: i64,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -528,6 +548,22 @@ pub trait RuntimeValueOps {
     /// owns the real `elephc_crypto` handle and frees it in its own `Drop` — this cell
     /// must never free anything.
     fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Creates a runtime cell for an eval-owned curl easy/multi/share handle.
+    ///
+    /// A DEFAULT METHOD, not a new generated-runtime wrapper: PHP 8's `CurlHandle` /
+    /// `CurlMultiHandle` / `CurlShareHandle` are OBJECTS that consume nothing from the
+    /// resource counter, exactly like `HashContext` above, and the box shape that fact
+    /// requires — runtime tag 9, resource kind 5, no PHP id, no destructor — is already
+    /// exactly what `hash_context()` produces. Reusing it here means curl needs no new
+    /// entry in the generated `__elephc_eval_value_*` wrapper family
+    /// (`elephc::codegen_support::runtime::eval_bridge`) at all. `value` is a key into
+    /// `EvalStreamResources`'s curl tables (`crate::stream_resources::curl`, behind the
+    /// `curl` Cargo feature), which own the real `elephc_curl_*` handle and free it in
+    /// `EvalStreamResources`'s own `Drop`.
+    fn curl_handle(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.hash_context(value)
+    }
 
     /// Creates a runtime float cell.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus>;

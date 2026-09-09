@@ -34,7 +34,16 @@ fn lower_file(path: &Path) -> crate::ir::Module {
 
 /// Runs the `--emit-ir` frontend ordering for a source string and base path.
 fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate::ir::Module {
-    let target = Target::detect_host();
+    lower_source_at_for_target(source, main_file_path, parent, Target::detect_host())
+}
+
+/// Runs the corpus frontend for a selected target, including precheck availability folding.
+fn lower_source_at_for_target(
+    source: &str,
+    main_file_path: &Path,
+    parent: &Path,
+    target: Target,
+) -> crate::ir::Module {
     let source_mode = crate::source::SourceMode::from_path(main_file_path);
     let tokens =
         crate::lexer::tokenize_with_mode(source, source_mode).expect("tokenize failed");
@@ -69,6 +78,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(
         ast,
@@ -81,7 +91,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
     let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
-    let ast = crate::optimize::fold_constants(ast);
+    let ast = crate::optimize::fold_constants_for_target(ast, target);
     let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
     let ast = crate::optimize::prune_constant_control_flow(
@@ -301,11 +311,26 @@ fn unary_string_builtin_coerces_mixed_operand_before_runtime_call() {
     );
 }
 
-/// Verifies descriptor result contracts override checker precision when runtime layouts differ.
+/// Verifies a descriptor's result contract reaches the EIR, in both directions.
+///
+/// A descriptor can be LESS precise than the checker, and `json_encode` is that:
+/// the checker knows `int|string`, the runtime hands back a boxed Mixed, and the
+/// EIR says `mixed` because that is the representation.
+///
+/// It can also be MORE precise, and that direction is where the bugs were.
+/// `getenv` and `readline` both used to override their `string|false` down to a
+/// plain `Str`, which is not a layout fact but a lost answer: an unset variable
+/// became `""`, and end-of-input became `""`, each indistinguishable from a real
+/// empty string. Both now carry the union, and it is asserted here so the
+/// override cannot come back unnoticed.
+///
+/// No builtin narrows a falsy union to a scalar any more — a sweep of every
+/// `BuiltinResultType::Shared` override found none — so this test has no third
+/// example to give, and that emptiness is the point rather than a gap.
 #[test]
 fn builtin_runtime_calls_use_descriptor_result_representations() {
     let module = lower_source(
-        "<?php $encoded = json_encode(INF); $environment = getenv('HOME'); echo $encoded === false; echo strlen($environment);",
+        "<?php $encoded = json_encode(INF); $typed = readline(); $environment = getenv('HOME'); echo $encoded === false; echo $typed === false; echo $environment === false;",
     );
     let text = print_module(&module);
     assert!(
@@ -314,12 +339,12 @@ fn builtin_runtime_calls_use_descriptor_result_representations() {
         }),
         "json_encode must retain its boxed string-or-false EIR result: {text}"
     );
-    assert!(
-        text.lines().any(|line| {
-            line.contains("Str php=string") && line.contains("runtime.getenv")
-        }),
-        "getenv must retain the backend's concrete string EIR result: {text}"
-    );
+    for name in ["runtime.readline", "runtime.getenv"] {
+        assert!(
+            text.lines().any(|line| line.contains("php=string|false") && line.contains(name)),
+            "{name} must carry string|false: narrowing it hides an unset or an EOF: {text}"
+        );
+    }
 }
 
 /// Verifies `count` uses its typed runtime operation for concrete and dynamic values.

@@ -13,9 +13,7 @@
 use std::fmt;
 
 use crate::errors::CompileError;
-use crate::ir::{
-    Effects, Immediate, Op, PhpTypePredicate, RuntimeCallTarget, RuntimeFnId, ValueId,
-};
+use crate::ir::{Effects, Immediate, Op, PhpTypePredicate, RuntimeCallTarget, RuntimeFnId, ValueId};
 use crate::parser::ast::Expr;
 use crate::span::Span;
 use crate::types::PhpType;
@@ -131,8 +129,14 @@ pub enum BuiltinTargetStrategy {
 /// Declares which supported compiler targets implement the builtin semantics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuiltinTargetSupport {
-    /// The semantic strategy is valid on macOS AArch64, Linux AArch64, and Linux x86_64.
+    /// The semantic strategy is valid on all five supported compiler targets.
     All,
+    /// The builtin is valid on the three executable hosts but explicitly refused on iOS.
+    HostOnly,
+    /// The semantic strategy is valid on Linux AArch64 and Linux x86_64 only.
+    Linux,
+    /// The semantic strategy is valid on macOS AArch64 only.
+    MacOs,
 }
 
 /// Runtime functions that a backend-neutral lowering may emit.
@@ -155,6 +159,10 @@ pub enum BuiltinArgumentLowering {
     Date,
     /// Preserve JSON decode's source-sensitive option handling.
     JsonDecode,
+    /// Preserve getenv's nullable name until runtime selects lookup or enumeration.
+    Getenv,
+    /// Keep source-sensitive omitted PCNTL defaults absent after named/spread planning.
+    PcntlPreserveOmitted,
     /// Lower a statically known callback descriptor before its subject.
     PregReplaceCallback,
     /// Keep positional regex operands in raw source order.
@@ -438,6 +446,64 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
     }
 }
 
+/// Builds runtime-call semantics for a builtin that is explicitly unavailable on iOS.
+pub const fn host_only_runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(target);
+    semantics.target_support = BuiltinTargetSupport::HostOnly;
+    semantics
+}
+
+/// Builds the shared descriptor for one typed PCNTL bridge operation.
+pub const fn pcntl_semantics(target: crate::ir::PcntlRuntime) -> BuiltinSemantics {
+    let target_support = match target.target_support() {
+        crate::ir::PcntlTargetSupport::All => BuiltinTargetSupport::HostOnly,
+        crate::ir::PcntlTargetSupport::Linux => BuiltinTargetSupport::Linux,
+        crate::ir::PcntlTargetSupport::MacOs => BuiltinTargetSupport::MacOs,
+    };
+    BuiltinSemantics {
+        validation: BuiltinValidation::Shared(validate_pcntl_scalar_arguments),
+        result_type: BuiltinResultType::Declared,
+        effects: BuiltinEffects::Static(target.effects()),
+        result_ownership: target.result_ownership(),
+        requirements: BuiltinRequirements::Static(&[BuiltinRequirement::Bridge("elephc_pcntl")]),
+        target_strategy: BuiltinTargetStrategy::RuntimeCall,
+        target_support,
+        runtime_functions: BuiltinRuntimeFunctions::None,
+        argument_lowering: BuiltinArgumentLowering::Standard,
+        callable: BuiltinCallablePolicy::StaticOnly(
+            "PCNTL callbacks use a dedicated process-runtime ABI",
+        ),
+        lowering: BuiltinLowering::Runtime(RuntimeCallTarget::Pcntl(target)),
+    }
+}
+
+/// Rejects values that the PCNTL scalar ABI cannot coerce through PHP integer semantics.
+fn validate_pcntl_scalar_arguments(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
+    for (index, ty) in input.arg_types.iter().enumerate() {
+        if !matches!(
+            ty.codegen_repr(),
+            PhpType::Int
+                | PhpType::Bool
+                | PhpType::Void
+                | PhpType::Float
+                | PhpType::TaggedScalar
+                | PhpType::Str
+                | PhpType::Mixed
+                | PhpType::Union(_)
+        ) {
+            return Err(CompileError::new(
+                input.span,
+                &format!(
+                    "{}() argument {} must be int-compatible",
+                    input.name,
+                    index + 1
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Builds the complete shared descriptor for one PHP internal-array-pointer builtin.
 ///
 /// The six pointer builtins are lowered as a unit by
@@ -558,10 +624,7 @@ pub fn lower_registry_call(
         arg_types: &arg_types,
         span,
     };
-    let effects = match def.spec.semantics.effects {
-        BuiltinEffects::Static(effects) => effects,
-        BuiltinEffects::Shared(resolve) => resolve(&semantic_input),
-    };
+    let effects = resolve_builtin_effects(def, &semantic_input);
     let resolved_result_type = match def.spec.semantics.result_type {
         BuiltinResultType::Checked => result_type.clone(),
         BuiltinResultType::Declared => def.return_type.clone(),
@@ -590,6 +653,63 @@ pub fn lower_registry_call(
             effects,
             Some(span),
         )),
+    }
+}
+
+/// Resolves a builtin's declared effects and adds weak float-to-int diagnostics.
+pub fn resolve_builtin_effects(
+    def: &crate::builtins::registry::BuiltinDef,
+    input: &BuiltinSemanticInput<'_>,
+) -> Effects {
+    let mut effects = match def.spec.semantics.effects {
+        BuiltinEffects::Static(effects) => effects,
+        BuiltinEffects::Shared(resolve) => resolve(input),
+    };
+    let weak_float_int = def
+        .params
+        .iter()
+        .zip(input.arg_types.iter())
+        .enumerate()
+        .any(|(index, ((_, expected), actual))| {
+            php_type_accepts_int(expected)
+                && (php_type_may_be_float(actual)
+                    || input
+                        .args
+                        .get(index)
+                        .is_some_and(|arg| !expr_is_definitely_non_float(arg)))
+        });
+    if weak_float_int {
+        effects |= Effects::MAY_WARN | Effects::MAY_THROW;
+    }
+    effects
+}
+
+/// Returns whether an optimizer expression is certainly unable to produce a float.
+fn expr_is_definitely_non_float(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        crate::parser::ast::ExprKind::StringLiteral(_)
+            | crate::parser::ast::ExprKind::IntLiteral(_)
+            | crate::parser::ast::ExprKind::BoolLiteral(_)
+            | crate::parser::ast::ExprKind::Null
+    )
+}
+
+/// Returns whether a declared builtin parameter accepts an integer.
+fn php_type_accepts_int(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int => true,
+        PhpType::Union(members) => members.iter().any(php_type_accepts_int),
+        _ => false,
+    }
+}
+
+/// Returns whether an inferred argument can reach weak integer coercion as a float.
+fn php_type_may_be_float(ty: &PhpType) -> bool {
+    match ty.codegen_repr() {
+        PhpType::Float | PhpType::Mixed => true,
+        PhpType::Union(members) => members.iter().any(php_type_may_be_float),
+        _ => false,
     }
 }
 

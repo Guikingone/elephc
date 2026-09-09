@@ -31,7 +31,7 @@ sidebar:
 | [`filetype()`](./filesystem/filetype.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fnmatch()`](./filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |
-| [`getenv()`](./filesystem/getenv.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
+| [`getenv()`](./filesystem/getenv.md) | `(?string $name = null, bool $local_only = false): string|array|false` | `string|array|false` | ✓ | ✓ |
 | [`glob()`](./filesystem/glob.md) | `(string $pattern): array` | `array` | ✓ | ✓ |
 | [`is_dir()`](./filesystem/is_dir.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_executable()`](./filesystem/is_executable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
@@ -61,6 +61,6 @@ sidebar:
 | [`sys_get_temp_dir()`](./filesystem/sys_get_temp_dir.md) | `(): string` | `string` | ✓ | ✓ |
 | [`tempnam()`](./filesystem/tempnam.md) | `(string $directory, string $prefix): string` | `string` | ✓ | ✓ |
 | [`tmpfile()`](./filesystem/tmpfile.md) | `(): mixed` | `mixed` | ✓ | ✓ |
-| [`touch()`](./filesystem/touch.md) | `(string $filename, int $mtime = null, int $atime = null): bool` | `bool` | ✓ | ✓ |
-| [`umask()`](./filesystem/umask.md) | `(int $mask = null): int` | `int` | ✓ | ✓ |
+| [`touch()`](./filesystem/touch.md) | `(string $filename, ?int $mtime = null, ?int $atime = null): bool` | `bool` | ✓ | ✓ |
+| [`umask()`](./filesystem/umask.md) | `(?int $mask = null): int` | `int` | ✓ | ✓ |
 | [`unlink()`](./filesystem/unlink.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |

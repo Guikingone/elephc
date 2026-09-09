@@ -14,7 +14,7 @@ AST layer.
 
 Today the AST optimizer is split into six passes:
 
-1. `fold_constants(program)` runs before type checking
+1. `fold_constants_for_target(program, target)` runs before type checking
 2. `propagate_constants(program, mixed_storage_locals)` runs after successful type checking
 3. `prune_constant_control_flow(program, binding_decision_spans)` runs after propagation and warning collection
 4. `normalize_control_flow(program, binding_decision_spans)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
@@ -31,6 +31,22 @@ synthesized `if`). `propagate_constants` takes the mixed-storage local NAMES for
 it must not substitute a literal for a read of a local the checker boxed as `mixed`.
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
+
+The pre-check target fold resolves `function_exists()` guards using known string
+assignments, constants, and concatenations. Its narrow string-fact environment
+substitutes only availability arguments, leaving ordinary variable reads intact
+for the checker. It shares the propagation write-invalidation and reference
+tracking helpers, isolates callable scopes, and discards uncertain facts at
+control-flow boundaries. Target-dependent branches can then be pruned before
+the checker rejects unavailable builtins.
+
+When pruning removes a namespaced function polyfill, the second target fold
+rechecks unqualified calls and first-class callable targets against the surviving
+declarations. The name resolver records their permitted global fallback before
+canonicalizing names, so an available builtin can be selected without stripping
+namespaces from explicit references. Retained declarations still take precedence;
+qualified calls and `use function` imports never acquire this fallback. Rebound
+calls use the resolver's ordinary builtin alias rewrites.
 
 Alongside those six passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
 
@@ -199,7 +215,16 @@ Current normalization coverage includes:
 - non-throwing `try` / `catch` simplification
 - outer `finally` blocks folded into a single inner `try` when they wrap exactly one inner `try` that does not already have its own `finally`
 - safe hoisting of non-throwing, fallthrough prefixes out of `try` blocks
-- conservative flattening of `try` / `finally` when the `try` body cannot throw and the body falls through
+- conservative flattening of `try` / `finally` when the `try` body cannot throw, falls through, and cannot leave early: a `return`, `break`, or `continue` nested in a branch of the body still runs `finally` under PHP, so such a body keeps its shell (the same rule gates DCE's flattening and its sinking of a tail into `finally`)
+
+The second generation of the pass (control-flow normalization v2) adds shell canonicalizations that matter to the CFG-aware EIR passes (loop analysis, LICM, branch simplification), all of which move AST nodes rather than clone them so the span-keyed checker decisions stay singular:
+
+- `if (!c) { A } else { B }` swapped into `if (c) { B } else { A }`, unless the `else` is a lone `if` (the canonical nested `elseif` chain, whose head/tail merges key on that shape)
+- `for (init; test;)` without an update clause hoisted into `init; while (test)` (`for (;;)` becomes `while (true)`), because `continue` reaches the test directly in both forms
+- `do { ... } while (true)` rewritten to `while (true) { ... }`
+- leading `if (g) { break; } [else { E }]` guards folded into the loop test: `while (c) { if (g) break; rest }` becomes `while (c && !g) { rest }` (`while (true)` / `for (;;)` become plain `while (!g)`), with the guard's `else` body leading the remaining body; the fold repeats while the body still starts with such a guard, and `for` loops with an update clause receive the same test without changing shape
+- an endless loop that ends in `if (g) { break; }` rotated into `do { body } while (!g)`, refused when the body carries a `continue` targeting that loop (it skips the guard today but would reach the rotated test); nested loops and `switch` bodies raise the `continue` level the check looks for
+- trailing terminators that transfer exactly where falling off the block would are dropped: a `continue` ending a loop body, the `break` ending the body that runs last in a `switch` (the `default` body when it is written last, else the last case; a `default` written between cases keeps its `break`, since EIR lowering places it at its source position), and a bare `return;` ending a function or method body. The walk follows only the tail path — the last statement, then recursively the last statement of each `if` / `ifdef` / `try` branch — and never enters loops, `switch` bodies, or `finally` blocks; a shell whose branch was emptied is re-pruned so it collapses like fresh input. By-reference-returning functions and generators keep their `return;`, and a `break`-only last case is kept when a `default` follows it
 ### Example
 
 ```php
@@ -226,7 +251,10 @@ Current dead-code-elimination coverage includes:
   - `break`
   - `continue`
 - statements after exhaustive `try/catch` and `try/finally` exits
-- unreachable `catch` paths when the post-DCE `try` body can no longer throw
+- unreachable `catch` paths when the post-DCE `try` body can no longer throw, or when its exact and constrained throwable domains cannot match that handler
+- exact thrown-class routing for explicit `throw new Class`, statically proven arithmetic failures, and fixed-point summaries of direct user functions and exact-receiver methods; unresolved calls, late-bound instance dispatch, dynamic operands, and external constructors retain an unknown `Throwable` domain
+- source-order handler subtraction for unknown throws, including the PHP `Throwable = Exception | Error` root partition, so a later handler is removed once earlier catches exhaust its remaining domain without assuming arbitrary interfaces or open class families are closed
+- caught-variable domains preserved through nested `try` blocks and simple local aliases/reassignments, allowing `throw $e` to retain the incoming exact or constrained class while writes through unknown paths invalidate that fact conservatively
 - shadowed `catch` clauses whose exception types are already fully covered by earlier handlers, including all later handlers after `catch (Throwable ...)`
 - shadowed `switch` patterns whose match points are already covered by earlier case labels, including full-case removal or fallthrough-body merging when no entry pattern remains
 - internal `if` regions pruned when outer pure variable guards or strict boolean checks already determine a nested branch outcome, with guard invalidation on relevant local writes to stay conservative
@@ -251,7 +279,10 @@ Current dead-code-elimination coverage includes:
 - `switch (true|false)` cases using single guard-like patterns can feed the same internal region pruning inside the selected case body, again with local-write invalidation to stay conservative
 - `catch` and `finally` bodies now invalidate outer guard facts only for locals written on the relevant pre-handler paths, so nested pruning there stays sound without discarding unrelated guard facts
 - throw-path invalidation for `switch` now consults the CFG-lite reachable block set, so writes in impossible case bodies do not unnecessarily kill catch-body guards, while reachable case writes before a `throw` still invalidate them
-- catch-side guard invalidation is now path-aware: writes that only happen on non-throwing `try` paths no longer block pruning inside the `catch`
+- catch-side guard invalidation is now path- and exception-type-aware: writes that only happen on non-throwing paths or paths throwing into a different handler no longer block pruning inside the selected `catch`, while call-aware by-reference writes performed by the throwing instruction itself still invalidate the affected locals
+- finally-entry guard invalidation separates normal/throw/return/break transfers from unconditional `exit`/`die` paths, which PHP terminates without running `finally`; branch-local writes on exit-only paths therefore no longer discard unrelated facts in the finally body
+- a `switch` whose `default` is written between cases keeps its shape in both the normalization and DCE passes (bodies are still optimized): every structural `switch` rewrite models `default` as the body that runs last, while EIR lowering places it at its source position, where a fallthrough `default` continues into the next case; the parser gives an empty `default:` written before a case an empty synthetic no-op carrying the label's span, so it can be ordered like any other body
+- statements following a `switch` without `default` stay after the switch, so the no-match path (and a last case falling off the switch) still runs them without cloning them into every exit path; a tail carrying a loop `break` / `continue` stays after the switch as well, where those statements keep targeting the loop
 - condition-only empty `if` / `elseif` chains reduced to just the observable condition checks that still matter
 - empty `elseif` bodies in the middle of a live chain folded into the minimum negated guard needed for later branches
 - trailing block tails sunk into `if` and `ifdef` fallthrough branches, so later statements are only retained on paths that can still reach them
@@ -565,8 +596,8 @@ The current optimizer is still intentionally local. It does not yet implement:
 
 - full fixed-point/basic-block constant propagation across arbitrary loops and general path merges
 - object/property facts, nested-array facts, and per-class constructor effect summaries beyond the current array-literal facts and unioned by-ref signatures
-- exact exception-type reachability, nested rethrow modeling, and less conservative `finally` invalidation beyond the current path-aware `try` heuristics
-- broader control-flow normalization beyond the current local AST shell rewrites
+- exact exception inference for unresolved/dynamic calls, open instance-dispatch sets, and runtime operand types beyond the current explicit-throw, exact-callable, and statically proven operator cases
+- control-flow normalization that reasons across sibling statements (merging adjacent `if` statements on the same pure condition, for instance), which needs the reference-volatility ledger the DCE guard state carries
 - backend-specific peephole cleanup
 - elimination of the `adrp/add/stur` instruction triple at the FCC assignment site when the wrapper is stubbed (the stub address still gets loaded and stored even though both are dead)
 
@@ -586,7 +617,13 @@ acquire/release cancellation, string-literal concat folding, redundant
 integer-sink specialization for checked add/subtract/multiply. Those passes make
 proven-stable local loads pure and replace transient boxed Mixed arithmetic with
 allocation-free `ichecked_*_to_int` operations only when every use observes an
-integer. Per-block constant folding then collapses
+integer. After `CheckedIntSink`, `CheckedNumericChain` may fuse a left-associated
+add/subtract/multiply chain whose `Mixed` intermediates are used only by the next
+operation, the final integer cast, and removable `Release` instructions into
+`ICheckedNumericChainToInt`; its in-range path stays in i64 registers, while the
+first signed overflow promotes the exact accumulator and operand, finishes the
+remaining suffix in double, and then uses the existing PHP float-to-int conversion.
+Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's
 scalar load/store forwarding, propagates constants through EIR value ids and

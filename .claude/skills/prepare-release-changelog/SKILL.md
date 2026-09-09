@@ -1,6 +1,6 @@
 ---
 name: prepare-release-changelog
-description: Audit and prepare Elephc's release changelog from the last published GitHub release through an exact candidate main SHA. Use before any release, version tag, release Pull Request, or pre-release verification, and when reconstructing `CHANGELOG.md` from merged work. Refresh live release/main state, reconcile every merged PR and direct first-parent commit, inspect actual shipped behavior, draft concise user-facing bullets with complete source traceability, and update `[Unreleased]` only after user approval.
+description: Audit and prepare Elephc's numbered release changelog from the last published GitHub release through an exact candidate main SHA. Use only for explicit release preparation, version tags, release Pull Requests, or pre-release verification. Refresh live release/main state, reconcile every merged PR and direct first-parent commit, inspect actual shipped behavior, draft concise user-facing bullets with complete source traceability, and update the named release section only after user approval.
 ---
 
 # Prepare Release Changelog
@@ -10,10 +10,11 @@ Build a complete, evidence-backed release ledger before writing release notes. T
 ## 1. Establish the exact release range
 
 1. Read `CONTRIBUTING.md`, `AGENTS.md`, and the top and link-list portions of `CHANGELOG.md`.
-2. Record the checkout, branch, `HEAD`, worktree status, remotes, and divergence from `origin/main`. Preserve unrelated or pre-existing changes.
-3. Refresh live state with `git fetch --prune origin main --tags` and identify the latest published, non-draft, non-prerelease GitHub release with `gh release list` / `gh release view`. Do not substitute the numerically highest local tag without checking GitHub. If preparing a prerelease line, require the user to name its base release explicitly.
-4. Resolve the release tag and candidate head to full SHAs. Default the candidate to refreshed `origin/main`; if the user names a SHA/ref, use that exact head. Report local commits ahead of `origin/main` separately and do not include them without explicit direction.
-5. Require the release tag to be an ancestor of the candidate head. Stop if the tag, candidate, repository identity, or GitHub release cannot be verified.
+2. Require the exact target version before editing. Do not use `[Unreleased]` as a substitute when the version is unknown.
+3. Record the checkout, branch, `HEAD`, worktree status, remotes, and divergence from `origin/main`. Preserve unrelated or pre-existing changes.
+4. Refresh live state with `git fetch --prune origin main --tags` and identify the latest published, non-draft, non-prerelease GitHub release with `gh release list` / `gh release view`. Do not substitute the numerically highest local tag without checking GitHub. If preparing a prerelease line, require the user to name its base release explicitly.
+5. Resolve the release tag and candidate head to full SHAs. Default the candidate to refreshed `origin/main`; if the user names a SHA/ref, use that exact head. Report local commits ahead of `origin/main` separately and do not include them without explicit direction.
+6. Require the release tag to be an ancestor of the candidate head. Stop if the tag, candidate, repository identity, or GitHub release cannot be verified.
 
 Do not edit `CHANGELOG.md` during this discovery phase.
 
@@ -49,7 +50,7 @@ For every PR and direct commit in the ledger:
 2. Describe the shipped user-visible behavior, compatibility change, performance effect, security impact, or developer-facing interface change.
 3. Mark internal chores, repository statistics, generated data, tests-only changes, and refactors with no observable effect as `omit`, with a concise reason.
 4. Detect follow-ups, partial fixes, reverts, and several PRs implementing one coherent outcome. Consolidate only when the combined wording remains accurate; retain every source PR/commit in the ledger.
-5. Compare every candidate semantically with the current `[Unreleased]` bullets. Mark existing coverage, duplicates, stale bullets, and claims not supported by the audited range.
+5. Compare every candidate semantically with the target version section, if it already exists. Mark existing coverage, duplicates, stale bullets, and claims not supported by the audited range. `[Unreleased]` should remain empty and is not the source of release coverage.
 
 Every ledger row must end as `include`, `covered`, `omit`, `reverted`, or `needs decision`. No source may disappear merely because it does not deserve its own bullet.
 
@@ -92,10 +93,13 @@ If any row needs a decision, ask for it before modifying the file.
 
 After user approval:
 
-1. Update only the top-level `## [Unreleased]` section. Do not create the numbered release section, change version links, tag, commit, push, or publish unless separately requested.
-2. Keep approved features/improvements before fixes and preserve intentional existing bullets.
-3. Recount the before/after bullets and verify that every removal or consolidation was approved.
-4. Run `git diff --check`, inspect the bounded changelog diff, and rerun the ledger against the same candidate SHA if the source range changed while drafting.
-5. Report the exact release tag, candidate SHA, PR/direct-commit counts, omitted sources, remaining decisions, and whether the changelog is ready for `verify-release`.
+1. Create or update `## [<version>] - YYYY-MM-DD` immediately below the empty `## [Unreleased]` section. Write approved bullets directly into that numbered section and leave `[Unreleased]` empty.
+2. Add or update the numbered release compare link using the latest published release as its base.
+3. Keep approved features/improvements before fixes and preserve intentional existing bullets.
+4. Recount the before/after bullets and verify that every removal or consolidation was approved.
+5. Run `git diff --check`, inspect the bounded changelog diff, and rerun the ledger against the same candidate SHA if the source range changed while drafting.
+6. Report the exact release tag, candidate SHA, PR/direct-commit counts, omitted sources, remaining decisions, and whether the changelog is ready for `verify-release`.
+
+Do not tag, commit, push, publish, or change Cargo package versions unless separately requested.
 
 Do not declare the changelog complete from a green diff alone: complete source reconciliation is the gate.

@@ -570,6 +570,40 @@ fn test_cli_regex_final_link_requires_managed_pcre2_project() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a final `--with-curl` link without a project fails with the same recovery
+/// style as PCRE2. The compiled program itself never calls a `curl_*` function — the
+/// explicit `--with-curl` flag is what forces `elephc_curl` into the plan here, exercising
+/// that override path directly rather than source-based detection — but planning it must
+/// still emit the `curl` native requirement and never fall back to a system `-lcurl`.
+#[test]
+fn test_cli_with_curl_final_link_requires_managed_curl_project() {
+    let dir = make_cli_test_dir("elephc_cli_curl_requires_native");
+    let cache = dir.join("native-cache-must-not-exist");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-curl")
+        .arg(&php_path)
+        .env("ELEPHC_NATIVE_CACHE", &cache)
+        .output()
+        .expect("failed to run --with-curl compilation");
+    assert!(!output.status.success(), "--with-curl link without a project must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("curl support requires managed native package curl"),
+        "unexpected missing-project diagnostic: {stderr}"
+    );
+    assert!(stderr.contains("project: not found"), "missing project context: {stderr}");
+    assert!(
+        stderr.contains("recovery: cd --") && stderr.contains("elephc native add curl"),
+        "missing copy-paste recovery command: {stderr}"
+    );
+    assert!(!cache.exists(), "failed compilation must not create the native cache");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--check` stops after type-checking and produces "Checked" output
 /// without emitting any assembly (.s), object (.o), or binary files.
 #[test]
@@ -1749,6 +1783,144 @@ fn test_cli_monitor_restores_a_coroutine_resumed_into_a_throw() {
         !graph.contains(&format!("{drive} -> {heavy}")),
         "the graph says `drive` calls `heavy`, which only holds while `body` is \
          still parked:\n{graph}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--live` works on every platform, because it asks the target it launched.
+///
+/// Deliberately NOT gated on macOS, which is the whole point of the test. The
+/// live view used to read its own child from the outside, through a tool that
+/// ships on macOS alone, and was refused everywhere else — for a program this
+/// process had started ITSELF and could simply have asked. It now hands the
+/// child a socketpair, exactly as the exact path always has, and the probe
+/// answers snapshots on it.
+///
+/// The fixture runs to a wall-clock DEADLINE rather than an iteration count. A
+/// count is a bet on the machine: calibrated here it gave five windows, and on a
+/// faster CI runner the program finished inside the second one, so the loop saw
+/// the child exit before it could redraw and the test failed for a reason that
+/// had nothing to do with what it measures. Six seconds against a one-second
+/// window leaves room on any machine, in both directions.
+///
+/// Three things are asserted, and the third is the one a reader would not think
+/// of. Windows advance, so the loop is really looping. A PHP function is named,
+/// so the answer carries symbolised frames rather than an empty table anyone
+/// could produce. And the program's own output survives while the profiler's
+/// does not: asking wakes the EXACT profiler too, which writes its table to
+/// stderr at exit, and forwarding that would print a raw dump under the live
+/// view as if the program had written it.
+#[test]
+fn test_cli_monitor_live_needs_no_external_sampler() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_live");
+    fs::write(
+        dir.join("hot.php"),
+        "<?php\n\
+         function spin(int $rounds): int { $n = 0; for ($i = 0; $i < $rounds; $i++) { $n = ($n + $i) % 1000003; } return $n; }\n\
+         function descend(int $depth, int $rounds): int {\n\
+         if ($depth <= 0) { return spin($rounds); }\n\
+         return descend($depth - 1, $rounds) % 1000003;\n\
+         }\n\
+         $t = 0;\n\
+         $deadline = microtime(true) + 6.0;\n\
+         while (microtime(true) < $deadline) { $t = ($t + descend(6, 400000)) % 1000003; }\n\
+         echo 'done', $t;\n",
+    )
+    .expect("failed to write the live fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "hot.php"])
+        .output()
+        .expect("failed to compile the live fixture");
+    assert!(
+        compile.status.success(),
+        "compile failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let watched = elephc_cli_command(&dir)
+        .args(["monitor", "./hot", "--live", "--duration", "1"])
+        .output()
+        .expect("failed to run elephc monitor --live");
+    let stdout = String::from_utf8_lossy(&watched.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&watched.stderr).to_string();
+    let report = format!("{stdout}{stderr}");
+
+    assert!(
+        report.contains("window 2"),
+        "the live loop produced no second window:\n{report}"
+    );
+    assert!(
+        report.contains("descend"),
+        "the live table named no PHP function, so the frames were not symbolised:\n{report}"
+    );
+    assert!(
+        report.contains("done"),
+        "the program's own output was swallowed:\n{report}"
+    );
+    for leaked in ["elephc-probe:", "elephc-instr:"] {
+        assert!(
+            !report.contains(leaked),
+            "raw profiler output reached the operator under the live view ({leaked}):\n{report}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--live` on a `.php` SOURCE, which is the way a user actually reaches it.
+///
+/// The live view asks the program it launched, so the program has to carry the
+/// probe — and the live path compiled the source with `--debug-info` instead of
+/// `--with-monitoring`, producing a binary with nothing listening. `monitor`
+/// then opened a channel, waited out every window for an ACK that could not
+/// come, and reported an empty table for a program running perfectly well.
+///
+/// Nothing caught it because the test above compiles the fixture by hand first
+/// and monitors the BINARY. That is a real path, but it is not the one the
+/// documentation puts first, and between them they left the common case
+/// uncovered. This runs `monitor hot.php --live` and nothing else.
+#[test]
+fn test_cli_monitor_live_compiles_the_source_with_the_probe() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_live_source");
+    fs::write(
+        dir.join("hot.php"),
+        "<?php\n\
+         function spin(int $rounds): int { $n = 0; for ($i = 0; $i < $rounds; $i++) { $n = ($n + $i) % 1000003; } return $n; }\n\
+         function descend(int $depth, int $rounds): int {\n\
+         if ($depth <= 0) { return spin($rounds); }\n\
+         return descend($depth - 1, $rounds) % 1000003;\n\
+         }\n\
+         $t = 0;\n\
+         $deadline = microtime(true) + 6.0;\n\
+         while (microtime(true) < $deadline) { $t = ($t + descend(6, 400000)) % 1000003; }\n\
+         echo 'done', $t;\n",
+    )
+    .expect("failed to write the live source fixture");
+
+    // No `--with-monitoring` step. That is the point of the test.
+    let watched = elephc_cli_command(&dir)
+        .args(["monitor", "hot.php", "--live", "--duration", "1"])
+        .output()
+        .expect("failed to run elephc monitor hot.php --live");
+    let stdout = String::from_utf8_lossy(&watched.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&watched.stderr).to_string();
+    let report = format!("{stdout}{stderr}");
+
+    assert!(
+        report.contains("descend"),
+        "the live table named no PHP function, so the source was compiled without the probe \
+         and the child had nothing to answer with:\n{report}"
+    );
+    assert!(
+        !report.contains("did not answer within the window"),
+        "the child never answered, which is what a binary compiled without the probe does:\n{report}"
+    );
+    assert!(
+        report.contains("done"),
+        "the program's own output was swallowed:\n{report}"
     );
 
     let _ = fs::remove_dir_all(&dir);

@@ -55,10 +55,10 @@ selection, toolchain overrides, and transactional behavior.
 
 | Command | Arguments and flags | Description |
 |---|---|---|
-| `monitor` | `<program\|source.php> [--html <file>] [--trace <file>] [--assert <expr>] [--assert-file <file>] [--save <file>] [--baseline <file>] [--out <file.speedscope.json>]` | Profile a program built with `--with-monitoring` (a `.php` source is built first): exact per-function wall time, allocations, retained objects, DB-driver wait, SQL queries and calls, rooted at `{main}`. File I/O is not measured. A service endpoint answers from the sampled CPU-time ring instead unless `--exact` requests one completed request. A binary without the capability is refused. |
+| `monitor` | `<program\|source.php> [--html <file>] [--trace <file>] [--assert <expr>] [--assert-file <file>] [--save <file>] [--baseline <file>] [--out <file.speedscope.json>]` | Profile a program built with `--with-monitoring` (a `.php` source is built first): exact per-function wall time, allocations, retained objects, DB-driver wait, SQL queries, outgoing network operations and network wait, plus calls, rooted at `{main}`. File I/O is not measured. A service endpoint answers from the sampled CPU-time ring instead unless `--exact` requests one completed request. A binary without the capability is refused. |
 | `monitor <address>` | `<host:port\|http://host\|https://host\|/path/to.sock> [--key <file>] [--out <file>] [--pprof <file>] [--dot <file>] [--html <file>]` | Profile a service already running. Sampled CPU time, allocation attribution and route tags by default; no blocked wall time or combined-build SQL/wait summary. `--exact` returns the measured table for the next completed request. Needs the build key. |
-| `monitor --attach` | `<pid> [--live] [--duration <seconds>]` | Monitor an already-running local process (and its worker children) instead of spawning one. Sampled, and macOS-only. |
-| `monitor --live` | `<program\|source.php> [--duration <seconds>] [--html <file>] [--serve <host:port>]` | Top-style table refreshed once per window. Sampled, and macOS-only. |
+| `monitor --attach` | `<pid> [--live] [--duration <seconds>]` | Monitor an already-running local process (and its worker children) instead of spawning one. Sampled, and reads the process from the outside, so the target must have been built with `--keep-symbols` and the OS must permit tracing it. |
+| `monitor --live` | `<program\|source.php> [--duration <seconds>] [--html <file>] [--serve <host:port>]` | Top-style table refreshed once per window. Sampled — it answers from the ring — but on every platform: it launches the program, so it asks over the same control channel the exact path uses rather than reading it from the outside. |
 | `monitor --stitch` | `<log> [<log>...] [--html <file>] [--otlp <endpoint>] [--prometheus <file>]` | Correlate per-request slices from several services into distributed traces, joined by W3C trace id; summarise them per service and route, and export them as OpenTelemetry spans or Prometheus metrics. |
 
 `elephc monitor` runs the program and renders what it measured: a per-function
@@ -82,12 +82,13 @@ completes, at that request's expense. A binary built without `--with-monitoring`
 is **refused**, with both remedies printed — there is no reduced fallback,
 because a degraded profile that looks like the real one is worse than none.
 
-| Capture | CPU / wall | Calls | Allocation | Queries / file I/O / wait | Routes |
+| Capture | CPU / wall | Calls | Allocation | Queries / network / file I/O / wait | Routes |
 |---|---|---|---|---|---|
-| launched default | exact wall; `wall - DB wait` is a derived remainder, not OS CPU | exact | exact plus exact retained | exact DB queries; no file-I/O metrics; exact DB wait | untagged |
+| launched default | exact wall; recorded waits are derived dimensions, not OS CPU | exact | exact plus exact retained | exact DB queries and curl operations; no file-I/O metrics; exact DB and network wait | untagged |
 | service default | sampled CPU; no blocked wall time | none | exact inter-sample deltas with sampled attribution; no retained | none in combined `--with-monitoring`; no file-I/O metrics | sampled stacks carry route tags |
-| service `--exact` / signed request | exact request wall; no separate OS CPU | exact | exact plus exact retained | exact DB queries; no file-I/O metrics; exact DB wait | exact request route/trace |
-| `--live` / `--attach` | external sampled CPU only | none | none | none | none |
+| service `--exact` / signed request | exact request wall; no separate OS CPU | exact | exact plus exact retained | exact DB queries and curl operations; no file-I/O metrics; exact DB and network wait | exact request route/trace |
+| launched `--live` | sampled CPU from the shared ring | none | none | none | request route tags for `--web`; otherwise untagged |
+| `--attach` | sampled CPU from outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | none | none | none | none |
 
 Reading a running service (`monitor <address>`) needs the build key: from
 `--key <file>`, the `ELEPHC_PROBE_KEY` hex environment variable, or a `.key`
@@ -126,12 +127,17 @@ bare-binary capture cannot, and the asymmetry reads as phantom deltas.
 Sampling noise on identical runs measures around ±0.3 points at ~1,500
 samples; thresholds of a few points are well clear of it.
 
-`--live` and `--attach` read a process from the **outside** with `/usr/bin/sample`
-— the only way to look at a program already running under someone else's control,
-with nothing built into it. Their numbers are sampled shares, they cannot see
-time spent blocked on I/O, and they need macOS. On Linux, or for a process that
-does carry the capability, use `monitor <address>`: it answers from the process's
-own CPU-time sample ring, which also cannot see blocked wall time. In a combined
+`--live` launches its target, so it can hand it a socketpair and **ask**: it needs
+no external tool and works wherever elephc does. `--attach` is handed a pid that
+is already running under someone else's control, with no channel in, so it reads
+the process from the **outside** — `/usr/bin/sample` on macOS, and on Linux
+elephc does it itself, stopping each thread with `ptrace` and walking its frame
+chain. Reading from the outside also needs the target's symbol table
+(`--keep-symbols`) and the kernel's permission (`yama/ptrace_scope`, or
+`CAP_SYS_PTRACE` in a container). Both report sampled shares and cannot see time
+spent blocked on I/O. For a process that carries the capability, use
+`monitor <address>`: it answers from the process's own CPU-time sample ring,
+which also cannot see blocked wall time. In a combined
 `--with-monitoring` build that default answer has no SQL/wait summary; `--exact`
 returns the measured per-function table and DB-driver wait for one completed
 request.
@@ -140,12 +146,17 @@ request.
 (`--duration`, default 3s in live mode): the current window's shares with
 trend arrows against the previous window, the cumulative share alongside, and
 a final cumulative table on exit. `--attach <pid>` monitors a process that is
-already running — Ctrl-C stops monitoring and leaves it running. In both
-modes the target's direct children are discovered each window and merged, so
-a `--web` prefork server is measured across all its workers, not just the
-master. Live mode skips inlined-frame recovery to keep the refresh light. When
-the sampler refuses (it will not read a process it did not spawn without
-elevation), the command says so rather than reporting an empty capture.
+already running — Ctrl-C stops monitoring and leaves it running. `--attach`
+discovers the target's direct children each window and merges them, so a
+`--web` prefork server is measured across all its workers, not just the master.
+A launched `--live` asks the program it started, over the channel it handed it.
+A `--web` binary fills one shared ring from its workers, so the answer includes
+worker samples and request route tags (`METHOD /path`), as the endpoint does.
+The header counts discovered processes, which can differ from the ring's sample
+contributors. Live mode skips inlined-frame recovery to keep the refresh light.
+For `--attach`, an external-sampling permission refusal is reported as an error.
+A Linux tracee that cannot stop within the deadline remains attached; even an
+empty live window retries it on the next redraw.
 
 When the target is a `.php` source and its `.dSYM` bundle is present, calls
 erased by the inliner reappear as virtual `name (inlined)` frames: the inliner
@@ -155,11 +166,12 @@ call boundary. This recovery is best-effort and silently degrades to plain
 frames without the source or the dSYM.
 
 What the capability buys is **measuring** rather than sampling: exact numbers,
-six dimensions, and true edge counts instead of statistical shares.
+eight dimensions, and true edge counts instead of statistical shares.
 `--assert '<metric>:<function><op><value>'` gates the run — for example
 `--assert 'queries:load_price<=1'` or `--assert 'self_ms:*<250'`. Metrics are
-`calls`, `allocs`, `retained`, `queries`, `self_ms`, `incl_ms`, `wait_ms` and
-`time_pct`; the operator is one of `<=`, `>=`, `==`, `<`, `>`; `*` as the
+`calls`, `allocs`, `retained`, `queries`, `self_ms`, `incl_ms`, `wait_ms`,
+`network`, `network_wait_ms` and `time_pct`; the operator is one of `<=`, `>=`,
+`==`, `<`, `>`; `*` as the
 function name means the whole run. Any failure exits 2. Repeat the flag for several budgets. A project's
 standing budget lives in a `.elephc` file found by walking up from the source,
 so `--assert` is for one-off checks and the file is for the ones you keep; both
@@ -206,7 +218,8 @@ service:
 format for a textfile collector — a file rather than an endpoint, because
 `monitor` runs and exits and leaves nothing to scrape. Percentiles are exposed as
 a `summary`, not a histogram: we hold exact per-request values, and buckets would
-invent a resolution the capture does not have.
+invent a resolution the capture does not have. It also writes mean network
+operations and network-wait seconds per request as gauges.
 
 `--serve <addr>` serves the HTML page over HTTP instead of writing it to disk,
 rewriting it in place as new captures arrive — the page updates without a
@@ -220,21 +233,22 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
-| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library. |
+| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. |
 | `--emit-asm` | — | off | Write generated assembly instead of a binary. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
-| `--check` | — | off | Run front-end checks only; write nothing. |
+| `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
 | `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. See [Strict locals mode](#strict-locals-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--keep-symbols` | — | off | Keep the symbol table in the linked executable. It is stripped by default; `--debug-info` also implies keeping it. See [Symbol stripping](#symbol-stripping). |
-| `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | detected, else `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. Usually unnecessary — see [Where the profile comes from](#where-the-profile-comes-from) and [Profile dependence](#profile-dependence). |
+| `--php-version VERSION` | `8.0` through `8.6` | detected, else `8.5` | Select a PHP compatibility profile for version-dependent behavior. Automatic project detection chooses among the maintained stable profiles `8.2` through `8.5`; historical `8.0`/`8.1` and preview `8.6` remain explicitly selectable. Sessions use the profile for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. Usually unnecessary; see [Where the profile comes from](#where-the-profile-comes-from) and [Profile dependence](#profile-dependence). |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
 | `--web-isolation MODE` / `--web-isolation=MODE` | `worker`, `pool`, `request` | `worker` | Bake the web handler process model into the produced binary. Requires `--web`; plain `--web` is exactly `worker`. |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
-be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
+be combined with `--check`, either library emit kind (`cdylib` or `staticlib`),
+`--emit-asm`, or `--emit-ir`. See
 [Output formats and diagnostics](output-and-diagnostics.md).
 
 ### Where the profile comes from
@@ -414,10 +428,12 @@ status and headers with `http_response_code()` and `header()`. See
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. |
+| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. iOS is ARM64-only and emits libraries for an app host, not standalone app executables. |
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
-spellings.
+spellings. For `ios-arm64` and `ios-sim-arm64`, use `--emit staticlib` (normally)
+or `--emit cdylib`; `--emit executable` is rejected because it would be an
+Elephc CLI process, not a signed iOS application bundle.
 
 ## Optimization and code generation
 
@@ -437,7 +453,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `phar`, `tz`, `image`, `eval`, `regex`, `mysqli`, `web` | — | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic when static detection cannot see a call. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `eval`, `regex`, `curl`, `mysqli`, `web` | — | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic when static detection cannot see a call. `--with-iconv` and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -737,8 +753,10 @@ ini_get_all()['opcache.save_comments'];                              // '0'
 
 A value that does not parse for the directive's type is **ignored** — the
 compile-time value stays, on both surfaces — rather than corrupting the report.
-An environment variable set to the empty string is treated as unset, because
-`getenv()` cannot distinguish the two.
+An environment variable set to the empty string is treated as unset. `getenv()`
+does distinguish the two — it answers `false` for a name that is not set and `""`
+for one set to nothing — but the override reads its value through a string cast,
+and both arrive as `""` on the other side of it.
 
 **Which directives are overridable at run time.** Only the ones elephc merely
 *reports*. Ten `opcache.*` directives are consumed at compile time to bake code
@@ -775,7 +793,16 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
 | `--help` / `-h` | — | off | Print the compiler help, including the current elephc version, and exit successfully. |
 | `--version` / `-V` | — | off | Print the elephc compiler version and exit successfully. |
+| `--print-capabilities` | — | off | List the optional capabilities **this** binary accepts and the bridge archives each one needs, then exit successfully. One tab-separated line per capability: `<kind>\t<name>[\t<archive>...]`, where `kind` is `bridge` for a capability backed by one archive of its own and `capability` for one that is not — because it needs no archive (`regex`, whose provider is a managed native package) or because it is built out of several (`monitoring`). Every field is derived from the compiler's own bridge table, so this is the authoritative answer for the binary you are holding, not for the version the documentation was written against. A bridge archive is resolved from the directory the binary lives in or its sibling `lib/`, so `scripts/verify-release-artifact.sh` uses this to check a packaged tarball actually carries everything the compiler inside it advertises. |
 | `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
+
+Exact monitoring rows also append inclusive/exclusive network operations and
+network wait. Curl reports those dimensions through network-specific runtime
+slots, separate from PDO query and wait counters, and propagates the active W3C
+`traceparent` unless the program supplied that header explicitly. Transfer
+operations exclude connection upkeep, and network wait excludes PHP callback
+execution nested inside `curl_exec()`. The exclusive network dimensions are
+available to `--assert` as `network` and `network_wait_ms`.
 
 See [Output formats and diagnostics](output-and-diagnostics.md).
 

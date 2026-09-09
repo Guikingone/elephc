@@ -7,7 +7,8 @@
 //! - `super::tests` for cache-key and integrity regressions.
 //!
 //! Key details:
-//! - Every runtime-emission feature and PIC mode participates in the source-identity hash.
+//! - Every runtime-emission feature, relocation mode, and library-boundary mode participates in the
+//!   source-identity hash.
 //! - Published objects are accepted only when their FNV-1a checksum matches the sidecar.
 
 use std::fs;
@@ -31,6 +32,7 @@ pub(super) fn runtime_cache_file_name(heap_size: usize, target: Target, runtime_
 /// Keeping this separate makes cache-key invariants testable without assembling
 /// an object. Production passes Cargo's source-derived build identity, so any
 /// runtime emitter change invalidates the entry even if package versions match.
+#[cfg(test)]
 pub(super) fn runtime_cache_key_with_build_identity(
     heap_size: usize,
     target: Target,
@@ -38,11 +40,32 @@ pub(super) fn runtime_cache_key_with_build_identity(
     pic: bool,
     build_identity: &[u8],
 ) -> u64 {
+    runtime_cache_key_with_build_identity_and_boundary(
+        heap_size,
+        target,
+        features,
+        pic,
+        pic,
+        build_identity,
+    )
+}
+
+/// Extends the runtime cache identity with the recoverable-library boundary mode.
+pub(super) fn runtime_cache_key_with_build_identity_and_boundary(
+    heap_size: usize,
+    target: Target,
+    features: RuntimeFeatures,
+    pic: bool,
+    library_boundary: bool,
+    build_identity: &[u8],
+) -> u64 {
     // The feature bits come from `RuntimeFeatures` itself rather than being re-packed here: it
     // owns the layout, and a feature that gates emission but is missing from this key would name
-    // two different runtime objects with one key. `pic` rides in the HIGH bit precisely so that
-    // appending a feature never shifts it.
-    let feature_bits = features.cache_key_bits() | ((pic as u64) << 63);
+    // two different runtime objects with one key. Relocation and boundary modes
+    // ride in the high bits so appending a feature never shifts them.
+    let feature_bits = features.cache_key_bits()
+        | ((library_boundary as u64) << 62)
+        | ((pic as u64) << 63);
     let mut identity = format!("{}:{heap_size}:{feature_bits}:", target.as_str()).into_bytes();
     identity.extend_from_slice(build_identity);
     runtime_bytes_hash(&identity)

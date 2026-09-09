@@ -14,7 +14,7 @@ This skill is an explicit exception to the normal implementation workflow in `AG
 
 ### 0. Release changelog prerequisite
 
-Run `prepare-release-changelog` before beginning the remaining release checks. Read and follow `../prepare-release-changelog/SKILL.md`; require its PR/direct-commit ledger to cover the exact candidate head with zero unresolved commits. If the audit has not completed, if the candidate SHA changed afterward, or if approved `[Unreleased]` edits remain unapplied, stop and complete that skill first.
+Run `prepare-release-changelog` before beginning the remaining release checks. Read and follow `../prepare-release-changelog/SKILL.md`; require its PR/direct-commit ledger to cover the exact candidate head with zero unresolved commits. If the audit has not completed, if the candidate SHA changed afterward, or if approved edits to the numbered candidate release section remain unapplied, stop and complete that skill first. `[Unreleased]` must remain empty.
 
 ### 1. README.md Completeness
 
@@ -48,7 +48,7 @@ Read the current version section in `ROADMAP.md`:
 
 - For every `[x]` item: verify the feature actually exists (grep for the function name, check for the AST node, etc.).
 - For every `[ ]` item: confirm it is genuinely not implemented.
-- Report any implemented feature that is missing from the roadmap entirely.
+- Report any notable implemented feature that is missing from the current version section. If the user asks to fix verification findings, add the missing work there as `[x]`; release preparation may record delivered work that was not planned earlier.
 
 ### 4. Test Coverage
 

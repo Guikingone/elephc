@@ -133,6 +133,7 @@ pub fn emit_buffer_new(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_buffer_alloc_size_msg");
     emitter.instruction(&format!("mov x2, #{}", BUFFER_ALLOC_SIZE_MSG.len()));  // pass the exact buffer-length diagnostic byte count
     emitter.syscall(4);
+    abi::emit_cdylib_exit_escape(emitter);
     emitter.instruction("mov x0, #1");                                          // exit code 1
     emitter.syscall(1);
 }
@@ -249,6 +250,7 @@ fn emit_buffer_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov edx, {}", BUFFER_ALLOC_SIZE_MSG.len()));  // pass the exact buffer-length diagnostic byte count
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // print the fatal buffer-length message to stderr
+    abi::emit_cdylib_exit_escape(emitter);
     emitter.instruction("mov edi, 1");                                          // exit code 1 for an unrepresentable buffer length
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // terminate the process after reporting the buffer-length failure
