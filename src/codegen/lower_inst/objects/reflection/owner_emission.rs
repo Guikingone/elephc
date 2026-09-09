@@ -41,13 +41,15 @@ pub(super) fn emit_reflection_owner_object(
         if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
         }
-        if is_reflection_class_owner {
+        if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_owner_string_array_property_by_name(
                 ctx,
                 class_name,
                 "__interface_names",
                 &metadata.interface_names,
             )?;
+        }
+        if is_reflection_class_owner {
             emit_reflection_class_array_property_by_name(
                 ctx,
                 class_name,
@@ -474,4 +476,3 @@ pub(super) fn reflection_name_parts(reflected_name: &str) -> (&str, &str) {
         None => ("", reflected_name),
     }
 }
-

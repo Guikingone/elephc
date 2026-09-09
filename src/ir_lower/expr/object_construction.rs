@@ -49,6 +49,13 @@ pub(super) fn lower_new_object(
             return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
         }
     }
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionenum" {
+        if let Some(reflected_class) = reflection_class_reflected_class_from_args(ctx, args) {
+            if !ctx.enums.contains_key(&reflected_class) {
+                return lower_reflection_enum_non_enum_constructor(ctx, &reflected_class, expr);
+            }
+        }
+    }
     if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionparameter" {
         if let Some(operands) = lower_reflection_parameter_constructor_operands(ctx, args) {
             let php_type = PhpType::Object(class_name.as_str().to_string());
@@ -80,6 +87,28 @@ pub(super) fn lower_new_object(
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());
     emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span)
+}
+
+/// Lowers a known non-enum `ReflectionEnum` target to PHP's catchable reflection error.
+fn lower_reflection_enum_non_enum_constructor(
+    ctx: &mut LoweringContext<'_, '_>,
+    reflected_class: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let message = format!("Class \"{}\" is not an enum", reflected_class.trim_start_matches('\\'));
+    let exception = Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("ReflectionException"),
+            args: vec![Expr::new(ExprKind::StringLiteral(message), expr.span)],
+        },
+        expr.span,
+    );
+    let placeholder = lower_null(ctx, expr);
+    let exception = lower_expr(ctx, &exception);
+    ctx.builder.terminate(Terminator::Throw {
+        value: exception.value,
+    });
+    placeholder
 }
 
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.

@@ -424,6 +424,7 @@ pub(super) fn reflection_enum_inherited_method_is_supported(method_name: &str) -
             | "getname"
             | "getshortname"
             | "getnamespacename"
+            | "getinterfacenames"
             | "innamespace"
             | "isfinal"
             | "isabstract"

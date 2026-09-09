@@ -153,6 +153,55 @@ echo "|", is_subclass_of("Dom\\XMLDocument", "Dom\\Document") ? "yes" : "no", "\
     );
 }
 
+/// Verifies ReflectionEnum exposes DOM enum metadata, case reflectors, and catchable failures.
+#[test]
+fn dom_reflection_enum_metadata_and_errors_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+function reflection_error_type(Closure $probe): string {
+    try {
+        $probe();
+        return "none";
+    } catch (Throwable $error) {
+        return get_class($error);
+    }
+}
+
+$enum = new ReflectionEnum("Dom\\AdjacentPosition");
+echo $enum->getName(), "|", ($enum->isEnum() ? "enum" : "not-enum"), "|";
+echo $enum->isBacked() ? "backed" : "unit";
+echo "|", $enum->getBackingType()->getName(), "|";
+echo $enum->isInternal() ? "internal" : "user";
+echo "|", $enum->isFinal() ? "final" : "not-final", "|";
+echo $enum->getModifiers(), "|", $enum->getExtensionName(), "|";
+echo $enum->getExtension()->getName(), "|", implode(",", $enum->getInterfaceNames()), "\n";
+
+foreach ($enum->getCases() as $case) {
+    echo get_class($case), ":", $case->getName(), ":", $case->getBackingValue(), ":";
+    echo get_class($case->getEnum()), ":";
+    echo $case->isEnumCase() ? "case" : "not-case";
+    echo ":", $case->isPublic() ? "public" : "not-public";
+    echo ":", $case->isFinal() ? "final" : "not-final";
+    echo ":", $case->getModifiers(), "\n";
+}
+
+echo reflection_error_type(fn() => new ReflectionEnum("Dom\\Document")), "\n";
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "Dom\\AdjacentPosition|enum|backed|string|internal|not-final|0|dom|dom|BackedEnum,UnitEnum\n",
+            "ReflectionEnumBackedCase:BeforeBegin:beforebegin:ReflectionEnum:case:public:not-final:1\n",
+            "ReflectionEnumBackedCase:AfterBegin:afterbegin:ReflectionEnum:case:public:not-final:1\n",
+            "ReflectionEnumBackedCase:BeforeEnd:beforeend:ReflectionEnum:case:public:not-final:1\n",
+            "ReflectionEnumBackedCase:AfterEnd:afterend:ReflectionEnum:case:public:not-final:1\n",
+            "ReflectionException\n",
+        ),
+    );
+}
+
 /// Verifies every public DOM/libxml/SimpleXML function family retains names, types, and named arguments.
 #[test]
 fn dom_reflection_function_signatures_and_registration_match_php_8_5_8() {
