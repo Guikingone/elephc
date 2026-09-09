@@ -471,6 +471,11 @@ Legend:
   `Class::__debugInfo(): Return type must be ?array when declared`. The existing
   TDD covers the exact error. Visibility and deeper-descendant diagnostics remain
   separate open cases, and focused execution remains under the disk gate.
+  `94a70ad2b4` closes the direct-`SimpleXMLElement` visibility case: protected
+  or private `__debugInfo(): ?array` overrides emit PHP 8.5.8's exact fatal
+  access-level error, while public `?array` remains accepted. Deeper descendants
+  remain a separate open diagnostic case; focused execution remains under the
+  disk gate.
   `09c20c07c9` adds `ReflectionFunction::getExtensionName()` and
   `getExtension()` for all 13 DOM/libxml/SimpleXML functions via the immutable
   extension registry, including case-insensitive lookup and the runtime
