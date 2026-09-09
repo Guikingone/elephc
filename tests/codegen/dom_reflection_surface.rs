@@ -309,6 +309,40 @@ foreach (["DOMDocument", "Dom\\XMLDocument", "LibXMLError", "SimpleXMLElement"] 
     );
 }
 
+/// Verifies `get_extension_funcs()` resolves runtime strings and non-strict scalar coercion
+/// through PHP's case-insensitive DOM bridge registry while preserving unknown `false`.
+#[test]
+fn dynamic_dom_extension_function_registry_matches_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+function extension_functions(string $extension): string {
+    $functions = get_extension_funcs($extension);
+    if ($functions === false) {
+        return "false";
+    }
+    sort($functions);
+    return implode(",", $functions);
+}
+
+foreach (["DOM", "LiBxMl", "simpleXML", "not-an-extension"] as $extension) {
+    echo $extension, "|", extension_functions($extension), "\n";
+}
+echo "int|", get_extension_funcs(42) === false ? "false" : "bad", "\n";
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "DOM|Dom\\import_simplexml,dom_import_simplexml\n",
+            "LiBxMl|libxml_clear_errors,libxml_disable_entity_loader,libxml_get_errors,libxml_get_external_entity_loader,libxml_get_last_error,libxml_set_external_entity_loader,libxml_set_streams_context,libxml_use_internal_errors\n",
+            "simpleXML|simplexml_import_dom,simplexml_load_file,simplexml_load_string\n",
+            "not-an-extension|false\n",
+            "int|false\n",
+        ),
+    );
+}
+
 /// Verifies arity, unknown named parameters, and type errors remain catchable PHP runtime exceptions.
 #[test]
 fn dom_public_surface_argument_errors_match_php_8_5_8() {

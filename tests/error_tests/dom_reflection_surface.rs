@@ -56,3 +56,12 @@ fn dom_reflection_surface_rejects_missing_required_function_argument() {
         "libxml_set_external_entity_loader() expects exactly 1 argument, 0 given",
     );
 }
+
+/// Verifies `get_extension_funcs()` rejects the array shape that PHP 8.5.8 raises as a TypeError.
+#[test]
+fn dom_reflection_surface_rejects_non_string_extension_function_registry_name() {
+    expect_error(
+        "<?php get_extension_funcs([]);",
+        "get_extension_funcs() first argument must be a string in AOT mode",
+    );
+}
