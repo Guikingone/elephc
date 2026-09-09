@@ -452,6 +452,11 @@ Legend:
   `isInternal()` is deliberately absent because PHP does not expose that method
   on ReflectionExtension. These TDD cases await focused codegen execution under
   the same disk gate.
+  `81b69c096f` adds `ReflectionExtension::getDependencies()` from the PHP 8.5.8
+  oracle: DOM (`libxml`/`lexbor` required, `domxml` conflicts), libxml
+  (`standard` required), and SimpleXML (`libxml`/`spl` required), preserving
+  ordered string-key/string-value maps. Its focused codegen execution remains
+  under the disk gate.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
