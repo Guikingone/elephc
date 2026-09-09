@@ -422,6 +422,33 @@ try {
     );
 }
 
+/// Verifies `ReflectionExtension`'s DOM-family metadata predicates and versions retain the
+/// PHP 8.5.8 value and scalar-type contracts without inventing `isInternal()`.
+#[test]
+fn reflection_extension_metadata_methods_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+foreach (["dom", "libxml", "SimpleXML"] as $extension) {
+    $reflection = new ReflectionExtension($extension);
+    echo $reflection->getName(), "|";
+    echo gettype($reflection->isPersistent()), ":", $reflection->isPersistent() ? "true" : "false", "|";
+    echo gettype($reflection->isTemporary()), ":", $reflection->isTemporary() ? "true" : "false", "|";
+    echo gettype($reflection->getVersion()), ":", $reflection->getVersion(), "|";
+    echo method_exists($reflection, "isInternal") ? "isInternal" : "no-isInternal", "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "dom|boolean:true|boolean:false|string:20031129|no-isInternal\n",
+            "libxml|boolean:true|boolean:false|string:8.5.8|no-isInternal\n",
+            "SimpleXML|boolean:true|boolean:false|string:8.5.8|no-isInternal\n",
+        ),
+    );
+}
+
 /// Verifies `ReflectionExtension` canonicalizes known names and reports literal and runtime
 /// unknown extensions through PHP's catchable, name-bearing `ReflectionException`.
 #[test]

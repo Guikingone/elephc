@@ -39,6 +39,28 @@ pub(super) fn emit_reflection_owner_object(
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
         if class_name == "ReflectionExtension" {
+            let extension = crate::internal_extensions::registry()
+                .extension(reflected_name)
+                .ok_or_else(|| {
+                    CodegenIrError::unsupported(format!(
+                        "ReflectionExtension metadata for unknown extension {}",
+                        reflected_name
+                    ))
+                })?;
+            let version = extension.version.as_deref().ok_or_else(|| {
+                CodegenIrError::unsupported(format!(
+                    "ReflectionExtension::getVersion has no version for {}",
+                    reflected_name
+                ))
+            })?;
+            emit_reflection_owner_string_property_by_name(
+                ctx,
+                class_name,
+                "__version",
+                version,
+            )?;
+            emit_reflection_owner_bool_property(ctx, class_name, "__is_persistent", true)?;
+            emit_reflection_owner_bool_property(ctx, class_name, "__is_temporary", false)?;
             emit_reflection_owner_string_array_property_by_name(
                 ctx,
                 class_name,

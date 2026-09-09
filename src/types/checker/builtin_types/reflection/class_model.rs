@@ -428,6 +428,24 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
                 Some(mixed_type()),
                 empty_array(),
             ),
+            builtin_property(
+                "__version",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__is_persistent",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_temporary",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                false_bool(),
+            ),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
@@ -449,6 +467,9 @@ pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
             ),
             builtin_reflection_class_mixed_method("getConstants", "__constants"),
             builtin_reflection_class_mixed_method("getINIEntries", "__ini_entries"),
+            builtin_reflection_class_string_method("getVersion", "__version"),
+            builtin_reflection_class_bool_method("isPersistent", "__is_persistent"),
+            builtin_reflection_class_bool_method("isTemporary", "__is_temporary"),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
