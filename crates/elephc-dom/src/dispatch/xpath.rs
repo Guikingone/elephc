@@ -687,9 +687,6 @@ pub(super) fn finish_evaluation(
             9,
             b"The namespace axis is not well-defined in the living DOM specification. Use Dom\\Element::getInScopeNamespaces() or Dom\\Element::getDescendantNamespaces() instead.",
         ),
-        5 => DispatchResult::error(
-            b"Legacy XPath namespace-node results are not implemented",
-        ),
         6 => return Err(()),
         7 => DispatchResult::error(&outcome.callback_error),
         8 => DispatchResult::type_error(&outcome.callback_error),

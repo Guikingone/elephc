@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Cases pin namespaces, scalar/node-set semantics, callback reentrancy, exceptions, clone families, and contexts.
-//! - The ignored legacy namespace-axis case is the explicit TDD marker for the unsupported result wrapper path.
+//! - The legacy namespace-axis case verifies the standalone namespace-node wrapper path.
 
 use crate::support::{compile_and_run_capture, compile_and_run_with_heap_debug};
 
@@ -137,11 +137,8 @@ try {
     }]);
 }
 
-/// Documents the currently unsupported legacy namespace-node result materialization from PHP 8.5.8.
-///
-/// This test is intentionally red and ignored until legacy XPath namespace-axis results are implemented.
+/// Verifies legacy XPath namespace-axis results materialize PHP 8.5.8 namespace-node wrappers.
 #[test]
-#[ignore = "TDD red: Legacy XPath namespace-node results are not implemented"]
 fn legacy_xpath_namespace_node_results_match_php_8_5_8() {
     assert_xpath_cases(&[XPathCase {
         id: "legacy_xpath_namespace_axis_returns_namespace_node_wrappers",
