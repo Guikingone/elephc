@@ -462,6 +462,10 @@ Legend:
   classes, including aliases and internal/extension metadata. `Dom\AdjacentPosition`
   correctly materializes as `ReflectionEnum`; focused execution remains under
   the disk gate.
+  `4e4566ecc7` adds `ReflectionExtension::info()` with PHP 8.5.8 exact
+  DOM/libxml/SimpleXML stdout blocks, a `null` return, and a runtime catchable
+  exact `ArgumentCountError` before output for surplus arguments. Its focused
+  codegen execution remains under the disk gate.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
