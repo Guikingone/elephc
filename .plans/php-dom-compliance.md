@@ -382,9 +382,12 @@ Legend:
   `DOMNameSpaceNode` values, and the pinned oracle
   `/private/tmp/php-dom-oracle-build-8.5.8/sapi/cli/php` matches it exactly.
   The obsolete dispatch refusal was removed in `539f1f0a4d`; Elephc's focused
-  codegen test remains pending until disk space permits Cargo. SimpleXMLElement
-  serialization denial remains uncovered and requires its own oracle-pinned
-  red test before production correction.
+  codegen test remains pending until disk space permits Cargo. The
+  SimpleXMLElement serialization-denial matrix is now oracle-pinned in
+  `890e0d15e7`: base/child, subclass/child, nested array, and nested `stdClass`
+  cases all require `Exception`, code `0`, and the effective-class message from
+  PHP 8.5.8. It is test-only because no Elephc divergence has been demonstrated;
+  its focused codegen execution remains pending under the disk gate.
   The coverage-gate TDD tranche now has twelve Python contract tests covering
   all of the above inventory/provenance/orphan/target rules. Its first deliberate
   red run completed in 1.042 seconds with 12 tests and 15 failed assertions,
