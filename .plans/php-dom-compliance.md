@@ -466,6 +466,11 @@ Legend:
   DOM/libxml/SimpleXML stdout blocks, a `null` return, and a runtime catchable
   exact `ArgumentCountError` before output for surplus arguments. Its focused
   codegen execution remains under the disk gate.
+  `5fcb437fae` closes the direct-`SimpleXMLElement` subclass diagnostic for an
+  incompatible `__debugInfo` return: PHP 8.5.8 requires
+  `Class::__debugInfo(): Return type must be ?array when declared`. The existing
+  TDD covers the exact error. Visibility and deeper-descendant diagnostics remain
+  separate open cases, and focused execution remains under the disk gate.
   `09c20c07c9` adds `ReflectionFunction::getExtensionName()` and
   `getExtension()` for all 13 DOM/libxml/SimpleXML functions via the immutable
   extension registry, including case-insensitive lookup and the runtime
