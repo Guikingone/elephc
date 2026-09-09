@@ -18,14 +18,23 @@ pub(super) fn reflection_function_metadata(
         return Ok(empty_reflection_metadata());
     };
     let function_name = const_required_string_operand(ctx, function_operand, "ReflectionFunction")?;
-    let Some(function) = ctx.function_by_name(&function_name) else {
-        if let Some((builtin_name, signature)) =
-            reflection_builtin_function_signature(&function_name)
-        {
-            return reflection_builtin_function_metadata(ctx, &builtin_name, &signature);
-        }
-        return Ok(empty_reflection_metadata());
-    };
+    if ctx.function_by_name(&function_name).is_some() {
+        return reflection_registered_function_metadata(ctx, &function_name);
+    }
+    if let Some((builtin_name, signature)) = reflection_builtin_function_signature(&function_name) {
+        return reflection_builtin_function_metadata(ctx, &builtin_name, &signature);
+    }
+    Ok(empty_reflection_metadata())
+}
+
+/// Builds metadata for a declared compiler function while preserving its PHP-visible case.
+pub(super) fn reflection_registered_function_metadata(
+    ctx: &FunctionContext<'_>,
+    function_name: &str,
+) -> Result<ReflectionOwnerMetadata> {
+    let function = ctx
+        .function_by_name(function_name)
+        .ok_or_else(|| CodegenIrError::missing_entry("function", 0))?;
     let Some(signature) = function.signature.as_ref() else {
         return Ok(empty_reflection_metadata());
     };
@@ -213,4 +222,3 @@ pub(super) fn reflection_method_owner_metadata(
         member_flags: member.flags,
     }
 }
-

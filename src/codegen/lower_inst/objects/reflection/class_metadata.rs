@@ -59,6 +59,29 @@ pub(super) fn reflection_extension_metadata_for_name(name: &str) -> Result<Refle
     Ok(metadata)
 }
 
+/// Returns PHP 8.5.8's ordered DOM-family function registry for one extension.
+pub(super) fn reflection_extension_function_names(name: &str) -> Option<&'static [&'static str]> {
+    match php_symbol_key(name).as_str() {
+        "dom" => Some(&["dom_import_simplexml", "Dom\\import_simplexml"]),
+        "libxml" => Some(&[
+            "libxml_set_streams_context",
+            "libxml_use_internal_errors",
+            "libxml_get_last_error",
+            "libxml_get_errors",
+            "libxml_clear_errors",
+            "libxml_disable_entity_loader",
+            "libxml_set_external_entity_loader",
+            "libxml_get_external_entity_loader",
+        ]),
+        "simplexml" => Some(&[
+            "simplexml_load_file",
+            "simplexml_load_string",
+            "simplexml_import_dom",
+        ]),
+        _ => None,
+    }
+}
+
 /// Maps the bounded DOM bridge classes to their PHP extension names.
 pub(super) fn reflection_extension_name_for_class(class_name: &str) -> Option<&'static str> {
     if class_name.eq_ignore_ascii_case("LibXMLError") {

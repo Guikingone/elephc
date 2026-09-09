@@ -309,6 +309,49 @@ foreach (["DOMDocument", "Dom\\XMLDocument", "LibXMLError", "SimpleXMLElement"] 
     );
 }
 
+/// Verifies `ReflectionExtension::getFunctions()` preserves PHP 8.5.8's ordered
+/// associative registry of internal `ReflectionFunction` instances.
+#[test]
+fn reflection_extension_functions_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+foreach (["dom", "libxml", "SimpleXML"] as $extension) {
+    $reflection = new ReflectionExtension($extension);
+    $functions = $reflection->getFunctions();
+    echo "extension|", $reflection->getName(), "|", count($functions), "\n";
+    foreach ($functions as $key => $function) {
+        echo "function|", $key, "|", get_class($function), "|";
+        echo $function->getName(), "|", $function->getExtensionName(), "|";
+        echo $function->isInternal() ? "internal" : "user", "|";
+        echo $function->isUserDefined() ? "user" : "internal", "\n";
+    }
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "extension|dom|2\n",
+            "function|dom_import_simplexml|ReflectionFunction|dom_import_simplexml|dom|internal|internal\n",
+            "function|Dom\\import_simplexml|ReflectionFunction|Dom\\import_simplexml|dom|internal|internal\n",
+            "extension|libxml|8\n",
+            "function|libxml_set_streams_context|ReflectionFunction|libxml_set_streams_context|libxml|internal|internal\n",
+            "function|libxml_use_internal_errors|ReflectionFunction|libxml_use_internal_errors|libxml|internal|internal\n",
+            "function|libxml_get_last_error|ReflectionFunction|libxml_get_last_error|libxml|internal|internal\n",
+            "function|libxml_get_errors|ReflectionFunction|libxml_get_errors|libxml|internal|internal\n",
+            "function|libxml_clear_errors|ReflectionFunction|libxml_clear_errors|libxml|internal|internal\n",
+            "function|libxml_disable_entity_loader|ReflectionFunction|libxml_disable_entity_loader|libxml|internal|internal\n",
+            "function|libxml_set_external_entity_loader|ReflectionFunction|libxml_set_external_entity_loader|libxml|internal|internal\n",
+            "function|libxml_get_external_entity_loader|ReflectionFunction|libxml_get_external_entity_loader|libxml|internal|internal\n",
+            "extension|SimpleXML|3\n",
+            "function|simplexml_load_file|ReflectionFunction|simplexml_load_file|SimpleXML|internal|internal\n",
+            "function|simplexml_load_string|ReflectionFunction|simplexml_load_string|SimpleXML|internal|internal\n",
+            "function|simplexml_import_dom|ReflectionFunction|simplexml_import_dom|SimpleXML|internal|internal\n",
+        ),
+    );
+}
+
 /// Verifies `ReflectionExtension` canonicalizes known DOM-family names and throws PHP's
 /// catchable `ReflectionException` for an unknown extension.
 #[test]

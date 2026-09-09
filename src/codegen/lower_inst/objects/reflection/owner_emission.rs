@@ -45,6 +45,12 @@ pub(super) fn emit_reflection_owner_object(
                 "__class_names",
                 &metadata.interface_names,
             )?;
+            emit_reflection_extension_function_array_property_by_name(
+                ctx,
+                class_name,
+                "__functions",
+                reflected_name,
+            )?;
         }
         if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;

@@ -49,6 +49,37 @@ pub(super) fn emit_reflection_property_hook_array(
     Ok(())
 }
 
+/// Allocates PHP's ordered, string-keyed `ReflectionExtension::getFunctions()` map.
+pub(super) fn emit_reflection_extension_function_array(
+    ctx: &mut FunctionContext<'_>,
+    extension_name: &str,
+) -> Result<()> {
+    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Object("ReflectionFunction".to_string()));
+    let function_names = reflection_extension_function_names(extension_name).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "ReflectionExtension::getFunctions for unknown extension {}",
+            extension_name
+        ))
+    })?;
+    for function_name in function_names {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        let metadata = if ctx.function_by_name(function_name).is_some() {
+            reflection_registered_function_metadata(ctx, function_name)?
+        } else {
+            let (_, signature) = reflection_builtin_function_signature(function_name).ok_or_else(|| {
+                CodegenIrError::unsupported(format!(
+                    "ReflectionExtension::getFunctions missing builtin {}",
+                    function_name
+                ))
+            })?;
+            reflection_builtin_function_metadata(ctx, function_name, &signature)?
+        };
+        emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
+        emit_reflection_function_hash_insert(ctx, function_name);
+    }
+    Ok(())
+}
+
 /// Allocates an indexed array of populated ReflectionParameter objects.
 pub(super) fn emit_reflection_parameter_array(
     ctx: &mut FunctionContext<'_>,
@@ -157,6 +188,39 @@ pub(super) fn emit_reflection_method_hash_insert(ctx: &mut FunctionContext<'_>, 
                 ctx.emitter,
                 "r9",
                 runtime_value_tag(&PhpType::Object("ReflectionMethod".to_string())) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+    }
+}
+
+/// Inserts the current ReflectionFunction object into the stacked associative array.
+pub(super) fn emit_reflection_function_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
+    let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the ReflectionFunction object as the hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // object hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x5",
+                runtime_value_tag(&PhpType::Object("ReflectionFunction".to_string())) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the ReflectionFunction object as the hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // object hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "r9",
+                runtime_value_tag(&PhpType::Object("ReflectionFunction".to_string())) as i64,
             );
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         }
@@ -322,4 +386,3 @@ pub(super) fn emit_skip_if_static_property_uninitialized(
     }
     Some(skip_label)
 }
-
