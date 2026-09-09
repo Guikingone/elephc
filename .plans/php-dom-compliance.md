@@ -428,6 +428,11 @@ Legend:
   `ReflectionException`, code `0`, and exact message. Mandatory builtin-doc
   regeneration/audits and focused Cargo tests remain blocked by the disk gate
   and must run before readiness or PR review.
+  `ac3c6df5ca` adds `ReflectionExtension::getFunctions()` with PHP 8.5.8
+  ordered associative maps of internal `ReflectionFunction` objects: DOM (2),
+  libxml (8), and SimpleXML (3), including canonical casing. This is
+  oracle-pinned but awaits its focused codegen execution under the same disk
+  gate.
   The parser/diagnostics/stream/entity/validation tranche is also now
   written and registered across six focused modules. Its PHP 8.5.8 oracle
   matrices cover BOM/NUL/UTF-8 recovery, `PARSEHUGE`/`NO_XXE`, ordered libxml
