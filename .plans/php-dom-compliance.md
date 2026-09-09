@@ -565,6 +565,12 @@ Legend:
   while internal `NOENT` expansion remains valid. Inspection confirms both
   routes already transmit `NO_XXE` unchanged to `xmlCtxtReadMemory`; focused
   codegen execution remains under the disk gate.
+  `f86814421d` adds the modern `LIBXML_PARSEHUGE` depth TDD: depth 257 without
+  the flag yields the PHP 8.5.8 DOMException plus libxml `3/114`, while the
+  flag completes the 257-node tree and invalid combinations retain the exact
+  whitelist ValueError. Inspection confirms 524288 is already whitelisted and
+  reaches `xmlCtxtReadMemory`; focused codegen execution remains under the
+  disk gate.
   unrelated Cargo work is consuming memory after two earlier OOMs.
   Post-rebase validation on 2026-08-21 now builds the `elephc-dom` crate and a
   fresh complete bridge run passes 175 tests with zero failures. One-shot
