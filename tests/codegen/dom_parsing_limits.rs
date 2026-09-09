@@ -10,7 +10,7 @@
 
 use crate::support::compile_and_run;
 
-/// Pins BOM, NUL, malformed UTF-8, recovery, PARSEHUGE, and NO_XXE parser contracts.
+/// Pins BOM, NUL, malformed UTF-8, recovery, tree-shaping, PARSEHUGE, and NO_XXE parser contracts.
 #[test]
 fn dom_parsing_limits_match_php_oracle_matrix() {
     for (case, source, expected) in [
@@ -88,6 +88,36 @@ echo "recover|" . ($recoverResult ? "T" : "F") . "|"
     . $recoverError->level . "/" . $recoverError->code;
 "#,
             "strict|F|N|3/76\nrecover|T|root|3/76",
+        ),
+        (
+            "DOM-PARSE-TREE-SHAPING-04",
+            r#"<?php
+$source = '<!DOCTYPE root [<!ENTITY e "expanded">]><root> 
+ <![CDATA[cdata]]>&e;</root>';
+$plain = Dom\XMLDocument::createFromString($source);
+$plainRoot = $plain->documentElement;
+echo "plain|" . $plain->saveXml($plainRoot) . "|"
+    . $plainRoot->childNodes->length . "|"
+    . $plainRoot->firstChild->nodeType . "|"
+    . $plainRoot->lastChild->nodeType . "\n";
+
+$shaped = Dom\XMLDocument::createFromString(
+    $source,
+    LIBXML_NOENT | LIBXML_NOCDATA | LIBXML_NOBLANKS,
+);
+$shapedRoot = $shaped->documentElement;
+echo "shaped|" . $shaped->saveXml($shapedRoot) . "|"
+    . $shapedRoot->childNodes->length . "|"
+    . $shapedRoot->firstChild->nodeType . "|"
+    . $shapedRoot->lastChild->nodeType . "\n";
+
+try {
+    Dom\XMLDocument::createFromString('<root/>', 1 << 30);
+} catch (ValueError $error) {
+    echo "invalid|" . $error->getMessage();
+}
+"#,
+            "plain|<root> \n <![CDATA[cdata]]>&e;</root>|3|3|5\nshaped|<root>cdataexpanded</root>|1|3|3\ninvalid|Dom\\XMLDocument::createFromString(): Argument #2 ($options) contains invalid flags (allowed flags: LIBXML_RECOVER, LIBXML_NOENT, LIBXML_NO_XXE, LIBXML_DTDLOAD, LIBXML_DTDATTR, LIBXML_DTDVALID, LIBXML_NOERROR, LIBXML_NOWARNING, LIBXML_NOBLANKS, LIBXML_XINCLUDE, LIBXML_NSCLEAN, LIBXML_NOCDATA, LIBXML_NONET, LIBXML_PEDANTIC, LIBXML_COMPACT, LIBXML_PARSEHUGE, LIBXML_BIGLINES)",
         ),
     ] {
         assert_eq!(compile_and_run(source), expected, "{case}");
