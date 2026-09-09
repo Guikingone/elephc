@@ -73,6 +73,17 @@ pub(super) fn emit_reflection_exception(ctx: &mut FunctionContext<'_>, message: 
     );
 }
 
+/// Throws a catchable `ReflectionException` whose message is in the string-result registers.
+///
+/// Dynamic reflection constructor errors interpolate the rejected runtime name, so their message
+/// is composed by the caller and must be persisted by the standard dynamic-throwable path.
+pub(super) fn emit_reflection_exception_from_string_result(ctx: &mut FunctionContext<'_>) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "ReflectionException");
+    emit_dynamic_throwable_object(ctx, "_spl_reflection_exception_class_id");
+}
+
 /// The register condition a materialized builtin argument must satisfy to skip its
 /// `ValueError`.
 ///

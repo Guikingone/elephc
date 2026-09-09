@@ -33,22 +33,12 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
     inst: &Instruction,
     class_name: &str,
 ) -> Result<()> {
+    if class_name == "ReflectionExtension" {
+        return lower_reflection_extension_new(ctx, inst);
+    }
     if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
         emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
     } else {
-        if class_name == "ReflectionExtension" {
-            if let Some(value) = inst.operands.first().copied() {
-                let name = const_required_string_operand(ctx, value, "ReflectionExtension")?;
-                let metadata = reflection_extension_metadata_for_name(&name)?;
-                if metadata.reflected_name.is_none() {
-                    super::super::super::exceptions::emit_reflection_exception(
-                        ctx,
-                        &format!("Extension \"{}\" does not exist", name),
-                    );
-                    return Ok(());
-                }
-            }
-        }
         let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
         emit_reflection_owner_object(ctx, class_name, &metadata)?;
     }
@@ -56,6 +46,129 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Allocates a bounded DOM-family ReflectionExtension from literal or runtime string input.
+fn lower_reflection_extension_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let Some(value) = inst.operands.first().copied() else {
+        let metadata = empty_reflection_metadata();
+        emit_reflection_owner_object(ctx, "ReflectionExtension", &metadata)?;
+        let result = inst.result.ok_or_else(|| {
+            CodegenIrError::invalid_module("reflection object_new missing result")
+        })?;
+        return ctx.store_result_value(result);
+    };
+
+    if let Some(name) = const_optional_string_operand(ctx, value, "ReflectionExtension")? {
+        let metadata = reflection_extension_metadata_for_name(&name)?;
+        if metadata.reflected_name.is_none() {
+            super::super::super::exceptions::emit_reflection_exception(
+                ctx,
+                &format!("Extension \"{}\" does not exist", name),
+            );
+            return Ok(());
+        }
+        emit_reflection_owner_object(ctx, "ReflectionExtension", &metadata)?;
+    } else {
+        emit_runtime_reflection_extension(ctx, value)?;
+    }
+
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
+    ctx.store_result_value(result)
+}
+
+/// Selects bounded ReflectionExtension metadata by a case-insensitive runtime name.
+fn emit_runtime_reflection_extension(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let extensions = ["dom", "libxml", "SimpleXML"];
+    let done_label = ctx.next_label("reflection_extension_done");
+    let case_labels = extensions
+        .iter()
+        .map(|_| ctx.next_label("reflection_extension_case"))
+        .collect::<Vec<_>>();
+
+    for (extension, label) in extensions.iter().zip(case_labels.iter()) {
+        emit_reflection_extension_name_compare(ctx, value, extension, label)?;
+    }
+    emit_runtime_reflection_extension_exception(ctx, value)?;
+
+    for (extension, label) in extensions.iter().zip(case_labels.iter()) {
+        ctx.emitter.label(label);
+        let metadata = reflection_extension_metadata_for_name(extension)?;
+        emit_reflection_owner_object(ctx, "ReflectionExtension", &metadata)?;
+        emit_reflection_dispatch_jump(ctx, &done_label);
+    }
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Builds PHP's unknown-extension message from the rejected runtime name and throws it.
+///
+/// The dynamic name is reloaded after every case-insensitive comparison because `__rt_strcasecmp`
+/// may clobber caller-saved registers; `__rt_concat` returns the composed bytes in the canonical
+/// target-specific string-result registers consumed by the dynamic throwable emitter.
+fn emit_runtime_reflection_extension_exception(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    const PREFIX: &str = "Extension \"";
+    const SUFFIX: &str = "\" does not exist";
+
+    let (prefix_label, prefix_len) = ctx.data.add_string(PREFIX.as_bytes());
+    let (suffix_label, suffix_len) = ctx.data.add_string(SUFFIX.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
+            ctx.load_string_value_to_regs(value, "x3", "x4")?;
+            abi::emit_call_label(ctx.emitter, "__rt_concat");
+            abi::emit_symbol_address(ctx.emitter, "x3", &suffix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", suffix_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_concat");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", &prefix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
+            ctx.load_string_value_to_regs(value, "rdi", "rsi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_concat");
+            abi::emit_symbol_address(ctx.emitter, "rdi", &suffix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", suffix_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_concat");
+        }
+    }
+    super::super::super::exceptions::emit_reflection_exception_from_string_result(ctx);
+    Ok(())
+}
+
+/// Branches to one extension case when the runtime string matches its canonical name.
+fn emit_reflection_extension_name_compare(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    extension: &str,
+    matched_label: &str,
+) -> Result<()> {
+    let (label, len) = ctx.data.add_string(extension.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(value, "x1", "x2")?;
+            abi::emit_symbol_address(ctx.emitter, "x3", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter.instruction("cmp x0, #0");                              // compare the runtime extension name without PHP case sensitivity
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // select the matched bounded extension metadata
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(value, "rdi", "rsi")?;
+            abi::emit_symbol_address(ctx.emitter, "rdx", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter.instruction("test rax, rax");                           // compare the runtime extension name without PHP case sensitivity
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // select the matched bounded extension metadata
+        }
+    }
+    Ok(())
 }
 
 /// Returns the constructor object operand for ReflectionClass/Object object reflection.

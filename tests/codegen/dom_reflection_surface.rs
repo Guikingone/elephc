@@ -384,8 +384,46 @@ foreach (["dom", "libxml", "SimpleXML"] as $extension) {
     );
 }
 
-/// Verifies `ReflectionExtension` canonicalizes known DOM-family names and throws PHP's
-/// catchable `ReflectionException` for an unknown extension.
+/// Verifies `ReflectionExtension::getINIEntries()` exposes PHP 8.5.8's empty,
+/// ordered INI map for the bounded DOM-family extensions and retains constructor errors.
+#[test]
+fn reflection_extension_ini_entries_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+foreach (["dom", "libxml", "SimpleXML"] as $extension) {
+    $reflection = new ReflectionExtension($extension);
+    $entries = $reflection->getINIEntries();
+    echo "extension|", $reflection->getName(), "|";
+    echo method_exists($reflection, "getINIEntries") ? "method" : "no-method", "|";
+    echo gettype($entries), "|", count($entries), "|";
+    foreach ($entries as $name => $value) {
+        echo gettype($name), ":", $name, "=", gettype($value), ":", $value, ";";
+    }
+    echo "\n";
+}
+
+try {
+    (new ReflectionExtension("not-an-extension"))->getINIEntries();
+    echo "missing|none\n";
+} catch (ReflectionException $error) {
+    echo "missing|", get_class($error), "|", $error->getMessage(), "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "extension|dom|method|array|0|\n",
+            "extension|libxml|method|array|0|\n",
+            "extension|SimpleXML|method|array|0|\n",
+            "missing|ReflectionException|Extension \"not-an-extension\" does not exist\n",
+        ),
+    );
+}
+
+/// Verifies `ReflectionExtension` canonicalizes known names and reports literal and runtime
+/// unknown extensions through PHP's catchable, name-bearing `ReflectionException`.
 #[test]
 fn reflection_extension_unknown_name_matches_php_8_5_8() {
     let output = compile_and_run(
@@ -408,6 +446,17 @@ try {
     echo $error instanceof Exception ? "Exception" : "no", "|";
     echo $error instanceof Throwable ? "Throwable" : "no", "\n";
 }
+
+$runtimeUnknown = $argc === 1 ? "dynamic-unknown" : "not-reached";
+try {
+    new ReflectionExtension($runtimeUnknown);
+    echo "runtime-missing|none\n";
+} catch (ReflectionException $error) {
+    echo "runtime-missing|", get_class($error), "|", $error->getCode(), "|";
+    echo $error->getMessage(), "|";
+    echo $error instanceof Exception ? "Exception" : "no", "|";
+    echo $error instanceof Throwable ? "Throwable" : "no", "\n";
+}
 "#,
     );
 
@@ -418,6 +467,7 @@ try {
             "known|LiBxMl|ReflectionExtension|libxml\n",
             "known|simplexml|ReflectionExtension|SimpleXML\n",
             "missing|ReflectionException|0|Extension \"not-an-extension\" does not exist|Exception|Throwable\n",
+            "runtime-missing|ReflectionException|0|Extension \"dynamic-unknown\" does not exist|Exception|Throwable\n",
         ),
     );
 }

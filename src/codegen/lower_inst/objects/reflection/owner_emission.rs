@@ -57,6 +57,12 @@ pub(super) fn emit_reflection_owner_object(
                 "__constants",
                 &reflection_extension_constant_members(reflected_name)?,
             )?;
+            emit_reflection_constant_array_property_by_name(
+                ctx,
+                class_name,
+                "__ini_entries",
+                &[],
+            )?;
         }
         if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
@@ -227,7 +233,9 @@ pub(super) fn emit_reflection_owner_object(
             emit_reflection_method_name_parts(ctx, reflected_name)?;
         }
     }
-    emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
+    if class_name != "ReflectionExtension" {
+        emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
+    }
     if is_reflection_class_owner || class_name == "ReflectionEnum" {
         emit_reflection_owner_bool_property(ctx, class_name, "__is_final", metadata.is_final)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_abstract", metadata.is_abstract)?;
