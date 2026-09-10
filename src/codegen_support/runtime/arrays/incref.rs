@@ -42,8 +42,7 @@ pub fn emit_incref(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_incref_skip");                               // yes — not a heap pointer, skip
 
     // -- heap range check: x0 < _heap_buf + _heap_off --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // x10 = current heap offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // x10 = heap_buf + heap_off = heap end
     emitter.instruction("cmp x0, x10");                                         // is pointer at or beyond heap end?
     emitter.instruction("b.hs __rt_incref_skip");                               // yes — not a valid heap pointer, skip

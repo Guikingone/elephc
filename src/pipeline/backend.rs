@@ -33,6 +33,10 @@ pub(super) struct BackendInputs<'a> {
     pub(super) counters: bool,
     pub(super) instrument: crate::codegen::Instrumentation,
     pub(super) heap_debug: bool,
+    /// Select the ctx-register runtime addressing mode (`--rt-ctx`): published
+    /// into `ir_module.required_runtime_features.ctx_register` so the runtime
+    /// cache key and every shared emitter's ctx branch follow automatically.
+    pub(super) rt_ctx: bool,
     pub(super) exported_functions: &'a HashMap<String, exports::ExportedFunction>,
     pub(super) regalloc_linear: bool,
     pub(super) emit_debug_info: bool,
@@ -77,6 +81,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         counters,
         instrument,
         heap_debug,
+        rt_ctx,
         exported_functions,
         regalloc_linear,
         emit_debug_info,
@@ -92,6 +97,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // lets eval setup register that managed provider with Magician.
     if with_crates.contains("regex") {
         ir_module.required_runtime_features.regex = true;
+    }
+    // `--rt-ctx` publishes the ctx-register mode into the module's required
+    // features BEFORE user-code codegen runs, so the user Emitter and the main
+    // prologue branch on the same fact the runtime emitter will see below.
+    if rt_ctx {
+        ir_module.required_runtime_features.ctx_register = true;
     }
     let probe = with_crates.contains("probe");
     if probe {
@@ -114,6 +125,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         ir_module.probe_key = Some(key);
     }
     let mut runtime_features = ir_module.required_runtime_features;
+    // `--rt-ctx` selects per-context state addressing through the reserved ctx
+    // register. Like `--web`, this is CLI-driven rather than program-derived: the
+    // feature bit keys the runtime cache, keeping ctx and legacy objects distinct.
+    runtime_features.ctx_register = rt_ctx;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
     // sole driver of the web runtime feature: it is CLI-driven, not derived from the
     // program, so the runtime cache (keyed on the generated assembly hash) keeps the

@@ -96,6 +96,9 @@ fn compile_lfc_eval_project_and_run(
         // neither kind-specific destructor arm.
         popen_resource: false,
         directory_resource: false,
+        // The LFC fixture predates the ctx-register spike and pins legacy symbol
+        // addressing for its runtime-object assembly assertions.
+        ctx_register: false,
     };
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);

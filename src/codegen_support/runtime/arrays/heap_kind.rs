@@ -77,8 +77,7 @@ pub fn emit_heap_kind(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_heap_kind_zero");                            // non-heap pointers report kind 0
 
     // -- heap range check: x0 < _heap_buf + _heap_off --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the pointer at or beyond the heap end?
     emitter.instruction("b.hs __rt_heap_kind_zero");                            // non-heap pointers report kind 0

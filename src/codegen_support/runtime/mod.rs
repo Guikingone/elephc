@@ -12,6 +12,8 @@
 mod arrays;
 mod buffers;
 mod callables;
+/// Per-context runtime state layout, ctx register convention, and `__rt_ctx_init`.
+pub(crate) mod ctx;
 /// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.
 mod compare;
 pub(crate) mod data;

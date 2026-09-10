@@ -10,6 +10,168 @@
 
 use crate::support::*;
 
+/// `--rt-ctx` selects the ctx-register runtime mode: the emitted main entry
+/// must install the per-context state pointer by calling `__rt_ctx_init`
+/// before any user statement runs.
+#[test]
+fn test_cli_rt_ctx_main_calls_ctx_init() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_main_init");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").expect("failed to write the rt-ctx fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--rt-ctx")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx program");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read rt-ctx assembly");
+    assert!(
+        asm.contains("bl __rt_ctx_init") || asm.contains("call __rt_ctx_init"),
+        "--rt-ctx main prologue must call __rt_ctx_init:\n{}",
+        asm.lines().take(40).collect::<Vec<_>>().join("\n")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A full `--rt-ctx` build links and runs end to end: the ctx-routed heap
+/// allocator must serve real allocations (array + string) driven through the
+/// reserved ctx register, proving the mode executable on the host target.
+#[test]
+fn test_cli_rt_ctx_binary_runs_and_allocates() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_binary_run");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\n$a = [10, 20, 30];\n$s = 'x' . 'y' . 'z';\necho count($a) + strlen($s);\n",
+    )
+    .expect("failed to write the rt-ctx run fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--rt-ctx")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx run fixture");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx failed to compile and link: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bin = dir.join("main");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("failed to run the rt-ctx binary");
+    assert!(
+        run.status.success(),
+        "rt-ctx binary exited with {}: {}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "6",
+        "rt-ctx allocation-driven program must print 6 (count 3 + strlen 3)"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Fiber and generator bodies run on zero-initialized fiber stacks, so the first
+/// switch restores a zeroed ctx register; the fiber entry trampoline must
+/// re-publish the per-context pointer or every allocation inside the coroutine
+/// dereferences NULL. Both coroutines allocate, so both would crash without it.
+#[test]
+fn test_cli_rt_ctx_fibers_and_generators_re_publish_ctx() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_fiber_ctx");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\n\
+         function gen($n) {\n\
+             for ($i = 0; $i < $n; $i++) { $a = [$i, $i + 1, $i + 2]; yield $a[0] + $a[1]; }\n\
+             return 'done';\n\
+         }\n\
+         $total = 0;\n\
+         foreach (gen(1000) as $v) { $total = ($total + $v) % 999983; }\n\
+         $f = new Fiber(function () {\n\
+             $x = [4, 5, 6];\n\
+             Fiber::suspend(count($x));\n\
+             return 7;\n\
+         });\n\
+         $r1 = $f->start();\n\
+         $r2 = $f->resume();\n\
+         echo $total + $r1 + $r2;\n",
+    )
+    .expect("failed to write the rt-ctx fiber fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--rt-ctx")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx fiber fixture");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx fiber compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bin = dir.join("main");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("failed to run the rt-ctx fiber binary");
+    assert!(
+        run.status.success(),
+        "rt-ctx fiber binary crashed ({}): {}",
+        run.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // The running total folds (2i+1) modulo 999983 per iteration, landing on 10;
+    // + 3 (suspend count) + 7 (fiber return) = 20. Legacy and ctx builds agree.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "20",
+        "rt-ctx generator + fiber program must print 20"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The default build stays on legacy symbol addressing: no ctx helper call.
+#[test]
+fn test_cli_default_main_has_no_ctx_init() {
+    let dir = make_cli_test_dir("elephc_cli_default_no_ctx_init");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").expect("failed to write the default fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile default program");
+    assert!(
+        output.status.success(),
+        "elephc --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read default assembly");
+    assert!(
+        !asm.contains("__rt_ctx_init"),
+        "default main must not call the ctx helper:\n{}",
+        asm.lines().take(40).collect::<Vec<_>>().join("\n")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A top-level-only program still produces one exact `{main}` frame when run
 /// through the real compile/control-channel/monitor pipeline.
 #[test]

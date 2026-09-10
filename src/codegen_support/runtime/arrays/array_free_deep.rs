@@ -43,8 +43,7 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // below heap start?
     emitter.instruction("b.lo __rt_array_free_deep_done");                      // not on heap, skip
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // current heap offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // heap end = base + offset
     emitter.instruction("cmp x0, x10");                                         // beyond heap end?
     emitter.instruction("b.hs __rt_array_free_deep_done");                      // not on heap, skip

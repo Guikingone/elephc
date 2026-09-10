@@ -107,6 +107,9 @@ pub fn generate_runtime_with_features_mode(
         (false, true) => Emitter::new_staticlib(target),
         (false, false) => Emitter::new(target),
     };
+    // The ctx-register feature selects per-context addressing in every shared
+    // emitter that branches on it; the feature bit itself keys the runtime cache.
+    emitter.ctx_register = features.ctx_register;
     emitter.dead_strip = dead_strip;
     emitter.emit_text_prelude();
     runtime::emit_runtime(&mut emitter, features);
@@ -119,7 +122,11 @@ pub fn generate_runtime_with_features_mode(
         emitter.output()
     };
     output.push('\n');
-    output.push_str(&runtime::emit_runtime_data_fixed(heap_size, target));
+    output.push_str(&runtime::emit_runtime_data_fixed(
+        heap_size,
+        target,
+        features.ctx_register,
+    ));
     // PIC runtime globals are implementation details on every shared-library
     // target. ELF uses hidden visibility; Mach-O uses private extern visibility.
     if library_boundary {

@@ -46,8 +46,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // is the pointer below the heap buffer?
     emitter.instruction("b.lo __rt_gc_mark_reachable_done");                    // only heap pointers can be marked
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the pointer at or beyond the heap end?
     emitter.instruction("b.hs __rt_gc_mark_reachable_done");                    // invalid pointers are ignored

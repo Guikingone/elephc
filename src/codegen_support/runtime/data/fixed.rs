@@ -47,12 +47,21 @@ use crate::types::checker::builtins::{
 /// `heap_size` is the maximum heap bytes requested by the user program;
 /// it is baked into `_heap_max` to enforce the heap limit at runtime.
 ///
+/// `ctx_register` (the sandbox-threads spike feature) appends the single
+/// `_rt_ctx` instance after the legacy globals so both addressing modes can
+/// coexist during the A/B comparison; it is part of the runtime cache key
+/// through `RuntimeFeatures::cache_key_bits`, so this stays cache-safe.
+///
 /// `target` is needed only for the one symbol the `--web` bridge references
 /// (`elephc_web_capture`): it must carry the platform's C-ABI mangling so the
 /// runtime's `.comm`, the runtime's load, and the Rust bridge's `extern "C"`
 /// all name the same symbol (`_elephc_web_capture` on macOS, `elephc_web_capture`
 /// on Linux). The cache key already includes the target, so this stays cache-safe.
-pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> String {
+pub(crate) fn emit_runtime_data_fixed(
+    heap_size: usize,
+    target: Target,
+    ctx_register: bool,
+) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
@@ -1411,6 +1420,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&system::emit_date_data());
     out.push_str(&system::emit_strtotime_data());
     out.push_str(&emit_php_uname_data());
+    // Per-context state block for the ctx-register spike: one instance, emitted
+    // after the legacy globals so both addressing modes coexist during A/B.
+    if ctx_register {
+        out.push_str(&format!(
+            ".globl _rt_ctx\n_rt_ctx:\n    .space {}\n",
+            crate::codegen_support::runtime::ctx::CTX_SIZE
+        ));
+    }
 
     out
 }
@@ -1504,7 +1521,7 @@ mod tests {
             (Platform::Linux, Arch::X86_64, "8"),
         ] {
             let target = Target::new(platform, arch);
-            let asm = emit_runtime_data_fixed(8_388_608, target);
+            let asm = emit_runtime_data_fixed(8_388_608, target, false);
 
             let mut seen = 0usize;
             for line in asm.lines().filter(|line| line.starts_with(".comm ")) {
@@ -1532,6 +1549,7 @@ mod tests {
         let asm = emit_runtime_data_fixed(
             8_388_608,
             Target::new(Platform::Linux, Arch::AArch64),
+            false,
         );
 
         assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
@@ -1564,7 +1582,7 @@ mod tests {
             (Platform::Linux, Arch::X86_64, ""),
         ] {
             let target = Target::new(platform, arch);
-            let asm = emit_runtime_data_fixed(8_388_608, target);
+            let asm = emit_runtime_data_fixed(8_388_608, target, false);
             for slot in &bridge_slots {
                 let wanted = format!(".comm {prefix}{slot}, 8, ");
                 assert!(
