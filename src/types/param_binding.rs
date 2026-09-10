@@ -28,6 +28,7 @@
 
 use crate::parser::ast::{CallableTarget, CastType, Expr, ExprKind, StaticReceiver};
 use crate::names::Name;
+use crate::numeric_string::{scan_numeric_prefix, NumericScan};
 use crate::types::PhpType;
 
 /// How a declared parameter binds an argument whose type does not already match.
@@ -311,91 +312,16 @@ fn const_string_to_float(text: &str) -> ParamBinding {
     }
 }
 
-/// A string that satisfies PHP's `is_numeric()` grammar, split into its numeric text and
-/// whether that text spells a float.
-struct NumericString<'a> {
-    /// The numeric run with PHP whitespace stripped from both ends.
-    text: &'a str,
-    /// True when the run contains a decimal point or a consumed exponent (PHP `IS_DOUBLE`).
-    is_float: bool,
-}
-
 /// Scans a *fully* numeric string using PHP's numeric-string grammar, returning `None` when
 /// trailing non-whitespace bytes remain.
 ///
-/// This is the compile-time twin of the runtime `__rt_php_num_scan` helper
-/// (`crate::codegen_support::runtime::strings::php_num_scan`) restricted to
-/// `is_numeric() === true`: leading and trailing PHP whitespace are allowed, an optional sign,
-/// a mantissa with at least one digit, and an exponent only when a digit follows it. Hex,
-/// underscore separators, `INF` and `NAN` are not part of the grammar. Parameter binding only
-/// ever accepts fully numeric strings, so a leading-numeric string like `"42abc"` returns
-/// `None` here and reaches PHP's `TypeError`.
-fn scan_php_numeric_string(value: &str) -> Option<NumericString<'_>> {
-    let bytes = value.as_bytes();
-    let mut idx = 0;
-    while idx < bytes.len() && is_php_whitespace(bytes[idx]) {
-        idx += 1;
-    }
-
-    let start = idx;
-    if idx < bytes.len() && matches!(bytes[idx], b'+' | b'-') {
-        idx += 1;
-    }
-
-    let mut digits = 0;
-    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-        idx += 1;
-        digits += 1;
-    }
-
-    let mut is_float = false;
-    if idx < bytes.len() && bytes[idx] == b'.' {
-        let mut probe = idx + 1;
-        while probe < bytes.len() && bytes[probe].is_ascii_digit() {
-            probe += 1;
-            digits += 1;
-        }
-        if digits > 0 {
-            idx = probe;
-            is_float = true;
-        }
-    }
-    if digits == 0 {
-        return None;
-    }
-
-    if idx < bytes.len() && matches!(bytes[idx], b'e' | b'E') {
-        let mut probe = idx + 1;
-        if probe < bytes.len() && matches!(bytes[probe], b'+' | b'-') {
-            probe += 1;
-        }
-        let exponent_start = probe;
-        while probe < bytes.len() && bytes[probe].is_ascii_digit() {
-            probe += 1;
-        }
-        if probe > exponent_start {
-            idx = probe;
-            is_float = true;
-        }
-    }
-
-    let end = idx;
-    while idx < bytes.len() && is_php_whitespace(bytes[idx]) {
-        idx += 1;
-    }
-    if idx != bytes.len() {
-        return None;
-    }
-
-    Some(NumericString {
-        text: &value[start..end],
-        is_float,
-    })
-}
-
-/// Returns true for the bytes PHP's numeric-string grammar treats as leading/trailing space.
-fn is_php_whitespace(byte: u8) -> bool {
-    matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
+/// Parameter binding only ever accepts fully numeric strings, so a leading-numeric string
+/// like `"42abc"` returns `None` here and reaches PHP's `TypeError`. The grammar itself lives
+/// in [`crate::numeric_string`], the single compile-time twin of the runtime
+/// `__rt_php_num_scan` helper.
+fn scan_php_numeric_string(value: &str) -> Option<NumericScan<'_>> {
+    let scan = scan_numeric_prefix(value)?;
+    scan.is_fully_numeric().then_some(scan)
 }
 
 /// Renders a float the way PHP spells it inside a diagnostic (`5.5`, `INF`, `NAN`).

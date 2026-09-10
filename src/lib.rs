@@ -59,6 +59,8 @@ pub mod native_deps;
 pub mod name_resolver;
 /// Name resolution and mangling.
 pub mod names;
+/// Compile-time implementation of PHP's numeric-string grammar.
+pub(crate) mod numeric_string;
 /// Compile-time OPcache introspection data (directive matrix).
 pub mod opcache;
 /// `opcache_get_configuration()` standard-library prelude injection.
