@@ -519,6 +519,12 @@ Legend:
   >4.4 GiB cc1as expansion. Nested Extension collections, enum owners, and
   fresh identities are TDD-covered. The fixture's full assembler/executable
   run remains pending until disk headroom exceeds the current 3.3 GiB.
+  `00c7bd44c2` extends AArch64 long-range conditional branches from owner
+  dispatch to generic dynamic-property, Mixed/SimpleXML/stdClass and sentinel
+  dispatches, adding zero/equal/not-equal ABI helpers with x86 parity tests.
+  This directly addresses the fixture's `fixup value out of range` assembler
+  errors; the full assembler/executable rerun remains pending under the disk
+  gate.
   `81b6d0f009` closes dynamic/literal `ReflectionClass` construction for DOM
   classes: canonical case/one-leading-slash handling succeeds, while unknown
   inputs throw the PHP 8.5.8 catchable `ReflectionException`, code `-1`, with
