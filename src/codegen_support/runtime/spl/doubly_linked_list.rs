@@ -1413,9 +1413,9 @@ fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r12, r10");                                        // have all live elements been shifted left?
     emitter.instruction("jge __rt_spl_dll_shift_done");                         // finish once cursor reaches old length
     emitter.instruction("mov r13, QWORD PTR [r11 + r12 * 8]");                  // load next Mixed pointer
-    emitter.instruction("mov r14, r12");                                        // copy source index for destination calculation
-    emitter.instruction("sub r14, 1");                                          // destination index is one slot earlier
-    emitter.instruction("mov QWORD PTR [r11 + r14 * 8], r13");                  // move Mixed pointer down by one slot
+    emitter.instruction("mov rbx, r12");                                        // copy source index for destination calculation
+    emitter.instruction("sub rbx, 1");                                          // destination index is one slot earlier
+    emitter.instruction("mov QWORD PTR [r11 + rbx * 8], r13");                  // move Mixed pointer down by one slot
     emitter.instruction("add r12, 1");                                          // advance shift cursor
     emitter.instruction("jmp __rt_spl_dll_shift_loop");                         // continue compacting storage
     emitter.label("__rt_spl_dll_shift_done");
@@ -1492,15 +1492,15 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_insert_shift_loop");
     emitter.instruction("cmp r13, r12");                                        // has cursor reached insertion index?
     emitter.instruction("jle __rt_spl_dll_insert_store");                       // stop once insertion slot is free
-    emitter.instruction("mov r14, r13");                                        // copy destination index for source calculation
-    emitter.instruction("sub r14, 1");                                          // source index is one slot before cursor
-    emitter.instruction("mov r15, QWORD PTR [r11 + r14 * 8]");                  // load Mixed pointer being shifted right
+    emitter.instruction("mov rbx, r13");                                        // copy destination index for source calculation
+    emitter.instruction("sub rbx, 1");                                          // source index is one slot before cursor
+    emitter.instruction("mov r15, QWORD PTR [r11 + rbx * 8]");                  // load Mixed pointer being shifted right
     emitter.instruction("mov QWORD PTR [r11 + r13 * 8], r15");                  // store Mixed pointer one slot to the right
     emitter.instruction("sub r13, 1");                                          // move shift cursor left
     emitter.instruction("jmp __rt_spl_dll_insert_shift_loop");                  // continue shifting until insert slot opens
     emitter.label("__rt_spl_dll_insert_store");
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload owned Mixed value to insert
-    emitter.instruction("mov QWORD PTR [r11 + r12 * 8], r14");                  // store owned Mixed value in insertion slot
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 24]");                       // reload owned Mixed value to insert
+    emitter.instruction("mov QWORD PTR [r11 + r12 * 8], rbx");                  // store owned Mixed value in insertion slot
     emitter.instruction("add r10, 1");                                          // increase storage length
     emitter.instruction("mov QWORD PTR [r9], r10");                             // persist new storage length
     emitter.instruction("add rsp, 48");                                         // release insertion state
@@ -2360,12 +2360,12 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 0");                                          // reject negative offsets
     emitter.instruction("jl __rt_spl_dll_offset_set_range_throw");              // negative offsets are out of range
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver
-    emitter.instruction(&format!("mov r14, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits for logical index mapping
+    emitter.instruction(&format!("mov rbx, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits for logical index mapping
     emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("mov r11, QWORD PTR [r9]");                             // read storage length
     emitter.instruction("cmp r10, r11");                                        // compare explicit offset with length
     emitter.instruction("jae __rt_spl_dll_offset_set_range_throw");             // explicit offsets at/past length are out of range
-    emitter.instruction(&format!("test r14, {}", ITER_MODE_LIFO));              // does logical indexing run in LIFO order?
+    emitter.instruction(&format!("test rbx, {}", ITER_MODE_LIFO));              // does logical indexing run in LIFO order?
     emitter.instruction("jz __rt_spl_dll_offset_set_physical_index_ready");     // FIFO offsets already match physical storage
     emitter.instruction("mov r10, r11");                                        // start converting logical LIFO offset to physical offset
     emitter.instruction("sub r10, QWORD PTR [rbp - 40]");                       // compute one-based physical offset
@@ -2440,10 +2440,10 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_unset_shift_loop");
     emitter.instruction("cmp r13, r11");                                        // have all following elements shifted left?
     emitter.instruction("jge __rt_spl_dll_offset_unset_shrink");                // shrink once compaction is complete
-    emitter.instruction("mov r14, QWORD PTR [r12 + r13 * 8]");                  // load next Mixed pointer
+    emitter.instruction("mov rbx, QWORD PTR [r12 + r13 * 8]");                  // load next Mixed pointer
     emitter.instruction("mov r15, r13");                                        // copy source index for destination calculation
     emitter.instruction("sub r15, 1");                                          // compute destination index
-    emitter.instruction("mov QWORD PTR [r12 + r15 * 8], r14");                  // shift Mixed pointer left by one slot
+    emitter.instruction("mov QWORD PTR [r12 + r15 * 8], rbx");                  // shift Mixed pointer left by one slot
     emitter.instruction("add r13, 1");                                          // advance compaction cursor
     emitter.instruction("jmp __rt_spl_dll_offset_unset_shift_loop");            // continue compaction
     emitter.label("__rt_spl_dll_offset_unset_shrink");

@@ -110,8 +110,7 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
     emitter.instruction("cmp rax, r10");                                        // reject values below the managed x86_64 heap before reading a header word
     emitter.instruction("jb __rt_decref_any_done");                             // scalar integers and static data below the heap own no runtime storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current x86_64 heap bump extent
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add r11, r10");                                        // compute the managed heap end address
     emitter.instruction("cmp rax, r11");                                        // is the candidate pointer outside the live heap window?
     emitter.instruction("jae __rt_decref_any_done");                            // non-heap values above the managed heap own no runtime storage

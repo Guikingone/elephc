@@ -53,6 +53,13 @@ materialization, unlike the legacy `adrp` + `add` pair per symbol.
   `__rt_fiber_switch`, and are now excluded from the linear-scan allocator
   pools (AArch64 pool drops to x21–x27; x86_64 already only allocated rbx).
 
+On x86_64, reserving `r14` also required migrating every hand-written runtime
+helper that scratched it (~120 uses across 12 files) to `rbx`, which the
+runtime never used and preserves by contract everywhere. The fiber wrapper's
+descriptor scratch moved to `r15` with a descriptor reload, and the x86_64
+callback trampolines re-publish the ctx pointer before reaching compiled PHP
+code (see Foreign entries below).
+
 ## Measured results (macos-aarch64, host build)
 
 An allocation-heavy program (4M array/string allocations + a 200k-entry hash
@@ -88,27 +95,58 @@ global is silently broken — recycling, refcount range checks, and the GC
 walkers must all agree on the same state. The M0 migration must therefore be
 complete-per-family, not incremental-per-helper.
 
+This hazard is now mechanically enforced: ctx builds omit the legacy
+`_heap_off`/`_heap_free_list`/`_heap_small_bins` symbols from the runtime data
+section entirely, so any helper that still materializes them fails the link
+with an undefined-symbol error instead of corrupting state at runtime.
+
+## Foreign entries must re-publish (spike review, B2)
+
+The fiber trap generalizes: the ctx register is callee-saved, so a host that
+calls into compiled code preserves ITS value — pointing at host data, not at
+zero and not at `_rt_ctx`. Every entry that reaches compiled PHP code from
+foreign context must re-publish the pointer first (publish-only; never reset
+allocator state mid-flight). Currently published at:
+
+- the executable main prologue (full `__rt_ctx_init`),
+- `__rt_fiber_entry` (zeroed fiber stacks),
+- every cdylib/staticlib exported-function boundary wrapper,
+- `elephc_init` (the library-mode lifecycle entry, which also zeroes the ctx
+  fields — the library equivalent of the main prologue),
+- extern FFI callback trampolines (called by foreign code like `qsort`).
+
+## Scratch audit (spike review, B3)
+
+A hand-written helper that starts using the ctx register as an ordinary
+scratch register would silently corrupt the state pointer, and no other test
+would catch it. `ctx_mode_runtime_never_scratches_the_ctx_register` scans the
+ENTIRE ctx-mode runtime text on both architectures and fails on any ctx
+register reference outside the sanctioned shapes (publish sequences,
+ctx-relative accesses, fiber-switch save/restore pairs).
+
 ## Current state and what M0 must finish
 
-Validated on macos-aarch64: alloc + free + 14 decref/incref/heap-kind/GC
-range-check sites route through x28; main installs the pointer via
-`__rt_ctx_init`; fiber entry re-publishes it. `--rt-ctx` binaries compile,
-link, run, recycle their heap, and survive generators and fibers.
+Validated on macos-aarch64 AND linux-x86_64: the whole heap family routes
+through the reserved register on both architectures (alloc, free,
+heap_free_safe, incref/decref/heap-kind/GC range checks, the heap-debug
+validator, descriptor release, object-handle and wrapper-cast checks, the web
+arena reset); main installs the pointer via `__rt_ctx_init`; fiber entry and
+every foreign-entry wrapper re-publish it. `--rt-ctx` binaries compile, link,
+run, recycle their heap, and survive generators and fibers. The x86_64 `r14`
+scratch uses are fully migrated to `rbx`, and the CLI accepts the flag on
+every supported target.
 
 Still on legacy addressing (the M0 work list):
 
 - `_concat_buf`/`_concat_off` helpers (`__rt_concat_reserve`, `__rt_concat_publish`,
   `__rt_concat_grow`, the JSON/`sprintf`/diagnostic concat consumers) — the
   concat buffer lives in `_rt_ctx` but is still read through the globals.
-- x86_64 parity: the x86_64 emitter arms of the same helpers, plus an audit of
-  every existing `r14` scratch use (`io/http.rs` and friends clobber it today
-  without ABI-compliant saves — acceptable while x86_64 stays legacy, a
-  blocker before x86_64 `--rt-ctx` can ship).
 - `_rt_ctx` as an emitter-shaped pool (array + free list) instead of a single
   instance, and `__rt_ctx_init`/`__rt_ctx_destroy` exported for the M1
   thread-pool bridge.
 
 The full generated-runtime gate tests
 (`ctx_feature_generates_ctx_addressed_runtime_end_to_end`,
-`legacy_feature_keeps_symbol_addressed_runtime`) and the CLI e2e tests
-(`test_cli_rt_ctx_*`) pin both modes.
+`legacy_feature_keeps_symbol_addressed_runtime`), the scratch audit, and the
+CLI e2e tests (`test_cli_rt_ctx_*`, including heap recycling and the
+legacy-vs-ctx golden cross-check) pin both modes.

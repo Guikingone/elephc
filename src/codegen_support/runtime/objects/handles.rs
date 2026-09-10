@@ -150,8 +150,7 @@ fn emit_object_handle_of_arm64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // is the pointer below the managed heap?
     emitter.instruction("b.lo __rt_object_handle_of_zero");                     // static and foreign pointers carry no handle
-    abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current heap bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap bump offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the live heap end
     emitter.instruction("cmp x0, x10");                                         // is the pointer at or beyond the live heap end?
     emitter.instruction("b.hs __rt_object_handle_of_zero");                     // pointers past the live heap carry no handle
@@ -276,8 +275,7 @@ fn emit_object_handle_of_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r10", "_heap_buf");
     emitter.instruction("cmp rax, r10");                                        // is the pointer below the managed heap?
     emitter.instruction("jb __rt_object_handle_of_zero");                       // static and foreign pointers carry no handle
-    abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current heap bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add r11, r10");                                        // compute the live heap end
     emitter.instruction("cmp rax, r11");                                        // is the pointer at or beyond the live heap end?
     emitter.instruction("jae __rt_object_handle_of_zero");                      // pointers past the live heap carry no handle

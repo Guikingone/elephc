@@ -1027,6 +1027,27 @@ mod tests {
         assert!(!config.rt_ctx, "default builds must keep legacy symbol addressing");
     }
 
+    /// Verifies `--rt-ctx` is accepted for x86_64 targets and parses cleanly:
+    /// the ctx arms of the x86_64 runtime are routed (r14 reserved, scratch
+    /// users migrated to rbx), so the flag selects the mode on every supported
+    /// architecture. Runtime execution is covered by the host-native e2e
+    /// tests on the linux-x86_64 CI shard.
+    #[test]
+    fn rt_ctx_parses_for_x86_64_targets() {
+        let args = vec![
+            "elephc".into(),
+            "--rt-ctx".into(),
+            "--target=linux-x86_64".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert!(config.rt_ctx, "--rt-ctx must parse for x86_64 targets");
+        assert_eq!(
+            config.target.arch,
+            crate::codegen::platform::Arch::X86_64
+        );
+    }
+
     /// Verifies all explicit web-isolation spellings select their compile-time model.
     #[test]
     fn web_isolation_parses_all_modes() {

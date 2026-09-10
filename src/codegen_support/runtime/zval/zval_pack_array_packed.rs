@@ -260,11 +260,11 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_zval_pack_array_packed_loop_done");           // exit the loop once every element is packed
 
     // -- compute the element address: elements_base + i * elem_size --
-    emitter.instruction("mov r14, QWORD PTR [rbp - 48]");                       // load the elements base
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 48]");                       // load the elements base
     emitter.instruction("mov r15, QWORD PTR [rbp - 24]");                       // load the element size
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // reload the loop index
     emitter.instruction("imul rax, r15");                                       // i * elem_size (rdx:rax, but values fit in rax)
-    emitter.instruction("add r14, rax");                                        // r14 = element address
+    emitter.instruction("add rbx, rax");                                        // rbx = element address
 
     // -- dispatch on the value_type to stage (tag, lo, hi) for pack_element --
     emitter.instruction("mov r15, QWORD PTR [rbp - 32]");                       // reload the value_type
@@ -287,43 +287,43 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_zval_pack_array_packed_vt_null");             // unknown kinds pack as null
 
     emitter.label("__rt_zval_pack_array_packed_vt_int");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = integer value
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = integer value
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("xor eax, eax");                                        // tag = 0 (int)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_float");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = float bits
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = float bits
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("mov eax, 2");                                          // tag = 2 (float)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_bool");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = bool payload
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = bool payload
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("mov eax, 3");                                          // tag = 3 (bool)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_mixed");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = nested mixed cell pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = nested mixed cell pointer
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("mov eax, 7");                                          // tag = 7 (nested)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_idxarr");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = nested indexed-array pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = nested indexed-array pointer
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("mov eax, 4");                                          // tag = 4 (indexed array)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_hasharr");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = nested associative-array pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = nested associative-array pointer
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("mov eax, 5");                                          // tag = 5 (associative array)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_tagged");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = tagged payload
-    emitter.instruction("mov rax, QWORD PTR [r14 + 8]");                        // tag = tagged runtime tag
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = tagged payload
+    emitter.instruction("mov rax, QWORD PTR [rbx + 8]");                        // tag = tagged runtime tag
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_str");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = string pointer
-    emitter.instruction("mov rsi, QWORD PTR [r14 + 8]");                        // hi = string length
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = string pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbx + 8]");                        // hi = string length
     emitter.instruction("mov eax, 1");                                          // tag = 1 (string)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_null");

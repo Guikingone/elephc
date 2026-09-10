@@ -146,6 +146,12 @@ fn emit_aarch64_extern_callback_trampoline(
     emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); // preserve runtime-loop registers across descriptor invocation
 
     abi::emit_load_symbol_to_reg(emitter, "x19", &trampoline.descriptor_slot_label, 0);
+    // Foreign-entry publish (spike review, B2): an FFI callback is invoked by
+    // foreign code (qsort and friends) whose x28 is not elephc's ctx pointer;
+    // re-publish before the descriptor invoker can reach compiled PHP code.
+    if emitter.ctx_register {
+        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    }
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
@@ -186,6 +192,13 @@ fn emit_x86_64_extern_callback_trampoline(
     abi::store_at_offset(emitter, "r15", saved_runtime_count_offset);
 
     abi::emit_load_symbol_to_reg(emitter, "r12", &trampoline.descriptor_slot_label, 0);
+    // Foreign-entry publish (spike review, B2): the foreign caller's r14 is
+    // not elephc's ctx pointer and this trampoline's own scratch use of r14
+    // above would clobber it anyway — re-publish before the descriptor invoker
+    // can reach compiled PHP code.
+    if emitter.ctx_register {
+        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    }
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);

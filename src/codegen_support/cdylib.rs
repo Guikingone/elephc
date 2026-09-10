@@ -267,6 +267,14 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
         emit_store_immediate_to_symbol(emitter, BOUNDARY_ACTIVE, 0);
         emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
         if lifecycle == "elephc_init" {
+            // Library-mode context installation: `elephc_init` is where the
+            // host starts the library, so it plays the main-prologue role for
+            // the ctx-register mode — install the per-context state pointer
+            // and zero the allocator fields before any exported call runs.
+            if emitter.ctx_register {
+                crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+                crate::codegen_support::runtime::ctx::emit_ctx_zero_fields(emitter);
+            }
             crate::codegen::stack_guard::emit_stack_limit_init_call(emitter);
             if heap_debug {
                 abi::emit_enable_heap_debug_flag(emitter);

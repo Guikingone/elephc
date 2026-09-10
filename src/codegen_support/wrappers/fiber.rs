@@ -612,26 +612,26 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     abi::emit_frame_prologue(emitter, frame_size);
     abi::store_at_offset(emitter, "r12", saved_fiber_offset); // preserve the caller's r12 before caching the Fiber pointer
     abi::store_at_offset(emitter, "r13", saved_callable_offset); // preserve the caller's r13 before caching the callable entry
-    abi::store_at_offset(emitter, "r14", saved_descriptor_offset); // preserve the caller's r14 before caching the descriptor
-    abi::store_at_offset(emitter, "r15", saved_tail_count_offset); // preserve the caller's r15 before caching variadic tail count
+    abi::store_at_offset(emitter, "r15", saved_descriptor_offset); // preserve the caller's r15 before caching the descriptor
+    abi::store_at_offset(emitter, "r14", saved_tail_count_offset); // preserve the caller's r14 (reserved ctx register) before caching variadic tail count
     abi::store_at_offset(emitter, "rbx", saved_tail_index_offset); // preserve the caller's rbx before using it as a tail copy index
     emitter.instruction("mov r12, rdi");                                        // r12 = Fiber object passed by __rt_fiber_entry
     emitter.instruction(&format!(
         "mov r13, QWORD PTR [r12 + {}]",
         runtime::FIBER_CALLABLE_OFFSET
     )); // r13 = callable descriptor stored on the Fiber
-    emitter.instruction("mov r14, r13");                                        // r14 = descriptor pointer kept for hidden capture reloads
+    emitter.instruction("mov r15, r13");                                        // r15 = descriptor pointer kept for hidden capture reloads (r14 is the reserved ctx register)
     callable_descriptor::emit_load_entry_from_descriptor(emitter, "r13", "r13");
 
-    spill_wrapper_args_x86_64(emitter, wrapper, &arg_types, "r14");
+    spill_wrapper_args_x86_64(emitter, wrapper, &arg_types, "r15");
     let overflow_bytes = materialize_spilled_args_for_closure_call_x86_64(emitter, &arg_types);
     abi::emit_call_reg(emitter, "r13");
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the Fiber callback returns
     box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
 
     abi::load_at_offset(emitter, "rbx", saved_tail_index_offset);
-    abi::load_at_offset(emitter, "r15", saved_tail_count_offset);
-    abi::load_at_offset(emitter, "r14", saved_descriptor_offset);
+    abi::load_at_offset(emitter, "r14", saved_tail_count_offset); // restore the caller's r14 (reserved ctx register) last-but-one
+    abi::load_at_offset(emitter, "r15", saved_descriptor_offset); // restore the caller's r15 after the wrapper's descriptor scratch
     abi::load_at_offset(emitter, "r13", saved_callable_offset);
     abi::load_at_offset(emitter, "r12", saved_fiber_offset);
     abi::emit_frame_restore(emitter, frame_size);
@@ -666,6 +666,16 @@ fn spill_wrapper_args_x86_64(
         visible
     };
 
+    // The variadic tail spill above reuses the descriptor register (r15) as
+    // its tail counter, so the descriptor pointer must be reloaded from the
+    // Fiber object before the hidden-capture loop reads through it.
+    if hidden_start < arg_types.len() {
+        emitter.instruction(&format!(
+            "mov {}, QWORD PTR [r12 + {}]",
+            descriptor_reg,
+            runtime::FIBER_CALLABLE_OFFSET
+        )); // reload the callable descriptor from the Fiber object
+    }
     for (idx, ty) in arg_types.iter().enumerate().skip(hidden_start) {
         let slot_offset = frame_arg_slot_offset(idx);
         spill_descriptor_hidden_arg_x86_64(

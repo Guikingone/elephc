@@ -96,8 +96,7 @@ fn emit_decref_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r10, [r10 + 16]");                                 // first valid user payload begins after the initial heap header
     emitter.instruction("cmp rax, r10");                                        // reject null sentinels, scalar values, and static pointers before reading a heap header
     emitter.instruction("jb __rt_decref_object_skip");                          // non-heap values below the managed heap do not own object storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current x86_64 heap bump extent before deriving the live heap end
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
     emitter.instruction("add r11, r10");                                        // compute the managed heap end address from the base and live offset
     emitter.instruction("cmp rax, r11");                                        // is the candidate object pointer outside the live heap window?

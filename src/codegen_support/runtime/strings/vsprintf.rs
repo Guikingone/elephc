@@ -163,16 +163,16 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r12");                       // save the slot size
 
     // -- push one 16-byte tagged record per element, in reverse order --
-    emitter.instruction("mov r14, r9");                                         // loop index = count
-    emitter.instruction("dec r14");                                             // = count - 1 (last element first)
-    emitter.instruction("mov QWORD PTR [rbp - 56], r14");                       // save the loop index
+    emitter.instruction("mov rbx, r9");                                         // loop index = count
+    emitter.instruction("dec rbx");                                             // = count - 1 (last element first)
+    emitter.instruction("mov QWORD PTR [rbp - 56], rbx");                       // save the loop index
     emitter.label("__rt_vsprintf_loop_x86");
-    emitter.instruction("mov r14, QWORD PTR [rbp - 56]");                       // current index
-    emitter.instruction("cmp r14, 0");                                          // exhausted the array?
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 56]");                       // current index
+    emitter.instruction("cmp rbx, 0");                                          // exhausted the array?
     emitter.instruction("jl __rt_vsprintf_format_x86");                         // all elements pushed → format
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // slot base
     emitter.instruction("mov r12, QWORD PTR [rbp - 48]");                       // slot size
-    emitter.instruction("mov rax, r14");                                        // index
+    emitter.instruction("mov rax, rbx");                                        // index
     emitter.instruction("imul rax, r12");                                       // index * slot size
     emitter.instruction("add rax, r10");                                        // slot address = base + index * size
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // value_type
@@ -203,9 +203,9 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve one 16-byte tagged record
     emitter.instruction("mov QWORD PTR [rsp], rsi");                            // store the payload word
     emitter.instruction("mov QWORD PTR [rsp + 8], rcx");                        // store the tag/metadata word
-    emitter.instruction("mov r14, QWORD PTR [rbp - 56]");                       // reload the loop index
-    emitter.instruction("dec r14");                                             // step to the previous element
-    emitter.instruction("mov QWORD PTR [rbp - 56], r14");                       // store the loop index
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 56]");                       // reload the loop index
+    emitter.instruction("dec rbx");                                             // step to the previous element
+    emitter.instruction("mov QWORD PTR [rbp - 56], rbx");                       // store the loop index
     emitter.instruction("jmp __rt_vsprintf_loop_x86");                          // push the next record
 
     emitter.label("__rt_vsprintf_empty_x86");

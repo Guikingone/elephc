@@ -44,6 +44,9 @@ fn test_cli_rt_ctx_main_calls_ctx_init() {
 /// A full `--rt-ctx` build links and runs end to end: the ctx-routed heap
 /// allocator must serve real allocations (array + string) driven through the
 /// reserved ctx register, proving the mode executable on the host target.
+/// The program also reads `$argc`/`$argv`: the ctx-init helper runs before
+/// argc/argv are spilled in the main prologue, so a clobber there would
+/// surface here as garbage arguments (spike review, B5).
 #[test]
 fn test_cli_rt_ctx_binary_runs_and_allocates() {
     let dir = make_cli_test_dir("elephc_cli_rt_ctx_binary_run");
@@ -79,6 +82,118 @@ fn test_cli_rt_ctx_binary_runs_and_allocates() {
         String::from_utf8_lossy(&run.stdout),
         "6",
         "rt-ctx allocation-driven program must print 6 (count 3 + strlen 3)"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `__rt_ctx_init` runs BEFORE argc/argv are spilled in the main prologue; the
+/// helper's pinned clobber contract (ctx register only, no argument
+/// registers) must hold, or a ctx build reads garbage arguments. This drives
+/// an argument through `$argv[1]` end to end.
+#[test]
+fn test_cli_rt_ctx_preserves_argv_across_ctx_init() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_argv");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\necho isset($argv[1]) ? $argv[1] : 'none';\n",
+    )
+    .expect("failed to write the rt-ctx argv fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--rt-ctx")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx argv fixture");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx argv compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bin = dir.join("main");
+    let run = std::process::Command::new(&bin)
+        .arg("hello-ctx")
+        .output()
+        .expect("failed to run the rt-ctx argv binary");
+    assert!(
+        run.status.success(),
+        "rt-ctx argv binary crashed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "hello-ctx",
+        "ctx-init must not clobber argc/argv before the prologue spills them"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The ctx-mode allocator must RECYCLE: a loop whose cumulative allocation
+/// volume exceeds the default heap several times over can only complete
+/// through free-list/small-bin reuse. This is the codified form of the
+/// partial-routing trap the spike found (frees landing on an unread global
+/// free list exhausted the heap) — under a broken routing this test fails
+/// with "heap memory exhausted" (spike review, D3).
+#[test]
+fn test_cli_rt_ctx_heap_recycling_survives_cumulative_allocations() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_recycle");
+    let php_path = dir.join("main.php");
+    // Each iteration allocates an 8-element array and a short string, then
+    // releases both at the next iteration's reassignment. 600k iterations ×
+    // ~100 bytes ≈ 60 MB through an 8 MB heap: >7x reuse is mandatory.
+    fs::write(
+        &php_path,
+        "<?php\n$sum = 0;\nfor ($i = 0; $i < 600000; $i++) {\n    $a = [1, 2, 3, 4, $i, $i + 1, $i + 2, $i + 3];\n    $s = 'v' . $i;\n    $sum = ($sum + count($a) + strlen($s)) % 1000003;\n}\necho $sum;\n",
+    )
+    .expect("failed to write the rt-ctx recycle fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--rt-ctx")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx recycle fixture");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx recycle compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bin = dir.join("main");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("failed to run the rt-ctx recycle binary");
+    assert!(
+        run.status.success(),
+        "rt-ctx recycle binary failed (recycling broken?): {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // Deterministic output: the same program must print the same value under
+    // the legacy addressing mode (golden cross-check, D7).
+    let ctx_out = String::from_utf8_lossy(&run.stdout);
+    assert!(!ctx_out.trim().is_empty(), "recycle program printed nothing");
+
+    // Golden: recompile the identical program WITHOUT --rt-ctx and compare.
+    let legacy_php = dir.join("legacy.php");
+    fs::copy(&php_path, &legacy_php).expect("failed to copy the legacy fixture");
+    let output = elephc_cli_command(&dir)
+        .arg(&legacy_php)
+        .output()
+        .expect("failed to compile legacy recycle fixture");
+    assert!(
+        output.status.success(),
+        "elephc legacy recycle compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let legacy_run = std::process::Command::new(dir.join("legacy"))
+        .output()
+        .expect("failed to run the legacy recycle binary");
+    assert_eq!(
+        ctx_out,
+        String::from_utf8_lossy(&legacy_run.stdout),
+        "ctx and legacy modes must produce identical output for the same program"
     );
 
     let _ = fs::remove_dir_all(&dir);

@@ -89,6 +89,42 @@ pub fn emit_rt_ctx_data(emitter: &mut Emitter, single: bool) {
     }
 }
 
+/// Zeroes the heap allocator state (bump offset, free-list head, small-bin
+/// heads), ctx-relative in ctx-register mode and via the legacy globals
+/// otherwise.
+///
+/// Used by the `--web` per-request arena reset: the whole arena is reclaimed at
+/// once after every refcounted per-request value has already been released.
+pub fn emit_heap_arena_reset_state(emitter: &mut Emitter) {
+    let fields = [
+        CTX_HEAP_OFF_OFFSET,
+        CTX_HEAP_FREE_LIST_OFFSET,
+        CTX_HEAP_SMALL_BINS_OFFSET,
+        CTX_HEAP_SMALL_BINS_OFFSET + 8,
+        CTX_HEAP_SMALL_BINS_OFFSET + 16,
+        CTX_HEAP_SMALL_BINS_OFFSET + 24,
+    ];
+    if emitter.ctx_register {
+        for offset in fields {
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("str xzr, [x28, #{}]", offset)); // zero one per-context heap allocator field
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], 0", offset)); // zero one per-context heap allocator field
+                }
+            }
+        }
+        return;
+    }
+    abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 8);
+    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 16);
+    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 24);
+}
+
 /// Publishes the `_rt_ctx` base into the reserved ctx register without a call.
 ///
 /// Used by entry points that must (re-)establish the per-context state pointer
@@ -98,24 +134,14 @@ pub fn emit_ctx_publish(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, ctx_reg(emitter), "_rt_ctx");
 }
 
-/// Emits `__rt_ctx_init`: publishes the `_rt_ctx` base into the ctx register and
-/// zeroes the mutable ctx fields (concat offset, heap bump, free list, bins).
+/// Zeroes every mutable ctx field (concat offset, heap bump, free list, bins)
+/// through the already-published ctx register, on both targets.
 ///
-/// Contract:
-/// - Must be called exactly once per execution context before any ctx-relative
-///   access runs (main prologue today; a spawned thread's entry later).
-/// - Clobbers only the ctx register itself plus ordinary caller-saved scratch.
-/// - The data section's `.space` zero-fill covers the initial zeroing, but the
-///   explicit zero stores keep `__rt_ctx_init` correct for a REUSED context
-///   (the M1 thread-pool case where a fresh request reuses a pooled ctx).
-pub fn emit_rt_ctx_init(emitter: &mut Emitter) {
+/// Split out of `emit_rt_ctx_init` so library-entry points can reuse the
+/// reset without emitting a call: `elephc_init` publishes the pointer inline
+/// and must zero the same fields the helper does.
+pub fn emit_ctx_zero_fields(emitter: &mut Emitter) {
     let ctx = ctx_reg(emitter);
-    emitter.blank();
-    emitter.comment("--- runtime: ctx_init (publish per-context state pointer) ---");
-    emitter.label_global("__rt_ctx_init");
-    abi::emit_symbol_address(emitter, ctx, "_rt_ctx");
-    // Zero the mutable fields so a REUSED context (thread pool, request reuse)
-    // starts pristine even though the data section zero-fills only the first use.
     for offset in [
         CTX_CONCAT_OFF_OFFSET,
         CTX_HEAP_OFF_OFFSET,
@@ -141,6 +167,36 @@ pub fn emit_rt_ctx_init(emitter: &mut Emitter) {
             }
         }
     }
+}
+
+/// Emits `__rt_ctx_init`: publishes the `_rt_ctx` base into the ctx register and
+/// zeroes the mutable ctx fields (concat offset, heap bump, free list, bins).
+///
+/// Contract:
+/// - Must be called exactly once per execution context before any ctx-relative
+///   access runs (main prologue today; a spawned thread's entry later). Calling
+///   it again on a LIVE context resets the allocator (zeroed bump offset,
+///   empty free list) — catastrophic mid-request, intended only at fresh
+///   context boundaries (pool reuse, per-request reset).
+/// - Clobber set, pinned: the ctx register (`x28`/`r14`) is REWRITTEN (that is
+///   its purpose) and the AArch64 `adrp`/x86_64 `lea` sequences borrow the
+///   standard symbol scratch (`x9` AArch64; none on x86_64 — RIP-relative).
+///   No argument register (`x0`-`x7`, `rdi`-`r9`) is touched, so a prologue
+///   may call this helper BEFORE argc/argv have been spilled without
+///   corrupting them. Keep this property: new field stores must stay on the
+///   ctx register, not on argument registers.
+/// - The data section's `.space` zero-fill covers the initial zeroing, but the
+///   explicit zero stores keep `__rt_ctx_init` correct for a REUSED context
+///   (the M1 thread-pool case where a fresh request reuses a pooled ctx).
+pub fn emit_rt_ctx_init(emitter: &mut Emitter) {
+    let ctx = ctx_reg(emitter);
+    emitter.blank();
+    emitter.comment("--- runtime: ctx_init (publish per-context state pointer) ---");
+    emitter.label_global("__rt_ctx_init");
+    abi::emit_symbol_address(emitter, ctx, "_rt_ctx");
+    // Zero the mutable fields so a REUSED context (thread pool, request reuse)
+    // starts pristine even though the data section zero-fills only the first use.
+    emit_ctx_zero_fields(emitter);
     emitter.instruction("ret");
 }
 
@@ -189,6 +245,126 @@ pub fn emit_ctx_address(emitter: &mut Emitter, dest: &str, field_offset: usize) 
             emitter.instruction(&format!("lea {}, [{} + {}]", dest, ctx, field_offset));
         }
     }
+}
+
+/// Loads the free-list head value into `reg`, ctx-relative in ctx-register
+/// mode and from the legacy global symbol otherwise.
+///
+/// Mirrors `emit_heap_off_load` for `_heap_free_list` so every helper that
+/// consumes the free-list head shares one addressing-mode switch.
+pub fn emit_free_list_head_load(emitter: &mut Emitter, reg: &str) {
+    if emitter.ctx_register {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!(
+                    "ldr {}, [x28, #{}]",
+                    reg, CTX_HEAP_FREE_LIST_OFFSET
+                )); // load the per-context free-list head
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov {}, QWORD PTR [r14 + {}]",
+                    reg, CTX_HEAP_FREE_LIST_OFFSET
+                )); // load the per-context free-list head
+            }
+        }
+        return;
+    }
+    abi::emit_symbol_address(emitter, reg, "_heap_free_list");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {}, [{}]", reg, reg)); // load the legacy global free-list head
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {}, QWORD PTR [{}]", reg, reg)); // load the legacy global free-list head
+        }
+    }
+}
+
+/// Stores the heap bump offset value in `reg` back into per-context state,
+/// ctx-relative in ctx-register mode and to the legacy global symbol otherwise.
+///
+/// Companion to `emit_heap_off_load` for the bump-shrink paths (tail trimming,
+/// bump resets) that write the allocator cursor back. In legacy mode the value
+/// is stored straight through the given scratch register: the caller must not
+/// rely on it surviving.
+pub fn emit_heap_off_store(emitter: &mut Emitter, reg: &str, value: &str) {
+    if emitter.ctx_register {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!(
+                    "str {}, [x28, #{}]",
+                    value, CTX_HEAP_OFF_OFFSET
+                )); // store the per-context heap bump offset
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov QWORD PTR [r14 + {}], {}",
+                    CTX_HEAP_OFF_OFFSET, value
+                )); // store the per-context heap bump offset
+            }
+        }
+        return;
+    }
+    abi::emit_symbol_address(emitter, reg, "_heap_off");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("str {}, [{}]", value, reg)); // store the legacy global heap offset
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [{}], {}", reg, value)); // store the legacy global heap offset
+        }
+    }
+}
+
+/// Materializes the free-list head SLOT address into `reg`, ctx-relative in
+/// ctx-register mode and from the legacy global symbol otherwise.
+///
+/// Distinct from `emit_free_list_head_load` (which loads the head VALUE): the
+/// ordered-insertion and merge paths keep a mutable pointer to the previous
+/// next-slot, so they need the slot's address rather than its contents.
+pub fn emit_free_list_address(emitter: &mut Emitter, reg: &str) {
+    if emitter.ctx_register {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!(
+                    "add {}, x28, #{}",
+                    reg, CTX_HEAP_FREE_LIST_OFFSET
+                )); // address of the per-context free-list head slot
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "lea {}, [r14 + {}]",
+                    reg, CTX_HEAP_FREE_LIST_OFFSET
+                )); // address of the per-context free-list head slot
+            }
+        }
+        return;
+    }
+    abi::emit_symbol_address(emitter, reg, "_heap_free_list");
+}
+
+/// Materializes the small-bin head array address into `reg`, ctx-relative in
+/// ctx-register mode and from the legacy global symbol otherwise.
+pub fn emit_small_bins_address(emitter: &mut Emitter, reg: &str) {
+    if emitter.ctx_register {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!(
+                    "add {}, x28, #{}",
+                    reg, CTX_HEAP_SMALL_BINS_OFFSET
+                )); // base of the per-context small-bin head array
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "lea {}, [r14 + {}]",
+                    reg, CTX_HEAP_SMALL_BINS_OFFSET
+                )); // base of the per-context small-bin head array
+            }
+        }
+        return;
+    }
+    abi::emit_symbol_address(emitter, reg, "_heap_small_bins");
 }
 
 /// Loads the current heap bump offset into `reg`, ctx-relative in ctx-register
@@ -431,5 +607,70 @@ mod tests {
         assert!(!asm.contains("__rt_ctx_init"), "legacy runtime must not emit ctx helpers");
         assert!(!asm.contains("_rt_ctx"), "legacy runtime must not declare the ctx block");
         assert!(asm.contains("_heap_off"), "legacy runtime keeps symbol addressing");
+    }
+
+    /// Scratch audit for the reserved ctx register (spike review, B3): across
+    /// the ENTIRE ctx-mode runtime text, the ctx register may only appear in
+    /// sanctioned shapes — the publish/install sequences, ctx-relative
+    /// loads/stores/addresses, and the fiber-switch save/restore pairs. Any
+    /// hand-written helper that starts using x28/r14 as an ordinary scratch
+    /// register would silently corrupt the per-context state pointer, and no
+    /// other test would catch it; this one fails on the first stray shape.
+    #[test]
+    fn ctx_mode_runtime_never_scratches_the_ctx_register() {
+        use crate::codegen_support::driver_support::generate_runtime_with_features;
+        for (platform, arch, ctx_reg) in [
+            (Platform::MacOS, Arch::AArch64, "x28"),
+            (Platform::Linux, Arch::X86_64, "r14"),
+        ] {
+            let asm = generate_runtime_with_features(
+                8 * 1024 * 1024,
+                Target::new(platform, arch),
+                RuntimeFeatures {
+                    ctx_register: true,
+                    ..RuntimeFeatures::none()
+                },
+            );
+            let mut offenders: Vec<&str> = Vec::new();
+            for line in asm.lines().filter_map(|line| line.trim().strip_prefix(';')) {
+                let line = line.trim();
+                if !line.contains(ctx_reg) {
+                    continue;
+                }
+                // Sanctioned shapes per line:
+                //  - save/restore pairs by the fiber switch (stp/ldp x27, x28 / push|pop r14)
+                //  - publish/install (adrp x28, _rt_ctx / add x28, x28, _rt_ctx / lea r14, [rip + _rt_ctx])
+                //  - ctx-relative access: ldr/str ... [x28, #imm] / mov ... [r14 + imm] / add xN, x28, #imm / lea rN, [r14 + imm]
+                let sanctioned = match arch {
+                    Arch::AArch64 => {
+                        line.starts_with("stp x27, x28")
+                            || line.starts_with("ldp x27, x28")
+                            || line.starts_with("adrp x28, _rt_ctx")
+                            || line.starts_with("add x28, x28, _rt_ctx")
+                            || (line.starts_with("ldr ") && line.contains("[x28, #"))
+                            || (line.starts_with("str ") && line.contains("[x28, #"))
+                            || (line.starts_with("add x") && line.ends_with(&format!(", #{}", "")))
+                            || (line.starts_with("add x") && line.contains(", x28, #"))
+                    }
+                    Arch::X86_64 => {
+                        line.starts_with("push r14")
+                            || line.starts_with("pop r14")
+                            || line.starts_with("lea r14, [rip + _rt_ctx]")
+                            || (line.starts_with("mov ") && line.contains(&format!("[{ctx_reg} +")))
+                            || (line.starts_with("lea ") && line.contains(&format!("[{ctx_reg} +")))
+                    }
+                };
+                if !sanctioned {
+                    offenders.push(line);
+                }
+            }
+            assert!(
+                offenders.is_empty(),
+                "{arch:?} ctx runtime uses {ctx_reg} outside sanctioned shapes ({}
+                 offenders, e.g. {:?})",
+                offenders.len(),
+                offenders.first(),
+            );
+        }
     }
 }

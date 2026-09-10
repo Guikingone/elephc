@@ -189,7 +189,7 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
 /// Output registers: rax=result ptr, rdx=result len.
 ///
 /// Hot state lives in callee-saved registers (rbx=source base, r12=current, r13=laststart,
-/// r14=lastspace, r15=output pointer); width, textlen, break ptr/len, cut, and the result start are
+/// rbx=lastspace, r15=output pointer); width, textlen, break ptr/len, cut, and the result start are
 /// spilled to `[rbp-8..56]`. Writes wrapped output to `_concat_buf` / `_concat_off` and advances
 /// `_concat_off` on completion.
 fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
@@ -203,7 +203,7 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve callee-saved rbx (source base)
     emitter.instruction("push r12");                                            // preserve callee-saved r12 (current index)
     emitter.instruction("push r13");                                            // preserve callee-saved r13 (laststart)
-    emitter.instruction("push r14");                                            // preserve callee-saved r14 (lastspace)
+    emitter.instruction("push rbx");                                            // preserve callee-saved rbx (lastspace)
     emitter.instruction("push r15");                                            // preserve callee-saved r15 (output pointer)
     emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the cold inputs
 
@@ -216,7 +216,7 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbx, rax");                                        // rbx = source base pointer
     emitter.instruction("xor r12, r12");                                        // r12 = current scan index = 0
     emitter.instruction("xor r13, r13");                                        // r13 = laststart = 0
-    emitter.instruction("mov r14, -1");                                         // r14 = lastspace = -1 (no space on line yet)
+    emitter.instruction("mov rbx, -1");                                         // rbx = lastspace = -1 (no space on line yet)
 
     // -- reserve the worst-case wrapped result before writing anything --
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the break-string length before deriving the worst-case expansion factor
@@ -242,7 +242,7 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rbx + r13]");                                // source = base + laststart
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the line including its newline to output
     emitter.instruction("lea r13, [r12 + 1]");                                  // laststart = current + 1
-    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("mov rbx, -1");                                         // reset lastspace
     emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
     emitter.label("__rt_wordwrap_not_nl_x86_64");
@@ -262,11 +262,11 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // source = break-string pointer
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the break string in place of the space
     emitter.instruction("lea r13, [r12 + 1]");                                  // laststart = current + 1 (skip the space)
-    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("mov rbx, -1");                                         // reset lastspace
     emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
     emitter.label("__rt_wordwrap_mark_space_x86_64");
-    emitter.instruction("mov r14, r12");                                        // lastspace = current
+    emitter.instruction("mov rbx, r12");                                        // lastspace = current
     emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
     // -- regular character: break only when the line exceeds the width --
@@ -275,19 +275,19 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, r13");                                        // ... - laststart
     emitter.instruction("cmp r10, QWORD PTR [rbp - 72]");                       // is the line still under the wrap width?
     emitter.instruction("jl __rt_wordwrap_next_x86_64");                        // yes → keep accumulating the word
-    emitter.instruction("cmp r14, -1");                                         // is lastspace == -1 (no space on this line)?
+    emitter.instruction("cmp rbx, -1");                                         // is lastspace == -1 (no space on this line)?
     emitter.instruction("je __rt_wordwrap_no_space_x86_64");                    // yes → only a long word can be cut here
 
     // -- break at the last space seen on this line --
-    emitter.instruction("mov r10, r14");                                        // count = lastspace ...
+    emitter.instruction("mov r10, rbx");                                        // count = lastspace ...
     emitter.instruction("sub r10, r13");                                        // ... - laststart
     emitter.instruction("lea rsi, [rbx + r13]");                                // source = base + laststart
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the line up to (not including) the space
     emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // count = break-string length
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // source = break-string pointer
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the break string in place of the space
-    emitter.instruction("lea r13, [r14 + 1]");                                  // laststart = lastspace + 1
-    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("lea r13, [rbx + 1]");                                  // laststart = lastspace + 1
+    emitter.instruction("mov rbx, -1");                                         // reset lastspace
     emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
     // -- long word with no space: break mid-word only when cut is requested --
@@ -302,7 +302,7 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // source = break-string pointer
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the break string mid-word
     emitter.instruction("mov r13, r12");                                        // laststart = current (the remaining word continues)
-    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("mov rbx, -1");                                         // reset lastspace
 
     emitter.label("__rt_wordwrap_next_x86_64");
     emitter.instruction("add r12, 1");                                          // current += 1
@@ -324,7 +324,7 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     // -- restore callee-saved registers and return --
     emitter.instruction("add rsp, 64");                                         // release the spill slots
     emitter.instruction("pop r15");                                             // restore r15
-    emitter.instruction("pop r14");                                             // restore r14
+    emitter.instruction("pop rbx");                                             // restore rbx
     emitter.instruction("pop r13");                                             // restore r13
     emitter.instruction("pop r12");                                             // restore r12
     emitter.instruction("pop rbx");                                             // restore rbx

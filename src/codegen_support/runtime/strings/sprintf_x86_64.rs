@@ -52,7 +52,7 @@ use super::sprintf::{CONCAT_BUF_CAP, CONV_SCRATCH_CAP};
 /// before `ret`.
 ///
 /// Callee-saved registers used: `rbx` = write cursor in `_concat_buf`, `r12` = format
-/// cursor, `r13` = remaining format bytes, `r14` = next sequential argument index,
+/// cursor, `r13` = remaining format bytes, `rbx` = next sequential argument index,
 /// `r15` = argument record base.
 pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -60,7 +60,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_sprintf");
 
     // Frame layout, relative to rbp:
-    //   [rbp-8 .. rbp-40]    = pushed rbx, r12, r13, r14, r15
+    //   [rbp-8 .. rbp-40]    = pushed rbx, r12, r13, rbx, r15
     //   [rbp-48]             = result start pointer inside _concat_buf
     //   [rbp-56]             = address of the _concat_off symbol
     //   [rbp-64]             = packed argument record count
@@ -81,12 +81,12 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve the concat-buffer write cursor register
     emitter.instruction("push r12");                                            // preserve the format-cursor register
     emitter.instruction("push r13");                                            // preserve the remaining-format-length register
-    emitter.instruction("push r14");                                            // preserve the sequential-argument-index register
+    emitter.instruction("push rbx");                                            // preserve the sequential-argument-index register
     emitter.instruction("push r15");                                            // preserve the argument-record base register
     emitter.instruction("sub rsp, 648");                                        // reserve parse slots, conversion scratch, and formatter state
     emitter.instruction("mov r12, rax");                                        // format cursor
     emitter.instruction("mov r13, rdx");                                        // remaining format bytes
-    emitter.instruction("xor r14d, r14d");                                      // next sequential argument index
+    emitter.instruction("xor ebx, ebx");                                      // next sequential argument index
     emitter.instruction("lea r15, [rbp + 16]");                                 // argument records begin above the saved return address
     emitter.instruction("mov QWORD PTR [rbp - 64], rdi");                       // remember how many records the caller pushed
     emitter.instruction("mov QWORD PTR [rbp - 680], rsi");                      // preserve optional eval context for Stringable dispatch
@@ -160,7 +160,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl rcx, 4");                                          // records are 16 bytes each
     emitter.instruction("add rsp, 648");                                        // release local buffers and formatter state
     emitter.instruction("pop r15");                                             // restore the argument-record base register
-    emitter.instruction("pop r14");                                             // restore the sequential-argument-index register
+    emitter.instruction("pop rbx");                                             // restore the sequential-argument-index register
     emitter.instruction("pop r13");                                             // restore the remaining-format-length register
     emitter.instruction("pop r12");                                             // restore the format-cursor register
     emitter.instruction("pop rbx");                                             // restore the concat-buffer write cursor register
@@ -339,8 +339,8 @@ fn emit_argument_fetch(emitter: &mut Emitter) {
     emitter.instruction("sub r9, 1");                                           // PHP argument numbers are 1-based
     emitter.instruction("jmp __rt_sprintf_arg_have_x64");                       // index resolved
     emitter.label("__rt_sprintf_arg_seq_x64");
-    emitter.instruction("mov r9, r14");                                         // consume the next sequential argument
-    emitter.instruction("add r14, 1");                                          // advance the sequential cursor
+    emitter.instruction("mov r9, rbx");                                         // consume the next sequential argument
+    emitter.instruction("add rbx, 1");                                          // advance the sequential cursor
     emitter.label("__rt_sprintf_arg_have_x64");
     emitter.instruction("cmp r9, QWORD PTR [rbp - 64]");                        // is the index within the supplied records?
     emitter.instruction("jae __rt_sprintf_afatal_x64");                         // no → controlled fatal instead of a stack read

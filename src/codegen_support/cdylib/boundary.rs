@@ -418,6 +418,13 @@ fn emit_scalar_export_aarch64(
     runtime_error: (&str, usize),
 ) {
     abi::emit_frame_prologue(emitter, layout.frame_size);
+    // Foreign-entry publish (spike review, B2): the host calls this export with
+    // its own callee-saved ctx register (pointing at HOST data, not zero), so
+    // the per-context pointer must be re-published before any compiled PHP code
+    // can run. Publish-only: never reset allocator state here.
+    if emitter.ctx_register {
+        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    }
     emit_save_scalar_c_inputs(emitter, export, layout);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,
@@ -497,6 +504,12 @@ fn emit_scalar_export_x86_64(
     runtime_error: (&str, usize),
 ) {
     abi::emit_frame_prologue(emitter, layout.frame_size);
+    // Foreign-entry publish (spike review, B2): re-establish the per-context
+    // state pointer before compiled PHP code runs; the host's r14 is foreign.
+    // Publish-only: never reset allocator state here.
+    if emitter.ctx_register {
+        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    }
     emit_save_scalar_c_inputs(emitter, export, layout);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,

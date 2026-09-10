@@ -368,9 +368,17 @@ pub(crate) fn emit_runtime_data_fixed(
         target,
     ));
     out.push_str(&comm_directive("_heap_buf", heap_size, target));
-    out.push_str(&comm_directive("_heap_off", 8, target));
-    out.push_str(&comm_directive("_heap_free_list", 8, target));
-    out.push_str(&comm_directive("_heap_small_bins", 32, target));
+    // Heap allocator state lives in `_rt_ctx` in ctx-register mode; the legacy
+    // `.comm` words are only emitted for legacy builds. This is also the ctx
+    // mode's routing tripwire: any ctx-mode helper that still materializes
+    // `_heap_off`/`_heap_free_list`/`_heap_small_bins` fails the LINK with an
+    // undefined-symbol error on the first build instead of corrupting state
+    // silently at runtime.
+    if !ctx_register {
+        out.push_str(&comm_directive("_heap_off", 8, target));
+        out.push_str(&comm_directive("_heap_free_list", 8, target));
+        out.push_str(&comm_directive("_heap_small_bins", 32, target));
+    }
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
     // Generation-safe buffer descriptor registry. Public Buffer values are

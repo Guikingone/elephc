@@ -75,6 +75,12 @@ pub(super) fn emit_owned_string_export(
     ));
     emitter.label_global(&exported);
     abi::emit_frame_prologue(emitter, layout.frame_size);
+    // Foreign-entry publish (spike review, B2): re-establish the per-context
+    // state pointer before compiled PHP code runs; the host's callee-saved ctx
+    // register is foreign. Publish-only: never reset allocator state here.
+    if emitter.ctx_register {
+        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    }
     emit_save_public_arguments(emitter, export, &layout);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,

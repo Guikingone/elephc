@@ -44,8 +44,7 @@ pub fn emit_heap_kind(emitter: &mut Emitter) {
         crate::codegen_support::abi::emit_symbol_address(emitter, "rcx", "_heap_buf");
         emitter.instruction("cmp rax, rcx");                                    // reject values below the managed x86_64 heap before probing metadata
         emitter.instruction("jb __rt_heap_kind_zero");                          // scalar integers and static data below the heap report kind 0
-        crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_heap_off");
-        emitter.instruction("mov rdx, QWORD PTR [rdx]");                        // load the current x86_64 heap bump extent
+        crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "rdx"); // rdx = current heap offset (ctx-relative in ctx mode)
         emitter.instruction("add rdx, rcx");                                    // compute the managed heap end address
         emitter.instruction("cmp rax, rdx");                                    // is the candidate pointer outside the live heap window?
         emitter.instruction("jae __rt_heap_kind_zero");                         // non-heap values above the managed heap report kind 0

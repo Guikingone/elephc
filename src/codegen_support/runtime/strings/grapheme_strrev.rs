@@ -232,7 +232,7 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve callee-saved source pointer storage
     emitter.instruction("push r12");                                            // preserve callee-saved source length storage
     emitter.instruction("push r13");                                            // preserve callee-saved destination cursor storage
-    emitter.instruction("push r14");                                            // preserve callee-saved destination start storage
+    emitter.instruction("push rbx");                                            // preserve callee-saved destination start storage
     emitter.instruction("push r15");                                            // preserve callee-saved cluster-end storage
     emitter.instruction("mov rbx, rax");                                        // keep the source string pointer stable across decoder calls
     emitter.instruction("mov r12, rdx");                                        // keep the source string length stable across decoder calls
@@ -240,7 +240,7 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load current concat-buffer write offset
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
     emitter.instruction("lea r13, [r10 + r9]");                                 // compute destination pointer for the reversed string
-    emitter.instruction("mov r14, r13");                                        // preserve destination start for the returned string pointer
+    emitter.instruction("mov rbx, r13");                                        // preserve destination start for the returned string pointer
     emitter.instruction("mov rcx, r12");                                        // scan_end = source length in bytes
 
     emitter.label("__rt_grapheme_strrev_loop_x");
@@ -296,10 +296,10 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload concat-buffer write offset for the final update
     emitter.instruction("add r8, r12");                                         // advance offset by the unchanged source byte length
     abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat-buffer write offset
-    emitter.instruction("mov rax, r14");                                        // return pointer to the reversed string
+    emitter.instruction("mov rax, rbx");                                        // return pointer to the reversed string
     emitter.instruction("mov rdx, r12");                                        // return the unchanged source byte length
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage
-    emitter.instruction("pop r14");                                             // restore callee-saved destination start storage
+    emitter.instruction("pop rbx");                                             // restore callee-saved destination start storage
     emitter.instruction("pop r13");                                             // restore callee-saved destination cursor storage
     emitter.instruction("pop r12");                                             // restore callee-saved source length storage
     emitter.instruction("pop rbx");                                             // restore callee-saved source pointer storage
@@ -309,7 +309,7 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // null pointer sentinel means false for grapheme_strrev()
     emitter.instruction("xor edx, edx");                                        // failure length is zero
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage on failure
-    emitter.instruction("pop r14");                                             // restore callee-saved destination start storage on failure
+    emitter.instruction("pop rbx");                                             // restore callee-saved destination start storage on failure
     emitter.instruction("pop r13");                                             // restore callee-saved destination cursor storage on failure
     emitter.instruction("pop r12");                                             // restore callee-saved source length storage on failure
     emitter.instruction("pop rbx");                                             // restore callee-saved source pointer storage on failure

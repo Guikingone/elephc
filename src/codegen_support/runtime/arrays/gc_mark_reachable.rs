@@ -273,8 +273,7 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
     emitter.instruction("cmp rax, r8");                                         // is the candidate pointer below the managed heap buffer?
     emitter.instruction("jb __rt_gc_mark_reachable_done");                      // only heap-backed values participate in cycle traversal
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the current heap bump offset before computing the managed heap end
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r9"); // r9 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("lea r9, [r8 + r9]");                                   // compute the current heap end from the heap base plus bump offset
     emitter.instruction("cmp rax, r9");                                         // is the candidate pointer at or beyond the current heap end?
     emitter.instruction("jae __rt_gc_mark_reachable_done");                     // pointers outside the live heap window are ignored
