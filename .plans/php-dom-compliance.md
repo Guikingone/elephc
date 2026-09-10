@@ -121,6 +121,20 @@ Legend:
   39.88 seconds). A final independent audit returned `GO` for the complete
   uncommitted ReflectionFunction diff; the wider failures above remain open
   campaign work.
+  A subsequent focused Reflection ownership tranche makes all four internal
+  owner families (`ReflectionClass`, `ReflectionFunction`, `ReflectionMethod`,
+  and `ReflectionEnum`) return a fresh `ReflectionExtension` for every
+  `getExtension()` call while an alias remains live after the original reads
+  are unset, exactly as PHP 8.5.8 does. User class/function/method owners
+  retain the PHP `false` extension-name sentinel and return null; the sentinel
+  remains a boxed `Mixed` boolean rather than an empty string. The obsolete
+  cached `__extension` object was removed. Focused evidence is green: user
+  sentinel 1/1 (39.13 s), four-owner lifetime 1/1 (163.63 s), and static
+  factory/boxing emission on Linux AArch64 plus Linux x86_64 1/1 (39.45 s).
+  An independent post-fix audit returned `GO` for this Reflection-only diff.
+  The separate Eval/AOT worktree changes remain intentionally uncommitted:
+  PHP requires cross-file visibility for eval-declared functions, whereas the
+  current per-AOT-function Magician contexts still isolate them.
 - [x] Freeze PHP `8.5.8`, php-src commit
   `26b97507444c4fbda072f57dda1820f7b7d5e467`, libxml2 `2.15.3`, and
   bundled Lexbor `2.7.0`.

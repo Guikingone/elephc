@@ -55,6 +55,19 @@ pub(super) fn emit_reflection_owner_string_property_by_name(
         .get(class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
+    let stores_mixed = class_info
+        .properties
+        .iter()
+        .find(|(name, _)| name == property_name)
+        .is_some_and(|(_, property_type)| property_type.codegen_repr() == PhpType::Mixed);
+    if stores_mixed {
+        // A `Mixed` slot is a tagged single-word cell, unlike a native string's
+        // pointer-plus-length pair.  In particular, Reflection's extension-origin
+        // slots are declared Mixed so user-defined owners can retain `false`.
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_boxed_string_literal_default_to_result(ctx, value);
+        return emit_reflection_owner_mixed_property_from_result(ctx, class_name, property_name);
+    }
     emit_reflection_string_property(ctx, value, low_offset, low_offset + 8);
     Ok(())
 }

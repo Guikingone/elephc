@@ -39,12 +39,6 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
                 false_bool(),
             ),
             builtin_property(
-                "__extension",
-                Visibility::Private,
-                Some(mixed_type()),
-                false_bool(),
-            ),
-            builtin_property(
                 "__attrs",
                 Visibility::Private,
                 Some(array_type()),
@@ -260,7 +254,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_string_method("__toString", "__string"),
             builtin_reflection_constant_false_union_method("getDocComment"),
             builtin_reflection_class_mixed_method("getExtensionName", "__extension_name"),
-            builtin_reflection_class_mixed_method("getExtension", "__extension"),
+            builtin_reflection_class_fresh_extension_method(),
             builtin_reflection_class_string_method("getShortName", "__short_name"),
             builtin_reflection_class_string_method("getNamespaceName", "__namespace_name"),
             builtin_reflection_class_bool_method("inNamespace", "__in_namespace"),

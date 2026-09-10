@@ -536,6 +536,64 @@ pub(super) fn builtin_reflection_class_mixed_method(method_name: &str, property:
     }
 }
 
+/// Returns `getExtension()` with PHP's fresh-object and user-owner `null` semantics.
+///
+/// The getter relies on the retained extension name rather than returning the owner cache. Every
+/// internal-owner read constructs a distinct `ReflectionExtension`, while a user-defined owner
+/// keeps PHP's `null` result instead of resolving the internal `false` sentinel as a name.
+pub(super) fn builtin_reflection_class_fresh_extension_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let extension_name = reflection_this_property("__extension_name", dummy_span);
+    ClassMethod {
+        name: "getExtension".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: binary_expr(
+                        extension_name.clone(),
+                        BinOp::StrictEq,
+                        Expr::new(ExprKind::BoolLiteral(false), dummy_span),
+                        dummy_span,
+                    ),
+                    then_body: vec![Stmt::new(StmtKind::Return(null_expr()), dummy_span)],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(Expr::new(
+                    ExprKind::NewObject {
+                        class_name: Name::unqualified("ReflectionExtension"),
+                        // The retained owner slot must stay `mixed`: its false default is
+                        // PHP-observable for user-defined owners. The guard above establishes
+                        // the runtime string invariant, while `strval()` gives the synthetic
+                        // constructor call its static `string` argument without retagging the
+                        // stored sentinel.
+                        args: vec![function_call("strval", vec![extension_name], dummy_span)],
+                    },
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public `ReflectionClass` boolean method backed by one private slot.
 pub(super) fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();

@@ -12,7 +12,9 @@
 
 use std::fs;
 
-use crate::support::{compile_and_run, compile_source_to_asm_with_options, make_cli_test_dir};
+use crate::support::{
+    compile_and_run, compile_and_run_files, compile_source_to_asm_with_options, make_cli_test_dir,
+};
 
 /// Verifies legacy and modern DOM hierarchy, interfaces, finality, construction, and cloning metadata.
 #[test]
@@ -531,6 +533,216 @@ foreach ($owners as $kind => $owner) {
             "enum|dom|51|51|ReflectionEnum|2\n",
         ),
     );
+}
+
+/// Verifies every DOM Reflection owner returns a usable fresh extension object.
+///
+/// Internal owners retain the typed extension name and construct a new `ReflectionExtension`
+/// on demand. Each supported owner probes the result's identity and collection accessors.
+#[test]
+fn dom_reflection_owner_extension_results_remain_usable() {
+    let class_output = compile_and_run(
+        r#"<?php
+$classExtension = (new ReflectionClass(DOMImplementation::class))->getExtension();
+echo get_class($classExtension), "|", $classExtension->getName(), "|";
+echo count($classExtension->getClassNames()), "|", count($classExtension->getFunctions()), "\n";
+"#,
+    );
+    assert_eq!(class_output, "ReflectionExtension|dom|51|2\n");
+
+    let function_output = compile_and_run(
+        r#"<?php
+$functionExtension = (new ReflectionFunction("dom_import_simplexml"))->getExtension();
+echo get_class($functionExtension), "|", $functionExtension->getName(), "|";
+echo count($functionExtension->getClassNames()), "|", count($functionExtension->getFunctions()), "\n";
+"#,
+    );
+    assert_eq!(function_output, "ReflectionExtension|dom|51|2\n");
+
+    let method_output = compile_and_run(
+        r#"<?php
+$methodExtension = (new ReflectionMethod(DOMImplementation::class, "hasFeature"))->getExtension();
+echo get_class($methodExtension), "|", $methodExtension->getName(), "|";
+echo count($methodExtension->getClassNames()), "|", count($methodExtension->getFunctions()), "\n";
+"#,
+    );
+    assert_eq!(method_output, "ReflectionExtension|dom|51|2\n");
+
+    let enum_output = compile_and_run(
+        r#"<?php
+$enumExtension = (new ReflectionEnum(Dom\AdjacentPosition::class))->getExtension();
+echo get_class($enumExtension), "|", $enumExtension->getName(), "|";
+echo count($enumExtension->getClassNames()), "|", count($enumExtension->getFunctions()), "\n";
+"#,
+    );
+    assert_eq!(enum_output, "ReflectionExtension|dom|51|2\n");
+}
+
+/// Verifies repeated DOM owner extension reads retain an aliased result after the other reads die.
+///
+/// PHP returns a distinct `ReflectionExtension` object for every `getExtension()` call.  The
+/// original result may nevertheless outlive both the first variable and the later independent
+/// result through an alias. That makes fresh factory ownership observable without constructing
+/// the large aggregate extension collections.
+#[test]
+fn dom_reflection_owner_extension_fresh_lifetime_matches_php_8_5_8() {
+    let class_output = compile_and_run(
+        r#"<?php
+$owner = new ReflectionClass(DOMImplementation::class);
+$first = $owner->getExtension();
+$alias = $first;
+$second = $owner->getExtension();
+$identity = $alias === $second ? "same" : "different";
+unset($first, $second);
+echo get_class($alias), "|", $alias->getName(), "|", $identity, "|";
+echo count($alias->getClassNames()), "|", count($alias->getFunctions()), "\n";
+"#,
+    );
+    assert_eq!(class_output, "ReflectionExtension|dom|different|51|2\n");
+
+    let function_output = compile_and_run(
+        r#"<?php
+$owner = new ReflectionFunction("dom_import_simplexml");
+$first = $owner->getExtension();
+$alias = $first;
+$second = $owner->getExtension();
+$identity = $alias === $second ? "same" : "different";
+unset($first, $second);
+echo get_class($alias), "|", $alias->getName(), "|", $identity, "|";
+echo count($alias->getClassNames()), "|", count($alias->getFunctions()), "\n";
+"#,
+    );
+    assert_eq!(function_output, "ReflectionExtension|dom|different|51|2\n");
+
+    let method_output = compile_and_run(
+        r#"<?php
+$owner = new ReflectionMethod(DOMImplementation::class, "hasFeature");
+$first = $owner->getExtension();
+$alias = $first;
+$second = $owner->getExtension();
+$identity = $alias === $second ? "same" : "different";
+unset($first, $second);
+echo get_class($alias), "|", $alias->getName(), "|", $identity, "|";
+echo count($alias->getClassNames()), "|", count($alias->getFunctions()), "\n";
+"#,
+    );
+    assert_eq!(method_output, "ReflectionExtension|dom|different|51|2\n");
+
+    let enum_output = compile_and_run(
+        r#"<?php
+$owner = new ReflectionEnum(Dom\AdjacentPosition::class);
+$first = $owner->getExtension();
+$alias = $first;
+$second = $owner->getExtension();
+$identity = $alias === $second ? "same" : "different";
+unset($first, $second);
+echo get_class($alias), "|", $alias->getName(), "|", $identity, "|";
+echo count($alias->getClassNames()), "|", count($alias->getFunctions()), "\n";
+"#,
+    );
+    assert_eq!(enum_output, "ReflectionExtension|dom|different|51|2\n");
+}
+
+/// Verifies user class, function, and method Reflection owners preserve PHP's sentinels.
+///
+/// The internal owner path stores a real extension name, but user classes, functions, and methods
+/// deliberately retain the literal `false`. The `getExtension()` guard must consume that sentinel
+/// before attempting the typed `ReflectionExtension` construction. `ReflectionEnum` is covered by
+/// the internal owner tests because its current constructor contract accepts only a class string.
+#[test]
+fn user_reflection_owner_extensions_are_false_and_null() {
+    let output = compile_and_run(
+        r#"<?php
+class DomReflectionUserExtensionOwner {
+    public function method(): int { return 1; }
+}
+function dom_reflection_user_extension_function(): int { return 2; }
+
+$instance = new DomReflectionUserExtensionOwner();
+echo $instance->method(), "|", dom_reflection_user_extension_function(), "|";
+
+$owners = [
+    new ReflectionClass("DomReflectionUserExtensionOwner"),
+    new ReflectionFunction("dom_reflection_user_extension_function"),
+    new ReflectionMethod(DomReflectionUserExtensionOwner::class, "method"),
+];
+foreach ($owners as $owner) {
+    echo $owner->getExtensionName() === false ? "false" : "value", "|";
+    echo $owner->getExtension() === null ? "null" : "value", "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        "1|2|false|null\nfalse|null\nfalse|null\n",
+    );
+}
+
+/// Verifies every typed DOM owner extension path emits on both executable architectures.
+///
+/// This is intentionally an emission-only test: execution is host-specific, while the static
+/// `string|false` owner slot must narrow to `string` before every `ReflectionExtension`
+/// construction on the supported AArch64 and x86_64 targets. Keep the owners direct rather than
+/// in an array: an array would erase their static receiver types and fail to exercise that path.
+#[test]
+fn dom_reflection_owner_extension_typed_factory_emits_on_aarch64_and_x86_64() {
+    let source = r#"<?php
+$class = new ReflectionClass(DOMImplementation::class);
+$function = new ReflectionFunction("dom_import_simplexml");
+$method = new ReflectionMethod(DOMImplementation::class, "hasFeature");
+$enum = new ReflectionEnum(Dom\AdjacentPosition::class);
+
+$classFirst = $class->getExtension();
+$classSecond = $class->getExtension();
+$functionFirst = $function->getExtension();
+$functionSecond = $function->getExtension();
+$methodFirst = $method->getExtension();
+$methodSecond = $method->getExtension();
+$enumFirst = $enum->getExtension();
+$enumSecond = $enum->getExtension();
+
+echo $classFirst->getName(), $classFirst === $classSecond ? "same" : "different", "\n";
+echo $functionFirst->getName(), $functionFirst === $functionSecond ? "same" : "different", "\n";
+echo $methodFirst->getName(), $methodFirst === $methodSecond ? "same" : "different", "\n";
+echo $enumFirst->getName(), $enumFirst === $enumSecond ? "same" : "different", "\n";
+"#;
+
+    for target in ["linux-aarch64", "linux-x86_64"] {
+        let dir = make_cli_test_dir("elephc_dom_reflection_owner_extension_target_asm");
+        let php_path = dir.join("main.php");
+        fs::write(&php_path, source).expect("write DOM owner extension target fixture");
+        let mut command = crate::support::elephc_cli_command(&dir);
+        command
+            .arg("--emit-asm")
+            .arg("--target")
+            .arg(target)
+            .arg(&php_path);
+        let output = command
+            .output()
+            .expect("run DOM owner extension target assembly emission");
+        assert!(
+            output.status.success(),
+            "emit-asm for {target} failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let assembly = fs::read_to_string(php_path.with_extension("s"))
+            .expect("read DOM owner extension target assembly");
+        assert!(
+            assembly.contains("_eir_shared_reflection_extension_dom:\n"),
+            "{target} omitted the shared DOM ReflectionExtension factory",
+        );
+        let factory_call = if target.ends_with("aarch64") {
+            "bl _eir_shared_reflection_extension_dom"
+        } else {
+            "call _eir_shared_reflection_extension_dom"
+        };
+        assert!(
+            assembly.contains(factory_call),
+            "{target} omitted the typed owner-to-extension factory call",
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 
 /// Verifies a ReflectionFunction-owned extension collection remains linkable through the shared Mixed string ladder.

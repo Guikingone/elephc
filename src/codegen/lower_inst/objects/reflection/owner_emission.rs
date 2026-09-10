@@ -235,9 +235,12 @@ pub(super) fn emit_reflection_owner_object(
                     "__extension_name",
                     extension_name,
                 )?;
-                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-                emit_reflection_extension_factory(ctx, extension_name)?;
-                emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
+            } else {
+                emit_reflection_owner_false_mixed_property(
+                    ctx,
+                    class_name,
+                    "__extension_name",
+                )?;
             }
             emit_reflection_member_array_property_by_name(
                 ctx,
@@ -256,9 +259,12 @@ pub(super) fn emit_reflection_owner_object(
                     "__extension_name",
                     extension_name,
                 )?;
-                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-                emit_reflection_extension_factory(ctx, extension_name)?;
-                emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
+            } else {
+                emit_reflection_owner_false_mixed_property(
+                    ctx,
+                    class_name,
+                    "__extension_name",
+                )?;
             }
         } else if class_name == "ReflectionMethod" {
             if let Some(extension_name) = metadata
@@ -272,9 +278,12 @@ pub(super) fn emit_reflection_owner_object(
                     "__extension_name",
                     extension_name,
                 )?;
-                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-                emit_reflection_extension_factory(ctx, extension_name)?;
-                emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
+            } else {
+                emit_reflection_owner_false_mixed_property(
+                    ctx,
+                    class_name,
+                    "__extension_name",
+                )?;
             }
         }
         if class_name == "ReflectionEnum" {
@@ -285,9 +294,12 @@ pub(super) fn emit_reflection_owner_object(
                     "__extension_name",
                     extension_name,
                 )?;
-                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-                emit_reflection_extension_factory(ctx, extension_name)?;
-                emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
+            } else {
+                emit_reflection_owner_false_mixed_property(
+                    ctx,
+                    class_name,
+                    "__extension_name",
+                )?;
             }
             let case_names = metadata
                 .enum_case_members

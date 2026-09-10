@@ -297,3 +297,36 @@ try {
         "Dom\\import_simplexml:dom:I|Dom\\import_simplexml:dom:I|libxml_get_errors:libxml:I|simplexml_load_string:SimpleXML:I|ReflectionException:0:Function Missing_Reflection_Target() does not exist|ReflectionException:0:Function MiSsInG_Reflection_Target() does not exist|"
     );
 }
+
+/// Verifies DOM-family function extension metadata survives each ReflectionFunction origin.
+///
+/// The PHP 8.5.8 oracle covers a direct builtin name, a rooted namespaced alias, a
+/// dynamically supplied case-insensitive name, and an object materialized by
+/// `ReflectionExtension::getFunctions()`.  Every route must retain both the string
+/// `getExtensionName()` metadata and its `ReflectionExtension` owner.
+#[test]
+fn test_reflection_function_dom_extension_name_mixed_metadata_matches_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+$direct = new ReflectionFunction("dom_import_simplexml");
+$rooted = new ReflectionFunction("\\Dom\\import_simplexml");
+$dynamicName = "LiBxMl_GeT_ErRoRs";
+$dynamic = new ReflectionFunction($dynamicName);
+$fromCollection = (new ReflectionExtension("SimpleXML"))->getFunctions()["simplexml_load_string"];
+
+foreach ([$direct, $rooted, $dynamic, $fromCollection] as $reflection) {
+    echo $reflection->getName(), "|", $reflection->getExtensionName(), "|";
+    echo $reflection->getExtension()->getName(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "dom_import_simplexml|dom|dom\n",
+            "Dom\\import_simplexml|dom|dom\n",
+            "libxml_get_errors|libxml|libxml\n",
+            "simplexml_load_string|SimpleXML|SimpleXML\n",
+        ),
+    );
+}
