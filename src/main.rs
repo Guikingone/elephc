@@ -41,6 +41,7 @@ mod name_resolver;
 #[allow(dead_code, unused_imports)]
 mod native_deps;
 mod names;
+mod numeric_string;
 mod opcache;
 mod opcache_prelude;
 mod optimize;

@@ -21,6 +21,7 @@
 use std::cmp::Ordering;
 
 use super::scalar::ScalarValue;
+use crate::numeric_string::{scan_numeric_prefix, NumericScan};
 
 /// PHP's `is_numeric_string()` classification of a numeric string.
 ///
@@ -52,84 +53,6 @@ impl PhpNumeric {
     }
 }
 
-/// Returns whether a byte is one of the six characters PHP's `ZEND_IS_WHITESPACE` accepts.
-fn is_php_whitespace(byte: u8) -> bool {
-    matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
-}
-
-/// The longest leading numeric run of a string, as scanned by PHP's `_is_numeric_string_ex`.
-struct NumericScan<'a> {
-    /// The matched numeric text with leading whitespace and trailing garbage removed.
-    text: &'a str,
-    /// Whether the run contained a decimal point or a consumed exponent (`IS_DOUBLE` syntax).
-    is_float: bool,
-    /// Everything after the matched run, still un-trimmed.
-    trailing: &'a str,
-}
-
-/// Scans the longest leading numeric run of `value` using PHP's numeric-string grammar.
-///
-/// Accepts optional leading whitespace, an optional sign, a mantissa with at least one
-/// digit (`12`, `.5`, `5.`), and an exponent only when at least one digit follows it —
-/// `"1e"` therefore scans as `1` with `"e"` left over, exactly like PHP. Hex, underscore
-/// separators, `INF` and `NAN` are not part of the grammar. Returns `None` when no digit
-/// is present at all.
-fn scan_numeric_prefix(value: &str) -> Option<NumericScan<'_>> {
-    let bytes = value.as_bytes();
-    let mut idx = 0;
-    while idx < bytes.len() && is_php_whitespace(bytes[idx]) {
-        idx += 1;
-    }
-
-    let start = idx;
-    if idx < bytes.len() && matches!(bytes[idx], b'+' | b'-') {
-        idx += 1;
-    }
-
-    let mut digits = 0;
-    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-        idx += 1;
-        digits += 1;
-    }
-
-    let mut is_float = false;
-    if idx < bytes.len() && bytes[idx] == b'.' {
-        let mut probe = idx + 1;
-        while probe < bytes.len() && bytes[probe].is_ascii_digit() {
-            probe += 1;
-            digits += 1;
-        }
-        if digits > 0 {
-            idx = probe;
-            is_float = true;
-        }
-    }
-    if digits == 0 {
-        return None;
-    }
-
-    if idx < bytes.len() && matches!(bytes[idx], b'e' | b'E') {
-        let mut probe = idx + 1;
-        if probe < bytes.len() && matches!(bytes[probe], b'+' | b'-') {
-            probe += 1;
-        }
-        let exponent_start = probe;
-        while probe < bytes.len() && bytes[probe].is_ascii_digit() {
-            probe += 1;
-        }
-        if probe > exponent_start {
-            idx = probe;
-            is_float = true;
-        }
-    }
-
-    Some(NumericScan {
-        text: &value[start..idx],
-        is_float,
-        trailing: &value[idx..],
-    })
-}
-
 /// Classifies a scanned numeric run into PHP's `IS_LONG` / `IS_DOUBLE` result.
 ///
 /// Integer text that does not fit `i64` becomes `Float` with the `oflow` sign PHP records,
@@ -159,7 +82,7 @@ fn classify_numeric_scan(scan: &NumericScan<'_>) -> Option<PhpNumeric> {
 /// `"1_000"`, `"INF"`, and `"NAN"`.
 pub(in crate::optimize) fn php_numeric_string(value: &str) -> Option<PhpNumeric> {
     let scan = scan_numeric_prefix(value)?;
-    if !scan.trailing.bytes().all(is_php_whitespace) {
+    if !scan.is_fully_numeric() {
         return None;
     }
     classify_numeric_scan(&scan)

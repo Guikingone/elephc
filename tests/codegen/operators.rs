@@ -1387,3 +1387,215 @@ $d = "9223372036854775807"; $d--; var_dump($d);
          float(1.0E+20)\nint(9223372036854775806)\n"
     );
 }
+
+// --- Issue #362: PHP 8 numeric-string arithmetic ---
+// PHP 8 accepts numeric and leading-numeric strings as arithmetic operands (`+ - * / % **`),
+// coercing them at runtime: an integer-form string coerces to int, a float-form string
+// (with a `.` or exponent) coerces to float, and a leading-numeric string uses its numeric
+// prefix. Fully non-numeric string literals are rejected at compile time
+// (see `error_tests::type_system::test_error_arithmetic_on_string`).
+
+/// Verifies a pure integer-form string added to an int coerces to int: `"123" + 3` is `126`.
+#[test]
+fn test_numeric_string_plus_int() {
+    let out = compile_and_run(r#"<?php echo "123" + 3;"#);
+    assert_eq!(out, "126");
+}
+
+/// Verifies a float-form string operand routes through the runtime float path:
+/// `"1.5" + 3` must be `float(4.5)`, not the truncated `int(4)`.
+#[test]
+fn test_numeric_string_float_form_plus_int() {
+    let out = compile_and_run(r#"<?php var_dump("1.5" + 3);"#);
+    assert_eq!(out, "float(4.5)\n");
+}
+
+/// Verifies a float-form string on the right operand also routes to float: `3 + "1.5"`.
+#[test]
+fn test_int_plus_numeric_string_float_form() {
+    let out = compile_and_run(r#"<?php var_dump(3 + "1.5");"#);
+    assert_eq!(out, "float(4.5)\n");
+}
+
+/// Verifies integer-form string subtraction stays int: `"100" - 30` is `int(70)`.
+#[test]
+fn test_numeric_string_subtraction() {
+    let out = compile_and_run(r#"<?php var_dump("100" - 30);"#);
+    assert_eq!(out, "int(70)\n");
+}
+
+/// Verifies float-form string subtraction routes to float: `"10.5" - 3` is `float(7.5)`.
+#[test]
+fn test_numeric_string_float_form_subtraction() {
+    let out = compile_and_run(r#"<?php var_dump("10.5" - 3);"#);
+    assert_eq!(out, "float(7.5)\n");
+}
+
+/// Verifies integer-form string multiplication stays int: `"2" * 5` is `int(10)`.
+#[test]
+fn test_numeric_string_multiplication() {
+    let out = compile_and_run(r#"<?php var_dump("2" * 5);"#);
+    assert_eq!(out, "int(10)\n");
+}
+
+/// Verifies string division follows PHP's float division: `"10" / 3` is `float(3.333...)`.
+#[test]
+fn test_numeric_string_division() {
+    let out = compile_and_run(r#"<?php echo "10" / 3;"#);
+    assert_eq!(out, "3.3333333333333");
+}
+
+/// Verifies string modulo coerces to int: `"10" % 3` is `int(1)`.
+#[test]
+fn test_numeric_string_modulo() {
+    let out = compile_and_run(r#"<?php var_dump("10" % 3);"#);
+    assert_eq!(out, "int(1)\n");
+}
+
+/// Verifies a leading-numeric string coerces its numeric prefix, matching PHP's
+/// `"  +12foo" + 3` result of `int(15)` (with a compile-time non-numeric warning).
+#[test]
+fn test_leading_numeric_string_plus_int() {
+    let out = compile_and_run(r#"<?php var_dump("  +12foo" + 3);"#);
+    assert_eq!(out, "int(15)\n");
+}
+
+/// Verifies exponentiation accepts a numeric string operand: `"2" ** 3` prints `8`.
+#[test]
+fn test_numeric_string_exponentiation() {
+    let out = compile_and_run(r#"<?php echo "2" ** 3;"#);
+    assert_eq!(out, "8");
+}
+
+/// Verifies a scientific-notation string is float-form: `"1e3" + 1` is `float(1001)`.
+#[test]
+fn test_scientific_notation_string_plus_int() {
+    let out = compile_and_run(r#"<?php var_dump("1e3" + 1);"#);
+    assert_eq!(out, "float(1001)\n");
+}
+
+/// Verifies both operands may be numeric strings: `"6" * "7"` is `int(42)`.
+#[test]
+fn test_numeric_string_both_operands() {
+    let out = compile_and_run(r#"<?php var_dump("6" * "7");"#);
+    assert_eq!(out, "int(42)\n");
+}
+
+/// Verifies a numeric string variable (runtime value, not a literal) is coerced in
+/// arithmetic: a float-form string still routes to the float path through the mixed helper.
+#[test]
+fn test_numeric_string_variable_operand() {
+    let out = compile_and_run(
+        r#"<?php $a = $argc > 99 ? "3" : "1.5"; var_dump($a + 3);"#,
+    );
+    assert_eq!(out, "float(4.5)\n");
+}
+
+/// Verifies an integer-form string wider than `i64` classifies as PHP's `IS_DOUBLE` before
+/// the arithmetic runs: `"99999999999999999999" + 1` must be `float(1.0E+20)`, not the
+/// `PHP_INT_MAX` value `strtoll` saturation would produce.
+#[test]
+fn test_numeric_string_integer_overflow_is_float() {
+    let out = compile_and_run(r#"<?php var_dump("99999999999999999999" + 1);"#);
+    assert_eq!(out, "float(1.0E+20)\n");
+}
+
+/// Verifies the same out-of-range classification on `*`, where a saturated integer path
+/// would have kept the wrong `int(9223372036854775807)` result type as well as the value.
+#[test]
+fn test_numeric_string_integer_overflow_multiplication_is_float() {
+    let out = compile_and_run(r#"<?php var_dump("99999999999999999999" * 1);"#);
+    assert_eq!(out, "float(1.0E+20)\n");
+}
+
+/// Verifies a very wide integer-form string keeps full magnitude through the float path
+/// instead of collapsing onto the 64-bit boundary.
+#[test]
+fn test_numeric_string_wide_integer_overflow_keeps_magnitude() {
+    let out = compile_and_run(r#"<?php var_dump("123456789012345678901234567890" + 0);"#);
+    assert_eq!(out, "float(1.2345678901234568E+29)\n");
+}
+
+/// Verifies the negative side of the range check: `"-99999999999999999999" - 1` is a float.
+#[test]
+fn test_negative_numeric_string_integer_overflow_is_float() {
+    let out = compile_and_run(r#"<?php var_dump("-99999999999999999999" - 1);"#);
+    assert_eq!(out, "float(-1.0E+20)\n");
+}
+
+/// Verifies the boundary itself still takes the integer path: `PHP_INT_MAX` spelled as a
+/// string is `IS_LONG` in PHP, so it must stay `int` and keep every digit.
+#[test]
+fn test_numeric_string_at_int_max_stays_int() {
+    let out = compile_and_run(r#"<?php var_dump("9223372036854775807" + 0);"#);
+    assert_eq!(out, "int(9223372036854775807)\n");
+}
+
+/// Verifies `PHP_INT_MIN` spelled as a string also stays on the integer path.
+#[test]
+fn test_numeric_string_at_int_min_stays_int() {
+    let out = compile_and_run(r#"<?php var_dump("-9223372036854775808" - 0);"#);
+    assert_eq!(out, "int(-9223372036854775808)\n");
+}
+
+/// Verifies a runtime-valued out-of-range integer string is classified the same way as a
+/// literal, so the compile-time and runtime paths agree.
+#[test]
+fn test_runtime_numeric_string_integer_overflow_is_float() {
+    let out = compile_and_run(
+        r#"<?php $s = $argc > 99 ? "1" : "99999999999999999999"; var_dump($s + 1);"#,
+    );
+    assert_eq!(out, "float(1.0E+20)\n");
+}
+
+/// Verifies a boxed `Mixed` string operand coming out of an array is coerced with the same
+/// int-or-float rules as a typed `Str`, so `"1.5"` stored in an array is not truncated.
+#[test]
+fn test_boxed_mixed_numeric_string_float_form() {
+    let out = compile_and_run(r#"<?php $a = ["x" => "1.5", "y" => 1]; var_dump($a["x"] + 3);"#);
+    assert_eq!(out, "float(4.5)\n");
+}
+
+/// Verifies an integer-form string in a boxed `Mixed` cell stays an int.
+#[test]
+fn test_boxed_mixed_numeric_string_integer_form() {
+    let out = compile_and_run(r#"<?php $a = ["x" => "3", "y" => 1]; var_dump($a["x"] + 3);"#);
+    assert_eq!(out, "int(6)\n");
+}
+
+/// Verifies the `float` cast of a boxed string operand follows PHP's numeric-string grammar
+/// rather than libc `strtod`: `"0x1A"` is `0`, not `26`, so `1.5 + "0x1A"` is `float(1.5)`.
+#[test]
+fn test_float_plus_hex_spelling_string_uses_php_grammar() {
+    let out = compile_and_run(r#"<?php var_dump(1.5 + "0x1A");"#);
+    assert_eq!(out, "float(1.5)\n");
+}
+
+/// Verifies the `INF` spelling libc `strtod` accepts cannot reach the float path through a
+/// boxed `Mixed` operand: PHP has no `INF` numeric string, so the run is empty and the
+/// result stays finite.
+#[test]
+fn test_float_plus_inf_spelling_string_is_not_infinite() {
+    let out = compile_and_run(
+        r#"<?php $a = ["x" => "INF", "y" => 1.5]; var_dump($a["y"] + $a["x"]);"#,
+    );
+    assert_eq!(out, "float(1.5)\n");
+}
+
+/// Verifies the underscore separator is not part of PHP's numeric-string grammar, so
+/// `"1_000"` contributes only its `1` prefix.
+#[test]
+fn test_underscore_separator_string_uses_numeric_prefix_only() {
+    let out = compile_and_run(r#"<?php var_dump("1_000" + 1);"#);
+    assert_eq!(out, "int(2)\n");
+}
+
+/// Pins the documented incompatibility for a **runtime** non-numeric string: PHP raises a
+/// `TypeError`, elephc coerces the missing numeric prefix to `0`. Only a constant string
+/// literal is rejected at compile time (see
+/// `error_tests::type_system::test_error_arithmetic_on_string`).
+#[test]
+fn test_runtime_non_numeric_string_coerces_to_zero() {
+    let out = compile_and_run(r#"<?php $x = $argc > 99 ? "1" : "hi"; var_dump($x + 1);"#);
+    assert_eq!(out, "int(1)\n");
+}

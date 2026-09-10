@@ -14,7 +14,8 @@ use crate::codegen_support::{abi, platform::Arch};
 /// Emits `__rt_mixed_cast_float` which casts a boxed PhpMixed cell to a float.
 /// Uses the PhpMixed runtime tag to dispatch to per-type conversion paths:
 /// - Tag 0 (int): widens integer in x1 to float via `emit_int_result_to_float_result`
-/// - Tag 1 (string): calls `__rt_cstr` then `atof` to parse the string as a double
+/// - Tag 1 (string): parses the string through `__rt_str_to_number` (PHP's numeric-string
+///   grammar: leading numeric run, no hex/`INF`/`NAN`), matching the direct `(float)` cast
 /// - Tag 2 (float): moves float bits from x1 directly into d0
 /// - Tag 3 (bool): widens 0/1 bool in x1 to float
 /// - Tag >= 4 (null, unsupported): returns 0.0
@@ -38,7 +39,7 @@ pub fn emit_mixed_cast_float(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // does the mixed payload already hold an int?
     emitter.instruction("b.eq __rt_mixed_cast_float_from_int");                 // ints widen directly into the floating-point result register
     emitter.instruction("cmp x0, #1");                                          // does the mixed payload hold a string?
-    emitter.instruction("b.eq __rt_mixed_cast_float_from_string");              // strings cast through the runtime C-string bridge plus atof()
+    emitter.instruction("b.eq __rt_mixed_cast_float_from_string");              // strings parse through the PHP numeric-string grammar scanner
     emitter.instruction("cmp x0, #2");                                          // does the mixed payload already hold a float?
     emitter.instruction("b.eq __rt_mixed_cast_float_from_float");               // floats reuse their stored payload directly
     emitter.instruction("cmp x0, #3");                                          // does the mixed payload hold a bool?
@@ -53,9 +54,8 @@ pub fn emit_mixed_cast_float(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_cast_float_done");                        // return the converted integer payload
 
     emitter.label("__rt_mixed_cast_float_from_string");
-    emitter.instruction("bl __rt_cstr");                                        // materialize a null-terminated copy of the unboxed elefant string payload
-    emitter.bl_c("atof");                                                       // parse the current C string payload as double
-    emitter.instruction("b __rt_mixed_cast_float_done");                        // return the parsed floating-point string payload
+    emitter.instruction("bl __rt_str_to_number");                               // parse the string with PHP's numeric-string grammar (clips to the leading numeric run)
+    emitter.instruction("b __rt_mixed_cast_float_done");                        // return the parsed floating-point string payload in d0
 
     emitter.label("__rt_mixed_cast_float_from_float");
     emitter.instruction("fmov d0, x1");                                         // move the unboxed float bits into the floating-point result register
@@ -89,7 +89,7 @@ fn emit_mixed_cast_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 0");                                          // does the mixed payload already hold an int?
     emitter.instruction("je __rt_mixed_cast_float_from_int_linux_x86_64");      // ints widen directly into the floating-point result register
     emitter.instruction("cmp rax, 1");                                          // does the mixed payload hold a string?
-    emitter.instruction("je __rt_mixed_cast_float_from_string_linux_x86_64");   // strings cast through the runtime C-string bridge plus atof()
+    emitter.instruction("je __rt_mixed_cast_float_from_string_linux_x86_64");   // strings parse through the PHP numeric-string grammar scanner
     emitter.instruction("cmp rax, 2");                                          // does the mixed payload already hold a float?
     emitter.instruction("je __rt_mixed_cast_float_from_float_linux_x86_64");    // floats reuse their stored payload directly
     emitter.instruction("cmp rax, 3");                                          // does the mixed payload hold a bool?
@@ -105,10 +105,8 @@ fn emit_mixed_cast_float_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_float_from_string_linux_x86_64");
     emitter.instruction("mov rax, rdi");                                        // move the unboxed string pointer into the x86_64 string-result pointer register
-    abi::emit_call_label(emitter, "__rt_cstr");                                 // materialize a null-terminated copy of the unboxed elefant string payload
-    emitter.instruction("mov rdi, rax");                                        // pass the temporary C string through the SysV first integer argument register before atof()
-    emitter.instruction("call atof");                                           // parse the current C string payload as double
-    emitter.instruction("jmp __rt_mixed_cast_float_done_linux_x86_64");         // return the parsed floating-point string payload
+    abi::emit_call_label(emitter, "__rt_str_to_number");                        // parse the string with PHP's numeric-string grammar (clips to the leading numeric run)
+    emitter.instruction("jmp __rt_mixed_cast_float_done_linux_x86_64");         // return the parsed floating-point string payload in xmm0
 
     emitter.label("__rt_mixed_cast_float_from_float_linux_x86_64");
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float bits into the floating-point result register
