@@ -79,6 +79,14 @@ Legend:
   20.02 seconds with the 125.47 MiB user-assembly guard, proving the rebase has
   not reintroduced the ReflectionExtension codegen expansion. The larger
   assembler/executable fixture and CI matrix remain open.
+  On 2026-09-10, a fresh `git fetch origin` confirmed that `origin/main` still
+  resolves to `c91beb3434681294e0a1dd29ef92f42f3365923a`, is an ancestor of
+  published tip `e4b79113cb`, and the sole fork branch resolves to that same
+  tip (`0 behind / 73 ahead`). The fail-closed Python
+  coverage/bootstrap/PHPT-runner suite was re-run on this post-#913 tip:
+  55/55 passed in 13.872 seconds; `git diff --check` also passed. The full
+  assembler/executable Reflection fixture remains deliberately deferred while
+  only 2.3 GiB is free on the data volume, to avoid repeating the prior OOM.
 - [x] Freeze PHP `8.5.8`, php-src commit
   `26b97507444c4fbda072f57dda1820f7b7d5e467`, libxml2 `2.15.3`, and
   bundled Lexbor `2.7.0`.
