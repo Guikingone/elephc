@@ -70,6 +70,15 @@ Legend:
   fail-closed Python coverage/bootstrap/PHPT-runner suite was re-run after the
   rebase with 55/55 passing. GitHub has not yet supplied a validation CI run for
   that rewritten fork head, so no CI-green claim is made.
+  The rebase including merged #913 was then refreshed onto
+  `origin/main` `c91beb3434681294e0a1dd29ef92f42f3365923a`: 69 checkpoints
+  replayed with six semantic infrastructure conflicts resolved and force-pushed
+  with lease. A follow-up scanner fix yields current tip `6138743338`, now
+  `0 behind / 70 ahead`. On that exact tip,
+  `dom_reflection_extension_collection_assembly_stays_bounded` passes 1/1 in
+  20.02 seconds with the 125.47 MiB user-assembly guard, proving the rebase has
+  not reintroduced the ReflectionExtension codegen expansion. The larger
+  assembler/executable fixture and CI matrix remain open.
 - [x] Freeze PHP `8.5.8`, php-src commit
   `26b97507444c4fbda072f57dda1820f7b7d5e467`, libxml2 `2.15.3`, and
   bundled Lexbor `2.7.0`.
