@@ -191,6 +191,17 @@ struct ReflectionParameterMember {
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
     default_value_constant_name: Option<String>,
+    default_value_display: Option<ReflectionParameterDefaultDisplay>,
+}
+
+/// PHP source representation used only in reflection string formatting.
+///
+/// Some internal defaults evaluate to scalar values while php-src retains a richer source form
+/// in `ReflectionFunction::__toString()`. This stays distinct from
+/// `default_value_constant_name`, whose presence controls ReflectionParameter's constant APIs.
+#[derive(Clone)]
+enum ReflectionParameterDefaultDisplay {
+    ClassNameConstant(String),
 }
 
 /// Metadata needed for `ReflectionParameter::getDeclaringFunction()`.

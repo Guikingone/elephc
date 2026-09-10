@@ -69,6 +69,87 @@ fn reflection_owner_factory_label(
     )
 }
 
+/// Formats an internal `ReflectionFunction` object exactly as PHP exposes it through
+/// `ReflectionFunction::__toString()`.
+///
+/// The shared DOM-family factories bypass the normal constructor lowering, so they
+/// must initialize the synthetic `__string` slot themselves rather than leaving the
+/// shell class's empty default observable through object-to-string coercion.
+fn reflection_internal_function_to_string(
+    metadata: &ReflectionOwnerMetadata,
+    extension_name: &str,
+) -> String {
+    let reflected_name = metadata.reflected_name.as_deref().unwrap_or_default();
+    let deprecation = if metadata.is_deprecated {
+        ", deprecated"
+    } else {
+        ""
+    };
+    let mut rendered = format!(
+        "Function [ <internal{deprecation}:{extension_name}> function {reflected_name} ] {{\n\n  - Parameters [{}] {{\n",
+        metadata.parameter_members.len(),
+    );
+    for parameter in &metadata.parameter_members {
+        let requirement = if parameter.is_optional { "optional" } else { "required" };
+        let type_label = parameter
+            .type_metadata
+            .as_ref()
+            .map(reflection_type_metadata_to_string)
+            .map(|label| format!("{label} "))
+            .unwrap_or_default();
+        let reference = if parameter.is_passed_by_reference { "&" } else { "" };
+        let variadic = if parameter.is_variadic { "..." } else { "" };
+        let default = parameter
+            .default_value_display
+            .as_ref()
+            .map(|display| match display {
+                ReflectionParameterDefaultDisplay::ClassNameConstant(class_name) => {
+                    format!(" = {class_name}::class")
+                }
+            })
+            .or_else(|| {
+                parameter
+                    .default_value_constant_name
+                    .as_deref()
+                    .map(|value| format!(" = {value}"))
+                    .or_else(|| {
+                        parameter.default_value.as_ref().map(|value| match value {
+                            ReflectionParameterDefaultValue::Int(value) => format!(" = {value}"),
+                            ReflectionParameterDefaultValue::Bool(value) => format!(" = {value}"),
+                            ReflectionParameterDefaultValue::Float(value) => format!(" = {value}"),
+                            ReflectionParameterDefaultValue::Str(value) => {
+                                format!(" = \"{}\"", value.replace('"', "\\\""))
+                            }
+                            ReflectionParameterDefaultValue::Null => String::from(" = null"),
+                            ReflectionParameterDefaultValue::Object { class_name, args } if args.is_empty() => {
+                                format!(" = new {class_name}()")
+                            }
+                            ReflectionParameterDefaultValue::Object { class_name, .. } => {
+                                format!(" = new {class_name}(...)" )
+                            }
+                            ReflectionParameterDefaultValue::Array(_) => String::from(" = []"),
+                            ReflectionParameterDefaultValue::AssocArray(_) => String::from(" = []"),
+                        })
+                    })
+                })
+            .unwrap_or_default();
+        rendered.push_str(&format!(
+            "    Parameter #{} [ <{requirement}> {type_label}{reference}{variadic}${}{} ]\n",
+            parameter.position, parameter.name, default,
+        ));
+    }
+    rendered.push_str("  }\n");
+    if let Some(return_type) = metadata
+        .type_metadata
+        .as_ref()
+        .map(reflection_type_metadata_to_string)
+    {
+        rendered.push_str(&format!("  - Return [ {return_type} ]\n"));
+    }
+    rendered.push_str("}\n");
+    rendered
+}
+
 /// Resolves a canonical DOM-family class name when its factory is emitted for this module.
 fn shared_reflection_class_factory_name(
     ctx: &FunctionContext<'_>,
@@ -127,7 +208,12 @@ pub(super) fn emit_shared_reflection_owner_factory(
     let Some(canonical) = canonical else {
         return Ok(false);
     };
-    let label = reflection_owner_factory_label(reflector_class, &canonical, shallow);
+    let label_name = if reflector_class == "ReflectionFunction" {
+        php_symbol_key(&canonical)
+    } else {
+        canonical
+    };
+    let label = reflection_owner_factory_label(reflector_class, &label_name, shallow);
     abi::emit_call_label(ctx.emitter, &label);
     Ok(true)
 }
@@ -235,7 +321,12 @@ pub(in crate::codegen) fn emit_shared_reflection_extension_factories(
         .collect::<Vec<_>>();
     function_names.sort_unstable_by_key(|name| php_symbol_key(name));
     for function_name in function_names {
-        let label = reflection_owner_factory_label("ReflectionFunction", function_name, false);
+        // Factory calls resolve the function through `php_symbol_key` before they
+        // select the internal signature.  Keep the label on that same key while
+        // passing the exported spelling into metadata generation, which preserves
+        // ReflectionFunction's PHP-visible declaration case.
+        let function_key = php_symbol_key(function_name);
+        let label = reflection_owner_factory_label("ReflectionFunction", &function_key, false);
         emit_shared_helper(
             module,
             emitter,
@@ -247,7 +338,21 @@ pub(in crate::codegen) fn emit_shared_reflection_extension_factories(
             &format!("--- shared ReflectionFunction factory: {} ---", function_name),
             |ctx| {
                 let metadata = reflection_function_metadata_for_name(ctx, function_name)?;
-                emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)
+                emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
+                let extension_name = reflection_extension_name_for_function(function_name)
+                    .ok_or_else(|| {
+                        CodegenIrError::unsupported(format!(
+                            "shared ReflectionFunction factory missing extension for {}",
+                            function_name
+                        ))
+                    })?;
+                let string = reflection_internal_function_to_string(&metadata, extension_name);
+                emit_reflection_owner_string_property_by_name(
+                    ctx,
+                    "ReflectionFunction",
+                    "__string",
+                    &string,
+                )
             },
         )?;
     }

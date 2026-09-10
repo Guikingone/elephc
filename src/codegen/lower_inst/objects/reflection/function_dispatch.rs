@@ -126,6 +126,7 @@ fn emit_reflection_function_name_compare(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_string_value_to_regs(value, "x1", "x2")?;
+            emit_reflection_function_name_leading_slash_normalization(ctx, "x1", "x2");
             abi::emit_symbol_address(ctx.emitter, "x3", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
@@ -134,6 +135,7 @@ fn emit_reflection_function_name_compare(
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(value, "rdi", "rsi")?;
+            emit_reflection_function_name_leading_slash_normalization(ctx, "rdi", "rsi");
             abi::emit_symbol_address(ctx.emitter, "rdx", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
@@ -142,4 +144,52 @@ fn emit_reflection_function_name_compare(
         }
     }
     Ok(())
+}
+
+/// Rebases a borrowed dynamic function-name slice after exactly one leading namespace separator.
+///
+/// The caller reloads the source value before each bounded candidate comparison, so this changes
+/// only call-local pointer/length registers and neither mutates nor takes ownership of the PHP
+/// string. A doubled separator restores the original slice so it follows PHP's normal missing-
+/// function ReflectionException path. This mirrors the literal ReflectionFunction lookup rule.
+fn emit_reflection_function_name_leading_slash_normalization(
+    ctx: &mut FunctionContext<'_>,
+    pointer_reg: &str,
+    length_reg: &str,
+) {
+    let done_label = ctx.next_label("reflection_function_trimmed_name");
+    let single_slash_label = ctx.next_label("reflection_function_single_leading_slash");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {length_reg}, {done_label}")); // preserve an empty borrowed name without dereferencing it
+            ctx.emitter.instruction(&format!("ldrb w9, [{pointer_reg}]"));      // inspect the first byte of the dynamic function name
+            ctx.emitter.instruction("cmp w9, #92");                             // is the next byte PHP's namespace separator?
+            ctx.emitter.instruction(&format!("b.ne {done_label}"));             // keep the original slice when no separator remains
+            ctx.emitter.instruction(&format!("add {pointer_reg}, {pointer_reg}, #1")); // rebase the borrowed pointer beyond one separator
+            ctx.emitter.instruction(&format!("sub {length_reg}, {length_reg}, #1"));    // keep the borrowed length aligned with the rebased pointer
+            ctx.emitter.instruction(&format!("cbz {length_reg}, {done_label}")); // accept one trailing separator as the empty lookup name
+            ctx.emitter.instruction(&format!("ldrb w9, [{pointer_reg}]"));      // inspect whether the original name had a second separator
+            ctx.emitter.instruction("cmp w9, #92");                             // reject doubled namespace separators like PHP
+            ctx.emitter.instruction(&format!("b.ne {single_slash_label}"));     // retain the one-separator rebased slice
+            ctx.emitter.instruction(&format!("sub {pointer_reg}, {pointer_reg}, #1")); // restore the original borrowed pointer for an invalid doubled prefix
+            ctx.emitter.instruction(&format!("add {length_reg}, {length_reg}, #1"));    // restore the original borrowed length for the exception message
+            ctx.emitter.label(&single_slash_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {length_reg}, {length_reg}")); // preserve an empty borrowed name without dereferencing it
+            ctx.emitter.instruction(&format!("je {done_label}"));               // skip the byte load when the dynamic name is empty
+            ctx.emitter.instruction(&format!("cmp BYTE PTR [{pointer_reg}], 92"));// is the next byte PHP's namespace separator?
+            ctx.emitter.instruction(&format!("jne {done_label}"));              // keep the original slice when no separator remains
+            ctx.emitter.instruction(&format!("inc {pointer_reg}"));             // rebase the borrowed pointer beyond one separator
+            ctx.emitter.instruction(&format!("dec {length_reg}"));              // keep the borrowed length aligned with the rebased pointer
+            ctx.emitter.instruction(&format!("test {length_reg}, {length_reg}")); // accept one trailing separator as the empty lookup name
+            ctx.emitter.instruction(&format!("je {done_label}"));               // no second byte means the one separator was valid
+            ctx.emitter.instruction(&format!("cmp BYTE PTR [{pointer_reg}], 92"));// inspect whether the original name had a second separator
+            ctx.emitter.instruction(&format!("jne {single_slash_label}"));      // retain the one-separator rebased slice
+            ctx.emitter.instruction(&format!("dec {pointer_reg}"));             // restore the original borrowed pointer for an invalid doubled prefix
+            ctx.emitter.instruction(&format!("inc {length_reg}"));              // restore the original borrowed length for the exception message
+            ctx.emitter.label(&single_slash_label);
+        }
+    }
+    ctx.emitter.label(&done_label);
 }

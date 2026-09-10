@@ -79,6 +79,39 @@ pub(super) fn reflection_registered_function_metadata(
     Ok(metadata)
 }
 
+/// Applies source-display forms whose semantics are retained by the locked PHP 8.5.8 snapshot.
+///
+/// The SimpleXML class-name defaults evaluate to the string `SimpleXMLElement`, while php-src
+/// renders their original `SimpleXMLElement::class` expression in ReflectionFunction text. The
+/// exact function/parameter/value triples below are intentionally enumerated rather than inferred
+/// from arbitrary strings, and do not change ReflectionParameter's constant metadata APIs.
+fn apply_locked_internal_function_default_displays(
+    function_name: &str,
+    parameters: &mut [ReflectionParameterMember],
+) {
+    let is_simplexml_class_name_default = matches!(
+        php_symbol_key(function_name).as_str(),
+        "simplexml_load_file" | "simplexml_load_string" | "simplexml_import_dom"
+    );
+    if !is_simplexml_class_name_default {
+        return;
+    }
+    for parameter in parameters {
+        if parameter.name == "class_name"
+            && matches!(
+                parameter.default_value.as_ref(),
+                Some(ReflectionParameterDefaultValue::Str(value)) if value == "SimpleXMLElement"
+            )
+        {
+            parameter.default_value_display = Some(
+                ReflectionParameterDefaultDisplay::ClassNameConstant(
+                    "SimpleXMLElement".to_string(),
+                ),
+            );
+        }
+    }
+}
+
 /// Builds metadata for a supported builtin `ReflectionFunction`.
 pub(super) fn reflection_builtin_function_metadata(
     ctx: &FunctionContext<'_>,
@@ -93,7 +126,7 @@ pub(super) fn reflection_builtin_function_metadata(
         attr_args: Vec::new(),
         required_parameter_count,
         type_metadata: type_metadata.clone(),
-        is_deprecated: false,
+        is_deprecated: signature.deprecation.is_some(),
         is_generator: false,
     };
     let mut metadata = empty_reflection_metadata();
@@ -108,14 +141,28 @@ pub(super) fn reflection_builtin_function_metadata(
         &[],
         None,
     )?;
+    apply_locked_internal_function_default_displays(function_name, &mut metadata.parameter_members);
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
+    metadata.is_deprecated = signature.deprecation.is_some();
     Ok(metadata)
 }
 
 /// Returns the canonical callable-builtin name and signature for ReflectionFunction.
 pub(super) fn reflection_builtin_function_signature(function_name: &str) -> Option<(String, FunctionSig)> {
-    let builtin_key = php_symbol_key(function_name.trim_start_matches('\\'));
+    let lookup_name = function_name.strip_prefix('\\').unwrap_or(function_name);
+    if lookup_name.starts_with('\\') {
+        return None;
+    }
+    if let Some(function) = crate::internal_extensions::registry().function(lookup_name) {
+        let signature = crate::internal_extensions::function_signature_for(
+            &function.exported_name,
+            &function.signature,
+        )
+        .ok()?;
+        return Some((function.exported_name.clone(), signature));
+    }
+    let builtin_key = php_symbol_key(lookup_name);
     crate::types::first_class_callable_builtin_sig(&builtin_key)
         .map(|signature| (builtin_key, signature))
 }

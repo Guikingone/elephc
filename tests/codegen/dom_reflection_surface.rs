@@ -533,6 +533,355 @@ foreach ($owners as $kind => $owner) {
     );
 }
 
+/// Verifies a ReflectionFunction-owned extension collection remains linkable through the shared Mixed string ladder.
+///
+/// The collection builder constructs its `ReflectionFunction` entries lazily.  Keeping
+/// the owner in an associative array makes its public method results dynamic.  Two
+/// concatenations then force the same `ReflectionFunction` through two `Mixed → string`
+/// contexts, which requires `_eir_shared_mixed_to_string` rather than an inline ladder.
+/// This is the smallest program that previously left the `dom_import_simplexml` factory
+/// undefined.
+#[test]
+fn reflection_function_extension_collection_links_from_shared_mixed_string_ladder() {
+    let output = compile_and_run(
+        r#"<?php
+$owners = [
+    "function" => (new ReflectionFunction("dom_import_simplexml"))->getExtension(),
+];
+
+foreach ($owners as $owner) {
+    $functions = $owner->getFunctions();
+    $function = $functions["dom_import_simplexml"];
+    $first = "first:" . $function;
+    $second = "second:" . $function;
+    echo $owner->getName(), "|", $function->getName(), "|", strlen($first), "|", strlen($second), "|", $first, "|", $second, "\n";
+}
+"#,
+    );
+    let reflected = concat!(
+        "Function [ <internal:dom> function dom_import_simplexml ] {\n\n",
+        "  - Parameters [1] {\n",
+        "    Parameter #0 [ <required> object $node ]\n",
+        "  }\n",
+        "  - Return [ DOMAttr|DOMElement ]\n",
+        "}\n",
+    );
+    assert_eq!(
+        output,
+        format!(
+            "dom|dom_import_simplexml|173|174|first:{reflected}|second:{reflected}\n"
+        ),
+    );
+}
+
+/// Verifies DOM-family shared function factories preserve PHP's internal deprecation marker.
+#[test]
+fn reflection_function_deprecated_internal_string_matches_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+$function = new ReflectionFunction("libxml_disable_entity_loader");
+echo $function;
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "Function [ <internal, deprecated:libxml> function libxml_disable_entity_loader ] {\n\n",
+            "  - Parameters [1] {\n",
+            "    Parameter #0 [ <optional> bool $disable = true ]\n",
+            "  }\n",
+            "  - Return [ bool ]\n",
+            "}\n",
+        ),
+    );
+}
+
+/// Verifies a namespaced DOM function keeps PHP's registered declaration spelling.
+#[test]
+fn reflection_function_namespaced_dom_alias_string_matches_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+$function = new ReflectionFunction("Dom\\import_simplexml");
+echo $function->getName(), "|", $function;
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "Dom\\import_simplexml|",
+            "Function [ <internal:dom> function Dom\\import_simplexml ] {\n\n",
+            "  - Parameters [1] {\n",
+            "    Parameter #0 [ <required> object $node ]\n",
+            "  }\n",
+            "  - Return [ Dom\\Attr|Dom\\Element ]\n",
+            "}\n",
+        ),
+    );
+}
+
+/// Verifies a rooted namespaced DOM function resolves to its registered declaration spelling.
+#[test]
+fn reflection_function_rooted_namespaced_dom_alias_string_matches_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+$function = new ReflectionFunction("\\Dom\\import_simplexml");
+echo $function->getName(), "|", $function;
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "Dom\\import_simplexml|",
+            "Function [ <internal:dom> function Dom\\import_simplexml ] {\n\n",
+            "  - Parameters [1] {\n",
+            "    Parameter #0 [ <required> object $node ]\n",
+            "  }\n",
+            "  - Return [ Dom\\Attr|Dom\\Element ]\n",
+            "}\n",
+        ),
+    );
+}
+
+/// Verifies a dynamic rooted DOM function name resolves to its registered declaration spelling.
+#[test]
+fn reflection_function_dynamic_rooted_namespaced_dom_alias_string_matches_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+$name = "\\Dom\\import_simplexml";
+$function = new ReflectionFunction($name);
+echo $function->getName(), "|", $function;
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "Dom\\import_simplexml|",
+            "Function [ <internal:dom> function Dom\\import_simplexml ] {\n\n",
+            "  - Parameters [1] {\n",
+            "    Parameter #0 [ <required> object $node ]\n",
+            "  }\n",
+            "  - Return [ Dom\\Attr|Dom\\Element ]\n",
+            "}\n",
+        ),
+    );
+}
+
+/// Verifies a static doubled-rooted DOM function name keeps PHP's missing-function failure.
+#[test]
+fn reflection_function_static_doubled_rooted_dom_alias_rejects_like_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+try {
+    new ReflectionFunction("\\\\Dom\\import_simplexml");
+} catch (ReflectionException $exception) {
+    echo get_class($exception), "|", $exception->getCode(), "|", $exception->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "ReflectionException|0|Function \\\\Dom\\import_simplexml() does not exist\n",
+    );
+}
+
+/// Verifies a dynamic doubled-rooted DOM function name keeps PHP's missing-function failure.
+#[test]
+fn reflection_function_dynamic_doubled_rooted_dom_alias_rejects_like_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+$name = "\\\\Dom\\import_simplexml";
+try {
+    new ReflectionFunction($name);
+} catch (ReflectionException $exception) {
+    echo get_class($exception), "|", $exception->getCode(), "|", $exception->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "ReflectionException|0|Function \\\\Dom\\import_simplexml() does not exist\n",
+    );
+}
+
+/// Verifies direct SimpleXML ReflectionFunction strings retain class-name default source forms.
+#[test]
+fn reflection_function_simplexml_class_name_defaults_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+echo new ReflectionFunction("simplexml_load_file");
+echo new ReflectionFunction("simplexml_load_string");
+echo new ReflectionFunction("simplexml_import_dom");
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "Function [ <internal:SimpleXML> function simplexml_load_file ] {\n\n",
+            "  - Parameters [5] {\n",
+            "    Parameter #0 [ <required> string $filename ]\n",
+            "    Parameter #1 [ <optional> ?string $class_name = SimpleXMLElement::class ]\n",
+            "    Parameter #2 [ <optional> int $options = 0 ]\n",
+            "    Parameter #3 [ <optional> string $namespace_or_prefix = \"\" ]\n",
+            "    Parameter #4 [ <optional> bool $is_prefix = false ]\n",
+            "  }\n",
+            "  - Return [ SimpleXMLElement|false ]\n",
+            "}\n",
+            "Function [ <internal:SimpleXML> function simplexml_load_string ] {\n\n",
+            "  - Parameters [5] {\n",
+            "    Parameter #0 [ <required> string $data ]\n",
+            "    Parameter #1 [ <optional> ?string $class_name = SimpleXMLElement::class ]\n",
+            "    Parameter #2 [ <optional> int $options = 0 ]\n",
+            "    Parameter #3 [ <optional> string $namespace_or_prefix = \"\" ]\n",
+            "    Parameter #4 [ <optional> bool $is_prefix = false ]\n",
+            "  }\n",
+            "  - Return [ SimpleXMLElement|false ]\n",
+            "}\n",
+            "Function [ <internal:SimpleXML> function simplexml_import_dom ] {\n\n",
+            "  - Parameters [2] {\n",
+            "    Parameter #0 [ <required> object $node ]\n",
+            "    Parameter #1 [ <optional> ?string $class_name = SimpleXMLElement::class ]\n",
+            "  }\n",
+            "  - Return [ ?SimpleXMLElement ]\n",
+            "}\n",
+        ),
+    );
+}
+
+/// Verifies SimpleXML extension function collections retain class-name default source forms.
+#[test]
+fn reflection_extension_simplexml_function_collection_default_strings_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+$functions = (new ReflectionExtension("SimpleXML"))->getFunctions();
+foreach (["simplexml_load_file", "simplexml_load_string", "simplexml_import_dom"] as $name) {
+    echo $functions[$name];
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "Function [ <internal:SimpleXML> function simplexml_load_file ] {\n\n",
+            "  - Parameters [5] {\n",
+            "    Parameter #0 [ <required> string $filename ]\n",
+            "    Parameter #1 [ <optional> ?string $class_name = SimpleXMLElement::class ]\n",
+            "    Parameter #2 [ <optional> int $options = 0 ]\n",
+            "    Parameter #3 [ <optional> string $namespace_or_prefix = \"\" ]\n",
+            "    Parameter #4 [ <optional> bool $is_prefix = false ]\n",
+            "  }\n",
+            "  - Return [ SimpleXMLElement|false ]\n",
+            "}\n",
+            "Function [ <internal:SimpleXML> function simplexml_load_string ] {\n\n",
+            "  - Parameters [5] {\n",
+            "    Parameter #0 [ <required> string $data ]\n",
+            "    Parameter #1 [ <optional> ?string $class_name = SimpleXMLElement::class ]\n",
+            "    Parameter #2 [ <optional> int $options = 0 ]\n",
+            "    Parameter #3 [ <optional> string $namespace_or_prefix = \"\" ]\n",
+            "    Parameter #4 [ <optional> bool $is_prefix = false ]\n",
+            "  }\n",
+            "  - Return [ SimpleXMLElement|false ]\n",
+            "}\n",
+            "Function [ <internal:SimpleXML> function simplexml_import_dom ] {\n\n",
+            "  - Parameters [2] {\n",
+            "    Parameter #0 [ <required> object $node ]\n",
+            "    Parameter #1 [ <optional> ?string $class_name = SimpleXMLElement::class ]\n",
+            "  }\n",
+            "  - Return [ ?SimpleXMLElement ]\n",
+            "}\n",
+        ),
+    );
+}
+
+/// Verifies all locked SimpleXML class-name defaults preserve API values and source formatting.
+#[test]
+fn reflection_function_simplexml_class_name_default_apis_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+$direct = [
+    "simplexml_load_file" => new ReflectionFunction("simplexml_load_file"),
+    "simplexml_load_string" => new ReflectionFunction("simplexml_load_string"),
+    "simplexml_import_dom" => new ReflectionFunction("simplexml_import_dom"),
+];
+foreach ($direct as $name => $function) {
+    $parameter = $function->getParameters()[1];
+    echo "direct|", $name, "|", $parameter->getDefaultValue(), "|";
+    echo $parameter->isDefaultValueConstant() ? "1" : "0", "|";
+    echo $parameter->getDefaultValueConstantName() === null ? "1" : "0", "|", $function;
+}
+$functions = (new ReflectionExtension("SimpleXML"))->getFunctions();
+foreach (["simplexml_load_file", "simplexml_load_string", "simplexml_import_dom"] as $name) {
+    $function = $functions[$name];
+    $parameter = $function->getParameters()[1];
+    echo "collection|", $name, "|", $parameter->getDefaultValue(), "|";
+    echo $parameter->isDefaultValueConstant() ? "1" : "0", "|";
+    echo $parameter->getDefaultValueConstantName() === null ? "1" : "0", "|", $function;
+}
+"#,
+    );
+    let load_file = concat!(
+        "Function [ <internal:SimpleXML> function simplexml_load_file ] {\n\n",
+        "  - Parameters [5] {\n",
+        "    Parameter #0 [ <required> string $filename ]\n",
+        "    Parameter #1 [ <optional> ?string $class_name = SimpleXMLElement::class ]\n",
+        "    Parameter #2 [ <optional> int $options = 0 ]\n",
+        "    Parameter #3 [ <optional> string $namespace_or_prefix = \"\" ]\n",
+        "    Parameter #4 [ <optional> bool $is_prefix = false ]\n",
+        "  }\n",
+        "  - Return [ SimpleXMLElement|false ]\n",
+        "}\n",
+    );
+    let load_string = concat!(
+        "Function [ <internal:SimpleXML> function simplexml_load_string ] {\n\n",
+        "  - Parameters [5] {\n",
+        "    Parameter #0 [ <required> string $data ]\n",
+        "    Parameter #1 [ <optional> ?string $class_name = SimpleXMLElement::class ]\n",
+        "    Parameter #2 [ <optional> int $options = 0 ]\n",
+        "    Parameter #3 [ <optional> string $namespace_or_prefix = \"\" ]\n",
+        "    Parameter #4 [ <optional> bool $is_prefix = false ]\n",
+        "  }\n",
+        "  - Return [ SimpleXMLElement|false ]\n",
+        "}\n",
+    );
+    let import_dom = concat!(
+        "Function [ <internal:SimpleXML> function simplexml_import_dom ] {\n\n",
+        "  - Parameters [2] {\n",
+        "    Parameter #0 [ <required> object $node ]\n",
+        "    Parameter #1 [ <optional> ?string $class_name = SimpleXMLElement::class ]\n",
+        "  }\n",
+        "  - Return [ ?SimpleXMLElement ]\n",
+        "}\n",
+    );
+    let expected_rows = format!(
+        "simplexml_load_file|SimpleXMLElement|0|1|{load_file}{{source}}|simplexml_load_string|SimpleXMLElement|0|1|{load_string}{{source}}|simplexml_import_dom|SimpleXMLElement|0|1|{import_dom}"
+    );
+    assert_eq!(
+        output,
+        format!(
+            "direct|{}collection|{}",
+            expected_rows.replace("{source}", "direct"),
+            expected_rows.replace("{source}", "collection"),
+        ),
+    );
+}
+
+/// Verifies locked object and nullable-string parameter TypeExpr metadata remains observable.
+#[test]
+fn reflection_function_internal_parameter_types_match_php_8_5_8() {
+    let output = compile_and_run(
+        r#"<?php
+$object = (new ReflectionFunction("dom_import_simplexml"))->getParameters()[0];
+$nullable = (new ReflectionFunction("simplexml_load_file"))->getParameters()[1];
+echo "object|", $object->hasType() ? "1" : "0", "|", $object->getType(), "|";
+echo $object->getType()->allowsNull() ? "1" : "0", "|";
+echo $object->allowsNull() ? "1" : "0", "\n";
+echo "nullable|", $nullable->hasType() ? "1" : "0", "|", $nullable->getType(), "|";
+echo $nullable->getType()->allowsNull() ? "1" : "0", "|";
+echo $nullable->allowsNull() ? "1" : "0", "\n";
+"#,
+    );
+    assert_eq!(output, "object|1|object|0|0\nnullable|1|?string|1|1\n");
+}
+
 /// Guards the lazy extension collection path against re-inlining DOM registry payloads.
 ///
 /// The fixture stops after user assembly generation: the historical regression fed more than

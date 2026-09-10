@@ -87,6 +87,40 @@ Legend:
   55/55 passed in 13.872 seconds; `git diff --check` also passed. The full
   assembler/executable Reflection fixture remains deliberately deferred while
   only 2.3 GiB is free on the data volume, to avoid repeating the prior OOM.
+  A later ReflectionFunction factory tranche closed a concrete post-rebase
+  linker/runtime gap: shared factory labels now use the same PHP symbol key as
+  their calls while reflection metadata retains the registry's exported PHP
+  spelling. Shared internal factories initialize the PHP-exact `__string`
+  value, including declared `object` parameter types and the
+  `<internal, deprecated:libxml>` header. Static and dynamic names accept
+  exactly one rooted `\\`; doubled roots preserve PHP's original-name
+  `ReflectionException` instead of being silently normalized. The focused
+  `dom_import_simplexml` collection/Mixed-string, namespaced alias, rooted
+  static, rooted dynamic, doubled-root static, doubled-root dynamic, and
+  deprecated-libxml oracles pass individually (seven ReflectionFunction tests,
+  20.56--42.34 seconds each). Two independent
+  Terra/Luna reviews found and closed the exported-case, leading-slash, and
+  multi-slash defects before this checkpoint. `git diff --check` passes.
+  The reconstructible DOM `target/` was cleaned once under actual ENOSPC,
+  freeing 2.6 GiB; no source, oracle, foreign target, or untracked diagnostic
+  artifact was removed. An accidental broad `reflection_function_` filter
+  subsequently ran 33 tests (17 pass / 16 fail): it also records outstanding
+  non-closure work, notably eval's missing `get_extension_funcs` registry
+  binding and older DOM Reflection accessor/signature parity failures. Those
+  failures are explicitly not treated as green or fixed by this tranche.
+  A final strict review found that PHP displays the three SimpleXML
+  `class_name` defaults as `SimpleXMLElement::class` in `__toString()` while
+  their runtime default remains the string `"SimpleXMLElement"`, with
+  `isDefaultValueConstant() === false` and a null constant name. The metadata
+  now carries this display-only distinction exclusively for the three locked
+  contract tuples; it does not use a global string heuristic. The same oracle
+  exposed and fixed the declared Reflection type atom `false`, so
+  `SimpleXMLElement|false` is no longer truncated. Exact direct and dynamic
+  collection tests pass for the three renderings, `object`/`?string` type
+  flags, and all three default APIs across six reflector objects (the latter:
+  39.88 seconds). A final independent audit returned `GO` for the complete
+  uncommitted ReflectionFunction diff; the wider failures above remain open
+  campaign work.
 - [x] Freeze PHP `8.5.8`, php-src commit
   `26b97507444c4fbda072f57dda1820f7b7d5e467`, libxml2 `2.15.3`, and
   bundled Lexbor `2.7.0`.
