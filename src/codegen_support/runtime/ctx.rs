@@ -317,6 +317,106 @@ pub fn emit_heap_off_store(emitter: &mut Emitter, reg: &str, value: &str) {
     }
 }
 
+/// Loads the concat scratch write offset into `reg`, ctx-relative in
+/// ctx-register mode and from the legacy global symbol otherwise.
+// Consumed by the M0 concat-family migration (reserve/publish/grow + the
+// ~47 string-producing consumers), which lands as one family-wide change.
+#[allow(dead_code)]
+pub fn emit_concat_off_load(emitter: &mut Emitter, reg: &str) {
+    if emitter.ctx_register {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!(
+                    "ldr {}, [x28, #{}]",
+                    reg, CTX_CONCAT_OFF_OFFSET
+                )); // load the per-context concat scratch write offset
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov {}, QWORD PTR [r14 + {}]",
+                    reg, CTX_CONCAT_OFF_OFFSET
+                )); // load the per-context concat scratch write offset
+            }
+        }
+        return;
+    }
+    abi::emit_symbol_address(emitter, reg, "_concat_off");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {}, [{}]", reg, reg)); // load the legacy global concat offset
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {}, QWORD PTR [{}]", reg, reg)); // load the legacy global concat offset
+        }
+    }
+}
+
+/// Stores the concat scratch write offset value back, ctx-relative in
+/// ctx-register mode and to the legacy global symbol otherwise.
+///
+/// In legacy mode the value is stored through the given scratch register: the
+/// caller must not rely on it surviving.
+// Consumed by the M0 concat-family migration (see emit_concat_off_load).
+#[allow(dead_code)]
+pub fn emit_concat_off_store(emitter: &mut Emitter, reg: &str, value: &str) {
+    if emitter.ctx_register {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!(
+                    "str {}, [x28, #{}]",
+                    value, CTX_CONCAT_OFF_OFFSET
+                )); // store the per-context concat scratch write offset
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov QWORD PTR [r14 + {}], {}",
+                    CTX_CONCAT_OFF_OFFSET, value
+                )); // store the per-context concat scratch write offset
+            }
+        }
+        return;
+    }
+    abi::emit_symbol_address(emitter, reg, "_concat_off");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("str {}, [{}]", value, reg)); // store the legacy global concat offset
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [{}], {}", reg, value)); // store the legacy global concat offset
+        }
+    }
+}
+
+/// Materializes the concat scratch BUFFER base address into `reg`,
+/// ctx-relative in ctx-register mode and from the legacy global symbol
+/// otherwise.
+///
+/// The buffer closes the `_rt_ctx` layout at a 64 KiB+ offset, so the ctx form
+/// derives the address from the ctx register (an imm12-window `add`/`lea`) —
+/// never an immediate-offset load on the far offset itself.
+// Consumed by the M0 concat-family migration (see emit_concat_off_load).
+#[allow(dead_code)]
+pub fn emit_concat_buf_address(emitter: &mut Emitter, reg: &str) {
+    if emitter.ctx_register {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!(
+                    "add {}, x28, #{}",
+                    reg, CTX_CONCAT_BUF_OFFSET
+                )); // base of the per-context concat scratch buffer
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "lea {}, [r14 + {}]",
+                    reg, CTX_CONCAT_BUF_OFFSET
+                )); // base of the per-context concat scratch buffer
+            }
+        }
+        return;
+    }
+    abi::emit_symbol_address(emitter, reg, "_concat_buf");
+}
+
 /// Materializes the free-list head SLOT address into `reg`, ctx-relative in
 /// ctx-register mode and from the legacy global symbol otherwise.
 ///
