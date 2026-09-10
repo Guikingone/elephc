@@ -2144,7 +2144,7 @@ fn call_target_with_pushed_args(
 /// Saves the current concat offset before the nested callable target runs.
 fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
     let scratch = abi::temp_int_reg(emitter.target);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, scratch);
     match emitter.target.arch {
         Arch::AArch64 => abi::emit_push_reg(emitter, scratch),
         Arch::X86_64 => abi::store_at_offset(emitter, scratch, INVOKER_CONCAT_OFFSET),
@@ -2161,7 +2161,7 @@ fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &Ph
         Arch::AArch64 => abi::emit_pop_reg(emitter, scratch),
         Arch::X86_64 => abi::load_at_offset(emitter, scratch, INVOKER_CONCAT_OFFSET),
     }
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, scratch);
 }
 
 /// Emits an associative variadic array argument from remaining hash entries.

@@ -282,16 +282,12 @@ pub(super) fn emit_enter_boundary(emitter: &mut Emitter, concat_offset: usize, s
             emitter.instruction(&format!("cbnz x9, {nested}"));                 // isolate concat scratch only for a nested host entry
             emitter.instruction("mov x10, #0");                                 // outer entries restore an empty concat arena on return
             abi::store_at_offset(emitter, "x10", concat_offset);
-            emit_store_immediate_to_symbol(emitter, "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
             emitter.instruction(&format!("b {configured}"));                    // join nested and outer concat setup
             emitter.label(&nested);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
             abi::store_at_offset(emitter, "x10", concat_offset);
-            emit_store_immediate_to_symbol(
-                emitter,
-                "_concat_off",
-                CONCAT_SCRATCH_CAPACITY,
-            );
+            crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, CONCAT_SCRATCH_CAPACITY);
             emitter.label(&configured);
             abi::emit_load_symbol_to_reg(emitter, "x9", BOUNDARY_ACTIVE, 0);
             emitter.instruction("add x9, x9, #1");                              // increment the re-entrant boundary depth
@@ -303,16 +299,12 @@ pub(super) fn emit_enter_boundary(emitter: &mut Emitter, concat_offset: usize, s
             emitter.instruction(&format!("jnz {nested}"));                      // isolate concat scratch only for a nested host entry
             emitter.instruction("xor r11d, r11d");                              // outer entries restore an empty concat arena on return
             abi::store_at_offset(emitter, "r11", concat_offset);
-            emit_store_immediate_to_symbol(emitter, "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
             emitter.instruction(&format!("jmp {configured}"));                  // join nested and outer concat setup
             emitter.label(&nested);
-            abi::emit_load_symbol_to_reg(emitter, "r11", "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r11");
             abi::store_at_offset(emitter, "r11", concat_offset);
-            emit_store_immediate_to_symbol(
-                emitter,
-                "_concat_off",
-                CONCAT_SCRATCH_CAPACITY,
-            );
+            crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, CONCAT_SCRATCH_CAPACITY);
             emitter.label(&configured);
             abi::emit_load_symbol_to_reg(emitter, "r10", BOUNDARY_ACTIVE, 0);
             emitter.instruction("add r10, 1");                                  // increment the re-entrant boundary depth
@@ -329,14 +321,14 @@ pub(super) fn emit_leave_boundary(emitter: &mut Emitter, concat_offset: usize) {
             emitter.instruction("sub x9, x9, #1");                              // leave exactly one nested host boundary
             abi::emit_store_reg_to_symbol(emitter, "x9", BOUNDARY_ACTIVE, 0);
             abi::load_at_offset(emitter, "x10", concat_offset);
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10");
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(emitter, "r10", BOUNDARY_ACTIVE, 0);
             emitter.instruction("sub r10, 1");                                  // leave exactly one nested host boundary
             abi::emit_store_reg_to_symbol(emitter, "r10", BOUNDARY_ACTIVE, 0);
             abi::load_at_offset(emitter, "r11", concat_offset);
-            abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r11");
         }
     }
 }

@@ -93,13 +93,12 @@ fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.hi __rt_concat_reserve_too_large");                  // report a PHP-style allocation overflow instead of writing past any buffer
 
     // -- prefer the shared 64 KiB scratch buffer while the result still fits --
-    abi::emit_symbol_address(emitter, "x10", "_concat_off");
-    emitter.instruction("ldr x11, [x10]");                                      // load the current concat scratch write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x11");
     emitter.instruction("add x12, x11, x0");                                    // compute the scratch tail this request would reach
     emitter.instruction(&format!("mov x13, #{}", CONCAT_BUF_CAPACITY));         // load the concat scratch capacity in bytes
     emitter.instruction("cmp x12, x13");                                        // does the reservation still fit inside the shared scratch buffer?
     emitter.instruction("b.hi __rt_concat_reserve_heap");                       // use the owned heap fallback when the scratch buffer would overflow
-    abi::emit_symbol_address(emitter, "x14", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x14");
     emitter.instruction("add x0, x14, x11");                                    // return the scratch destination pointer at the current write offset
     emitter.instruction("ret");                                                 // return the scratch-backed reservation to the caller
 
@@ -128,14 +127,13 @@ fn emit_concat_publish_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: concat_publish ---");
     emitter.label_global("__rt_concat_publish");
 
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     emitter.instruction("sub x10, x1, x9");                                     // compute the candidate scratch offset of the finished result
     emitter.instruction(&format!("mov x11, #{}", CONCAT_BUF_CAPACITY));         // load the concat scratch capacity in bytes
     emitter.instruction("cmp x10, x11");                                        // is the result outside the shared scratch window (unsigned, so heap pointers wrap high)?
     emitter.instruction("b.hs __rt_concat_publish_done");                       // heap-backed results leave the shared scratch offset untouched
     emitter.instruction("add x10, x10, x2");                                    // advance the scratch offset past the bytes this result actually wrote
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("str x10, [x9]");                                       // publish the updated concat scratch write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10");
 
     emitter.label("__rt_concat_publish_done");
     emitter.instruction("ret");                                                 // return with the result pointer/length pair untouched
@@ -233,13 +231,12 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ja __rt_concat_reserve_too_large_x86");                // report a PHP-style allocation overflow instead of writing past any buffer
 
     // -- prefer the shared 64 KiB scratch buffer while the result still fits --
-    abi::emit_symbol_address(emitter, "r9", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the current concat scratch write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");
     emitter.instruction("mov r10, r9");                                         // copy the write offset before deriving the tail this request would reach
     emitter.instruction("add r10, rax");                                        // compute the scratch tail this request would reach
     emitter.instruction(&format!("cmp r10, {}", CONCAT_BUF_CAPACITY));          // does the reservation still fit inside the shared scratch buffer?
     emitter.instruction("ja __rt_concat_reserve_heap_x86");                     // use the owned heap fallback when the scratch buffer would overflow
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("lea rax, [r11 + r9]");                                 // return the scratch destination pointer at the current write offset
     emitter.instruction("ret");                                                 // return the scratch-backed reservation to the caller
 
@@ -261,14 +258,13 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: concat_publish ---");
     emitter.label_global("__rt_concat_publish");
 
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r8");
     emitter.instruction("mov r9, rax");                                         // copy the result pointer before deriving its candidate scratch offset
     emitter.instruction("sub r9, r8");                                          // compute the candidate scratch offset of the finished result
     emitter.instruction(&format!("cmp r9, {}", CONCAT_BUF_CAPACITY));           // is the result outside the shared scratch window (unsigned, so heap pointers wrap high)?
     emitter.instruction("jae __rt_concat_publish_done_x86");                    // heap-backed results leave the shared scratch offset untouched
     emitter.instruction("add r9, rdx");                                         // advance the scratch offset past the bytes this result actually wrote
-    abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the updated concat scratch write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");
 
     emitter.label("__rt_concat_publish_done_x86");
     emitter.instruction("ret");                                                 // return with the result pointer/length pair untouched

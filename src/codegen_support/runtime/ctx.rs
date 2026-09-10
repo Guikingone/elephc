@@ -317,10 +317,45 @@ pub fn emit_heap_off_store(emitter: &mut Emitter, reg: &str, value: &str) {
     }
 }
 
+/// Stores an immediate into the concat scratch write offset, ctx-relative in
+/// ctx-register mode and to the legacy global symbol otherwise.
+///
+/// Used by the reset paths (web request reset, boundary isolation) that park
+/// the scratch cursor at a known position rather than publishing a computed
+/// value.
+// Consumed by the M0 concat-family migration (see emit_concat_off_load).
+#[allow(dead_code)]
+pub fn emit_concat_off_store_imm(emitter: &mut Emitter, value: i64) {
+    if emitter.ctx_register {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!(
+                    "str {}, [x28, #{}]",
+                    if value == 0 { "xzr".to_string() } else { format!("#{}", value) },
+                    CTX_CONCAT_OFF_OFFSET
+                )); // store the immediate per-context concat offset
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov QWORD PTR [r14 + {}], {}",
+                    CTX_CONCAT_OFF_OFFSET, value
+                )); // store the immediate per-context concat offset
+            }
+        }
+        return;
+    }
+    abi::emit_store_imm_to_symbol(emitter, "_concat_off", 0, value);
+}
+
 /// Loads the concat scratch write offset into `reg`, ctx-relative in
 /// ctx-register mode and from the legacy global symbol otherwise.
-// Consumed by the M0 concat-family migration (reserve/publish/grow + the
-// ~47 string-producing consumers), which lands as one family-wide change.
+///
+/// Contract: the legacy arm must not disturb any OTHER register — the
+/// migrated string producers keep live state (sign flags, cursors) in the
+/// x9/r11-class scratch the ABI loader would clobber, so the legacy AArch64
+/// path resolves the symbol through the DESTINATION register itself and the
+/// x86_64 path loads RIP-relative with no scratch at all.
+// Consumed by the M0 concat-family migration (see emit_concat_off_load).
 #[allow(dead_code)]
 pub fn emit_concat_off_load(emitter: &mut Emitter, reg: &str) {
     if emitter.ctx_register {
@@ -340,13 +375,13 @@ pub fn emit_concat_off_load(emitter: &mut Emitter, reg: &str) {
         }
         return;
     }
-    abi::emit_symbol_address(emitter, reg, "_concat_off");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr {}, [{}]", reg, reg)); // load the legacy global concat offset
+            abi::emit_symbol_address(emitter, reg, "_concat_off");
+            emitter.instruction(&format!("ldr {}, [{}]", reg, reg)); // load the legacy global concat offset through the destination register
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [{}]", reg, reg)); // load the legacy global concat offset
+            emitter.instruction(&format!("mov {}, QWORD PTR [rip + _concat_off]", reg)); // load the legacy global concat offset RIP-relative (no scratch)
         }
     }
 }
@@ -354,11 +389,16 @@ pub fn emit_concat_off_load(emitter: &mut Emitter, reg: &str) {
 /// Stores the concat scratch write offset value back, ctx-relative in
 /// ctx-register mode and to the legacy global symbol otherwise.
 ///
-/// In legacy mode the value is stored through the given scratch register: the
-/// caller must not rely on it surviving.
+/// Contract: the legacy arm must not disturb the caller's live scratch — the
+/// migrated string producers keep write cursors in x9/r11-class scratch across
+/// the publish. The AArch64 legacy path therefore materializes the address in
+/// **x6** (the historical concat-scratch addressing register, not used by any
+/// call site around its publish) and the x86_64 path stores RIP-relative with
+/// no scratch at all. Call sites must not keep a live value in x6 across this
+/// helper on AArch64.
 // Consumed by the M0 concat-family migration (see emit_concat_off_load).
 #[allow(dead_code)]
-pub fn emit_concat_off_store(emitter: &mut Emitter, reg: &str, value: &str) {
+pub fn emit_concat_off_store(emitter: &mut Emitter, value: &str) {
     if emitter.ctx_register {
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -376,13 +416,13 @@ pub fn emit_concat_off_store(emitter: &mut Emitter, reg: &str, value: &str) {
         }
         return;
     }
-    abi::emit_symbol_address(emitter, reg, "_concat_off");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("str {}, [{}]", value, reg)); // store the legacy global concat offset
+            abi::emit_symbol_address(emitter, "x6", "_concat_off");
+            emitter.instruction(&format!("str {}, [x6]", value));                 // store the legacy global concat offset (x6 is the documented scratch)
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [{}], {}", reg, value)); // store the legacy global concat offset
+            emitter.instruction(&format!("mov QWORD PTR [rip + _concat_off], {}", value)); // store the legacy global concat offset RIP-relative (no scratch)
         }
     }
 }

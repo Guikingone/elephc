@@ -260,7 +260,7 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
 /// correct base; the handler then captures this fresh base for its frame.
 fn emit_concat_offset_reset(emitter: &mut Emitter) {
     emitter.comment("reset the concat-buffer write offset for the next request");
-    abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
 }
 
 /// Returns `(storage_symbol, php_type)` for every refcounted static class

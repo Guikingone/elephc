@@ -451,7 +451,7 @@ fn retain_owned_parameter_local(emitter: &mut Emitter, offset: usize, ty: &PhpTy
 /// Captures the caller-visible concat-buffer offset as this frame's reset base.
 fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(ctx.emitter, scratch);
     abi::store_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
 }
 

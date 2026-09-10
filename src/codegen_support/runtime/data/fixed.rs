@@ -64,8 +64,16 @@ pub(crate) fn emit_runtime_data_fixed(
 ) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
-    out.push_str(&comm_directive("_concat_buf", 65536, target));
-    out.push_str(&comm_directive("_concat_off", 8, target));
+    // Concat scratch state lives in `_rt_ctx` in ctx-register mode; the legacy
+    // `.comm` words are only emitted for legacy builds. This is the concat
+    // family's routing tripwire: with the whole producer set migrated to the
+    // ctx helpers, any helper that still materializes `_concat_buf`/
+    // `_concat_off` fails the LINK with an undefined-symbol error on the first
+    // build instead of reading stale shared state at runtime.
+    if !ctx_register {
+        out.push_str(&comm_directive("_concat_buf", 65536, target));
+        out.push_str(&comm_directive("_concat_off", 8, target));
+    }
     out.push_str(&comm_directive("_unser_depth", 8, target));
     out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
     out.push_str(&comm_directive("_unser_allowed_mode", 8, target));

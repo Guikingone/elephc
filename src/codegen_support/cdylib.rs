@@ -222,7 +222,7 @@ fn emit_clear_error_inline(emitter: &mut Emitter) {
 
 /// Restores the process-global concat scratch cursor between native host calls.
 fn emit_reset_concat_inline(emitter: &mut Emitter) {
-    emit_store_immediate_to_symbol(emitter, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
 }
 
 /// Stores one small integer in a fixed cdylib state symbol.

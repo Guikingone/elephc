@@ -64,8 +64,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- numeric raw-copy path --
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");             // load the current concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");                    // materialize the concat-buffer base
     emitter.instruction("add r11, r10");                                        // compute the write pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the output start pointer for the return slice
     emitter.instruction("xor rcx, rcx");                                        // initialize the copy index
@@ -78,7 +78,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_str_numeric_copy_x");                    // continue copying
     emitter.label("__rt_json_str_numeric_done_x");
     emitter.instruction("add r10, rdx");                                        // advance the concat-buffer offset by the copied length
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // republish the concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r10");            // republish the concat-buffer offset
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // rax = output start (the copied slice)
     // rdx already holds the source length; reuse it as the result length.
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
@@ -87,8 +87,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the unquoted numeric slice
 
     emitter.label("__rt_json_str_quoted_x");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before appending the JSON string
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base pointer for the current JSON append
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");             // load the current concat-buffer absolute offset before appending the JSON string
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");                    // materialize the concat-buffer base pointer for the current JSON append
     emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the encoded-string start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the current concat-buffer write pointer for the escape loop
@@ -650,10 +650,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the encoded-string start pointer in the leading x86_64 string result register
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer write pointer before turning it into a slice length
     emitter.instruction("sub rdx, rax");                                        // compute the final encoded-string length from write_end - write_start
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base pointer for the global offset update
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");                    // materialize the concat-buffer base pointer for the global offset update
     emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON string
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated concat-buffer offset so nested writers append after this JSON string
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");            // publish the updated concat-buffer offset so nested writers append after this JSON string
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
     emitter.instruction("add rsp, 80");                                         // release the local JSON-string scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
