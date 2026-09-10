@@ -239,6 +239,32 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Branches to `label` when two integer registers contain the same value.
+///
+/// AArch64: `cmp`, inverse `b.ne` over an unconditional `b`; x86_64: `cmp` + `je`.
+/// The AArch64 sequence keeps the conditional skip within its +/-1 MiB range while the
+/// selected target receives the unconditional branch's +/-128 MiB range. This is required
+/// for runtime dispatches whose selected reflection metadata body can be very large.
+pub fn emit_branch_if_int_regs_equal(
+    emitter: &mut Emitter,
+    left: &str,
+    right: &str,
+    label: &str,
+) {
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {left}, {right}"));               // compare the integer dispatch operands
+            emitter.instruction("b.ne 1f");                                     // skip the long branch when the dispatch operands differ
+            emitter.instruction(&format!("b {label}"));                         // branch with the wider unconditional range when the operands match
+            emitter.label("1");
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {left}, {right}"));               // compare the integer dispatch operands
+            emitter.instruction(&format!("je {label}"));                        // branch when the integer dispatch operands match
+        }
+    }
+}
+
 /// Unconditionally jumps to `label` for control flow transfer.
 ///
 /// AArch64 uses `b label`. x86_64 uses `jmp label`.

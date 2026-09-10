@@ -240,16 +240,14 @@ fn emit_reflection_class_name_compare(
             abi::emit_symbol_address(ctx.emitter, "x3", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("cmp x0, #0");                              // compare the runtime class name without PHP case sensitivity
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // select the matching DOM ReflectionClass metadata
+            abi::emit_branch_if_int_result_zero(ctx.emitter, matched_label);
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(value, "rdi", "rsi")?;
             abi::emit_symbol_address(ctx.emitter, "rdx", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("test rax, rax");                           // compare the runtime class name without PHP case sensitivity
-            ctx.emitter.instruction(&format!("je {}", matched_label));          // select the matching DOM ReflectionClass metadata
+            abi::emit_branch_if_int_result_zero(ctx.emitter, matched_label);
         }
     }
     Ok(())
@@ -362,16 +360,14 @@ fn emit_reflection_extension_name_compare(
             abi::emit_symbol_address(ctx.emitter, "x3", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("cmp x0, #0");                              // compare the runtime extension name without PHP case sensitivity
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // select the matched bounded extension metadata
+            abi::emit_branch_if_int_result_zero(ctx.emitter, matched_label);
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(value, "rdi", "rsi")?;
             abi::emit_symbol_address(ctx.emitter, "rdx", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("test rax, rax");                           // compare the runtime extension name without PHP case sensitivity
-            ctx.emitter.instruction(&format!("je {}", matched_label));          // select the matched bounded extension metadata
+            abi::emit_branch_if_int_result_zero(ctx.emitter, matched_label);
         }
     }
     Ok(())
@@ -461,23 +457,20 @@ pub(super) fn emit_runtime_object_class_dispatch(
     ctx.load_value_to_result(object_operand)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x0, {}", fallback_label));    // use fallback metadata for null object pointers
+            abi::emit_branch_if_int_result_zero(ctx.emitter, fallback_label);
             ctx.emitter.instruction("ldr x9, [x0]");                            // load the object's concrete runtime class id
             for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp x9, x10");                         // compare the object class id with this reflection candidate
-                ctx.emitter.instruction(&format!("b.eq {}", label));            // select metadata for the matched runtime class
+                abi::emit_branch_if_int_regs_equal(ctx.emitter, "x9", "x10", label);
             }
             ctx.emitter.instruction(&format!("b {}", fallback_label));          // fall back when no generated candidate matches
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                           // use fallback metadata for null object pointers
-            ctx.emitter.instruction(&format!("je {}", fallback_label));         // skip class-id loading when the object pointer is null
+            abi::emit_branch_if_int_result_zero(ctx.emitter, fallback_label);
             ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the object's concrete runtime class id
             for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp r11, r10");                        // compare the object class id with this reflection candidate
-                ctx.emitter.instruction(&format!("je {}", label));              // select metadata for the matched runtime class
+                abi::emit_branch_if_int_regs_equal(ctx.emitter, "r11", "r10", label);
             }
             ctx.emitter.instruction(&format!("jmp {}", fallback_label));        // fall back when no generated candidate matches
         }

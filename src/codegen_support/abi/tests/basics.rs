@@ -10,14 +10,15 @@
 
 use super::*;
 
-/// Verifies AArch64 truthiness helpers use a short inverse branch followed by a
-/// wide-range unconditional branch, avoiding `cbz`/`cbnz` fixup overflows in very
-/// large generated functions.
+/// Verifies AArch64 truthiness and equality helpers use a short inverse branch
+/// followed by a wide-range unconditional branch, avoiding conditional-branch
+/// fixup overflows in very large generated functions.
 #[test]
 fn test_emit_branch_helpers_use_long_range_aarch64_sequence() {
     let mut emitter = test_emitter();
     emit_branch_if_int_result_zero(&mut emitter, "zero_label");
     emit_branch_if_int_result_nonzero(&mut emitter, "nonzero_label");
+    emit_branch_if_int_regs_equal(&mut emitter, "x9", "x10", "equal_label");
 
     assert_eq!(
         emitter.output(),
@@ -27,6 +28,10 @@ fn test_emit_branch_helpers_use_long_range_aarch64_sequence() {
             "1:\n",
             "    cbz x0, 1f\n",
             "    b nonzero_label\n",
+            "1:\n",
+            "    cmp x9, x10\n",
+            "    b.ne 1f\n",
+            "    b equal_label\n",
             "1:\n",
         )
     );
