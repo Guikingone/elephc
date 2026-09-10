@@ -17,8 +17,10 @@ use super::*;
 fn test_emit_branch_helpers_use_long_range_aarch64_sequence() {
     let mut emitter = test_emitter();
     emit_branch_if_int_result_zero(&mut emitter, "zero_label");
+    emit_branch_if_int_reg_zero(&mut emitter, "x9", "register_zero_label");
     emit_branch_if_int_result_nonzero(&mut emitter, "nonzero_label");
     emit_branch_if_int_regs_equal(&mut emitter, "x9", "x10", "equal_label");
+    emit_branch_if_int_regs_not_equal(&mut emitter, "x9", "x10", "not_equal_label");
 
     assert_eq!(
         emitter.output(),
@@ -26,12 +28,19 @@ fn test_emit_branch_helpers_use_long_range_aarch64_sequence() {
             "    cbnz x0, 1f\n",
             "    b zero_label\n",
             "1:\n",
+            "    cbnz x9, 1f\n",
+            "    b register_zero_label\n",
+            "1:\n",
             "    cbz x0, 1f\n",
             "    b nonzero_label\n",
             "1:\n",
             "    cmp x9, x10\n",
             "    b.ne 1f\n",
             "    b equal_label\n",
+            "1:\n",
+            "    cmp x9, x10\n",
+            "    b.eq 1f\n",
+            "    b not_equal_label\n",
             "1:\n",
         )
     );

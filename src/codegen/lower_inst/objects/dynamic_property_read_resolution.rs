@@ -386,8 +386,7 @@ pub(super) fn emit_branch_if_dynamic_name_matches(
             abi::emit_symbol_address(ctx.emitter, "x3", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
             ctx.emitter.instruction("bl __rt_str_eq");                          // compare the runtime property name against this declared property
-            ctx.emitter
-                .instruction(&format!("cbnz x0, {}", target_label)); // dispatch to the declared property slot when the names match
+            abi::emit_branch_if_int_result_nonzero(ctx.emitter, target_label);
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
@@ -395,8 +394,7 @@ pub(super) fn emit_branch_if_dynamic_name_matches(
             abi::emit_symbol_address(ctx.emitter, "rdx", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", len as i64);
             ctx.emitter.instruction("call __rt_str_eq");                        // compare the runtime property name against this declared property
-            ctx.emitter.instruction("test rax, rax");                           // check whether the runtime string comparison matched
-            ctx.emitter.instruction(&format!("jne {}", target_label));          // dispatch to the declared property slot when the names match
+            abi::emit_branch_if_int_result_nonzero(ctx.emitter, target_label);
         }
     }
 }

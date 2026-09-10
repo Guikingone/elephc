@@ -192,13 +192,11 @@ fn emit_mixed_property_and_simplexml_class_dispatch(
             ctx.emitter.instruction("ldr x9, [x0]");                            // load the receiver class id for Mixed property dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp x9, x10");                         // compare against this declared-property owner
-                ctx.emitter.instruction(&format!("b.eq {}", label));            // read the matching declared property
+                abi::emit_branch_if_int_regs_equal(ctx.emitter, "x9", "x10", label);
             }
             for (candidate, label) in simplexml_candidates.iter().zip(simplexml_match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp x9, x10");                         // compare against this SimpleXML wrapper class
-                ctx.emitter.instruction(&format!("b.eq {}", label));            // select the dynamic SimpleXML child property
+                abi::emit_branch_if_int_regs_equal(ctx.emitter, "x9", "x10", label);
             }
             emit_branch_to_stdclass_candidate(ctx, "x9", "x10", stdclass_label);
             abi::emit_jump(ctx.emitter, miss_label);
@@ -207,13 +205,11 @@ fn emit_mixed_property_and_simplexml_class_dispatch(
             ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the receiver class id for Mixed property dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp r11, r10");                        // compare against this declared-property owner
-                ctx.emitter.instruction(&format!("je {}", label));              // read the matching declared property
+                abi::emit_branch_if_int_regs_equal(ctx.emitter, "r11", "r10", label);
             }
             for (candidate, label) in simplexml_candidates.iter().zip(simplexml_match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp r11, r10");                        // compare against this SimpleXML wrapper class
-                ctx.emitter.instruction(&format!("je {}", label));              // select the dynamic SimpleXML child property
+                abi::emit_branch_if_int_regs_equal(ctx.emitter, "r11", "r10", label);
             }
             emit_branch_to_stdclass_candidate(ctx, "r11", "r10", stdclass_label);
             abi::emit_jump(ctx.emitter, miss_label);
@@ -323,13 +319,23 @@ pub(super) fn declared_mixed_property_candidates(
 pub(super) fn emit_mixed_object_payload_or_null(ctx: &mut FunctionContext<'_>, null_label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6");                              // check whether the Mixed receiver holds an object payload
-            ctx.emitter.instruction(&format!("b.ne {}", null_label));           // non-object Mixed receivers produce a null property result
+            abi::emit_load_int_immediate(ctx.emitter, "x9", 6);
+            abi::emit_branch_if_int_regs_not_equal(
+                ctx.emitter,
+                "x0",
+                "x9",
+                null_label,
+            );
             ctx.emitter.instruction("mov x0, x1");                              // promote the unboxed object payload for class-id dispatch
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6");                              // check whether the Mixed receiver holds an object payload
-            ctx.emitter.instruction(&format!("jne {}", null_label));            // non-object Mixed receivers produce a null property result
+            abi::emit_load_int_immediate(ctx.emitter, "r10", 6);
+            abi::emit_branch_if_int_regs_not_equal(
+                ctx.emitter,
+                "rax",
+                "r10",
+                null_label,
+            );
             ctx.emitter.instruction("mov rax, rdi");                            // promote the unboxed object payload for class-id dispatch
         }
     }
@@ -348,8 +354,7 @@ pub(super) fn emit_mixed_property_class_dispatch(
             ctx.emitter.instruction("ldr x9, [x0]");                            // load the receiver class id for Mixed property dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp x9, x10");                         // compare the receiver class id against this declared-property owner
-                ctx.emitter.instruction(&format!("b.eq {}", label));            // read the declared property when the class id matches
+                abi::emit_branch_if_int_regs_equal(ctx.emitter, "x9", "x10", label);
             }
             emit_branch_to_stdclass_candidate(ctx, "x9", "x10", stdclass_label);
             abi::emit_jump(ctx.emitter, miss_label);
@@ -358,8 +363,7 @@ pub(super) fn emit_mixed_property_class_dispatch(
             ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the receiver class id for Mixed property dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp r11, r10");                        // compare the receiver class id against this declared-property owner
-                ctx.emitter.instruction(&format!("je {}", label));              // read the declared property when the class id matches
+                abi::emit_branch_if_int_regs_equal(ctx.emitter, "r11", "r10", label);
             }
             emit_branch_to_stdclass_candidate(ctx, "r11", "r10", stdclass_label);
             abi::emit_jump(ctx.emitter, miss_label);
@@ -378,18 +382,12 @@ pub(super) fn emit_branch_to_stdclass_candidate(
         return;
     };
     abi::emit_load_int_immediate(ctx.emitter, scratch_reg, stdclass_id as i64);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, {}", class_id_reg, scratch_reg)); // check whether the object uses stdClass dynamic storage
-            ctx.emitter.instruction(&format!("b.eq {}", stdclass_label));       // route stdClass reads through the hash-backed helper
-        }
-        Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, {}", class_id_reg, scratch_reg)); // check whether the object uses stdClass dynamic storage
-            ctx.emitter.instruction(&format!("je {}", stdclass_label));         // route stdClass reads through the hash-backed helper
-        }
-    }
+    abi::emit_branch_if_int_regs_equal(
+        ctx.emitter,
+        class_id_reg,
+        scratch_reg,
+        stdclass_label,
+    );
 }
 
 /// Returns the runtime class id assigned to stdClass in this module.
@@ -433,12 +431,12 @@ pub(super) fn emit_stdclass_get_from_loaded_object(ctx: &mut FunctionContext<'_>
 pub(super) fn emit_branch_if_mixed_unboxed_object(ctx: &mut FunctionContext<'_>, object_label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the boxed union holds an object payload
-            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // read the declared property only for object payloads
+            abi::emit_load_int_immediate(ctx.emitter, "x9", 6);
+            abi::emit_branch_if_int_regs_equal(ctx.emitter, "x0", "x9", object_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the boxed union holds an object payload
-            ctx.emitter.instruction(&format!("je {}", object_label));           // read the declared property only for object payloads
+            abi::emit_load_int_immediate(ctx.emitter, "r10", 6);
+            abi::emit_branch_if_int_regs_equal(ctx.emitter, "rax", "r10", object_label);
         }
     }
 }
