@@ -134,6 +134,28 @@ pub fn emit_ctx_publish(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, ctx_reg(emitter), "_rt_ctx");
 }
 
+/// Spills the FOREIGN caller's ctx register into a frame slot, ahead of the
+/// publish that overwrites it.
+///
+/// The ctx register is callee-saved on both targets (`x28` AArch64 / `r14`
+/// x86_64), so any entry point a host calls — a cdylib/staticlib export, an FFI
+/// callback trampoline — owes the host that register back untouched. Publishing
+/// without this pair silently hands the host elephc's `_rt_ctx` pointer instead
+/// of its own value.
+pub fn emit_ctx_save_foreign(emitter: &mut Emitter, frame_offset: usize) {
+    let ctx = ctx_reg(emitter).to_string();
+    abi::store_at_offset(emitter, &ctx, frame_offset);
+}
+
+/// Restores the foreign caller's ctx register from its frame slot.
+///
+/// Must run on EVERY return path of an entry that called
+/// `emit_ctx_save_foreign` — including the error and exception returns.
+pub fn emit_ctx_restore_foreign(emitter: &mut Emitter, frame_offset: usize) {
+    let ctx = ctx_reg(emitter).to_string();
+    abi::load_at_offset(emitter, &ctx, frame_offset);
+}
+
 /// Zeroes every mutable ctx field (concat offset, heap bump, free list, bins)
 /// through the already-published ctx register, on both targets.
 ///
@@ -323,16 +345,29 @@ pub fn emit_heap_off_store(emitter: &mut Emitter, reg: &str, value: &str) {
 /// Used by the reset paths (web request reset, boundary isolation) that park
 /// the scratch cursor at a known position rather than publishing a computed
 /// value.
+///
+/// Clobbers: a NON-ZERO value needs a register to travel through on AArch64
+/// (there is no store-immediate form), and that register is `x10` — the same
+/// scratch the legacy arm's `emit_store_imm_to_symbol` uses, so both arms have
+/// the same clobber set. Zero stores through `xzr` and clobbers nothing.
 // Consumed by the M0 concat-family migration (see emit_concat_off_load).
 #[allow(dead_code)]
 pub fn emit_concat_off_store_imm(emitter: &mut Emitter, value: i64) {
     if emitter.ctx_register {
         match emitter.target.arch {
             Arch::AArch64 => {
+                // `str #imm, [...]` does not exist: anything but zero must be
+                // materialized first, or the assembler rejects the helper (the
+                // cdylib boundary parks the cursor at CONCAT_SCRATCH_CAPACITY).
+                let source = if value == 0 {
+                    "xzr"
+                } else {
+                    abi::emit_load_int_immediate(emitter, "x10", value);
+                    "x10"
+                };
                 emitter.instruction(&format!(
                     "str {}, [x28, #{}]",
-                    if value == 0 { "xzr".to_string() } else { format!("#{}", value) },
-                    CTX_CONCAT_OFF_OFFSET
+                    source, CTX_CONCAT_OFF_OFFSET
                 )); // store the immediate per-context concat offset
             }
             Arch::X86_64 => {
@@ -380,6 +415,13 @@ pub fn emit_concat_off_load(emitter: &mut Emitter, reg: &str) {
             abi::emit_symbol_address(emitter, reg, "_concat_off");
             emitter.instruction(&format!("ldr {}, [{}]", reg, reg)); // load the legacy global concat offset through the destination register
         }
+        // A library build resolves data through the GOT: the plain RIP-relative
+        // form would bind to this object's copy (or fail the link) instead of
+        // the process-wide one. The ABI helper's PIC path loads through the
+        // DESTINATION register, so it stays scratch-neutral like the arm below.
+        Arch::X86_64 if emitter.pic_data_refs => {
+            abi::emit_load_symbol_to_reg(emitter, reg, "_concat_off", 0);
+        }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov {}, QWORD PTR [rip + _concat_off]", reg)); // load the legacy global concat offset RIP-relative (no scratch)
         }
@@ -420,6 +462,12 @@ pub fn emit_concat_off_store(emitter: &mut Emitter, value: &str) {
         Arch::AArch64 => {
             abi::emit_symbol_address(emitter, "x6", "_concat_off");
             emitter.instruction(&format!("str {}, [x6]", value));                 // store the legacy global concat offset (x6 is the documented scratch)
+        }
+        // A library build resolves data through the GOT (see the load above).
+        // The ABI helper's PIC path borrows r11/r10 around a push/pop pair, so
+        // it keeps this helper's no-clobber contract.
+        Arch::X86_64 if emitter.pic_data_refs => {
+            abi::emit_store_reg_to_symbol(emitter, value, "_concat_off", 0);
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov QWORD PTR [rip + _concat_off], {}", value)); // store the legacy global concat offset RIP-relative (no scratch)
@@ -749,69 +797,233 @@ mod tests {
         assert!(asm.contains("_heap_off"), "legacy runtime keeps symbol addressing");
     }
 
-    /// Scratch audit for the reserved ctx register (spike review, B3): across
-    /// the ENTIRE ctx-mode runtime text, the ctx register may only appear in
-    /// sanctioned shapes — the publish/install sequences, ctx-relative
-    /// loads/stores/addresses, and the fiber-switch save/restore pairs. Any
-    /// hand-written helper that starts using x28/r14 as an ordinary scratch
-    /// register would silently corrupt the per-context state pointer, and no
-    /// other test would catch it; this one fails on the first stray shape.
-    #[test]
-    fn ctx_mode_runtime_never_scratches_the_ctx_register() {
+    /// Collects every instruction of the ALL-features ctx-mode runtime that
+    /// touches the reserved ctx register outside a sanctioned shape.
+    ///
+    /// Sanctioned shapes: the publish/install sequences, ctx-relative
+    /// loads/stores/addresses, and whole-register save/restore pairs (fiber
+    /// switch, frame spill). Anything else is a hand-written helper using the
+    /// ctx register as ordinary scratch, which silently corrupts the
+    /// per-context state pointer and no other test would catch.
+    ///
+    /// Runs on ALL features: a helper that scratches the ctx register inside a
+    /// feature-gated family would otherwise only corrupt state on the builds
+    /// that enable it — the hardest failure to attribute.
+    fn ctx_register_scratch_offenders(
+        platform: Platform,
+        arch: Arch,
+        ctx_reg: &str,
+    ) -> Vec<String> {
         use crate::codegen_support::driver_support::generate_runtime_with_features;
-        for (platform, arch, ctx_reg) in [
-            (Platform::MacOS, Arch::AArch64, "x28"),
-            (Platform::Linux, Arch::X86_64, "r14"),
-        ] {
-            let asm = generate_runtime_with_features(
-                8 * 1024 * 1024,
-                Target::new(platform, arch),
-                RuntimeFeatures {
-                    ctx_register: true,
-                    ..RuntimeFeatures::none()
-                },
-            );
-            let mut offenders: Vec<&str> = Vec::new();
-            for line in asm.lines().filter_map(|line| line.trim().strip_prefix(';')) {
-                let line = line.trim();
-                if !line.contains(ctx_reg) {
-                    continue;
+        let target = Target::new(platform, arch);
+        let comment = target.line_comment_prefix();
+        let asm = generate_runtime_with_features(
+            8 * 1024 * 1024,
+            target,
+            RuntimeFeatures {
+                ctx_register: true,
+                ..RuntimeFeatures::all()
+            },
+        );
+        let mut offenders: Vec<String> = Vec::new();
+        for raw in asm.lines() {
+            let line = raw.trim();
+            // INSTRUCTIONS only: skip blanks, comments, directives and labels.
+            // Reading the instruction stream is the whole point of the audit —
+            // an earlier version filtered lines on the comment prefix and so
+            // scanned nothing but comment text, which made it always green.
+            if line.is_empty() || line.starts_with(comment) || line.starts_with('.') {
+                continue;
+            }
+            let line = line.split(comment).next().unwrap_or(line).trim();
+            if line.is_empty() || line.ends_with(':') {
+                continue;
+            }
+            if !mentions_register(line, ctx_reg) {
+                continue;
+            }
+            let sanctioned = match arch {
+                Arch::AArch64 => {
+                    line.starts_with("stp x27, x28,")
+                        || line.starts_with("ldp x27, x28,")
+                        || line.starts_with("adrp x28, _rt_ctx")
+                        || line.starts_with("add x28, x28, _rt_ctx")
+                        || ((line.starts_with("ldr ") || line.starts_with("str "))
+                            && line.contains("[x28, #")
+                            && !line.starts_with("ldr x28"))
+                        || line.starts_with("str x28, [sp")
+                        || line.starts_with("ldr x28, [sp")
+                        || (line.starts_with("add x") && line.contains(", x28, #"))
                 }
-                // Sanctioned shapes per line:
-                //  - save/restore pairs by the fiber switch (stp/ldp x27, x28 / push|pop r14)
-                //  - publish/install (adrp x28, _rt_ctx / add x28, x28, _rt_ctx / lea r14, [rip + _rt_ctx])
-                //  - ctx-relative access: ldr/str ... [x28, #imm] / mov ... [r14 + imm] / add xN, x28, #imm / lea rN, [r14 + imm]
-                let sanctioned = match arch {
-                    Arch::AArch64 => {
-                        line.starts_with("stp x27, x28")
-                            || line.starts_with("ldp x27, x28")
-                            || line.starts_with("adrp x28, _rt_ctx")
-                            || line.starts_with("add x28, x28, _rt_ctx")
-                            || (line.starts_with("ldr ") && line.contains("[x28, #"))
-                            || (line.starts_with("str ") && line.contains("[x28, #"))
-                            || (line.starts_with("add x") && line.ends_with(&format!(", #{}", "")))
-                            || (line.starts_with("add x") && line.contains(", x28, #"))
-                    }
-                    Arch::X86_64 => {
-                        line.starts_with("push r14")
-                            || line.starts_with("pop r14")
-                            || line.starts_with("lea r14, [rip + _rt_ctx]")
-                            || (line.starts_with("mov ") && line.contains(&format!("[{ctx_reg} +")))
-                            || (line.starts_with("lea ") && line.contains(&format!("[{ctx_reg} +")))
-                    }
-                };
-                if !sanctioned {
-                    offenders.push(line);
+                Arch::X86_64 => {
+                    line == "push r14"
+                        || line == "pop r14"
+                        || line.starts_with("lea r14, [rip + _rt_ctx]")
+                        // whole-register save/restore (fiber switch context block)
+                        || line.starts_with("mov r14, QWORD PTR [")
+                        || line.ends_with(", r14")
+                        || ((line.starts_with("mov ") || line.starts_with("lea "))
+                            && line.contains("[r14 +"))
+                }
+            };
+            if !sanctioned {
+                offenders.push(line.to_string());
+            }
+        }
+        offenders
+    }
+
+    /// The legacy arms must follow the target's data-reference mode: a library
+    /// build (`pic_data_refs`) resolves globals through the GOT, so the plain
+    /// RIP-relative form would bind to the wrong copy or fail the link. The
+    /// `abi::` helpers these arms replaced already did this; the ctx helpers
+    /// have to keep doing it.
+    #[test]
+    fn legacy_concat_off_access_follows_the_targets_data_reference_mode() {
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        for pic in [false, true] {
+            let mut emitter = Emitter::new(target);
+            emitter.pic_data_refs = pic;
+            emit_concat_off_load(&mut emitter, "r10");
+            emit_concat_off_store(&mut emitter, "r10");
+            let asm = emitter.output();
+            if pic {
+                assert!(
+                    !asm.contains("[rip + _concat_off]"),
+                    "a PIC build must not reference _concat_off directly:\n{asm}"
+                );
+                assert!(
+                    asm.contains("_concat_off@GOTPCREL"),
+                    "a PIC build must resolve _concat_off through the GOT:\n{asm}"
+                );
+            } else {
+                assert!(
+                    asm.contains("mov r10, QWORD PTR [rip + _concat_off]"),
+                    "a non-PIC build keeps the scratch-free RIP-relative form:\n{asm}"
+                );
+            }
+        }
+    }
+
+    /// A NON-ZERO concat-offset reset must emit a real store on both targets.
+    ///
+    /// AArch64 has no store-immediate form, so the value has to travel through
+    /// a register: the first version emitted `str #65536, [x28, #0]`, which the
+    /// assembler rejects — and the only caller that passes a non-zero value is
+    /// the cdylib/staticlib boundary, so every `--rt-ctx` library build on
+    /// AArch64 failed to assemble while every executable test stayed green.
+    #[test]
+    fn concat_off_store_imm_materializes_a_non_zero_value() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            for ctx_register in [false, true] {
+                let mut emitter = Emitter::new(Target::new(platform, arch));
+                emitter.ctx_register = ctx_register;
+                emit_concat_off_store_imm(&mut emitter, 65_536);
+                let asm = emitter.output();
+                // No operand may be a bare immediate in a store position.
+                assert!(
+                    !asm.contains("str #"),
+                    "{arch:?} (ctx={ctx_register}) emitted a store of a bare immediate:\n{asm}"
+                );
+                match arch {
+                    // AArch64 materializes 65536 as movz/movk (0x1 << 16) and
+                    // stores through the register it built.
+                    Arch::AArch64 => assert!(
+                        asm.contains("str x10, "),
+                        "{arch:?} (ctx={ctx_register}) must store through the materialized register:\n{asm}"
+                    ),
+                    Arch::X86_64 => assert!(
+                        asm.contains("65536"),
+                        "{arch:?} (ctx={ctx_register}) lost the stored value:\n{asm}"
+                    ),
                 }
             }
-            assert!(
-                offenders.is_empty(),
-                "{arch:?} ctx runtime uses {ctx_reg} outside sanctioned shapes ({}
-                 offenders, e.g. {:?})",
-                offenders.len(),
-                offenders.first(),
-            );
         }
+
+        // Zero still stores through the zero register: no scratch clobbered.
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emitter.ctx_register = true;
+        emit_concat_off_store_imm(&mut emitter, 0);
+        let asm = emitter.output();
+        assert!(asm.contains("str xzr, [x28, #0]"), "{asm}");
+        assert!(!asm.contains("x10"), "a zero reset must clobber nothing:\n{asm}");
+    }
+
+    /// Scratch audit for the reserved ctx register on AArch64 (spike review,
+    /// B3): x28 carries the per-context state pointer, so no hand-written
+    /// helper may borrow it. Zero tolerance — this arm of the runtime is
+    /// fully migrated.
+    #[test]
+    fn aarch64_ctx_runtime_never_scratches_the_ctx_register() {
+        let offenders = ctx_register_scratch_offenders(Platform::MacOS, Arch::AArch64, "x28");
+        assert!(
+            offenders.is_empty(),
+            "AArch64 ctx runtime uses x28 outside sanctioned shapes ({} offenders):\n{}",
+            offenders.len(),
+            offenders.join("\n"),
+        );
+    }
+
+    /// Same audit on x86_64, as a SHRINKING baseline rather than a clean gate.
+    ///
+    /// The `r14` → `rbx` scratch migration is incomplete: the helper families
+    /// still borrowing r14 (strtotime weekdays, the fiber/generator API, the
+    /// hash and array walkers, the user-filter brigade, …) corrupt the ctx
+    /// pointer in a `--rt-ctx` x86_64 build. They were missed because the
+    /// original audit scanned comment text instead of instructions and so
+    /// reported zero offenders on both targets.
+    ///
+    /// Until that migration finishes, the count may only go DOWN: a new helper
+    /// that borrows r14 fails here immediately, and every family that migrates
+    /// lowers the constant. When it reaches zero, replace this with the same
+    /// zero-tolerance assertion the AArch64 arm uses.
+    ///
+    /// `--rt-ctx` is not a shipped mode on x86_64 until this is 0.
+    #[test]
+    fn x86_64_ctx_runtime_scratch_baseline_only_shrinks() {
+        /// Offenders remaining in the unmigrated x86_64 helper families.
+        const BASELINE: usize = 81;
+        let offenders = ctx_register_scratch_offenders(Platform::Linux, Arch::X86_64, "r14");
+        assert!(
+            offenders.len() <= BASELINE,
+            "x86_64 ctx runtime grew its r14 scratch debt: {} offenders (baseline {BASELINE}).\n\
+             A new helper borrowed r14 — the reserved ctx register. Use rbx (preserving \
+             the caller's value) or a frame slot instead.\n{}",
+            offenders.len(),
+            offenders.join("\n"),
+        );
+        assert!(
+            offenders.len() >= BASELINE,
+            "x86_64 ctx r14 scratch debt shrank to {} — lower BASELINE to match (and switch \
+             to a zero-tolerance assertion once it reaches 0).",
+            offenders.len(),
+        );
+    }
+
+    /// True when `line` names `reg` as a register operand rather than as a
+    /// substring of another token (`x28` inside a symbol like `_probe_x280`).
+    /// Sub-register writes clobber the full register, so `r14d`/`r14w` count.
+    fn mentions_register(line: &str, reg: &str) -> bool {
+        let bytes = line.as_bytes();
+        let mut from = 0usize;
+        while let Some(found) = line[from..].find(reg) {
+            let start = from + found;
+            let end = start + reg.len();
+            let before_ok = start == 0
+                || (!bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_');
+            let after_ok = match bytes.get(end).copied() {
+                None => true,
+                Some(byte) => !byte.is_ascii_digit() && byte != b'_',
+            };
+            if before_ok && after_ok {
+                return true;
+            }
+            from = end;
+        }
+        false
     }
 
     /// The rbx callee-saved contract (spike review round 2, NB1): rbx is the
@@ -825,13 +1037,18 @@ mod tests {
     /// The audit walks every `__rt_*` label in the fully generated runtime and
     /// verifies the balance per helper body; a stray `ret` on a rbx-scratching
     /// helper fails here instead of miscompiling user code in the field.
+    ///
+    /// It runs on the ALL-features runtime: a feature-gated family (spl, zval
+    /// packing, json, vsprintf, http) is exactly where an unbalanced helper
+    /// hides from a base-feature scan, and those families are the ones the
+    /// `r14` → `rbx` scratch migration touched.
     #[test]
     fn x86_64_runtime_helpers_that_scratch_rbx_preserve_it() {
         use crate::codegen_support::driver_support::generate_runtime_with_features;
         let asm = generate_runtime_with_features(
             8 * 1024 * 1024,
             Target::new(Platform::Linux, Arch::X86_64),
-            RuntimeFeatures::none(),
+            RuntimeFeatures::all(),
         );
         let mut offenders: Vec<String> = Vec::new();
         let mut current: Option<String> = None;

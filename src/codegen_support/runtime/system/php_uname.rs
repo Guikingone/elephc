@@ -390,9 +390,9 @@ fn emit_x86_64_copy_field(
 /// restores rbp, and returns with rax = result ptr, rdx = result length.
 fn emit_x86_64_done(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_done");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // reload the concat-buffer write offset from before this result
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r11");  // reload the concat-buffer write offset from before this result
     emitter.instruction("add r11, rdx");                                        // advance the concat-buffer offset by the returned uname length
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the updated concat-buffer write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r11"); // publish the updated concat-buffer write offset
     emitter.instruction("add rsp, 640");                                        // release the stack-backed utsname storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the selected uname string in rax/rdx

@@ -117,39 +117,81 @@ allocator state mid-flight). Currently published at:
 - the executable main prologue (full `__rt_ctx_init`),
 - `__rt_fiber_entry` (zeroed fiber stacks),
 - every cdylib/staticlib exported-function boundary wrapper,
-- `elephc_init` (the library-mode lifecycle entry, which also zeroes the ctx
-  fields — the library equivalent of the main prologue),
+- `elephc_init` and `elephc_shutdown` — the library lifecycle entries. The
+  publish is the FIRST instruction after the prologue, ahead of the concat
+  reset those entries perform: that reset is itself a ctx-relative store, and
+  publishing after it stored through the host's register (a wild write that
+  faulted at address 0 on the very first `elephc_init` of every ctx cdylib),
 - extern FFI callback trampolines (called by foreign code like `qsort`).
+
+Publishing is only half the contract. The ctx register is **callee-saved**, so
+an entry called by a host also owes that host its register back: every one of
+these boundaries spills the incoming value to a frame slot before the publish
+and restores it on EVERY return path, error and exception returns included.
+Without the restore the host gets elephc's `_rt_ctx` pointer in place of its own
+value — an ABI break no PHP-level test can see, so it is pinned by a C host that
+parks a sentinel in the register across the call
+(`test_rt_ctx_cdylib_export_preserves_the_hosts_ctx_register`; the probe is
+module-level assembly because clang spills an explicit `register … asm("x28")`
+around the call and reloads it, which makes the C-level version of that test
+pass against a library that clobbers the register).
+
+The exception path is the documented exception: a throw unwinds via longjmp PAST
+the trampoline, either to an enclosing PHP handler (the foreign caller never
+resumes) or to the uncaught path, which exits the process.
 
 ## Scratch audit (spike review, B3)
 
 A hand-written helper that starts using the ctx register as an ordinary
 scratch register would silently corrupt the state pointer, and no other test
-would catch it. `ctx_mode_runtime_never_scratches_the_ctx_register` scans the
-ENTIRE ctx-mode runtime text on both architectures and fails on any ctx
-register reference outside the sanctioned shapes (publish sequences,
-ctx-relative accesses, fiber-switch save/restore pairs).
+would catch it. The audit scans the ENTIRE ctx-mode runtime text — emitted with
+ALL features on — and fails on any ctx register reference outside the
+sanctioned shapes (publish sequences, ctx-relative accesses, whole-register
+save/restore pairs).
+
+Two tests share one scanner:
+
+- `aarch64_ctx_runtime_never_scratches_the_ctx_register` — zero tolerance.
+- `x86_64_ctx_runtime_scratch_baseline_only_shrinks` — a shrinking baseline
+  (see below): the x86_64 `r14` → `rbx` migration is unfinished, so the count
+  may only go down.
+
+The audit's first version filtered lines on the target's comment prefix, so it
+scanned comment text instead of instructions and reported zero offenders on
+both targets — while `__rt_wordwrap` kept its output cursor in x28 and 81
+x86_64 instructions still borrowed r14. **An audit that cannot fail is not an
+audit**: the negative control matters as much as the assertion.
 
 ## Current state and what M0 must finish
 
-Validated on macos-aarch64 AND linux-x86_64: the whole heap family routes
-through the reserved register on both architectures (alloc, free,
-heap_free_safe, incref/decref/heap-kind/GC range checks, the heap-debug
+**macos-aarch64 is the only target where `--rt-ctx` is correct today.** The
+whole heap and concat families route through the reserved register (alloc,
+free, heap_free_safe, incref/decref/heap-kind/GC range checks, the heap-debug
 validator, descriptor release, object-handle and wrapper-cast checks, the web
-arena reset); main installs the pointer via `__rt_ctx_init`; fiber entry and
-every foreign-entry wrapper re-publish it. `--rt-ctx` binaries compile, link,
-run, recycle their heap, and survive generators and fibers. The x86_64 `r14`
-scratch uses are fully migrated to `rbx`, and the CLI accepts the flag on
-every supported target.
+arena reset); main installs the pointer via `__rt_ctx_init`; fiber entry, both
+library lifecycle entries and every export/callback wrapper publish it.
+`--rt-ctx` executables and cdylibs compile, link, run, recycle their heap, and
+survive generators and fibers.
 
-Still on legacy addressing (the M0 work list):
+On linux-x86_64 the EMISSION is pinned by the asm tests, but 81 instructions in
+the unmigrated helper families still borrow `r14` — the strtotime weekday
+tables, the fiber/generator API, the hash and array walkers, the user-filter
+brigade and friends. Each one overwrites the context pointer mid-helper, so
+`--rt-ctx` must not be advertised on that target until
+`x86_64_ctx_runtime_scratch_baseline_only_shrinks` reaches zero.
 
-- `_concat_buf`/`_concat_off` helpers (`__rt_concat_reserve`, `__rt_concat_publish`,
-  `__rt_concat_grow`, the JSON/`sprintf`/diagnostic concat consumers) — the
-  concat buffer lives in `_rt_ctx` but is still read through the globals.
+Still on the M0 work list:
+
+- **Finish the `r14` → `rbx`/frame-slot migration on x86_64** (baseline 81).
+  `rbx` is the only callee-saved register the allocator hands to cross-call
+  values, so a helper that takes it must preserve the caller's value; a helper
+  with no register left uses a frame slot (`str_to_number`'s significand flag,
+  `sprintf`'s sequential-argument cursor, `wordwrap`'s lastspace).
 - `_rt_ctx` as an emitter-shaped pool (array + free list) instead of a single
   instance, and `__rt_ctx_init`/`__rt_ctx_destroy` exported for the M1
   thread-pool bridge.
+- `_rt_ctx` is emitted as `.space` inside `.data`, so a ctx build carries ~64 KiB
+  of zero bytes in the image where every other runtime global uses `.comm`.
 
 The full generated-runtime gate tests
 (`ctx_feature_generates_ctx_addressed_runtime_end_to_end`,

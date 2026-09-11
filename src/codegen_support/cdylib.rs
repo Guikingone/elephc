@@ -262,6 +262,14 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
         if lifecycle == "elephc_init" && matches!(target.arch, Arch::AArch64) {
             abi::emit_frame_prologue(emitter, 16);
         }
+        // Foreign-entry publish, FIRST: both lifecycle entries are called by the
+        // host, whose ctx register holds ITS value (host data, or zero), and the
+        // concat reset below is already a ctx-relative store. Publishing after
+        // it wrote `str xzr, [x28]` through the host's register — a wild store
+        // that faulted at address 0 on the very first `elephc_init`.
+        if emitter.ctx_register {
+            crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+        }
         emit_clear_error_inline(emitter);
         emit_reset_concat_inline(emitter);
         emit_store_immediate_to_symbol(emitter, BOUNDARY_ACTIVE, 0);
@@ -269,10 +277,10 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
         if lifecycle == "elephc_init" {
             // Library-mode context installation: `elephc_init` is where the
             // host starts the library, so it plays the main-prologue role for
-            // the ctx-register mode — install the per-context state pointer
-            // and zero the allocator fields before any exported call runs.
+            // the ctx-register mode — the pointer is already published above,
+            // so this only zeroes the allocator fields (publish-only entries
+            // like the exports below must never reach this reset).
             if emitter.ctx_register {
-                crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
                 crate::codegen_support::runtime::ctx::emit_ctx_zero_fields(emitter);
             }
             crate::codegen::stack_guard::emit_stack_limit_init_call(emitter);

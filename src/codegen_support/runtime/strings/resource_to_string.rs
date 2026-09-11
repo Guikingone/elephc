@@ -100,7 +100,6 @@ fn emit_resource_to_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve aligned locals for offsets and output pointers
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the native resource payload while building the output prefix
     crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");
-    emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // preserve the concat cursor address across the itoa call
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // preserve the original concat-buffer offset
     crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("lea r11, [r10 + r9]");                                 // compute the final output start inside concat_buf
@@ -116,7 +115,7 @@ fn emit_resource_to_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_resource_to_string_prefix_loop_x86");         // continue copying the prefix
     emitter.label("__rt_resource_to_string_prefix_done_x86");
     emitter.instruction("add r9, 13");                                          // move the scratch cursor after the copied prefix
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // let itoa write its temporary digits after the prefix
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");  // let itoa write its temporary digits after the prefix
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the native resource payload
     abi::emit_call_label(emitter, "__rt_resource_id_of");                       // resolve the payload to its PHP resource id through the registry
     abi::emit_call_label(emitter, "__rt_itoa");                                 // format the display id as temporary decimal digits
@@ -131,11 +130,10 @@ fn emit_resource_to_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc rcx");                                             // advance to the next digit byte
     emitter.instruction("jmp __rt_resource_to_string_digit_loop_x86");          // continue copying the display id digits
     emitter.label("__rt_resource_to_string_digit_done_x86");
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the concat cursor address
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the original concat-buffer offset
     emitter.instruction("add r9, 13");                                          // account for the resource prefix bytes
     emitter.instruction("add r9, rdx");                                         // account for the formatted display id digits
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the compact final concat-buffer cursor
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");  // publish the compact final concat-buffer cursor
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return the final resource string pointer
     emitter.instruction("add rdx, 13");                                         // return the final resource string length
     emitter.instruction("add rsp, 48");                                         // release the helper locals

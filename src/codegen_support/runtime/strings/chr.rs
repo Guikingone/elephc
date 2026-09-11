@@ -71,7 +71,7 @@ fn emit_chr_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rax, [r10 + r9]");                                 // compute the concat-buffer write address and return it as the one-byte string pointer
     emitter.instruction("mov BYTE PTR [rax], dil");                             // store the low byte of the requested character code into concat storage
     emitter.instruction("add r9, 1");                                           // advance the concat-buffer write offset by the single byte that chr() produced
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // persist the updated concat-buffer write offset after materializing the chr() result
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");  // persist the updated concat-buffer write offset after materializing the chr() result
     emitter.instruction("mov rdx, 1");                                          // return a one-byte string length for the concat-backed chr() result
     emitter.instruction("ret");                                                 // return the concat-backed one-byte string in the standard x86_64 string result registers
 }

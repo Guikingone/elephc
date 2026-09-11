@@ -415,7 +415,7 @@ fn emit_spl_object_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rbx, r9");                                         // advance the cursor to the reserved scratch slot
     emitter.instruction("mov r11, r9");                                         // copy the offset before reserving space
     emitter.instruction("add r11, 32");                                         // reserve exactly 32 scratch bytes
-    emitter.instruction("mov QWORD PTR [r8], r11");                             // publish the advanced scratch offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r11"); // publish the advanced scratch offset
 
     emitter.instruction("mov r8, 15");                                          // start at the most significant of the 16 nibbles
     emitter.label("__rt_spl_object_hash_nibble");

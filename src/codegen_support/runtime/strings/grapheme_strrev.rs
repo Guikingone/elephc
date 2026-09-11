@@ -229,14 +229,14 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve callee-saved source pointer storage
     emitter.instruction("push r12");                                            // preserve callee-saved source length storage
     emitter.instruction("push r13");                                            // preserve callee-saved destination cursor storage
-    emitter.instruction("push rbx");                                            // preserve callee-saved destination start storage
+    emitter.instruction("sub rsp, 8");                                          // spill slot for the destination start: r14 is the reserved ctx register and rbx already holds the source pointer
     emitter.instruction("push r15");                                            // preserve callee-saved cluster-end storage
     emitter.instruction("mov rbx, rax");                                        // keep the source string pointer stable across decoder calls
     emitter.instruction("mov r12, rdx");                                        // keep the source string length stable across decoder calls
     crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");
     crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("lea r13, [r10 + r9]");                                 // compute destination pointer for the reversed string
-    emitter.instruction("mov rbx, r13");                                        // preserve destination start for the returned string pointer
+    emitter.instruction("mov QWORD PTR [rsp + 8], r13");                        // preserve destination start for the returned string pointer
     emitter.instruction("mov rcx, r12");                                        // scan_end = source length in bytes
 
     emitter.label("__rt_grapheme_strrev_loop_x");
@@ -292,10 +292,10 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // reload concat-buffer write offset for the final update
     emitter.instruction("add r8, r12");                                         // advance offset by the unchanged source byte length
     crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r8");             // publish the updated concat-buffer write offset
-    emitter.instruction("mov rax, rbx");                                        // return pointer to the reversed string
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                        // return pointer to the reversed string
     emitter.instruction("mov rdx, r12");                                        // return the unchanged source byte length
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage
-    emitter.instruction("pop rbx");                                             // restore callee-saved destination start storage
+    emitter.instruction("add rsp, 8");                                          // release the destination-start spill slot
     emitter.instruction("pop r13");                                             // restore callee-saved destination cursor storage
     emitter.instruction("pop r12");                                             // restore callee-saved source length storage
     emitter.instruction("pop rbx");                                             // restore callee-saved source pointer storage
@@ -305,7 +305,7 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // null pointer sentinel means false for grapheme_strrev()
     emitter.instruction("xor edx, edx");                                        // failure length is zero
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage on failure
-    emitter.instruction("pop rbx");                                             // restore callee-saved destination start storage on failure
+    emitter.instruction("add rsp, 8");                                          // release the destination-start spill slot on failure
     emitter.instruction("pop r13");                                             // restore callee-saved destination cursor storage on failure
     emitter.instruction("pop r12");                                             // restore callee-saved source length storage on failure
     emitter.instruction("pop rbx");                                             // restore callee-saved source pointer storage on failure

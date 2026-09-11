@@ -259,6 +259,61 @@ fn test_cli_rt_ctx_fibers_and_generators_re_publish_ctx() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A runtime helper that borrows the reserved ctx register corrupts the state
+/// pointer for every ctx access it makes — and `__rt_wordwrap` did exactly that
+/// on AArch64 (it kept its output cursor in x28), so the `__rt_concat_publish`
+/// it calls at the end wrote the new scratch offset into its own result buffer
+/// instead of into `_rt_ctx`. The offset then never advanced and every later
+/// concat-backed result reused the same bytes.
+///
+/// The witness needs results that are NOT copied to the heap first: consumed
+/// inside one expression they stay in the concat arena, so a stale offset makes
+/// the second and third `wordwrap()` echo the FIRST one's text.
+#[test]
+fn test_cli_rt_ctx_concat_backed_results_do_not_overwrite_each_other() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_concat_reuse");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\n\
+         echo wordwrap(\"aaaa bbbb\", 4, \"\\n\", true) . \"[\" .\n\
+              wordwrap(\"wwww xxxx\", 4, \"\\n\", true) . \"]\" .\n\
+              wordwrap(\"1111 2222\", 4, \"\\n\", true);\n",
+    )
+    .expect("failed to write the rt-ctx concat-reuse fixture");
+
+    for mode in [vec!["--rt-ctx"], vec![]] {
+        let output = elephc_cli_command(&dir)
+            .args(&mode)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile the rt-ctx concat-reuse fixture");
+        assert!(
+            output.status.success(),
+            "elephc {mode:?} concat-reuse compile failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let run = std::process::Command::new(dir.join("main"))
+            .output()
+            .expect("failed to run the concat-reuse binary");
+        assert!(
+            run.status.success(),
+            "{mode:?} concat-reuse binary crashed ({}): {}",
+            run.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&run.stderr)
+        );
+        // php's own output for this program, byte for byte.
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "aaaa\nbbbb[wwww\nxxxx]1111\n2222",
+            "{mode:?} build reused the concat arena across wordwrap() results"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// The default build stays on legacy symbol addressing: no ctx helper call.
 #[test]
 fn test_cli_default_main_has_no_ctx_init() {

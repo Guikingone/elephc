@@ -2239,3 +2239,114 @@ fn test_export_attribute_warns_and_is_ignored_in_executable_mode() {
 
     fs::remove_dir_all(&dir).ok();
 }
+
+/// A C host that parks a sentinel in the reserved ctx register, calls across the
+/// library boundary, and reports whether it came back.
+///
+/// The probe is module-level assembly, not inline asm with a register variable:
+/// clang happily spills an explicit `register ... asm("x28")` around the call
+/// and reloads it afterwards, so the C-level version of this test passes even
+/// against a library that clobbers the register.
+const CTX_ABI_HOST_C: &str = r#"
+#include <stdio.h>
+#include <stdint.h>
+
+int32_t elephc_init(void);
+uint64_t probe_add_i64(int64_t a, int64_t b);
+
+#define SENTINEL 0x1234567890ABCDEFULL
+
+#if defined(__aarch64__)
+__asm__(
+"    .text\n"
+"    .globl _probe_add_i64\n"
+"    .globl probe_add_i64\n"
+"    .align 2\n"
+"_probe_add_i64:\n"
+"probe_add_i64:\n"
+"    sub sp, sp, #32\n"
+"    stp x29, x30, [sp, #16]\n"
+"    add x29, sp, #16\n"
+"    str x28, [sp, #0]\n"
+"    movz x28, #0xCDEF\n"
+"    movk x28, #0x90AB, lsl #16\n"
+"    movk x28, #0x5678, lsl #32\n"
+"    movk x28, #0x1234, lsl #48\n"
+"    bl _add_i64\n"
+"    mov x0, x28\n"
+"    ldr x28, [sp, #0]\n"
+"    ldp x29, x30, [sp, #16]\n"
+"    add sp, sp, #32\n"
+"    ret\n"
+);
+#elif defined(__x86_64__)
+__asm__(
+"    .text\n"
+"    .globl probe_add_i64\n"
+"probe_add_i64:\n"
+"    push %rbp\n"
+"    mov %rsp, %rbp\n"
+"    push %r14\n"
+"    push %r15\n"
+"    movabs $0x1234567890ABCDEF, %r14\n"
+"    call add_i64\n"
+"    mov %r14, %rax\n"
+"    pop %r15\n"
+"    pop %r14\n"
+"    pop %rbp\n"
+"    ret\n"
+);
+#endif
+
+int main(void) {
+    if (elephc_init() != 0) {
+        fprintf(stderr, "init failed\n");
+        return 1;
+    }
+    uint64_t after = probe_add_i64(40, 2);
+    if (after != SENTINEL) {
+        printf("CLOBBERED %016llx\n", (unsigned long long) after);
+        return 2;
+    }
+    printf("PRESERVED\n");
+    return 0;
+}
+"#;
+
+/// The ctx register (`x28` AArch64 / `r14` x86_64) is callee-saved, so a library
+/// export that publishes elephc's `_rt_ctx` pointer into it borrows a register
+/// the HOST owns. Every return path must hand the host's value back — the same
+/// contract the FFI callback trampoline already carries.
+///
+/// Without the save/restore pair the host gets elephc's context pointer in place
+/// of its own value, corrupting whatever the caller kept there: an ABI break no
+/// PHP-level test can see.
+#[test]
+fn test_rt_ctx_cdylib_export_preserves_the_hosts_ctx_register() {
+    let dir = make_test_dir("elephc_cdylib_rt_ctx_abi");
+    fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--rt-ctx", "--emit", "cdylib", "auth.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "--rt-ctx cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let host = compile_linked_c_host(&dir, CTX_ABI_HOST_C, "ctx-abi-host", "auth");
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run the ctx ABI host");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "PRESERVED",
+        "a --rt-ctx export clobbered the host's callee-saved ctx register (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}

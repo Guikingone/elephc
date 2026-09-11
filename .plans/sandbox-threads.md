@@ -1,7 +1,8 @@
 # Sandbox Threads — Plan de suivi
 
-Statut : **M0 en cours** — fondation ctx-register livrée sur la branche `spike/runtime-ctx-register` (PR #954).
-Dernière mise à jour : après la remédiation de la review round-2 de Kimi K3.
+Statut : **M0 en cours** — fondation ctx-register livrée sur la branche `spike/runtime-ctx-register` (PR #954),
+**correcte sur macos-aarch64, incomplète sur linux-x86_64** (voir « Review round 3 »).
+Dernière mise à jour : après la review round 3 (audit B3 réparé + 6 familles de défauts corrigées).
 
 ## Objectif
 
@@ -62,20 +63,52 @@ réservé) est ce qui se construit maintenant.
 
 - Unitaires : layout/registres, émission helpers 2 cibles, exclusion pool
   regalloc, collision cache key, gates runtime complet (ctx + legacy),
-  audit scratch, audit rbx + contrôle négatif, audit dangling-x6,
-  kitchen-sink, ordre trampolines 2 arches.
+  audit scratch **x28 zéro-tolérance + baseline r14 décroissante** (toutes
+  features), audit rbx + contrôle négatif (toutes features), audit dangling-x6,
+  kitchen-sink, ordre trampolines 2 arches, store d'immédiat concat non nul.
 - e2e `--rt-ctx` : main-init, défaut-legacy, run+allocations, argv préservé,
   recyclage heap (600k iters) + golden legacy≡ctx, fibers/generators
-  (re-publish), heap-debug+ctx.
+  (re-publish), heap-debug+ctx, réutilisation de l'arène concat, préservation du
+  registre ctx de l'hôte à travers un export cdylib (hôte C + sentinelle asm).
 - Suites : lib 262, strings 409, json 447, serialize 75, unserialize,
   var_dump, preg, date, fibers 101.
+
+### Review round 3 (relecture humaine + audits réparés)
+
+L'audit B3 (`ctx_mode_runtime_never_scratches_the_ctx_register`) filtrait les
+lignes sur le PRÉFIXE DE COMMENTAIRE de la cible : il lisait le texte des
+commentaires, jamais les instructions — donc **toujours vert, sur les deux
+arches**. Réparé (deux tests partagent un scanner), il a immédiatement sorti
+3 offenders AArch64 et 81 x86_64. Défauts trouvés et corrigés dans la foulée :
+
+| Défaut | Portée | Preuve |
+|---|---|---|
+| `__rt_wordwrap` gardait son curseur de sortie dans **x28** puis appelait `__rt_concat_publish` | ctx AArch64 | témoin PHP : 2e et 3e `wordwrap()` d'une même expression rendaient le texte du 1er (`test_cli_rt_ctx_concat_backed_results_do_not_overwrite_each_other`) |
+| Migration r14→rbx en **collision** avec un rbx déjà utilisé : `wordwrap` (base source vs lastspace), `grapheme_strrev` (pointeur source vs début destination), `sprintf` (curseur d'écriture vs index d'argument séquentiel) | **legacy ET ctx**, x86_64 | lecture ; régression pure vs `main` |
+| Adresse `_concat_off` **orpheline** : le helper ctx charge la VALEUR, le registre d'adresse n'est plus écrit mais reste déréférencé — `chr()`, `spl_object_hash()`, `resource_to_string()`, `php_uname()`, `sprintf` (`[rbp-56]`) | **legacy ET ctx**, x86_64 | lecture + audit scripté ; écriture sauvage |
+| `emit_concat_off_store_imm` non nul émettait `str #65536, [x28]` (inexistant) | ctx AArch64 | tout build `--emit cdylib/staticlib --rt-ctx` refusé par l'assembleur |
+| `elephc_init` publiait le ctx **après** le reset concat (lui-même ctx-relatif) | ctx, 2 arches | SIGSEGV à l'adresse 0 au premier `elephc_init` d'un cdylib |
+| Les exports cdylib/staticlib publiaient x28/r14 **sans sauver la valeur de l'hôte** | ctx, 2 arches | hôte C avec sentinelle en asm : `CLOBBERED` → `PRESERVED` (`test_rt_ctx_cdylib_export_preserves_the_hosts_ctx_register`) |
+
+Leçon à garder : **un audit qui ne peut pas échouer n'est pas un audit**. Les
+deux audits mécaniques exigés par les rounds 1-2 avaient chacun attrapé un vrai
+bug ; celui-ci n'en avait attrapé aucun parce qu'il ne lisait rien.
 
 ## Reste à faire (M0 → M1)
 
 ### M0 restant
+- [ ] **Finir la migration r14 → rbx / slot de pile sur x86_64** (baseline 81
+      instructions, `x86_64_ctx_runtime_scratch_baseline_only_shrinks`) :
+      strtotime weekdays, API fibers/generators, walkers hash et array, brigade
+      de filtres utilisateur, etc. `--rt-ctx` **ne doit pas être annoncé sur
+      x86_64** tant que ce compteur n'est pas à zéro. Discipline : rbx si le
+      helper peut préserver la valeur de l'appelant, slot de frame sinon.
 - [ ] **Pool multi-contextes** : `_rt_ctx` en tableau + free-list au lieu d'une
       instance unique ; `__rt_ctx_init`/`__rt_ctx_destroy` exportés pour le
       bridge M1. (`--heap-size` par thread à documenter.)
+- [ ] `_rt_ctx` est émis en `.space` dans `.data` : ~64 Ko de zéros dans l'image
+      là où tous les autres globals passent par `.comm`. À basculer (campagne
+      taille binaire).
 - [ ] **Familles d'état restantes sur globals** (inventaire puis migration
       familles entières, même discipline que concat) : exceptions
       (`_exc_handler_top`/`_exc_value`/...), fibers (`_fiber_current`,
@@ -84,9 +117,18 @@ réservé) est ce qui se construit maintenant.
 - [ ] **Bench compute/spill-heavy** (pool 8→7) — exigé avant toute claim de
       neutralité perf et avant M1.
 - [ ] **Validation exécution linux-x86_64** : `./scripts/test-linux-x86_64.sh rt_ctx`
-      (Docker) ou shard CI — l'émission est déjà verrouillée par les tests asm.
+      (Docker) ou shard CI. ⚠️ À faire d'abord en mode **legacy** : les trois
+      collisions rbx et les cinq adresses orphelines ci-dessus cassaient
+      `sprintf`/`chr`/`wordwrap`/`php_uname` sur x86_64 dans LES DEUX modes, et
+      rien ne les a vues parce que la CI de la branche n'a jamais tourné
+      (PR conflictuelle → aucun job sauf « Classify »).
 - [ ] Matrice chemins d'erreur des consommateurs concat × 2 modes × 2 arches ;
-      parité staticlib ctx.
+      parité staticlib ctx (le cdylib ctx est vert depuis le round 3, le
+      staticlib reste à sonder).
+- [ ] **Rebase/merge sur `origin/main`** : la branche est à 361 commits de
+      retard, `git merge-tree` annonce **2 fichiers en conflit**
+      (`runtime/emitters.rs`, `system/json_encode_array_int.rs`). C'est le
+      déblocage le moins cher de la CI.
 
 ### M1 (bridge elephc-parallel) — 5 PRs prévus
 1. Bridge staticlib + `__rt_ctx_init` dans un thread nu + smoke test asm.
