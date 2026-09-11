@@ -258,6 +258,19 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
                 // not demote its scope owner to a borrow and release that owner.
                 return Ok(());
             }
+            // The named variable can itself BE a reference -- the outer loop variable of a
+            // by-reference `foreach` aliasing an array element, a captured `use (&$x)` closure
+            // parameter, or a property reference alias -- in which case this scope cell is not
+            // what the write is really for. A write that stops here is invisible to whatever the
+            // variable actually names, so it must keep following the chain first, exactly as a
+            // plain `$name = value;` statement already does for its own target (`StoreVar` in
+            // `crate::interpreter::statements::dispatch`). This is what a nested by-reference
+            // `foreach` needed: the inner loop's subject resolves to a `Variable` target naming
+            // the outer loop variable, and without this the inner write reached only that
+            // variable's own local cell, never the array element it aliases.
+            if let Some(nested_target) = scope.reference_target(name).cloned() {
+                write_back_method_ref_target(&nested_target, value, context, values)?;
+            }
             let stored = values.retain(value)?;
             let replaced = match set_scope_cell(
                 context,

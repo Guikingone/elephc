@@ -25,6 +25,31 @@ fn test_runtime_dynamic_include_variable_path_shares_scope() {
     assert_eq!(out, "runtime-include");
 }
 
+/// Verifies a by-reference nested `foreach` write reaches the outer array when the whole
+/// fragment executes through the eval bridge (a runtime-only-known include path forces the
+/// interpreter to run the included file, rather than the AOT compiler lowering it directly).
+///
+/// This is the shape `examples/symfony-app/vendor/symfony/event-dispatcher/EventDispatcher.php`'s
+/// `optimizeListeners()` uses: `foreach ($this->listeners as &$byPriority) { foreach
+/// ($byPriority as $priority => &$listeners) { ... } }`. `php -n` 8.5.6 prints `X,Y/Z`.
+#[test]
+fn test_runtime_dynamic_include_nested_by_reference_foreach_writes_through_outer_reference() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function load($path) { include $path; } load('piece.php');",
+            ),
+            (
+                "piece.php",
+                "<?php\n$d = [[\"x\", \"y\"], [\"z\"]];\nforeach ($d as &$row) {\n    foreach ($row as &$cell) {\n        $cell = strtoupper($cell);\n    }\n    unset($cell);\n}\nunset($row);\necho implode(\",\", $d[0]), \"/\", implode(\",\", $d[1]);\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "X,Y/Z");
+}
+
 /// Verifies a dynamic require expression returns the included file's explicit value.
 #[test]
 fn test_runtime_dynamic_require_expression_returns_value() {
