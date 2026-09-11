@@ -123,19 +123,34 @@ baseline r14, kitchen-sink, alignement SysV) avant toute autre chose.
 
 ## Reste à faire (M0 → M1)
 
+### Fait pendant la session de review (round 3, suite)
+- [x] **Migration r14 terminée sur x86_64 : 81 → 0.** Le gate est passé de
+      « baseline décroissante » à zéro-tolérance
+      (`x86_64_ctx_runtime_never_scratches_the_ctx_register`). Ordre de
+      préférence appliqué : (1) registre libre hors pool alloc (r15, ou
+      caller-saved dans un helper feuille) ; (2) rbx **avec** préservation de la
+      valeur de l'appelant ; (3) slot de frame ; (4) aucun registre — deux sites
+      ne faisaient qu'une comparaison, un `cmp` à opérande mémoire suffit.
+      ⚠️ Un slot de 8 octets ajouté à un frame déjà aligné casse SysV : c'est
+      exactement ce que `every_x86_64_runtime_call_site_is_sysv_aligned` attrape.
+- [x] **`_rt_ctx` en `.comm`** : un binaire ctx passait de 70 Ko à 136 Ko à cause
+      des 64 Ko de zéros écrits dans `.data`. Il est maintenant **80 octets plus
+      PETIT** que son jumeau legacy (il perd `_concat_off`/`_heap_off`).
+- [x] **Bench pool 8→7 (exigé avant toute claim de neutralité)** : deux
+      programmes spill-heavy, chacun bâti deux fois depuis le même arbre avec
+      x28 dans et hors du pool, runs alternés → 1,325 s vs 1,315 s et 0,670 s vs
+      0,675 s. Dans le bruit ⇒ **x28 reste hors du pool dans les DEUX modes**
+      (une seule discipline de registres). Limite connue : dans le premier
+      programme l'allocateur ne gardait que 3 valeurs en callee-saved, d'où le
+      second, écrit pour en avoir huit en vol.
+- [x] **Exécution linux-x86_64** (Docker linux/amd64) : sonde couvrant les 7
+      helpers réécrits + json + getenv, **ALL PASS en legacy ET en `--rt-ctx`**.
+      Première exécution x86_64 de cette branche.
+
 ### M0 restant
-- [ ] **Finir la migration r14 → rbx / slot de pile sur x86_64** (baseline 81
-      instructions, `x86_64_ctx_runtime_scratch_baseline_only_shrinks`) :
-      strtotime weekdays, API fibers/generators, walkers hash et array, brigade
-      de filtres utilisateur, etc. `--rt-ctx` **ne doit pas être annoncé sur
-      x86_64** tant que ce compteur n'est pas à zéro. Discipline : rbx si le
-      helper peut préserver la valeur de l'appelant, slot de frame sinon.
 - [ ] **Pool multi-contextes** : `_rt_ctx` en tableau + free-list au lieu d'une
       instance unique ; `__rt_ctx_init`/`__rt_ctx_destroy` exportés pour le
       bridge M1. (`--heap-size` par thread à documenter.)
-- [ ] `_rt_ctx` est émis en `.space` dans `.data` : ~64 Ko de zéros dans l'image
-      là où tous les autres globals passent par `.comm`. À basculer (campagne
-      taille binaire).
 - [ ] **Familles d'état restantes sur globals** (inventaire puis migration
       familles entières, même discipline que concat) : exceptions
       (`_exc_handler_top`/`_exc_value`/...), fibers (`_fiber_current`,
@@ -143,12 +158,11 @@ baseline r14, kitchen-sink, alignement SysV) avant toute autre chose.
       — décision sémantique : par contexte ou atomiques), buffers ob/print_r.
 - [ ] **Bench compute/spill-heavy** (pool 8→7) — exigé avant toute claim de
       neutralité perf et avant M1.
-- [ ] **Validation exécution linux-x86_64** : `./scripts/test-linux-x86_64.sh rt_ctx`
-      (Docker) ou shard CI. ⚠️ À faire d'abord en mode **legacy** : les trois
-      collisions rbx et les cinq adresses orphelines ci-dessus cassaient
-      `sprintf`/`chr`/`wordwrap`/`php_uname` sur x86_64 dans LES DEUX modes, et
-      rien ne les a vues parce que la CI de la branche n'a jamais tourné
-      (PR conflictuelle → aucun job sauf « Classify »).
+- [ ] **Suite complète linux-x86_64** : `./scripts/test-linux-x86_64.sh` (Docker,
+      émulé et lent) ou un shard CI. La SONDE ciblée est verte dans les deux
+      modes (ci-dessus) ; ce qui reste est la couverture large. Recette pour
+      relancer la sonde sans repartir de zéro : volume docker persistant
+      `elephc-x86-ctx` + `scratchpad/x86run.sh` (build incrémental).
 - [ ] Matrice chemins d'erreur des consommateurs concat × 2 modes × 2 arches ;
       parité staticlib ctx (le cdylib ctx est vert depuis le round 3, le
       staticlib reste à sonder).

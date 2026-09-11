@@ -66,6 +66,14 @@ scratch moved to `r15` with a descriptor reload, and the x86_64 callback
 trampolines re-publish the ctx pointer before reaching compiled PHP code
 (see Foreign entries below).
 
+## Binary size
+
+`_rt_ctx` is a `.comm` symbol, like every other runtime global. Emitting it as
+`.space` inside `.data` — which the first version did — writes all 64 KiB of
+zeroes into the image: a small program went from 70 KB to 136 KB. As a common
+symbol the ctx build is 80 bytes SMALLER than its legacy twin, because it drops
+the `_concat_off`/`_heap_off` globals it no longer needs.
+
 ## Measured results (macos-aarch64, host build)
 
 An allocation-heavy program (4M array/string allocations + a 200k-entry hash
@@ -76,8 +84,21 @@ build), 5 alternating runs of the same compiled binaries:
 
 The ctx mode is equal-to-slightly-faster (the imm-offset load replaces an
 `adrp+add` pair on the hot alloc/free paths). **Cost of the reserved register:
-in the noise.** The pool reduction (8→7 callee-saved AArch64) did not measurably
-hurt the bench.
+in the noise.**
+
+The pool reduction (8→7 callee-saved AArch64) was then measured on its own,
+since it is paid by LEGACY builds too. Two spill-heavy programs, each built
+twice from the same tree with x28 in and out of the pool, alternating runs:
+
+- ten locals updated across a call in a 40M-iteration loop: 1.325 s vs 1.315 s
+- eight distinct values live across calls, 5M iterations: 0.670 s vs 0.675 s
+
+Both differences are inside the run-to-run spread, so x28 stays out of the pool
+in BOTH modes and the two builds keep one register discipline. Worth knowing
+what this does NOT prove: in the first program the allocator kept only three
+values in callee-saved registers and spilled the rest, so the eighth register
+was never the constraint. The second was written to put eight values in flight
+precisely to remove that doubt.
 
 ## The fiber trap (found by the spike, fixed)
 
@@ -149,12 +170,9 @@ ALL features on — and fails on any ctx register reference outside the
 sanctioned shapes (publish sequences, ctx-relative accesses, whole-register
 save/restore pairs).
 
-Two tests share one scanner:
-
-- `aarch64_ctx_runtime_never_scratches_the_ctx_register` — zero tolerance.
-- `x86_64_ctx_runtime_scratch_baseline_only_shrinks` — a shrinking baseline
-  (see below): the x86_64 `r14` → `rbx` migration is unfinished, so the count
-  may only go down.
+Two tests share one scanner, both zero tolerance:
+`aarch64_ctx_runtime_never_scratches_the_ctx_register` and
+`x86_64_ctx_runtime_never_scratches_the_ctx_register`.
 
 The audit's first version filtered lines on the target's comment prefix, so it
 scanned comment text instead of instructions and reported zero offenders on
@@ -162,36 +180,42 @@ both targets — while `__rt_wordwrap` kept its output cursor in x28 and 81
 x86_64 instructions still borrowed r14. **An audit that cannot fail is not an
 audit**: the negative control matters as much as the assertion.
 
+Where a borrowing helper goes depends on what it has left:
+
+1. a free register that the allocator never assigns (`r15`, or any caller-saved
+   one in a leaf helper) — a rename, nothing else;
+2. `rbx`, with the caller's value preserved (push/pop or a frame slot), which
+   `x86_64_runtime_helpers_that_scratch_rbx_preserve_it` then enforces;
+3. a frame slot, when every register is spoken for — `sprintf`'s sequential
+   argument cursor, `usort`'s length snapshot, `wordwrap`'s lastspace;
+4. no register at all: two of the `getX`/wrapper helpers only compared the
+   value once, and a memory-operand `cmp` replaced the load/compare pair.
+
+A frame slot must keep the frame a 16-byte multiple: an 8-byte spill added to
+an already-aligned frame is exactly what
+`every_x86_64_runtime_call_site_is_sysv_aligned` fails on.
+
 ## Current state and what M0 must finish
 
-**macos-aarch64 is the only target where `--rt-ctx` is correct today.** The
-whole heap and concat families route through the reserved register (alloc,
-free, heap_free_safe, incref/decref/heap-kind/GC range checks, the heap-debug
-validator, descriptor release, object-handle and wrapper-cast checks, the web
-arena reset); main installs the pointer via `__rt_ctx_init`; fiber entry, both
-library lifecycle entries and every export/callback wrapper publish it.
-`--rt-ctx` executables and cdylibs compile, link, run, recycle their heap, and
-survive generators and fibers.
+Both targets route their whole heap and concat families through the reserved
+register (alloc, free, heap_free_safe, incref/decref/heap-kind/GC range checks,
+the heap-debug validator, descriptor release, object-handle and wrapper-cast
+checks, the web arena reset); main installs the pointer via `__rt_ctx_init`;
+fiber entry, both library lifecycle entries and every export/callback wrapper
+publish it and hand the host's value back. `--rt-ctx` executables and cdylibs
+compile, link, run, recycle their heap, and survive generators and fibers.
 
-On linux-x86_64 the EMISSION is pinned by the asm tests, but 81 instructions in
-the unmigrated helper families still borrow `r14` — the strtotime weekday
-tables, the fiber/generator API, the hash and array walkers, the user-filter
-brigade and friends. Each one overwrites the context pointer mid-helper, so
-`--rt-ctx` must not be advertised on that target until
-`x86_64_ctx_runtime_scratch_baseline_only_shrinks` reaches zero.
+No helper on either target borrows the ctx register any more, and a
+linux/amd64 container runs the same probe as macos-aarch64 with identical
+results in both modes.
 
 Still on the M0 work list:
 
-- **Finish the `r14` → `rbx`/frame-slot migration on x86_64** (baseline 81).
-  `rbx` is the only callee-saved register the allocator hands to cross-call
-  values, so a helper that takes it must preserve the caller's value; a helper
-  with no register left uses a frame slot (`str_to_number`'s significand flag,
-  `sprintf`'s sequential-argument cursor, `wordwrap`'s lastspace).
 - `_rt_ctx` as an emitter-shaped pool (array + free list) instead of a single
   instance, and `__rt_ctx_init`/`__rt_ctx_destroy` exported for the M1
   thread-pool bridge.
-- `_rt_ctx` is emitted as `.space` inside `.data`, so a ctx build carries ~64 KiB
-  of zero bytes in the image where every other runtime global uses `.comm`.
+- The state families still on globals: exceptions, fibers, the GC counters,
+  the ob/print_r buffers. Those are what M1 actually needs.
 
 The full generated-runtime gate tests
 (`ctx_feature_generates_ctx_addressed_runtime_end_to_end`,

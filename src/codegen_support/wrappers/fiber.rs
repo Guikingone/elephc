@@ -196,6 +196,10 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     let saved_count_offset = 32;
     let saved_array_offset = 40;
     let saved_argbox_offset = 48;
+    // The start-argument count lives in the frame rather than in r14: r14 is the
+    // reserved runtime-context register, this wrapper reaches compiled PHP code
+    // through the descriptor invoker, and r12/r13/r15/rbx all already have a job.
+    let start_count_offset = 56;
     let missing_label = format!("{}_missing_invoker", label);
     let loop_label = format!("{}_copy_args", label);
     let copy_done_label = format!("{}_args_done", label);
@@ -218,11 +222,17 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
         runtime::FIBER_CALLABLE_OFFSET
     )); // r13 = callable descriptor stored on the Fiber
     emitter.instruction(&format!(
-        "mov r14, QWORD PTR [r12 + {}]",
+        "mov rax, QWORD PTR [r12 + {}]",
         runtime::FIBER_START_ARG_COUNT_OFFSET
-    )); // r14 = number of boxed start() values to forward
-    emit_allocate_descriptor_start_arg_array_x86_64(emitter);
-    emit_copy_fiber_start_args_to_array_x86_64(emitter, &loop_label, &copy_done_label);
+    )); // number of boxed start() values to forward
+    abi::store_at_offset(emitter, "rax", start_count_offset);
+    emit_allocate_descriptor_start_arg_array_x86_64(emitter, start_count_offset);
+    emit_copy_fiber_start_args_to_array_x86_64(
+        emitter,
+        &loop_label,
+        &copy_done_label,
+        start_count_offset,
+    );
     emit_box_descriptor_start_arg_array(emitter, "r15", "rsi");
 
     emitter.instruction("mov rbx, rsi");                                        // keep the boxed argument array alive across the descriptor invocation
@@ -257,10 +267,11 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
 }
 
 /// Allocates the Mixed-pointer argument array used by an x86_64 descriptor invoker.
-fn emit_allocate_descriptor_start_arg_array_x86_64(emitter: &mut Emitter) {
+fn emit_allocate_descriptor_start_arg_array_x86_64(emitter: &mut Emitter, count_offset: usize) {
     emitter.instruction("mov rdi, 4");                                          // default descriptor argument-array capacity
-    emitter.instruction("cmp r14, 4");                                          // does the actual start() arity exceed the small-array default?
-    emitter.instruction("cmova rdi, r14");                                      // use the actual arity when it is larger than four
+    abi::load_at_offset(emitter, "rax", count_offset);                          // the start() arity, parked in the frame (r14 is the ctx register)
+    emitter.instruction("cmp rax, 4");                                          // does the actual start() arity exceed the small-array default?
+    emitter.instruction("cmova rdi, rax");                                      // use the actual arity when it is larger than four
     emitter.instruction("mov rsi, 8");                                          // descriptor argument arrays store boxed Mixed pointers
     emitter.instruction("call __rt_array_new");                                 // allocate the descriptor invoker argument array
     emitter.instruction("mov r15, rax");                                        // keep the argument array pointer across element retains
@@ -272,10 +283,12 @@ fn emit_copy_fiber_start_args_to_array_x86_64(
     emitter: &mut Emitter,
     loop_label: &str,
     done_label: &str,
+    count_offset: usize,
 ) {
     emitter.instruction("xor ebx, ebx");                                        // start copying at start_args[0]
     emitter.label(loop_label);
-    emitter.instruction("cmp rbx, r14");                                        // have all supplied start() arguments been copied?
+    abi::load_at_offset(emitter, "rax", count_offset);                          // the start() arity, parked in the frame (r14 is the ctx register)
+    emitter.instruction("cmp rbx, rax");                                        // have all supplied start() arguments been copied?
     emitter.instruction(&format!("jae {}", done_label));                        // leave the copy loop once index >= count
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r12 + rbx * 8 + {}]",
@@ -286,7 +299,8 @@ fn emit_copy_fiber_start_args_to_array_x86_64(
     emitter.instruction("add rbx, 1");                                          // advance to the next supplied start() argument
     emitter.instruction(&format!("jmp {}", loop_label));                        // continue copying boxed start() arguments
     emitter.label(done_label);
-    emitter.instruction("mov QWORD PTR [r15], r14");                            // publish the argument array length after all payload slots are initialized
+    abi::load_at_offset(emitter, "rax", count_offset);                          // the start() arity, parked in the frame (r14 is the ctx register)
+    emitter.instruction("mov QWORD PTR [r15], rax");                            // publish the argument array length after all payload slots are initialized
 }
 
 /// Spills visible parameters and hidden arguments from the Fiber's argument storage

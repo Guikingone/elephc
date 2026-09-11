@@ -76,16 +76,20 @@ pub fn ctx_reg(emitter: &Emitter) -> &'static str {
 
 /// Emits the `_rt_ctx` data block: one instance of the context struct.
 ///
-/// Emitted as `.bss`-style `.comm` when `single` is true (the spike's default
-/// executable mode owns exactly one context). A future pool emitter will replace
-/// this with an array plus a free-list for per-thread contexts.
+/// A common symbol, like every other runtime global: the block is 64 KiB of
+/// zeroes, and `.space` inside `.data` writes all of them into the image (it
+/// made a ctx binary ~66 KB larger than its legacy twin). A future pool emitter
+/// will replace this with an array plus a free-list for per-thread contexts.
 // The ctx data block currently ships through `runtime::data::fixed`'s string
 // assembly path; this emitter-shaped variant stays for the pool iteration.
 #[allow(dead_code)]
 pub fn emit_rt_ctx_data(emitter: &mut Emitter, single: bool) {
     if single {
-        emitter.raw(".data");
-        emitter.raw(&format!(".globl _rt_ctx\n_rt_ctx:\n    .space {}", CTX_SIZE));
+        emitter.raw(&crate::codegen_support::data_section::comm_directive(
+            "_rt_ctx",
+            CTX_SIZE,
+            emitter.target,
+        ));
     }
 }
 
@@ -632,14 +636,16 @@ mod tests {
         assert!(CTX_SIZE > CTX_CONCAT_BUF_CAPACITY);
     }
 
-    /// `emit_rt_ctx_data` declares exactly one global `_rt_ctx` of `CTX_SIZE` bytes.
+    /// `emit_rt_ctx_data` declares exactly one `_rt_ctx` of `CTX_SIZE` bytes, as
+    /// a COMMON symbol: `.space` inside `.data` writes 64 KiB of zeroes into
+    /// every ctx binary, which nearly doubled a small program's image.
     #[test]
-    fn rt_ctx_data_emits_single_global_instance() {
+    fn rt_ctx_data_emits_single_zero_filled_instance() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
         emit_rt_ctx_data(&mut emitter, true);
         let asm = emitter.output();
-        assert!(asm.contains(".globl _rt_ctx\n_rt_ctx:\n"));
-        assert!(asm.contains(&format!(".space {}", CTX_SIZE)));
+        assert!(asm.contains(&format!(".comm _rt_ctx, {}", CTX_SIZE)), "{asm}");
+        assert!(!asm.contains(".space"), "the ctx block must not be image bytes: {asm}");
     }
 
     /// `__rt_ctx_init` publishes `_rt_ctx` into the ctx register and zeroes every
@@ -780,9 +786,8 @@ mod tests {
             asm.contains(&format!("ldr x10, [x28, #{}]", CTX_HEAP_OFF_OFFSET)),
             "ctx runtime allocator must bump through x28"
         );
-        // The data block backs it.
-        assert!(asm.contains(".globl _rt_ctx\n_rt_ctx:\n"), "{asm}");
-        assert!(asm.contains(&format!(".space {}", CTX_SIZE)), "{asm}");
+        // The data block backs it, zero-filled rather than written to the image.
+        assert!(asm.contains(&format!(".comm _rt_ctx, {}", CTX_SIZE)), "{asm}");
     }
 
     /// The legacy runtime is untouched by the feature: no `__rt_ctx_init`, no
@@ -967,39 +972,30 @@ mod tests {
         );
     }
 
-    /// Same audit on x86_64, as a SHRINKING baseline rather than a clean gate.
+    /// The same audit on x86_64, also zero tolerance.
     ///
-    /// The `r14` → `rbx` scratch migration is incomplete: the helper families
-    /// still borrowing r14 (strtotime weekdays, the fiber/generator API, the
-    /// hash and array walkers, the user-filter brigade, …) corrupt the ctx
-    /// pointer in a `--rt-ctx` x86_64 build. They were missed because the
-    /// original audit scanned comment text instead of instructions and so
-    /// reported zero offenders on both targets.
+    /// It started as a shrinking baseline of 81: reading the instruction stream
+    /// instead of the comment text exposed every helper family that still
+    /// borrowed r14 — strtotime's weekday table, the fiber/generator API, the
+    /// hash and array walkers, the user-filter brigade, the getX family. Each
+    /// one overwrote the context pointer mid-helper, and several then called
+    /// straight into compiled PHP (a usort comparator, an array_reduce
+    /// callback, a Fiber body).
     ///
-    /// Until that migration finishes, the count may only go DOWN: a new helper
-    /// that borrows r14 fails here immediately, and every family that migrates
-    /// lowers the constant. When it reaches zero, replace this with the same
-    /// zero-tolerance assertion the AArch64 arm uses.
-    ///
-    /// `--rt-ctx` is not a shipped mode on x86_64 until this is 0.
+    /// Where a helper had a free non-allocated register the value moved there
+    /// (r15, or a caller-saved one in a leaf); where it did not, it moved to
+    /// rbx with the caller's value preserved, or to a frame slot. Two of them
+    /// needed no register at all — a memory-operand `cmp` replaced the pair.
     #[test]
-    fn x86_64_ctx_runtime_scratch_baseline_only_shrinks() {
-        /// Offenders remaining in the unmigrated x86_64 helper families.
-        const BASELINE: usize = 81;
+    fn x86_64_ctx_runtime_never_scratches_the_ctx_register() {
         let offenders = ctx_register_scratch_offenders(Platform::Linux, Arch::X86_64, "r14");
         assert!(
-            offenders.len() <= BASELINE,
-            "x86_64 ctx runtime grew its r14 scratch debt: {} offenders (baseline {BASELINE}).\n\
-             A new helper borrowed r14 — the reserved ctx register. Use rbx (preserving \
-             the caller's value) or a frame slot instead.\n{}",
+            offenders.is_empty(),
+            "x86_64 ctx runtime uses r14 outside sanctioned shapes ({} offenders).\n\
+             A helper borrowed r14 — the reserved ctx register. Use a free non-allocated \
+             register, rbx (preserving the caller's value), or a frame slot.\n{}",
             offenders.len(),
             offenders.join("\n"),
-        );
-        assert!(
-            offenders.len() >= BASELINE,
-            "x86_64 ctx r14 scratch debt shrank to {} — lower BASELINE to match (and switch \
-             to a zero-tolerance assertion once it reaches 0).",
-            offenders.len(),
         );
     }
 

@@ -1491,10 +1491,18 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&emit_php_uname_data());
     // Per-context state block for the ctx-register spike: one instance, emitted
     // after the legacy globals so both addressing modes coexist during A/B.
+    //
+    // `.comm`, like every other runtime global — NOT `.space` inside `.data`.
+    // The block is 64 KiB of zeroes and `.data` is written to the image, so the
+    // first version made every ctx binary ~66 KB larger than its legacy twin
+    // (70 KB -> 136 KB for a small program). A common symbol lands in the
+    // zero-filled section instead, which is also where `_heap_buf` puts its
+    // whole 8 MiB arena.
     if ctx_register {
-        out.push_str(&format!(
-            ".globl _rt_ctx\n_rt_ctx:\n    .space {}\n",
-            crate::codegen_support::runtime::ctx::CTX_SIZE
+        out.push_str(&comm_directive(
+            "_rt_ctx",
+            crate::codegen_support::runtime::ctx::CTX_SIZE,
+            target,
         ));
     }
 
