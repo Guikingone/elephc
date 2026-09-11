@@ -617,6 +617,18 @@ pub(super) fn eval_closure_expr(
         context.current_class_scope().map(str::to_string),
         context.current_called_class_scope().map(str::to_string),
     );
+    // PHP binds `$this` into a non-static closure or arrow function automatically when one is
+    // declared inside a method body while an instance is in scope -- this is not a `use (...)`
+    // capture (and an arrow function's implicit capture list explicitly excludes `this`), so it
+    // has to be captured here, at the declaration site, the same way the class scopes above are.
+    // A `static function`/`static fn` never gets `$this`, even if one happens to be in scope
+    // (e.g. a static closure declared inside another closure that itself captured `$this`).
+    if !is_static {
+        if let Some(this_value) = visible_scope_cell(context, scope, "this") {
+            let retained = values.retain(this_value)?;
+            closure.set_declaring_this(Some(retained));
+        }
+    }
     closure.set_declaring_call_site(context.call_site());
     if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
         eprintln!(

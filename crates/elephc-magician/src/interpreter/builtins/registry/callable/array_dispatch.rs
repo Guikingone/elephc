@@ -19,17 +19,40 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
     match callback {
         EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
-                return eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
-                    &closure,
-                    closure.declaring_class_scope().map(str::to_string),
-                    closure.function().parameter_is_by_ref(),
-                    evaluated_args,
-                    EvalByRefBindingMode::WarnByValue {
-                        callable_name: closure.function().name(),
-                    },
-                    context,
-                    values,
-                );
+                let parameter_is_by_ref = closure.function().parameter_is_by_ref();
+                let by_ref_mode = EvalByRefBindingMode::WarnByValue {
+                    callable_name: closure.function().name(),
+                };
+                // A non-static closure or arrow function declared inside a method implicitly
+                // captured `$this` at its declaration site (`eval_closure_expr`); an unbound call
+                // through a plain variable (`$f(...)`) must still see it, exactly as it would
+                // through the direct call path in `execution.rs`. Deriving the called (late
+                // static) class from the captured object itself -- rather than reusing whatever
+                // lexical scope was captured -- is also what makes `static::` inside the closure
+                // follow the RUNTIME class of that `$this`, not the class that lexically declared
+                // the closure (a closure declared in a parent method but invoked on a child
+                // instance must see `static::` as the child).
+                return match closure.declaring_this() {
+                    Some(this_object) => eval_closure_with_evaluated_args_and_bound_this_scope_ref_mode(
+                        &closure,
+                        this_object,
+                        closure.declaring_class_scope().map(str::to_string),
+                        parameter_is_by_ref,
+                        evaluated_args,
+                        by_ref_mode,
+                        context,
+                        values,
+                    ),
+                    None => eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
+                        &closure,
+                        closure.declaring_class_scope().map(str::to_string),
+                        parameter_is_by_ref,
+                        evaluated_args,
+                        by_ref_mode,
+                        context,
+                        values,
+                    ),
+                };
             }
             eval_callable_with_call_array_args(name, evaluated_args, context, values)
         }

@@ -187,7 +187,7 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let binding = closure.declaring_class_scope().map(|class_scope| EvalClosureBinding {
-        this_object: None,
+        this_object: closure.declaring_this(),
         class_scope: class_scope.to_string(),
         called_class: closure
             .declaring_called_class_scope()

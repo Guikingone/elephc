@@ -105,6 +105,12 @@ pub struct EvalClosure {
     pub(super) declaring_class_scope: Option<String>,
     /// Late-static class at the declaration site, retained independently from `self` scope.
     pub(super) declaring_called_class_scope: Option<String>,
+    /// `$this` implicitly captured at the declaration site, for a non-static closure or arrow
+    /// function declared inside a method while an instance was in scope. PHP binds `$this`
+    /// automatically here -- it is not a `use (...)` capture and an arrow function's implicit
+    /// capture list explicitly excludes it (`infer_arrow_closure_captures` filters `"this"` out),
+    /// so without this field the closure body had no way to see the enclosing instance at all.
+    pub(super) declaring_this: Option<RuntimeCellHandle>,
     /// File, directory, line, and `__FILE__` override active at the declaration site.
     pub(super) declaring_call_site: Option<(String, String, i64, Option<String>)>,
     /// The unique name `define_closure` minted for THIS closure, used to key its `static` slots.
@@ -140,6 +146,7 @@ impl EvalClosure {
             is_static,
             declaring_class_scope: None,
             declaring_called_class_scope: None,
+            declaring_this: None,
             declaring_call_site: None,
         }
     }
@@ -177,6 +184,17 @@ impl EvalClosure {
     /// Returns the late-static class captured at the declaration site.
     pub(crate) fn declaring_called_class_scope(&self) -> Option<&str> {
         self.declaring_called_class_scope.as_deref()
+    }
+
+    /// Records `$this`, implicitly captured because a non-static closure was declared while an
+    /// instance was in scope.
+    pub(crate) fn set_declaring_this(&mut self, this_object: Option<RuntimeCellHandle>) {
+        self.declaring_this = this_object;
+    }
+
+    /// Returns the `$this` object implicitly captured at the closure's declaration site.
+    pub(crate) fn declaring_this(&self) -> Option<RuntimeCellHandle> {
+        self.declaring_this
     }
 
     /// Records the file-local execution frame that declared this closure.
