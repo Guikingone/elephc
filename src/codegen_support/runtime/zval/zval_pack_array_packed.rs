@@ -216,7 +216,8 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     // -- set up stack frame and read the elephc indexed array header --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 96");                                         // reserve header/loop slots
+    emitter.instruction("sub rsp, 104");                                        // reserve header/loop slots plus the callee-saved rbx spill
+    emitter.instruction("mov QWORD PTR [rbp - 88], rbx");                       // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the elephc array pointer
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the element count
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the length
@@ -375,7 +376,8 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 40], rcx");                       // store nNextFreeElement at offset 40 (64-bit)
     emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // pDestructor = NULL
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // return the HashTable pointer
-    emitter.instruction("add rsp, 96");                                         // release the local slots
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 88]");                       // restore the caller's callee-saved rbx value
+    emitter.instruction("add rsp, 104");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the zend_array pointer in rax
 }

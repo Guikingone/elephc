@@ -197,7 +197,7 @@ fn emit_aarch64_copy_field(
 /// releases the stack frame, and returns with x1 = result ptr, x2 = result length.
 fn emit_aarch64_done(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_done");
-    emitter.instruction("ldr x7, [x6]");                                        // reload the concat-buffer write offset from before this result
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x7"); // reload the concat-buffer write offset from before this result (ctx-relative in ctx mode)
     emitter.instruction("add x7, x7, x2");                                      // advance the concat-buffer offset by the returned uname length
     crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x7"); // publish the updated concat-buffer write offset (ctx-relative in ctx mode)
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the caller frame pointer and return address

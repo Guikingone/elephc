@@ -140,7 +140,8 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp-64] eval context.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // fixed frame pointer (rsp moves while records are pushed)
-    emitter.instruction("sub rsp, 64");                                         // reserve the helper locals
+    emitter.instruction("sub rsp, 72");                                         // reserve the helper locals plus the callee-saved rbx spill slot
+    emitter.instruction("mov QWORD PTR [rbp - 72], rbx");                       // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the format pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the format length
     emitter.instruction("mov QWORD PTR [rbp - 64], rsi");                       // preserve the optional eval context
@@ -217,6 +218,7 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // format length
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // forward the optional eval context
     emitter.instruction("call __rt_sprintf");                                   // format; pops the count*16 records, returns rax/rdx
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 72]");                       // restore the caller's callee-saved rbx value
     emitter.instruction("leave");                                               // restore rsp/rbp (records already discarded by __rt_sprintf)
     emitter.instruction("ret");                                                 // return the formatted string (rax/rdx)
 }

@@ -813,4 +813,272 @@ mod tests {
             );
         }
     }
+
+    /// The rbx callee-saved contract (spike review round 2, NB1): rbx is the
+    /// ONLY callee-saved register the x86_64 linear-scan allocator assigns to
+    /// cross-call values, and the EIR prologue preserves the caller's rbx once
+    /// per FUNCTION entry — a runtime helper that scratches rbx and returns
+    /// corrupts the live cross-call value of the calling PHP frame. Every
+    /// emitted x86_64 helper that writes rbx must therefore balance it with
+    /// push/pop (or spill/restore) pairs, one pop on EVERY return path.
+    ///
+    /// The audit walks every `__rt_*` label in the fully generated runtime and
+    /// verifies the balance per helper body; a stray `ret` on a rbx-scratching
+    /// helper fails here instead of miscompiling user code in the field.
+    #[test]
+    fn x86_64_runtime_helpers_that_scratch_rbx_preserve_it() {
+        use crate::codegen_support::driver_support::generate_runtime_with_features;
+        let asm = generate_runtime_with_features(
+            8 * 1024 * 1024,
+            Target::new(Platform::Linux, Arch::X86_64),
+            RuntimeFeatures::none(),
+        );
+        let mut offenders: Vec<String> = Vec::new();
+        let mut current: Option<String> = None;
+        let mut scratches_rbx = false;
+        let mut push_depth: i32 = 0;
+        let mut pop_depth: i32 = 0;
+        let mut previous_was_globl = false;
+        for line in asm.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with(".globl") {
+                previous_was_globl = true;
+                continue;
+            }
+            if trimmed.starts_with("__rt_") && previous_was_globl {
+                if let Some(name) = current.take() {
+                    if scratches_rbx && (push_depth == 0 || pop_depth < push_depth) {
+                        offenders.push(format!(
+                            "{name}: writes rbx with {push_depth} push(es) vs {pop_depth} pop(s)"
+                        ));
+                    }
+                }
+                current = Some(trimmed.split(':').next().unwrap_or(trimmed).to_string());
+                scratches_rbx = false;
+                push_depth = 0;
+                pop_depth = 0;
+                continue;
+            }
+            if trimmed.starts_with("ret") || trimmed.starts_with("jmp __rt_") {
+                if let Some(name) = current.clone() {
+                    if scratches_rbx && (push_depth == 0 || pop_depth < push_depth) {
+                        offenders.push(format!(
+                            "{name}: writes rbx with {push_depth} push(es) vs {pop_depth} pop(s)"
+                        ));
+                    }
+                    // A tail-jump hands the balance duty to the target helper.
+                    current = None;
+                    scratches_rbx = false;
+                    push_depth = 0;
+                    pop_depth = 0;
+                }
+            }
+            previous_was_globl = false;
+            if trimmed.contains("push rbx") || trimmed.contains("], rbx") {
+                push_depth += 1;
+            }
+            if trimmed.contains("pop rbx") || trimmed.contains("rbx, QWORD PTR [") {
+                pop_depth += 1;
+            }
+            if trimmed.contains("rbx")
+                && !trimmed.contains("], rbx")
+                && !trimmed.contains("rbx, QWORD PTR [")
+                && !trimmed.starts_with("//")
+            {
+                scratches_rbx = true;
+            }
+        }
+        if let Some(name) = current.take() {
+            if scratches_rbx && (push_depth == 0 || pop_depth < push_depth) {
+                offenders.push(format!(
+                    "{name}: writes rbx with {push_depth} push(es) vs {pop_depth} pop(s)"
+                ));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "x86_64 runtime helpers must preserve the allocator's rbx register:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+
+    /// Negative control for the rbx audit: a synthetic runtime text with an
+    /// unprotected rbx-scratching helper MUST be flagged. Guards the audit
+    /// itself against always-green regressions.
+    #[test]
+    fn rbx_audit_flags_unprotected_helper() {
+        let asm = ".globl __rt_probe_helper\n__rt_probe_helper:\n    mov rbx, 5\n    ret\n";
+        let mut offenders: Vec<String> = Vec::new();
+        let mut current: Option<String> = None;
+        let mut scratches_rbx = false;
+        let mut push_depth: i32 = 0;
+        let mut pop_depth: i32 = 0;
+        let mut previous_was_globl = false;
+        for line in asm.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with(".globl") {
+                previous_was_globl = true;
+                continue;
+            }
+            if trimmed.starts_with("__rt_") && previous_was_globl {
+                if let Some(name) = current.take() {
+                    if scratches_rbx && (push_depth == 0 || pop_depth < push_depth) {
+                        offenders.push(name);
+                    }
+                }
+                current = Some(trimmed.split(':').next().unwrap_or(trimmed).to_string());
+                scratches_rbx = false;
+                push_depth = 0;
+                pop_depth = 0;
+                continue;
+            }
+            previous_was_globl = false;
+            if trimmed.starts_with("ret") {
+                if let Some(name) = current.clone() {
+                    if scratches_rbx && (push_depth == 0 || pop_depth < push_depth) {
+                        offenders.push(name);
+                    }
+                    current = None;
+                    scratches_rbx = false;
+                    push_depth = 0;
+                    pop_depth = 0;
+                }
+            }
+            if trimmed.contains("push rbx") || trimmed.contains("], rbx") {
+                push_depth += 1;
+            }
+            if trimmed.contains("pop rbx") || trimmed.contains("rbx, QWORD PTR [") {
+                pop_depth += 1;
+            }
+            if trimmed.contains("rbx")
+                && !trimmed.contains("], rbx")
+                && !trimmed.contains("rbx, QWORD PTR [")
+            {
+                scratches_rbx = true;
+            }
+        }
+        assert!(!offenders.is_empty(), "the audit must flag the unprotected probe helper");
+    }
+
+    /// Dangling-x6 audit (spike review round 2, NB3): the legacy AArch64 arm of
+    /// `emit_concat_off_store` borrows x6 to hold the `_concat_off` symbol
+    /// address. x6 is an ABI argument register, so the borrow is only sound if
+    /// every x6 write in the emitted legacy runtime either (a) is the adrp that
+    /// materializes `_concat_off` for the store helper, or (b) belongs to a
+    /// helper whose contract already owns x6 (itoa/strtoupper-style string
+    /// producers that load the buffer address through x6 immediately before
+    /// use). The audit walks each label-delimited block of the FULL legacy
+    /// runtime text and fails on any `str/mov ..., [x6]` whose x6 was not
+    /// written in the same block by an address materialization — the exact
+    /// "orphaned store" class the naive concat migration produced (wild writes
+    /// into argument registers caught only by luck of coverage).
+    #[test]
+    fn legacy_aarch64_runtime_has_no_dangling_x6_stores() {
+        use crate::codegen_support::driver_support::generate_runtime_with_features;
+        let asm = generate_runtime_with_features(
+            8 * 1024 * 1024,
+            Target::new(Platform::MacOS, Arch::AArch64),
+            RuntimeFeatures::none(),
+        );
+        let mut offenders: Vec<String> = Vec::new();
+        let mut current_label = String::from("<prelude>");
+        let mut x6_addressed_in_block = false;
+        let mut block_start = 0usize;
+        let mut previous_was_globl = false;
+        for (index, line) in asm.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with(".globl") {
+                previous_was_globl = true;
+                continue;
+            }
+            // Only GLOBAL helper boundaries reset the borrow scope: internal
+            // loop labels share the helper's arm of x6 materialization.
+            if trimmed.ends_with(':') && previous_was_globl {
+                current_label = trimmed.trim_end_matches(':').to_string();
+                x6_addressed_in_block = false;
+                block_start = index;
+                previous_was_globl = false;
+                continue;
+            }
+            previous_was_globl = false;
+            // Any write that establishes x6 (address materialization or a
+            // value load) re-arms the borrow for the rest of the helper.
+            let writes_x6 = trimmed.starts_with("adrp x6,")
+                || trimmed.starts_with("add x6,")
+                || trimmed.starts_with("ldr x6,")
+                || trimmed.starts_with("ldrb w6,")
+                || trimmed.starts_with("mov x6,")
+                || trimmed.starts_with("mov w6,")
+                || trimmed.starts_with("ldp x6,");
+            if writes_x6 {
+                x6_addressed_in_block = true;
+                continue;
+            }
+            // A store/indirect access through x6 without a same-block
+            // materialization is a dangling borrow.
+            let uses_x6_as_base = (trimmed.starts_with("str ")
+                || trimmed.starts_with("ldr ")
+                || trimmed.starts_with("strb ")
+                || trimmed.starts_with("ldrb "))
+                && trimmed.contains("[x6]")
+                && !trimmed.starts_with("ldr x6");
+            if uses_x6_as_base && !x6_addressed_in_block {
+                offenders.push(format!(
+                    "{current_label} (line ~{index}, block from ~{block_start}): [x6] access without a same-block adrp materialization"
+                ));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "legacy runtime contains dangling x6 borrows (the orphaned-store class):\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// Kitchen-sink ctx gate (spike review round 2, D-test-2): the ctx-mode
+    /// runtime emitted with EVERY feature on must contain ZERO references to
+    /// the legacy heap and concat state symbols. Together with the link
+    /// tripwire (ctx builds omit those symbols from the data section), this
+    /// pins that no feature-gated helper family — regex, fibers, generators,
+    /// eval, phar, descriptor invoker, web — silently keeps a legacy
+    /// symbol-addressed path that only fails on the shard that happens to
+    /// enable that feature.
+    #[test]
+    fn ctx_runtime_kitchen_sink_references_no_legacy_state_symbols() {
+        use crate::codegen_support::driver_support::generate_runtime_with_features_mode;
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = generate_runtime_with_features_mode(
+                8 * 1024 * 1024,
+                Target::new(platform, arch),
+                {
+                    let mut features = RuntimeFeatures::all();
+                    features.ctx_register = true;
+                    features
+                },
+                false,
+                false,
+            );
+            for legacy in [
+                "_heap_off",
+                "_heap_free_list",
+                "_heap_small_bins",
+                "_concat_off",
+                "_concat_buf",
+            ] {
+                assert!(
+                    !asm.contains(&format!("adrp x9, {legacy}"))
+                        && !asm.contains(&format!("rip + {legacy}")),
+                    "{arch:?} ctx runtime (all features) still references {legacy}"
+                );
+                assert!(
+                    !asm.contains(&format!(".comm {legacy}")),
+                    "{arch:?} ctx runtime (all features) must not declare {legacy}"
+                );
+            }
+        }
+    }
 }

@@ -216,7 +216,8 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     // -- set up the frame and stash the elephc hash pointer --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 112");                                        // reserve hash/count/nTableSize/nTableMask/base/arData/bucket_idx/cursor/key_lo/key_hi/zval/nIndex/h/key slots
+    emitter.instruction("sub rsp, 128");                                        // reserve hash/count/nTableSize/nTableMask/base/arData/bucket_idx/cursor/key_lo/key_hi/zval/nIndex/h/key slots plus the callee-saved rbx spill
+    emitter.instruction("mov QWORD PTR [rbp - 120], rbx");                      // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the elephc hash pointer
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // count = hash header[0] (live entry count)
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the count (= nNumOfElements)
@@ -380,7 +381,8 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // nNextFreeElement = 0 at offset 40 (64-bit)
     emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // pDestructor = NULL
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // return the HashTable pointer
-    emitter.instruction("add rsp, 112");                                        // release the local slots
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 120]");                      // restore the caller's callee-saved rbx value
+    emitter.instruction("add rsp, 128");                                        // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the zend_array pointer in rax
 }

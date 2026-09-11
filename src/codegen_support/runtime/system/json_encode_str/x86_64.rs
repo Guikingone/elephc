@@ -44,6 +44,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // `test r15, N` instead of an rip-relative load.
     emitter.instruction("sub rsp, 80");                                         // reserve local slots + slot for the cached-flag callee-saved register
     emitter.instruction("mov QWORD PTR [rbp - 80], r15");                       // save callee-saved r15 across the encode call
+    emitter.instruction("mov QWORD PTR [rbp - 64], rbx");                       // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source string pointer across the JSON escaping loop
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the source string length across the JSON escaping loop
 
@@ -82,6 +83,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // rax = output start (the copied slice)
     // rdx already holds the source length; reuse it as the result length.
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 64]");                       // restore the caller's callee-saved rbx value
     emitter.instruction("mov rsp, rbp");                                        // unwind the scratch frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the unquoted numeric slice
@@ -655,6 +657,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON string
     crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");            // publish the updated concat-buffer offset so nested writers append after this JSON string
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 64]");                       // restore the caller's callee-saved rbx value
     emitter.instruction("add rsp, 80");                                         // release the local JSON-string scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return the encoded JSON string slice in the x86_64 string result registers

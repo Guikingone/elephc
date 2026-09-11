@@ -1400,6 +1400,8 @@ fn emit_pop_x86_64(emitter: &mut Emitter) {
 /// to the caller. Throws RuntimeException on an empty list.
 fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_shift");
+    emitter.instruction("push rbx");                                        // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
+    emitter.instruction("push rax");                                        // pad to the SysV 16-byte call alignment while rbx is parked
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read current storage length
     emitter.instruction("test r10, r10");                                       // is the list empty?
@@ -1420,6 +1422,8 @@ fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, 1");                                          // compute new storage length
     emitter.instruction("mov QWORD PTR [r9], r10");                             // persist shortened length
     emitter.instruction("mov QWORD PTR [r11 + r10 * 8], 0");                    // clear stale tail slot
+    emitter.instruction("pop rax");                                          // drop the alignment pad before restoring rbx
+    emitter.instruction("pop rbx");                                          // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return removed Mixed cell
     emitter.label("__rt_spl_dll_shift_empty");
     emit_throw_exception_x86_64(
@@ -1446,6 +1450,8 @@ fn emit_unshift_x86_64(emitter: &mut Emitter) {
 /// and throws OutOfRangeException on invalid index.
 fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_insert");
+    emitter.instruction("push rbx");                                        // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
+    emitter.instruction("push rax");                                        // pad to the SysV 16-byte call alignment while rbx is parked
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for insertion state
     emitter.instruction("mov rbp, rsp");                                        // establish insertion frame
     emitter.instruction("sub rsp, 48");                                         // reserve receiver, index, value, storage, and length spills
@@ -1503,6 +1509,8 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9], r10");                             // persist new storage length
     emitter.instruction("add rsp, 48");                                         // release insertion state
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop rax");                                          // drop the alignment pad before restoring rbx
+    emitter.instruction("pop rbx");                                          // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_insert_range_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected Mixed value before throwing
@@ -2337,6 +2345,8 @@ fn emit_offset_index_prefix_x86_64(
 /// logical offset to physical slot. Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
+    emitter.instruction("push rbx");                                        // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
+    emitter.instruction("push rax");                                        // pad to the SysV 16-byte call alignment while rbx is parked
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offsetSet
     emitter.instruction("mov rbp, rsp");                                        // establish offsetSet frame
     emitter.instruction("sub rsp, 64");                                         // reserve receiver, offset, value, tag, payload, and storage spills
@@ -2410,6 +2420,8 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_set_done");
     emitter.instruction("add rsp, 64");                                         // release offsetSet frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop rax");                                          // drop the alignment pad before restoring rbx
+    emitter.instruction("pop rbx");                                          // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -2419,6 +2431,8 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
 /// Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_unset");
+    emitter.instruction("push rbx");                                        // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
+    emitter.instruction("push rax");                                        // pad to the SysV 16-byte call alignment while rbx is parked
     emit_offset_index_prefix_x86_64(
         emitter,
         "__rt_spl_dll_offset_unset_type_throw",
@@ -2451,6 +2465,8 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_unset_done");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop rax");                                          // drop the alignment pad before restoring rbx
+    emitter.instruction("pop rbx");                                          // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_offset_unset_type_throw");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame before throwing

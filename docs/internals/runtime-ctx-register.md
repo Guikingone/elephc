@@ -54,11 +54,17 @@ materialization, unlike the legacy `adrp` + `add` pair per symbol.
   pools (AArch64 pool drops to x21–x27; x86_64 already only allocated rbx).
 
 On x86_64, reserving `r14` also required migrating every hand-written runtime
-helper that scratched it (~120 uses across 12 files) to `rbx`, which the
-runtime never used and preserves by contract everywhere. The fiber wrapper's
-descriptor scratch moved to `r15` with a descriptor reload, and the x86_64
-callback trampolines re-publish the ctx pointer before reaching compiled PHP
-code (see Foreign entries below).
+helper that scratched it (~120 uses across 12 files) to `rbx`. That migration
+moved the scratch traffic onto the ONE x86_64 callee-saved register the
+linear-scan allocator assigns to cross-call values — an unsound footgun the
+round-2 review caught (NB1). The final contract: every runtime helper that
+touches `rbx` MUST preserve the caller's value (push/pop pair or a frame
+spill slot, one restore per return path), enforced mechanically by
+`x86_64_runtime_helpers_that_scratch_rbx_preserve_it`, which scans the full
+emitted runtime for exactly this balance. The fiber wrapper's descriptor
+scratch moved to `r15` with a descriptor reload, and the x86_64 callback
+trampolines re-publish the ctx pointer before reaching compiled PHP code
+(see Foreign entries below).
 
 ## Measured results (macos-aarch64, host build)
 

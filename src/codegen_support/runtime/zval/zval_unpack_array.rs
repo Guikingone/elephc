@@ -199,7 +199,8 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
     // -- set up a shared frame and save the HashTable pointer --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 80");                                         // reserve HT/array/i/nNumUsed/bucket/key_lo/key_hi/cell slots
+    emitter.instruction("sub rsp, 88");                                         // reserve HT/array/i/nNumUsed/bucket/key_lo/key_hi/cell slots plus the callee-saved rbx spill
+    emitter.instruction("mov QWORD PTR [rbp - 72], rbx");                       // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the zend_array pointer across helper calls
 
     // -- dispatch on nTableMask: -2 (HT_MIN_MASK) selects the packed layout --
@@ -346,7 +347,8 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
 
     // -- shared epilogue: rax = tag, rdx = array/hash pointer --
     emitter.label("__rt_zval_unpack_array_epilogue");
-    emitter.instruction("add rsp, 80");                                         // release the local slots
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 72]");                       // restore the caller's callee-saved rbx value
+    emitter.instruction("add rsp, 88");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return tag in rax, array pointer in rdx
 }
