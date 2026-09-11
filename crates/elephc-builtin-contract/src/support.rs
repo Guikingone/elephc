@@ -321,15 +321,17 @@ mod tests {
         // not 491 / 40, so a prior commit on this branch drifted the catalog without updating
         // this census. The AOT-side numbers (`aot_registry: 555`, `aot_external: 10`,
         // `aot_unsupported: 5`) were still correct.
-        // 495 (substr_count + get_debug_type already landed) + parse_str, a brand-new contract
-        // that is NOT eval-pending.
-        assert_eq!(eval_registry, 496);
+        // 496 (substr_count + get_debug_type + parse_str already landed) + levenshtein, a
+        // brand-new `PreludeProvided` contract that is also NOT eval-pending.
+        assert_eq!(eval_registry, 497);
         assert_eq!(eval_internal, 39);
         assert_eq!(eval_pending, 36);
         // Unchanged: `parse_str` raises `aot_unsupported` (it joined
-        // `AOT_IMPLEMENTATION_PENDING`), not `aot_registry`.
+        // `AOT_IMPLEMENTATION_PENDING`), and `levenshtein` raises `aot_external` (it is
+        // `PreludeProvided`) -- neither is a `Registry` binding.
         assert_eq!(aot_registry, 555);
-        assert_eq!(aot_external, 10);
+        // 10 + `levenshtein` (`PreludeProvided` -> `BackendImplementation::Prelude`).
+        assert_eq!(aot_external, 11);
         // 5 + `parse_str`.
         assert_eq!(aot_unsupported, 6);
     }
@@ -379,8 +381,8 @@ mod tests {
         // this assertion inherited were likewise already stale (see the census above).
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        // 474 + parse_str (brand new, by-reference reason, no `RuntimeBuiltinId`).
-        assert_eq!(interpreter_adapter, 475);
+        // 475 + levenshtein (brand new, `PreludeProvided`, no `RuntimeBuiltinId`).
+        assert_eq!(interpreter_adapter, 476);
         // eval_internal (39) + eval_pending (36) above.
         assert_eq!(unsupported, 75);
         assert_eq!(

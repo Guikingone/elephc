@@ -183,6 +183,28 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Bool,
         "Determines whether variables are set and are not null."
     ),
+    // `PreludeProvided`, not a `catalog_data.rs`/`catalog_data_additional.rs` `Function`
+    // contract: the AOT side serves ONLY the plain two-argument call shape, as a conditionally
+    // injected PHP-source helper (`__elephc_levenshtein_two_arg` /
+    // `src/backend_gap_prelude.rs`), not a `builtin!` registry binding -- the same asymmetry
+    // `hash_init` above models. `min_args`/`max_args` stay `None` (php's own arity errors are
+    // "at least 2" / "at most 5", not a fixed count), matching the contract's five declared
+    // parameters.
+    surface!(
+        "levenshtein",
+        String,
+        PreludeProvided,
+        [
+            param!("string1", Str),
+            param!("string2", Str),
+            param!("insertion_cost", Int = DefaultSpec::Int(1)),
+            param!("replacement_cost", Int = DefaultSpec::Int(1)),
+            param!("deletion_cost", Int = DefaultSpec::Int(1)),
+        ],
+        None,
+        Int,
+        "Computes the Levenshtein edit distance between two strings."
+    ),
     surface!(
         "unset",
         Types,

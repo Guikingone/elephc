@@ -61,6 +61,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     SubstrCount,
     /// Dispatches `get_debug_type(...)`.
     GetDebugType,
+    /// Dispatches `levenshtein(...)`.
+    Levenshtein,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
@@ -386,6 +388,7 @@ impl EvalValuesHook {
             },
             Self::SubstrCount => eval_substr_count_values(evaluated_args, context, values),
             Self::GetDebugType => eval_get_debug_type_values(evaluated_args, context, values),
+            Self::Levenshtein => eval_levenshtein_values(evaluated_args, context, values),
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
             Self::Core => eval_core_values_result(name, evaluated_args, context, values),
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
