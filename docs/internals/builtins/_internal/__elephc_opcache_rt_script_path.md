@@ -1,47 +1,45 @@
 ---
-title: "__elephc_phar_list_entries() — internals"
-description: "Compiler internals for __elephc_phar_list_entries(): lowering path, type checks, and runtime helpers."
+title: "__elephc_opcache_rt_script_path() — internals"
+description: "Compiler internals for __elephc_opcache_rt_script_path(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1048
+  order: 1035
 ---
 
-## `__elephc_phar_list_entries()` — internals
+## `__elephc_opcache_rt_script_path()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/io/__elephc_phar_list_entries.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_list_entries.rs)
+- **Signature**: [`src/builtins/system/__elephc_opcache_rt_script_path.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_script_path.rs)
 - **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Internal helper used by the built-in Phar / PharData support to enumerate archive entries.
-- Calls the native PHAR listing bridge and returns the entries as an array.
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.__elephc_phar_list_entries` through `BuiltinLoweringContext`.
+- Emits the typed EIR target `runtime.__elephc_opcache_rt_script_path` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `checker_hook`
-- **Result type source**: `checked`
+- **Validation**: `signature`
+- **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (1 requirements)`
+- **Effects**: `static (2 declared effects)`
+- **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.__elephc_phar_list_entries`
+- **Typed EIR target**: `runtime.__elephc_opcache_rt_script_path`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 
 ```php
-function __elephc_phar_list_entries(string $filename): array
+function __elephc_opcache_rt_script_path(int $index): string
 ```
 
 ## What the type checker enforces
