@@ -336,3 +336,80 @@ pub(super) const EVAL_JSON_THROW_ON_ERROR: i64 = 4_194_304;
 pub(super) const EVAL_JSON_INF_OR_NAN_MESSAGE: &str = "Inf and NaN cannot be JSON encoded";
 pub(super) const EVAL_JSON_UTF8_MESSAGE: &str =
     "Malformed UTF-8 characters, possibly incorrectly encoded";
+
+// The full `ENT_*` HTML-escaping flag family (`htmlspecialchars()`/`htmlentities()`), taken from
+// `php -n` 8.5.6's own `get_defined_constants()`. `ENT_QUOTES`, `ENT_COMPAT`, `ENT_NOQUOTES`,
+// `ENT_HTML401`, `ENT_HTML5`, `ENT_SUBSTITUTE`, and `ENT_IGNORE` already match the compiled
+// backend's `src/types/ent_constants.rs::ENT_INT_CONSTANTS` bit-for-bit; `ENT_DISALLOWED` is new
+// to elephc entirely (missing from that compiled table too, so this is not a new divergence).
+pub(super) const EVAL_ENT_COMPAT: i64 = 2;
+pub(super) const EVAL_ENT_QUOTES: i64 = 3;
+pub(super) const EVAL_ENT_NOQUOTES: i64 = 0;
+pub(super) const EVAL_ENT_IGNORE: i64 = 4;
+pub(super) const EVAL_ENT_SUBSTITUTE: i64 = 8;
+pub(super) const EVAL_ENT_HTML401: i64 = 0;
+pub(super) const EVAL_ENT_XML1: i64 = 16;
+pub(super) const EVAL_ENT_XHTML: i64 = 32;
+pub(super) const EVAL_ENT_HTML5: i64 = 48;
+pub(super) const EVAL_ENT_DISALLOWED: i64 = 128;
+
+// The full `SORT_*` family (`sort()`/`usort()`/`array_multisort()` flags), taken from `php -n`
+// 8.5.6. `SORT_REGULAR`, `SORT_NUMERIC`, `SORT_STRING`, `SORT_LOCALE_STRING`, `SORT_NATURAL`, and
+// `SORT_FLAG_CASE` already match the compiled backend's `src/types/array_constants.rs` table;
+// `SORT_ASC`/`SORT_DESC` (the `array_multisort()` direction flags) are new to elephc entirely.
+pub(super) const EVAL_SORT_REGULAR: i64 = 0;
+pub(super) const EVAL_SORT_NUMERIC: i64 = 1;
+pub(super) const EVAL_SORT_STRING: i64 = 2;
+pub(super) const EVAL_SORT_DESC: i64 = 3;
+pub(super) const EVAL_SORT_ASC: i64 = 4;
+pub(super) const EVAL_SORT_LOCALE_STRING: i64 = 5;
+pub(super) const EVAL_SORT_NATURAL: i64 = 6;
+pub(super) const EVAL_SORT_FLAG_CASE: i64 = 8;
+
+/// `fseek()`/`ftell()`'s "measure from the start" origin. Identical on every POSIX platform
+/// elephc targets, unlike `LC_*` below -- no per-host branch needed.
+pub(super) const EVAL_SEEK_SET: i64 = 0;
+/// `fseek()`'s "measure from the current position" origin.
+pub(super) const EVAL_SEEK_CUR: i64 = 1;
+/// `fseek()`'s "measure from the end" origin.
+pub(super) const EVAL_SEEK_END: i64 = 2;
+
+// The full `LC_*` `setlocale()` category family. Unlike `SEEK_*`, this numbering is NOT POSIX
+// standard -- macOS/BSD libc and glibc assign different integers to the same category names, and
+// `php -n` reports whichever the host C library defines. Matches
+// `src/codegen_support/platform/target.rs`'s existing `Platform::lc_ctype()`/`lc_numeric()` for
+// the two categories the compiled backend already seeds (`LC_CTYPE` 2/0, `LC_NUMERIC` 4/1 for
+// macOS/Linux respectively); the rest are new to elephc on both backends.
+/// `setlocale()`'s "every category at once" pseudo-category.
+pub(super) const EVAL_LC_ALL: i64 = if cfg!(target_os = "macos") { 0 } else { 6 };
+pub(super) const EVAL_LC_COLLATE: i64 = if cfg!(target_os = "macos") { 1 } else { 3 };
+pub(super) const EVAL_LC_CTYPE: i64 = if cfg!(target_os = "macos") { 2 } else { 0 };
+pub(super) const EVAL_LC_MONETARY: i64 = if cfg!(target_os = "macos") { 3 } else { 4 };
+pub(super) const EVAL_LC_NUMERIC: i64 = if cfg!(target_os = "macos") { 4 } else { 1 };
+pub(super) const EVAL_LC_TIME: i64 = if cfg!(target_os = "macos") { 5 } else { 2 };
+pub(super) const EVAL_LC_MESSAGES: i64 = if cfg!(target_os = "macos") { 6 } else { 5 };
+
+// The full `M_*` maths constant family. Values that Rust's `std::f64::consts` already provides
+// are taken from there, bit-for-bit identical to what a C compiler rounds php's own `math.h`
+// literal to; the rest (`M_SQRT3`, `M_SQRTPI`, `M_LNPI`, `M_EULER`, none of which std provides)
+// are `php -n` 8.5.6's own `var_export()` shortest round-trip decimal, which parses back to the
+// same f64 bit pattern by construction. `M_PI`, `M_E`, `M_SQRT2`, `M_PI_2`, `M_PI_4`, `M_LOG2E`,
+// and `M_LOG10E` already match `src/codegen_support/prescan.rs`'s compiled-path seeding, which
+// uses the same `std::f64::consts` items.
+pub(super) const EVAL_M_PI: f64 = std::f64::consts::PI;
+pub(super) const EVAL_M_E: f64 = std::f64::consts::E;
+pub(super) const EVAL_M_LOG2E: f64 = std::f64::consts::LOG2_E;
+pub(super) const EVAL_M_LOG10E: f64 = std::f64::consts::LOG10_E;
+pub(super) const EVAL_M_LN2: f64 = std::f64::consts::LN_2;
+pub(super) const EVAL_M_LN10: f64 = std::f64::consts::LN_10;
+pub(super) const EVAL_M_PI_2: f64 = std::f64::consts::FRAC_PI_2;
+pub(super) const EVAL_M_PI_4: f64 = std::f64::consts::FRAC_PI_4;
+pub(super) const EVAL_M_1_PI: f64 = std::f64::consts::FRAC_1_PI;
+pub(super) const EVAL_M_2_PI: f64 = std::f64::consts::FRAC_2_PI;
+pub(super) const EVAL_M_SQRTPI: f64 = 1.772453850905516;
+pub(super) const EVAL_M_2_SQRTPI: f64 = std::f64::consts::FRAC_2_SQRT_PI;
+pub(super) const EVAL_M_SQRT2: f64 = std::f64::consts::SQRT_2;
+pub(super) const EVAL_M_SQRT3: f64 = 1.7320508075688772;
+pub(super) const EVAL_M_SQRT1_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
+pub(super) const EVAL_M_LNPI: f64 = 1.1447298858494002;
+pub(super) const EVAL_M_EULER: f64 = 0.5772156649015329;

@@ -28,6 +28,7 @@ mod builtins_debug_backtrace;
 mod builtins_debug_output;
 mod builtins_directory_streams;
 mod builtins_output_buffering;
+mod builtins_predefined_constants;
 mod builtins_file_streams;
 mod builtins_filesystem_metadata;
 mod builtins_filesystem_ops;
