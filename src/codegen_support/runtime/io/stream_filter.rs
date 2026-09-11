@@ -972,7 +972,7 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     // Read 3 bytes.
     emitter.instruction("movzx r13d, BYTE PTR [rax + r9]");                     // byte 0
     emitter.instruction("inc r9");                                              // advance the read cursor
-    emitter.instruction("movzx rsid, BYTE PTR [rax + r9]");                     // byte 1
+    emitter.instruction("movzx esi, BYTE PTR [rax + r9]");                     // byte 1
     emitter.instruction("inc r9");                                              // advance the read cursor
     emitter.instruction("movzx r15d, BYTE PTR [rax + r9]");                     // byte 2
     emitter.instruction("inc r9");                                              // advance the read cursor
@@ -1017,7 +1017,7 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     // 2-byte tail: 3 chars + '='
     emitter.instruction("movzx r13d, BYTE PTR [rax + r9]");                     // load the next byte from the stream buffer
     emitter.instruction("inc r9");                                              // advance the read cursor
-    emitter.instruction("movzx rsid, BYTE PTR [rax + r9]");                     // load the next byte from the stream buffer
+    emitter.instruction("movzx esi, BYTE PTR [rax + r9]");                     // load the next byte from the stream buffer
     emitter.instruction("inc r9");                                              // advance the read cursor
     emitter.instruction("mov rcx, r13");                                        // stage bits before extracting the next output byte
     emitter.instruction("shr rcx, 2");                                          // extract the next sextet or byte from the accumulated bits

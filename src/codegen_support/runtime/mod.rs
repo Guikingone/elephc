@@ -40,6 +40,11 @@ mod resource_ids;
 mod round_mode;
 /// Standard PHP library constants, functions, and classes.
 pub(crate) mod spl;
+/// Feeds the generated runtime to a real assembler, for every target and with every
+/// feature on. Test-only: it catches what no text assertion can, an instruction that
+/// does not exist.
+#[cfg(test)]
+mod assembles;
 /// The whole-runtime System V call-alignment audit (x86_64). Test-only: it walks the
 /// emitted runtime and fails when a `call` would hand its callee a misaligned stack.
 #[cfg(test)]
