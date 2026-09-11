@@ -337,6 +337,9 @@ Key invariants:
   AOT and eval without a second pinned list. Injected preludes must call
   `internal: true` `__elephc_*` aliases instead of PHP-visible extension builtins; a
   parity gate scans the prelude sources to enforce this.
+- **Implement the body, never transcribe PHP into it.** A builtin is Rust semantics, or a
+  declaration assembled with the AST builders — never PHP source text handed to the parser.
+  See *PHP surfaces are built as AST, never parsed from PHP text* below.
 - Add codegen + error tests (include a case-insensitive or namespaced call for
   PHP-visible builtins); keep shared-contract/backend-support parity gates green.
 - Magician bindings contribute only `contract`, `area`, and direct/value hooks. Use
@@ -352,6 +355,47 @@ Key invariants:
   `python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture`.
   Commit the
   generated docs and registry.
+
+### PHP surfaces are built as AST, never parsed from PHP text
+
+Every PHP function, method, or class that elephc provides itself — builtins, preludes,
+synthetic classes, backend gap fills — is **constructed with the AST builders**. Writing
+the PHP as source text in a Rust string and running elephc's own lexer and parser over it
+at compile time is not an accepted shortcut, in new code or in code you are extending.
+
+Two reasons, and the second is the one that changes design decisions:
+
+- The parse is paid on **every** invocation of the compiler, by every user, whether or not
+  the program touches that surface.
+- A string is **opaque to every static pass**. Declarations built as AST participate in name
+  resolution, type checking, EIR lowering, and closed-world pruning like user code; text
+  parsed late cannot be specialized, so the rule is about the quality of the code we emit,
+  not only about compile time.
+
+How: assemble the declaration with `function(...)`, `.param(...)`, `.returns(...)`,
+`.body(vec![...])`, `s_if`, `s_return`, `e_call`, `e_binop`, … The reference implementation
+is `src/web_prelude/build.rs`; `src/pdo_prelude/build.rs` is the proof the approach scales
+past ten thousand lines. Never call `eval()`, never hand a PHP snippet in a Rust literal to
+the parser, and never implement one builtin by generating another's PHP source.
+
+The one legitimate home for PHP source text is **tests** — probes, fixtures, `.phpt` cases,
+and oracle inputs are PHP by nature.
+
+**Prove it with the compiler, not with review.** A converted surface keeps its PHP constant
+only under `#[cfg(test)]`, so the constant does not exist in a release build and a relapse
+fails to compile rather than passing review. `PDO_PRELUDE_SRC` (`src/pdo_prelude.rs`) is the
+model and states the contract outright. If you convert a site, mark its constant in the same
+commit; an unmarked constant is the only thing standing between a conversion and a silent
+relapse.
+
+Legacy sites still parsing text are tracked, bounded, and **must not be extended**: 8 sites,
+~3,750 lines across 13 files, all in `src/*_prelude*` (`dom`, `mysqli`, `backend_gap`,
+`array_merge`, `array_reduce`, `filter_var`, `assert`, and the shared PDO extern block).
+Note that `dom_prelude::inject` has no usage gate, so its text is lexed and parsed on every
+compilation. When converting one, use the transcriber (`src/synthetic_class/transcribe.rs`,
+`#[cfg(test)]`), add your prelude's arm to its oracle — the arm list is not open-ended and it
+panics on an unknown name — and re-run the real codegen tests afterwards, because the oracle
+proves the AST only.
 
 ### Adding a new EIR optimization pass
 
