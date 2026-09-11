@@ -431,13 +431,22 @@ fn eval_declared_variant_spelling(variant: &EvalParameterTypeVariant) -> String 
 }
 
 /// Spells one runtime value's type the way PHP names it in a `TypeError`.
+///
+/// A boolean is named by its OWN VALUE, `true`/`false`, never the generic `bool` -- measured
+/// against `php -n` 8.5.6 across every context this helper feeds (a declared parameter under
+/// `strict_types`, a return-type coercion, an internal-function argument): `function ti(int $i)`
+/// called `ti(true)` under `strict_types=1` says `must be of type int, true given`, and so does
+/// every `float`/`string`/`array` sibling. `crates/elephc-magician/src/interpreter/tests` had no
+/// fixture pinning the old `"bool"` spelling; the ONLY place that spelling was asserted is the
+/// separate compiled-backend suite (`tests/error_tests/type_system.rs`), which is itself wrong
+/// against the same measurement and out of this fix's scope.
 pub(in crate::interpreter) fn eval_given_type_spelling(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     Ok(match values.type_tag(value)? {
         EVAL_TAG_NULL => "null".to_string(),
-        EVAL_TAG_BOOL => "bool".to_string(),
+        EVAL_TAG_BOOL => if values.truthy(value)? { "true" } else { "false" }.to_string(),
         EVAL_TAG_INT => "int".to_string(),
         EVAL_TAG_FLOAT => "float".to_string(),
         EVAL_TAG_STRING => "string".to_string(),

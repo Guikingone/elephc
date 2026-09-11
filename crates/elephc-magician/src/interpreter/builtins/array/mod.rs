@@ -32,6 +32,7 @@ mod array_product;
 mod array_push;
 mod array_rand;
 mod array_reduce;
+mod array_replace;
 mod array_reverse;
 mod array_search;
 mod array_shift;

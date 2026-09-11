@@ -245,7 +245,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_key_last",
     "array_merge_recursive",
     "array_multisort",
-    "array_replace",
     "array_replace_recursive",
     "array_udiff",
     "array_uintersect",
@@ -322,10 +321,12 @@ mod tests {
         // this census. The AOT-side numbers (`aot_registry: 555`, `aot_external: 10`,
         // `aot_unsupported: 5`) were still correct.
         // 496 (substr_count + get_debug_type + parse_str already landed) + levenshtein, a
-        // brand-new `PreludeProvided` contract that is also NOT eval-pending.
-        assert_eq!(eval_registry, 497);
+        // brand-new `PreludeProvided` contract that is also NOT eval-pending, + `array_replace`
+        // wired up (LOT B: the contract and AOT `builtin!` already existed, this only deleted
+        // it from `EVAL_IMPLEMENTATION_PENDING` and added the interpreter home file).
+        assert_eq!(eval_registry, 498);
         assert_eq!(eval_internal, 39);
-        assert_eq!(eval_pending, 36);
+        assert_eq!(eval_pending, 35);
         // Unchanged: `parse_str` raises `aot_unsupported` (it joined
         // `AOT_IMPLEMENTATION_PENDING`), and `levenshtein` raises `aot_external` (it is
         // `PreludeProvided`) -- neither is a `Registry` binding.
@@ -381,10 +382,12 @@ mod tests {
         // this assertion inherited were likewise already stale (see the census above).
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        // 475 + levenshtein (brand new, `PreludeProvided`, no `RuntimeBuiltinId`).
-        assert_eq!(interpreter_adapter, 476);
-        // eval_internal (39) + eval_pending (36) above.
-        assert_eq!(unsupported, 75);
+        // 475 + levenshtein (brand new, `PreludeProvided`, no `RuntimeBuiltinId`) + array_replace
+        // (LOT B wire-up, `Area::Array` is neither `Callables` nor `Spl`, no by-ref param, no
+        // `RuntimeBuiltinId` -- lands in `interpreter_adapter` like every other Array builtin).
+        assert_eq!(interpreter_adapter, 477);
+        // eval_internal (39) + eval_pending (35) above.
+        assert_eq!(unsupported, 74);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

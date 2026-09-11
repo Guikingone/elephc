@@ -34,6 +34,7 @@ pub(in crate::interpreter) fn eval_builtin_array_declared_call(
         "array_map" => super::array_map::eval_array_map_declared_call(args, context, scope, values),
         "array_merge" => super::array_merge::eval_array_merge_declared_call(args, context, scope, values),
         "array_reduce" => super::array_reduce::eval_array_reduce_declared_call(args, context, scope, values),
+        "array_replace" => super::array_replace::eval_array_replace_declared_call(args, context, scope, values),
         "iterator_apply" => super::iterator_apply::eval_iterator_apply_declared_call(args, context, scope, values),
         "iterator_count" => super::iterator_count::eval_iterator_count_declared_call(args, context, scope, values),
         "iterator_to_array" => super::iterator_to_array::eval_iterator_to_array_declared_call(args, context, scope, values),
