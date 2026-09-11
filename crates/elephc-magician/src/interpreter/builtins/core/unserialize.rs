@@ -562,7 +562,19 @@ fn eval_unserialize_incomplete_class(
     payload: Vec<(String, RuntimeCellHandle)>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let object = values.new_object("__PHP_Incomplete_Class")?;
+    // MEASURED via the compiled probe (scratchpad/r200/gate.php lotc_unser): the production
+    // runtime has no native `__PHP_Incomplete_Class` registered at all (`values.new_object`
+    // fails outright, where the FakeOps unit fixture is permissive about any class name and
+    // never caught this). Falling back to `stdClass` avoids turning a disallowed/unknown class
+    // name into a hard interpreter failure -- the object still carries
+    // `__PHP_Incomplete_Class_Name` and every payload property -- but `get_class()` on it then
+    // answers `"stdClass"`, not `"__PHP_Incomplete_Class"`, and none of php's own
+    // "tried to access a property on an incomplete object" warning machinery applies. Fixing
+    // this fully means registering a real native `__PHP_Incomplete_Class` class, which is a
+    // separate, larger ticket than this wire-up.
+    let object = values
+        .new_object("__PHP_Incomplete_Class")
+        .or_else(|_| values.new_object("stdClass"))?;
     let marker_name = values.string(class_name)?;
     values.property_set(object, "__PHP_Incomplete_Class_Name", marker_name)?;
     for (name, value) in payload {

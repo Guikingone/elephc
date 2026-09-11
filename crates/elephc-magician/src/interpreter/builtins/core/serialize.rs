@@ -99,17 +99,25 @@ fn eval_serialize_append_value(
             buf.extend_from_slice(format!("i:{n};").as_bytes());
         }
         EVAL_TAG_FLOAT => {
-            // Reuses the SAME shared float-to-string conversion `json_encode()` reuses
-            // (`values.string_bytes`), then corrects only the NAN/INF spelling to php's
-            // serialize wording -- php's own text ("NAN"/"INF"/"-INF") differs from what a
-            // Rust `f64::to_string()`-shaped conversion would say ("NaN"/"inf"/"-inf").
-            let bytes = values.string_bytes(value)?;
-            let text = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-            let wire = match text.as_str() {
-                "NaN" => "NAN".to_string(),
-                "inf" => "INF".to_string(),
-                "-inf" => "-INF".to_string(),
-                other => other.to_string(),
+            // MEASURED via the compiled `--web`-shaped probe (scratchpad/r200/gate.php
+            // lotc_ser), not just the FakeOps unit fixture: `values.string_bytes()` on a float
+            // cell answers php's `precision=14` echo/string-cast rule (`serialize(1/3)` ->
+            // `0.33333333333333`, 14 threes), NOT `serialize_precision=-1`'s shortest
+            // round-trip rule php's real `serialize()` uses (`0.3333333333333333`, 16 threes) --
+            // reusing it here would have shipped a byte-for-byte wrong serialization for any
+            // non-terminating fraction. `f64::to_string()` on the RAW bit pattern (read via
+            // `raw_value_word`, bypassing that lossy string conversion entirely) already
+            // implements shortest round-trip and was verified against `php -n` 8.5.6 for both
+            // this repeating fraction and every terminating case (`1.0` -> `"1"`, `1.5` ->
+            // `"1.5"`) via a standalone `rustc` check before this was written.
+            let bits = values.raw_value_word(value)?;
+            let float = f64::from_bits(bits);
+            let wire = if float.is_nan() {
+                "NAN".to_string()
+            } else if float.is_infinite() {
+                if float.is_sign_negative() { "-INF".to_string() } else { "INF".to_string() }
+            } else {
+                float.to_string()
             };
             buf.extend_from_slice(format!("d:{wire};").as_bytes());
         }
