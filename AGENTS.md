@@ -138,6 +138,26 @@ Kage is this repository's shared memory: verified, evidence-backed **memory pack
 - Treat a packet a recall marks "Withheld (stale)" as possibly true but unverified: re-measure before acting on it.
 - A packet is not session narration, carries no secrets, and cites no path outside the repo (`allow_missing_paths` is only for a file you are about to create). It states a mechanism a future session can act on, with the evidence that established it.
 
+### Navigating the code (Graft)
+
+Graft is the second half of the same discipline: where Kage answers *why* a mechanism is the way it is, Graft answers *where* it lives. The repository carries a prebuilt context graph under `graft/` — a wiring graph plus per-file cards — and it is queried from the shell, not through MCP.
+
+- `graft ask "<question>"` returns ranked symbols with exact `file:line` and the signature. Use it **before** grepping: a grep over this tree returns hundreds of lines and names nothing, while one `ask` names the owning function. It refreshes the graph for changed files on its own before answering.
+- `graft skeleton <file>` gives a signatures-only view of a file, which is how to read an unfamiliar 700-line module without pulling it all into context.
+- Graft is free and offline for `ask`/`build`; only `build --deep` calls an LLM.
+- A hit is a starting point, not a verdict: confirm the mechanism by reading the named lines, and confirm behaviour by measuring. Graft locates, Kage explains, a `php -n` reducer decides.
+
+### The order of a task
+
+Both tools are mandatory, on every task, and the cost of using them is accepted:
+
+1. `kage_context` first, with the real question and the files you expect to touch. Launch it early; it can take minutes.
+2. `graft ask` to locate the mechanism the recall named.
+3. Measure against `php -n` before changing anything — a recalled packet states what was true when it was written, not what is true now.
+4. `kage_risk` before committing, and read its co-change partners as candidate twins of the change.
+5. `kage_learn` with the commit, `kage_supersede` when it replaces an older claim, `kage reverify` when only the code moved.
+6. Never leave a measured divergence unrecorded because it was not the defect you were chasing. A finding filed as an open item and never scheduled costs exactly as much as a finding never made: on 2026-09-11 the Symfony `--web` request was blocked by an integer-key densification defect that had been measured, written up and filed as an open bug on 2026-08-23, and days were spent on stops downstream of it. Record it, and say plainly in the report that it is unfixed and why.
+
 ### Hygiene and known traps
 
 All measured in this repository:
