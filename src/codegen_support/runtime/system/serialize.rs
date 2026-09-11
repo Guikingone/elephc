@@ -41,7 +41,7 @@ pub(crate) fn emit_serialize(emitter: &mut Emitter) {
 
 /// AArch64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
 fn emit_serialize_aarch64(emitter: &mut Emitter) {
-    
+
     emitter.blank();
     emitter.comment("--- runtime: serialize_mixed (unbox a Mixed cell, then serialize) ---");
     emitter.label_global("__rt_serialize_mixed");
@@ -910,7 +910,7 @@ fn emit_serialize_copy_run_aarch64(emitter: &mut Emitter, prefix: &str) {
 
 /// x86_64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
 fn emit_serialize_x86_64(emitter: &mut Emitter) {
-    
+
     emitter.blank();
     emitter.comment("--- runtime: serialize_mixed (unbox a Mixed cell, then serialize) ---");
     emitter.label_global("__rt_serialize_mixed");
