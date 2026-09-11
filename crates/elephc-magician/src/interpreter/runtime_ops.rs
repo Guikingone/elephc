@@ -725,6 +725,23 @@ pub trait RuntimeValueOps {
     /// Emits one runtime cell to stdout using PHP echo semantics.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
+    /// Writes raw bytes to `error_log()`'s DEFAULT channel (message_type 0/4: no destination
+    /// configured, or a SAPI-handler type this embedding has no SAPI for).
+    ///
+    /// fd 2 is a raw OS file descriptor shared by the whole process regardless of which half of
+    /// a hybrid binary writes to it -- the compiled backend's own `__rt_error_log` runtime helper
+    /// (`src/codegen_support/runtime/system/error_log.rs`) reaches the SAME destination with a
+    /// raw `write(2, ...)` syscall, with no output-buffering (`ob_start()`) coordination needed
+    /// either way, since `error_log()` never writes through the stdout buffer stack. The default
+    /// body is therefore correct for every embedding unless one specifically wants to capture or
+    /// redirect it (the test fixture overrides it to capture bytes for assertions).
+    fn error_log_write_stderr(&mut self, bytes: &[u8]) -> Result<(), EvalStatus> {
+        use std::io::Write;
+        std::io::stderr()
+            .write_all(bytes)
+            .map_err(|_| EvalStatus::RuntimeFatal)
+    }
+
     /// Casts one runtime cell to a PHP string and copies its bytes for parsing.
     fn string_bytes(&mut self, value: RuntimeCellHandle) -> Result<Vec<u8>, EvalStatus>;
 

@@ -112,6 +112,8 @@ pub(super) struct FakeOps {
     /// Releases that drove a count below zero, recorded whether or not counting is enforced.
     pub(super) over_releases: Vec<FakeOverRelease>,
     pub(super) output: String,
+    /// Bytes `error_log()` wrote to its stderr channel, one entry per call, for test assertions.
+    pub(super) error_log_stderr_writes: Vec<Vec<u8>>,
     pub(super) releases: Vec<RuntimeCellHandle>,
     pub(super) warnings: Vec<String>,
     pub(super) fail_array_set_call: Option<usize>,

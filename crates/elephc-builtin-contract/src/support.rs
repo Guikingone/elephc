@@ -253,19 +253,16 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "decbin",
     "dechex",
     "decoct",
-    "error_log",
     "header_remove",
     "headers_sent",
     "hexdec",
     "join",
     "octdec",
     "preg_grep",
-    "serialize",
     "setlocale",
     "strncasecmp",
     "strncmp",
     "unpack",
-    "unserialize",
     "zval_free",
     "zval_pack",
     "zval_type",
@@ -323,10 +320,13 @@ mod tests {
         // 496 (substr_count + get_debug_type + parse_str already landed) + levenshtein, a
         // brand-new `PreludeProvided` contract that is also NOT eval-pending, + `array_replace`
         // wired up (LOT B: the contract and AOT `builtin!` already existed, this only deleted
-        // it from `EVAL_IMPLEMENTATION_PENDING` and added the interpreter home file).
-        assert_eq!(eval_registry, 498);
+        // it from `EVAL_IMPLEMENTATION_PENDING` and added the interpreter home file), +
+        // `serialize`/`unserialize`/`error_log` wired up the same way (LOT C: all three already
+        // had a contract and an AOT `builtin!`; this only deleted them from
+        // `EVAL_IMPLEMENTATION_PENDING` and added interpreter home files).
+        assert_eq!(eval_registry, 501);
         assert_eq!(eval_internal, 39);
-        assert_eq!(eval_pending, 35);
+        assert_eq!(eval_pending, 32);
         // Unchanged: `parse_str` raises `aot_unsupported` (it joined
         // `AOT_IMPLEMENTATION_PENDING`), and `levenshtein` raises `aot_external` (it is
         // `PreludeProvided`) -- neither is a `Registry` binding.
@@ -384,10 +384,12 @@ mod tests {
         assert_eq!(hybrid_adapter, 2);
         // 475 + levenshtein (brand new, `PreludeProvided`, no `RuntimeBuiltinId`) + array_replace
         // (LOT B wire-up, `Area::Array` is neither `Callables` nor `Spl`, no by-ref param, no
-        // `RuntimeBuiltinId` -- lands in `interpreter_adapter` like every other Array builtin).
-        assert_eq!(interpreter_adapter, 477);
-        // eval_internal (39) + eval_pending (35) above.
-        assert_eq!(unsupported, 74);
+        // `RuntimeBuiltinId` -- lands in `interpreter_adapter` like every other Array builtin) +
+        // serialize/unserialize/error_log (LOT C wire-up, `Area::Core`, no by-ref param, no
+        // `RuntimeBuiltinId` -- same `interpreter_adapter` bucket).
+        assert_eq!(interpreter_adapter, 480);
+        // eval_internal (39) + eval_pending (32) above.
+        assert_eq!(unsupported, 71);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

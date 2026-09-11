@@ -19,6 +19,7 @@ mod debug_backtrace;
 mod define;
 mod defined;
 mod die;
+mod error_log;
 mod exit;
 mod ob_clean;
 mod ob_end_clean;
@@ -35,8 +36,10 @@ mod ob_list_handlers;
 mod ob_start;
 mod print_r;
 mod func_args;
+mod serialize;
 mod tick_functions;
 mod trigger_error;
+mod unserialize;
 mod var_dump;
 
 pub(in crate::interpreter) use call_user_func::*;
@@ -46,9 +49,11 @@ pub(in crate::interpreter) use debug_backtrace::*;
 pub(in crate::interpreter) use define::*;
 pub(in crate::interpreter) use defined::*;
 pub(in crate::interpreter) use die::*;
+pub(in crate::interpreter) use error_log::*;
 pub(in crate::interpreter) use exit::*;
 pub(in crate::interpreter) use ob_get_clean::*;
 pub(in crate::interpreter) use func_args::*;
+pub(in crate::interpreter) use serialize::*;
 pub(in crate::interpreter) use tick_functions::*;
 pub(in crate::interpreter) use ob_get_contents::*;
 pub(in crate::interpreter) use ob_get_flush::*;
@@ -58,6 +63,7 @@ pub(in crate::interpreter) use ob_list_handlers::*;
 pub(in crate::interpreter) use ob_start::*;
 pub(in crate::interpreter) use print_r::*;
 pub(in crate::interpreter) use trigger_error::*;
+pub(in crate::interpreter) use unserialize::*;
 pub(in crate::interpreter) use var_dump::*;
 
 /// Dispatches direct expression-level calls for core builtins.
@@ -75,6 +81,7 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "die" => eval_builtin_die(args, context, scope, values),
+        "error_log" => eval_builtin_error_log(args, context, scope, values),
         "exit" => eval_builtin_exit(args, context, scope, values),
         "ob_get_clean" => eval_builtin_ob_get_clean(args, context, scope, values),
         "ob_get_contents" => eval_builtin_ob_get_contents(args, context, scope, values),
@@ -87,9 +94,11 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         "register_tick_function" => {
             eval_builtin_register_tick_function(args, context, scope, values)
         }
+        "serialize" => eval_builtin_serialize(args, context, scope, values),
         "unregister_tick_function" => {
             eval_builtin_unregister_tick_function(args, context, scope, values)
         }
+        "unserialize" => eval_builtin_unserialize(args, context, scope, values),
         "var_dump" => eval_builtin_var_dump(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -116,6 +125,7 @@ pub(in crate::interpreter) fn eval_core_values_result(
         "define" => eval_define_result(evaluated_args, context, values),
         "defined" => eval_defined_result(evaluated_args, context, values),
         "die" => eval_die_values_result(evaluated_args, values),
+        "error_log" => eval_error_log_declared_values_result(evaluated_args, context, values),
         "exit" => eval_exit_values_result(evaluated_args, values),
         "ob_get_clean" => eval_ob_get_clean_result(evaluated_args, context, values),
         "ob_get_contents" => eval_ob_get_contents_result(evaluated_args, context, values),
@@ -128,9 +138,11 @@ pub(in crate::interpreter) fn eval_core_values_result(
         "register_tick_function" => {
             eval_register_tick_function_result(evaluated_args, context, values)
         }
+        "serialize" => eval_serialize_declared_values_result(evaluated_args, context, values),
         "unregister_tick_function" => {
             eval_unregister_tick_function_result(evaluated_args, context, values)
         }
+        "unserialize" => eval_unserialize_declared_values_result(evaluated_args, context, values),
         "var_dump" => eval_var_dump_result(evaluated_args, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }

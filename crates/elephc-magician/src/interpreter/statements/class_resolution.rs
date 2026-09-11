@@ -538,7 +538,13 @@ pub(super) fn eval_runtime_object_class_name(
 }
 
 /// Creates a backing object for an eval-declared class without running its constructor.
-pub(super) fn eval_dynamic_class_allocate_object(
+///
+/// Widened from `pub(super)` to `pub(in crate::interpreter)` so `unserialize()`'s object
+/// hydration (`builtins::core::unserialize`) can reuse the exact same "allocate + seed declared
+/// defaults" primitive `ReflectionClass::newInstanceWithoutConstructor()` uses -- the two need
+/// identical behavior (U20: an unserialized object with no constructor still carries its
+/// declared property defaults for any property the payload does not mention).
+pub(in crate::interpreter) fn eval_dynamic_class_allocate_object(
     class: &EvalClass,
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
