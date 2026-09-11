@@ -149,7 +149,6 @@ fn test_cli_rt_ctx_user_codegen_never_scratches_the_ctx_register() {
     fs::write(&php_path, CTX_USER_CODEGEN_FIXTURE).expect("failed to write the fixture");
 
     let output = elephc_cli_command(&dir)
-        .arg("--rt-ctx")
         .args(["--target", "linux-x86_64"])
         .arg("--emit-asm")
         .arg(&php_path)
@@ -224,7 +223,6 @@ fn test_cli_rt_ctx_main_calls_ctx_init() {
     fs::write(&php_path, "<?php echo 'ok';").expect("failed to write the rt-ctx fixture");
 
     let output = elephc_cli_command(&dir)
-        .arg("--rt-ctx")
         .arg("--emit-asm")
         .arg(&php_path)
         .output()
@@ -262,7 +260,6 @@ fn test_cli_rt_ctx_binary_runs_and_allocates() {
     .expect("failed to write the rt-ctx run fixture");
 
     let output = elephc_cli_command(&dir)
-        .arg("--rt-ctx")
         .arg(&php_path)
         .output()
         .expect("failed to compile rt-ctx run fixture");
@@ -306,7 +303,6 @@ fn test_cli_rt_ctx_preserves_argv_across_ctx_init() {
     .expect("failed to write the rt-ctx argv fixture");
 
     let output = elephc_cli_command(&dir)
-        .arg("--rt-ctx")
         .arg(&php_path)
         .output()
         .expect("failed to compile rt-ctx argv fixture");
@@ -355,7 +351,6 @@ fn test_cli_rt_ctx_heap_recycling_survives_cumulative_allocations() {
     .expect("failed to write the rt-ctx recycle fixture");
 
     let output = elephc_cli_command(&dir)
-        .arg("--rt-ctx")
         .arg(&php_path)
         .output()
         .expect("failed to compile rt-ctx recycle fixture");
@@ -432,7 +427,6 @@ fn test_cli_rt_ctx_fibers_and_generators_re_publish_ctx() {
     .expect("failed to write the rt-ctx fiber fixture");
 
     let output = elephc_cli_command(&dir)
-        .arg("--rt-ctx")
         .arg(&php_path)
         .output()
         .expect("failed to compile rt-ctx fiber fixture");
@@ -486,42 +480,47 @@ fn test_cli_rt_ctx_concat_backed_results_do_not_overwrite_each_other() {
     )
     .expect("failed to write the rt-ctx concat-reuse fixture");
 
-    for mode in [vec!["--rt-ctx"], vec![]] {
-        let output = elephc_cli_command(&dir)
-            .args(&mode)
-            .arg(&php_path)
-            .output()
-            .expect("failed to compile the rt-ctx concat-reuse fixture");
-        assert!(
-            output.status.success(),
-            "elephc {mode:?} concat-reuse compile failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    // One mode now: this used to run the fixture twice to compare ctx against legacy, and
+    // the comparison is what went away with the flag, not the witness.
+    let output = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the concat-reuse fixture");
+    assert!(
+        output.status.success(),
+        "concat-reuse compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
-        let run = std::process::Command::new(dir.join("main"))
-            .output()
-            .expect("failed to run the concat-reuse binary");
-        assert!(
-            run.status.success(),
-            "{mode:?} concat-reuse binary crashed ({}): {}",
-            run.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&run.stderr)
-        );
-        // php's own output for this program, byte for byte.
-        assert_eq!(
-            String::from_utf8_lossy(&run.stdout),
-            "aaaa\nbbbb[wwww\nxxxx]1111\n2222",
-            "{mode:?} build reused the concat arena across wordwrap() results"
-        );
-    }
+    let run = std::process::Command::new(dir.join("main"))
+        .output()
+        .expect("failed to run the concat-reuse binary");
+    assert!(
+        run.status.success(),
+        "concat-reuse binary crashed ({}): {}",
+        run.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // php's own output for this program, byte for byte.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "aaaa\nbbbb[wwww\nxxxx]1111\n2222",
+        "the build reused the concat arena across wordwrap() results"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// The default build stays on legacy symbol addressing: no ctx helper call.
+/// THE DEFAULT BUILD IS THE CTX BUILD. There is no other one.
+///
+/// This test used to assert the opposite — that a plain `elephc app.php` stayed on legacy
+/// symbol addressing — which was true for as long as `--rt-ctx` existed to select the
+/// other arm. Inverting it rather than deleting it keeps the fact pinned from the same
+/// place: a regression that reintroduced legacy addressing as the default would otherwise
+/// pass every test in this file.
 #[test]
-fn test_cli_default_main_has_no_ctx_init() {
-    let dir = make_cli_test_dir("elephc_cli_default_no_ctx_init");
+fn test_cli_default_main_installs_the_context() {
+    let dir = make_cli_test_dir("elephc_cli_default_ctx_init");
     let php_path = dir.join("main.php");
     fs::write(&php_path, "<?php echo 'ok';").expect("failed to write the default fixture");
 
@@ -538,9 +537,36 @@ fn test_cli_default_main_has_no_ctx_init() {
 
     let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read default assembly");
     assert!(
-        !asm.contains("__rt_ctx_init"),
-        "default main must not call the ctx helper:\n{}",
+        asm.contains("__rt_ctx_init"),
+        "the default prologue must install the per-context state pointer:\n{}",
         asm.lines().take(40).collect::<Vec<_>>().join("\n")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--rt-ctx` IS REJECTED, NOT IGNORED.
+///
+/// A build script that still passes the flag must learn it is gone. Silently accepting it
+/// would be worse than either keeping or removing it: the script would go on believing it
+/// selects something. The rejection lives here rather than in a unit test because an
+/// unknown flag calls `fail()`, which exits the process.
+#[test]
+fn test_cli_rejects_the_removed_rt_ctx_flag() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_removed");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").expect("failed to write the fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--rt-ctx")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc");
+    assert!(!output.status.success(), "--rt-ctx must not be accepted any more");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Unknown flag: --rt-ctx"),
+        "the rejection must name the flag so a caller knows what to remove, got:\n{stderr}"
     );
 
     let _ = fs::remove_dir_all(&dir);
@@ -2580,7 +2606,6 @@ fn test_cli_rt_ctx_heap_debug_validator_passes_clean_workload() {
     .expect("failed to write the rt-ctx heap-debug fixture");
 
     let output = elephc_cli_command(&dir)
-        .arg("--rt-ctx")
         .arg("--heap-debug")
         .arg(&php_path)
         .output()

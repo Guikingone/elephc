@@ -147,8 +147,6 @@ Codegen:
   --null-repr=MODE        tagged (default) | sentinel
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
-  --rt-ctx                Route per-context runtime state through the reserved ctx
-                          register (sandbox-threads spike mode)
   --gc-stats              Print GC statistics at exit
   --counters              Embed per-function call counters (BSS) and print exact call
                           counts to stderr at exit
@@ -257,10 +255,6 @@ pub(crate) struct CliConfig {
     /// key is stored but ignored by the opcache layer (general INI is a future increment); it is
     /// never an error so a forward-looking `--ini` invocation does not break.
     pub(crate) ini_overrides: Vec<(String, String)>,
-    /// Select the ctx-register runtime addressing mode (`--rt-ctx`): per-context
-    /// heap/concat state is routed through the reserved ctx register instead of
-    /// global `.comm` symbols. Sandbox-threads spike flag.
-    pub(crate) rt_ctx: bool,
 }
 
 /// A fully parsed top-level invocation of either the compiler or native package manager.
@@ -347,17 +341,6 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut web_isolation = WebIsolation::default();
     let mut web_isolation_explicit = false;
     let mut quiet = false;
-    // The ctx-register runtime mode is opt-in through `--rt-ctx` today and is meant to
-    // become unconditional. Before the fallback can go, the WHOLE suite has to pass with it
-    // on, and a per-test flag cannot do that: `ELEPHC_RT_CTX=on` is what lets the harness
-    // compile every fixture in ctx mode, the same way ELEPHC_REGALLOC compares allocators.
-    // It is deliberately not a second user-facing switch — it selects nothing a program can
-    // observe, it only decides which arm the tests exercise.
-    let mut rt_ctx = match std::env::var("ELEPHC_RT_CTX").as_deref() {
-        Ok("on") => true,
-        Ok("off") => false,
-        _ => false,
-    };
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
@@ -453,8 +436,6 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             keep_symbols = true;
         } else if arg == "--quiet" || arg == "-q" {
             quiet = true;
-        } else if arg == "--rt-ctx" {
-            rt_ctx = true;
         } else if arg == "--mascotte" {
             // Already handled in main() before parse_args ran (so the banner
             // prints before --help/errors/compilation); recognized here only
@@ -651,7 +632,6 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         with_crates,
         quiet,
         ini_overrides,
-        rt_ctx,
     }
 }
 
@@ -1089,40 +1069,6 @@ mod tests {
         let config = compile_config(&args);
         assert!(config.web);
         assert_eq!(config.web_isolation, WebIsolation::Worker);
-    }
-
-    /// Verifies `--rt-ctx` selects the ctx-register runtime mode on the parsed
-    /// config, and that the default stays on legacy symbol addressing.
-    #[test]
-    fn rt_ctx_flag_sets_ctx_register_mode() {
-        let args = vec!["elephc".into(), "--rt-ctx".into(), "app.php".into()];
-        let config = compile_config(&args);
-        assert!(config.rt_ctx, "--rt-ctx must select the ctx-register runtime");
-
-        let args = vec!["elephc".into(), "app.php".into()];
-        let config = compile_config(&args);
-        assert!(!config.rt_ctx, "default builds must keep legacy symbol addressing");
-    }
-
-    /// Verifies `--rt-ctx` is accepted for x86_64 targets and parses cleanly:
-    /// the ctx arms of the x86_64 runtime are routed (r14 reserved, scratch
-    /// users migrated to rbx), so the flag selects the mode on every supported
-    /// architecture. Runtime execution is covered by the host-native e2e
-    /// tests on the linux-x86_64 CI shard.
-    #[test]
-    fn rt_ctx_parses_for_x86_64_targets() {
-        let args = vec![
-            "elephc".into(),
-            "--rt-ctx".into(),
-            "--target=linux-x86_64".into(),
-            "app.php".into(),
-        ];
-        let config = compile_config(&args);
-        assert!(config.rt_ctx, "--rt-ctx must parse for x86_64 targets");
-        assert_eq!(
-            config.target.arch,
-            crate::codegen::platform::Arch::X86_64
-        );
     }
 
     /// Verifies all explicit web-isolation spellings select their compile-time model.

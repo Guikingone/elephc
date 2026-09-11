@@ -74,7 +74,6 @@ pub(crate) fn compile(config: CliConfig) {
         with_crates,
         quiet,
         ini_overrides,
-        rt_ctx,
     } = config;
     let filename = filename.as_str();
     crate::progress::init(quiet);
@@ -680,7 +679,6 @@ pub(crate) fn compile(config: CliConfig) {
         counters,
         instrument,
         heap_debug,
-        rt_ctx,
         exported_functions: &exported_functions,
         regalloc_linear,
         emit_debug_info,

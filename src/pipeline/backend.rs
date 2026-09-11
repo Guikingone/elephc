@@ -33,10 +33,6 @@ pub(super) struct BackendInputs<'a> {
     pub(super) counters: bool,
     pub(super) instrument: crate::codegen::Instrumentation,
     pub(super) heap_debug: bool,
-    /// Select the ctx-register runtime addressing mode (`--rt-ctx`): published
-    /// into `ir_module.required_runtime_features.ctx_register` so the runtime
-    /// cache key and every shared emitter's ctx branch follow automatically.
-    pub(super) rt_ctx: bool,
     pub(super) exported_functions: &'a HashMap<String, exports::ExportedFunction>,
     pub(super) regalloc_linear: bool,
     pub(super) emit_debug_info: bool,
@@ -81,7 +77,6 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         counters,
         instrument,
         heap_debug,
-        rt_ctx,
         exported_functions,
         regalloc_linear,
         emit_debug_info,
@@ -98,12 +93,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if with_crates.contains("regex") {
         ir_module.required_runtime_features.regex = true;
     }
-    // `--rt-ctx` publishes the ctx-register mode into the module's required
-    // features BEFORE user-code codegen runs, so the user Emitter and the main
-    // prologue branch on the same fact the runtime emitter will see below.
-    if rt_ctx {
-        ir_module.required_runtime_features.ctx_register = true;
-    }
+    // The ctx-register mode is published into the module's required features BEFORE
+    // user-code codegen runs, so the user Emitter and the main prologue branch on the
+    // same fact the runtime emitter will see below. Unconditional since the flag went:
+    // there is no second arm to select.
+    ir_module.required_runtime_features.ctx_register = true;
     let probe = with_crates.contains("probe");
     if probe {
         // A build that cannot produce a real key does not produce a binary. The
@@ -125,10 +119,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         ir_module.probe_key = Some(key);
     }
     let mut runtime_features = ir_module.required_runtime_features;
-    // `--rt-ctx` selects per-context state addressing through the reserved ctx
-    // register. Like `--web`, this is CLI-driven rather than program-derived: the
-    // feature bit keys the runtime cache, keeping ctx and legacy objects distinct.
-    runtime_features.ctx_register = rt_ctx;
+    // Per-context state addressing is how this compiler emits, full stop. The feature
+    // bit stays in the runtime cache key rather than being deleted with the flag: a
+    // developer's cache may still hold legacy objects from before this change, and a key
+    // that stopped distinguishing them would serve one to a ctx build.
+    runtime_features.ctx_register = true;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
     // sole driver of the web runtime feature: it is CLI-driven, not derived from the
     // program, so the runtime cache (keyed on the generated assembly hash) keeps the

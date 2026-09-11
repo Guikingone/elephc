@@ -2515,7 +2515,7 @@ fn test_rt_ctx_pool_hands_out_distinct_slots_and_reuses_released_ones() {
     fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
 
     let output = elephc_command(&dir)
-        .args(["--rt-ctx", "--emit", "staticlib", "auth.php"])
+        .args(["--emit", "staticlib", "auth.php"])
         .output()
         .expect("failed to run elephc");
     assert!(
@@ -2555,7 +2555,7 @@ fn test_rt_ctx_staticlib_export_preserves_the_hosts_ctx_register() {
     fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
 
     let output = elephc_command(&dir)
-        .args(["--rt-ctx", "--emit", "staticlib", "auth.php"])
+        .args(["--emit", "staticlib", "auth.php"])
         .output()
         .expect("failed to run elephc");
     assert!(
@@ -2598,7 +2598,7 @@ fn test_rt_ctx_cdylib_export_preserves_the_hosts_ctx_register() {
     fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
 
     let output = elephc_command(&dir)
-        .args(["--rt-ctx", "--emit", "cdylib", "auth.php"])
+        .args(["--emit", "cdylib", "auth.php"])
         .output()
         .expect("failed to run elephc");
     assert!(
