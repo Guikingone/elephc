@@ -104,10 +104,43 @@ mod test_provider {
     const REG_ESPACE: i32 = 12;
     const REG_NOMATCH: i32 = 17;
     const REG_STARTEND: u32 = 0x0080;
+
+    // POSIX-style cflag bits `crate::interpreter::builtins::regex::engine`
+    // sets on `EvalPregModifiers::flags()`. The first six mirror
+    // `pcre2posix.h`'s REG_* bits (kept numerically identical so this test
+    // provider and the production `elephc_pcre2_v1_compile` shim agree); the
+    // last four are Elephc-owned bits above POSIX's own range because
+    // pcre2posix.h has no REG_* bit for PCRE2_EXTENDED, PCRE2_DOLLAR_ENDONLY,
+    // PCRE2_DUPNAMES, or PCRE2_NO_AUTO_CAPTURE.
+    const REG_ICASE: u32 = 0x0001;
+    const REG_NEWLINE: u32 = 0x0002;
+    const REG_DOTALL: u32 = 0x0010;
+    const REG_UTF: u32 = 0x0040;
+    const REG_UNGREEDY: u32 = 0x0200;
+    const REG_UCP: u32 = 0x0400;
     const ELEPHC_PCRE2_CFLAG_ANCHORED: u32 = 0x2000;
+    const ELEPHC_PCRE2_CFLAG_EXTENDED: u32 = 0x4000;
+    const ELEPHC_PCRE2_CFLAG_DOLLAR_ENDONLY: u32 = 0x8000;
+    const ELEPHC_PCRE2_CFLAG_DUPNAMES: u32 = 0x10000;
+    const ELEPHC_PCRE2_CFLAG_NO_AUTO_CAPTURE: u32 = 0x20000;
+
+    // Native PCRE2 compile options (from pcre2.h), used directly since the
+    // POSIX cflag set above cannot express all of them.
+    const PCRE2_CASELESS: u32 = 0x0000_0008;
+    const PCRE2_DOLLAR_ENDONLY: u32 = 0x0000_0010;
+    const PCRE2_DOTALL: u32 = 0x0000_0020;
+    const PCRE2_DUPNAMES: u32 = 0x0000_0040;
+    const PCRE2_EXTENDED: u32 = 0x0000_0080;
+    const PCRE2_MULTILINE: u32 = 0x0000_0400;
+    const PCRE2_NO_AUTO_CAPTURE: u32 = 0x0000_2000;
+    const PCRE2_UCP: u32 = 0x0002_0000;
+    const PCRE2_UNGREEDY: u32 = 0x0004_0000;
+    const PCRE2_UTF: u32 = 0x0008_0000;
+    const PCRE2_INFO_CAPTURECOUNT: u32 = 4;
     const PCRE2_INFO_NAMECOUNT: u32 = 17;
     const PCRE2_INFO_NAMEENTRYSIZE: u32 = 18;
     const PCRE2_INFO_NAMETABLE: u32 = 19;
+    const PCRE2_ZERO_TERMINATED: size_t = usize::MAX;
 
     /// PCRE2 POSIX `regex_t` layout for the supported host wrapper ABI.
     #[repr(C)]
@@ -136,8 +169,6 @@ mod test_provider {
     }
 
     unsafe extern "C" {
-        /// Compiles through the host PCRE2 POSIX wrapper.
-        fn pcre2_regcomp(regex: *mut Pcre2Regex, pattern: *const c_char, flags: c_int) -> c_int;
         /// Executes through the host PCRE2 POSIX wrapper.
         fn pcre2_regexec(
             regex: *const Pcre2Regex,
@@ -148,7 +179,37 @@ mod test_provider {
         ) -> c_int;
         /// Releases host PCRE2 resources.
         fn pcre2_regfree(regex: *mut Pcre2Regex);
-        /// Reads compile-time metadata (name table) off a compiled pattern.
+        // PCRE2's core (non-POSIX) API is compiled for multiple code-unit
+        // widths in the same library, so `pcre2.h`'s C preprocessor renames
+        // every one of these to an `_8` suffix when `PCRE2_CODE_UNIT_WIDTH 8`
+        // is defined before the include (exactly what the production shim in
+        // `src/native_deps/recipes/pcre2_shim.c` does). Rust never sees that
+        // macro, so it must name the real exported symbol explicitly — unlike
+        // `pcre2_regcomp`/`pcre2_regexec`/`pcre2_regfree` above, which come
+        // from the separate always-8-bit POSIX wrapper library and are never
+        // suffixed.
+        #[link_name = "pcre2_compile_8"]
+        fn pcre2_compile(
+            pattern: *const u8,
+            length: size_t,
+            options: u32,
+            errorcode: *mut c_int,
+            erroroffset: *mut size_t,
+            ccontext: *const c_void,
+        ) -> *mut c_void;
+        /// Allocates match-data sized for a compiled pattern's own capture count.
+        #[link_name = "pcre2_match_data_create_from_pattern_8"]
+        fn pcre2_match_data_create_from_pattern(
+            code: *const c_void,
+            gcontext: *const c_void,
+        ) -> *mut c_void;
+        /// Releases match-data allocated by `pcre2_match_data_create_from_pattern`.
+        #[link_name = "pcre2_match_data_free_8"]
+        fn pcre2_match_data_free(match_data: *mut c_void);
+        /// Releases a compiled pattern allocated by `pcre2_compile`.
+        #[link_name = "pcre2_code_free_8"]
+        fn pcre2_code_free(code: *mut c_void);
+        /// Reads compile-time metadata (capture count, name table) off a compiled pattern.
         #[link_name = "pcre2_pattern_info_8"]
         fn pcre2_pattern_info(code: *const c_void, what: u32, where_: *mut c_void) -> c_int;
     }
@@ -182,20 +243,89 @@ mod test_provider {
             *handle_out = std::ptr::null_mut();
             *slot_count_out = 0;
         }
+        let anchored = flags & ELEPHC_PCRE2_CFLAG_ANCHORED != 0;
+
+        // Translate the POSIX-style cflags into native PCRE2 compile options
+        // ourselves (mirrors `elephc_pcre2_v1_compile` in the production
+        // shim): pcre2_regcomp()'s fixed cflag set cannot express PHP's
+        // x/D/J/n modifiers at all, so this test provider must also bypass
+        // it to keep unit-test behavior identical to the real shim.
+        let mut native_options = 0u32;
+        if flags & REG_ICASE != 0 {
+            native_options |= PCRE2_CASELESS;
+        }
+        if flags & REG_NEWLINE != 0 {
+            native_options |= PCRE2_MULTILINE;
+        }
+        if flags & REG_DOTALL != 0 {
+            native_options |= PCRE2_DOTALL;
+        }
+        if flags & REG_UTF != 0 {
+            native_options |= PCRE2_UTF;
+        }
+        if flags & REG_UNGREEDY != 0 {
+            native_options |= PCRE2_UNGREEDY;
+        }
+        if flags & REG_UCP != 0 {
+            native_options |= PCRE2_UCP;
+        }
+        if flags & ELEPHC_PCRE2_CFLAG_EXTENDED != 0 {
+            native_options |= PCRE2_EXTENDED;
+        }
+        if flags & ELEPHC_PCRE2_CFLAG_DOLLAR_ENDONLY != 0 {
+            native_options |= PCRE2_DOLLAR_ENDONLY;
+        }
+        if flags & ELEPHC_PCRE2_CFLAG_DUPNAMES != 0 {
+            native_options |= PCRE2_DUPNAMES;
+        }
+        if flags & ELEPHC_PCRE2_CFLAG_NO_AUTO_CAPTURE != 0 {
+            native_options |= PCRE2_NO_AUTO_CAPTURE;
+        }
+
+        let mut errorcode: c_int = 0;
+        let mut erroffset: size_t = 0;
+        let code = unsafe {
+            pcre2_compile(
+                pattern.cast::<u8>(),
+                PCRE2_ZERO_TERMINATED,
+                native_options,
+                &mut errorcode,
+                &mut erroffset,
+                std::ptr::null(),
+            )
+        };
+        if code.is_null() {
+            return REG_BADPAT;
+        }
+        let match_data = unsafe { pcre2_match_data_create_from_pattern(code, std::ptr::null()) };
+        if match_data.is_null() {
+            unsafe { pcre2_code_free(code) };
+            return REG_ESPACE;
+        }
+        let mut capture_count: u32 = 0;
+        let info_status = unsafe {
+            pcre2_pattern_info(
+                code,
+                PCRE2_INFO_CAPTURECOUNT,
+                (&mut capture_count as *mut u32).cast(),
+            )
+        };
+        if info_status != 0 {
+            unsafe {
+                pcre2_match_data_free(match_data);
+                pcre2_code_free(code);
+            }
+            return REG_ESPACE;
+        }
+
         let mut regex = Pcre2Regex {
-            re_pcre2_code: std::ptr::null_mut(),
-            re_match_data: std::ptr::null_mut(),
+            re_pcre2_code: code,
+            re_match_data: match_data,
             re_endp: std::ptr::null(),
-            re_nsub: 0,
+            re_nsub: capture_count as size_t,
             re_erroffset: 0,
             re_cflags: 0,
         };
-        let anchored = flags & ELEPHC_PCRE2_CFLAG_ANCHORED != 0;
-        let posix_flags = flags & !ELEPHC_PCRE2_CFLAG_ANCHORED;
-        let status = unsafe { pcre2_regcomp(&mut regex, pattern, posix_flags as c_int) };
-        if status != 0 {
-            return status;
-        }
         let Some(slots) = regex.re_nsub.checked_add(1) else {
             unsafe { pcre2_regfree(&mut regex) };
             return REG_ESPACE;

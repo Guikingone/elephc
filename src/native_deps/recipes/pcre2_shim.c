@@ -6,7 +6,11 @@
 #include <pcre2.h>
 #include <pcre2posix.h>
 
-#define ELEPHC_PCRE2_CFLAG_ANCHORED 0x2000U
+#define ELEPHC_PCRE2_CFLAG_ANCHORED         0x2000U
+#define ELEPHC_PCRE2_CFLAG_EXTENDED         0x4000U
+#define ELEPHC_PCRE2_CFLAG_DOLLAR_ENDONLY   0x8000U
+#define ELEPHC_PCRE2_CFLAG_DUPNAMES         0x10000U
+#define ELEPHC_PCRE2_CFLAG_NO_AUTO_CAPTURE  0x20000U
 
 typedef struct elephc_pcre2_v1_handle {
     regex_t regex;
@@ -21,8 +25,12 @@ int32_t elephc_pcre2_v1_compile(
     uint64_t *match_slot_count_out
 ) {
     elephc_pcre2_v1_handle *handle;
-    uint32_t posix_cflags;
-    int result;
+    uint32_t native_options;
+    pcre2_code *code;
+    pcre2_match_data *match_data;
+    uint32_t capture_count;
+    int errorcode;
+    PCRE2_SIZE erroffset;
 
     if (handle_out != NULL) {
         *handle_out = NULL;
@@ -30,8 +38,7 @@ int32_t elephc_pcre2_v1_compile(
     if (match_slot_count_out != NULL) {
         *match_slot_count_out = 0;
     }
-    posix_cflags = cflags & ~ELEPHC_PCRE2_CFLAG_ANCHORED;
-    if (handle_out == NULL || match_slot_count_out == NULL || pattern_z == NULL || posix_cflags > INT_MAX) {
+    if (handle_out == NULL || match_slot_count_out == NULL || pattern_z == NULL) {
         return (int32_t)REG_BADPAT;
     }
 
@@ -40,11 +47,58 @@ int32_t elephc_pcre2_v1_compile(
         return (int32_t)REG_ESPACE;
     }
     handle->anchored = (cflags & ELEPHC_PCRE2_CFLAG_ANCHORED) != 0;
-    result = pcre2_regcomp(&handle->regex, pattern_z, (int)posix_cflags);
-    if (result != 0) {
+
+    /* Compile through native pcre2_compile() instead of delegating to
+       pcre2_regcomp(). The POSIX wrapper's fixed REG_* cflag set has no room
+       for PHP's x/D/J/n modifiers: none of PCRE2_EXTENDED, PCRE2_DOLLAR_ENDONLY,
+       PCRE2_DUPNAMES, or PCRE2_NO_AUTO_CAPTURE map through any bit
+       pcre2posix.h defines (confirmed against the installed header: only
+       CASELESS/MULTILINE/DOTALL/UTF/UNGREEDY/UCP/LITERAL have POSIX bits, and
+       REG_NOSUB does NOT map to PCRE2_NO_AUTO_CAPTURE — empirically it forces
+       regexec() to report zero match positions instead, which would have
+       silently broken $matches[0]). Translating every existing bit ourselves
+       and wrapping the result in the same regex_t shape pcre2_regexec() and
+       pcre2_regfree() already expect keeps every previously-supported
+       modifier's target PCRE2_* option identical to what pcre2_regcomp() set,
+       while adding the four PHP modifiers Symfony's compiled routes need. */
+    native_options = 0;
+    if ((cflags & REG_ICASE) != 0) native_options |= PCRE2_CASELESS;
+    if ((cflags & REG_NEWLINE) != 0) native_options |= PCRE2_MULTILINE;
+    if ((cflags & REG_DOTALL) != 0) native_options |= PCRE2_DOTALL;
+    if ((cflags & REG_UTF) != 0) native_options |= PCRE2_UTF;
+    if ((cflags & REG_UNGREEDY) != 0) native_options |= PCRE2_UNGREEDY;
+    if ((cflags & REG_UCP) != 0) native_options |= PCRE2_UCP;
+    if ((cflags & ELEPHC_PCRE2_CFLAG_EXTENDED) != 0) native_options |= PCRE2_EXTENDED;
+    if ((cflags & ELEPHC_PCRE2_CFLAG_DOLLAR_ENDONLY) != 0) native_options |= PCRE2_DOLLAR_ENDONLY;
+    if ((cflags & ELEPHC_PCRE2_CFLAG_DUPNAMES) != 0) native_options |= PCRE2_DUPNAMES;
+    if ((cflags & ELEPHC_PCRE2_CFLAG_NO_AUTO_CAPTURE) != 0) native_options |= PCRE2_NO_AUTO_CAPTURE;
+
+    code = pcre2_compile((PCRE2_SPTR)pattern_z, PCRE2_ZERO_TERMINATED, native_options, &errorcode, &erroffset, NULL);
+    if (code == NULL) {
         free(handle);
-        return (int32_t)result;
+        return (int32_t)REG_BADPAT;
     }
+    match_data = pcre2_match_data_create_from_pattern(code, NULL);
+    if (match_data == NULL) {
+        pcre2_code_free(code);
+        free(handle);
+        return (int32_t)REG_ESPACE;
+    }
+    capture_count = 0;
+    if (pcre2_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &capture_count) != 0) {
+        pcre2_match_data_free(match_data);
+        pcre2_code_free(code);
+        free(handle);
+        return (int32_t)REG_ESPACE;
+    }
+
+    handle->regex.re_pcre2_code = (void *)code;
+    handle->regex.re_match_data = (void *)match_data;
+    handle->regex.re_endp = NULL;
+    handle->regex.re_nsub = (size_t)capture_count;
+    handle->regex.re_erroffset = 0;
+    handle->regex.re_cflags = 0;
+
     if (handle->regex.re_nsub == SIZE_MAX) {
         pcre2_regfree(&handle->regex);
         free(handle);

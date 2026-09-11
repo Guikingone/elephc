@@ -25,6 +25,17 @@ const REG_UNGREEDY: c_int = 0x0200;
 const REG_UCP: c_int = 0x0400;
 const REG_UTF: c_int = 0x0040;
 const ELEPHC_PCRE2_CFLAG_ANCHORED: c_int = 0x2000;
+// Elephc-owned bits above POSIX's own range: pcre2posix.h has no REG_* bit
+// for PCRE2_EXTENDED, PCRE2_DOLLAR_ENDONLY, PCRE2_DUPNAMES, or
+// PCRE2_NO_AUTO_CAPTURE, so `elephc_pcre2_v1_compile()` translates these
+// directly into native PCRE2 compile options instead of POSIX cflags. Must
+// stay numerically identical to the shim in
+// `src/native_deps/recipes/pcre2_shim.c` and to the `#[cfg(test)]` provider
+// in `crate::regex_provider`.
+const ELEPHC_PCRE2_CFLAG_EXTENDED: c_int = 0x4000;
+const ELEPHC_PCRE2_CFLAG_DOLLAR_ENDONLY: c_int = 0x8000;
+const ELEPHC_PCRE2_CFLAG_DUPNAMES: c_int = 0x10000;
+const ELEPHC_PCRE2_CFLAG_NO_AUTO_CAPTURE: c_int = 0x20000;
 const REG_NOMATCH: c_int = 17;
 
 /// Supported PHP regex modifiers after delimiter stripping.
@@ -36,6 +47,19 @@ pub(in crate::interpreter) struct EvalPregModifiers {
     pub(in crate::interpreter) swap_greed: bool,
     pub(in crate::interpreter) unicode: bool,
     pub(in crate::interpreter) anchored: bool,
+    /// PHP's `x` modifier (PCRE2_EXTENDED): ignores unescaped pattern
+    /// whitespace and `#...` comments outside character classes.
+    pub(in crate::interpreter) extended: bool,
+    /// PHP's `D` modifier (PCRE2_DOLLAR_ENDONLY): `$` matches only at the
+    /// exact end of the subject, not before a trailing newline.
+    pub(in crate::interpreter) dollar_endonly: bool,
+    /// PHP's `J` modifier (PCRE2_DUPNAMES): allows more than one capture
+    /// group to declare the same name.
+    pub(in crate::interpreter) dupnames: bool,
+    /// PHP's `n` modifier (PCRE2_NO_AUTO_CAPTURE): unnamed `(...)` groups
+    /// stop capturing and stop consuming a capture-group number; named
+    /// groups are unaffected and keep capturing.
+    pub(in crate::interpreter) no_auto_capture: bool,
 }
 
 /// A compiled regex plus its registered opaque provider.
@@ -220,6 +244,18 @@ impl EvalPregModifiers {
         }
         if self.anchored {
             flags |= ELEPHC_PCRE2_CFLAG_ANCHORED;
+        }
+        if self.extended {
+            flags |= ELEPHC_PCRE2_CFLAG_EXTENDED;
+        }
+        if self.dollar_endonly {
+            flags |= ELEPHC_PCRE2_CFLAG_DOLLAR_ENDONLY;
+        }
+        if self.dupnames {
+            flags |= ELEPHC_PCRE2_CFLAG_DUPNAMES;
+        }
+        if self.no_auto_capture {
+            flags |= ELEPHC_PCRE2_CFLAG_NO_AUTO_CAPTURE;
         }
         flags
     }

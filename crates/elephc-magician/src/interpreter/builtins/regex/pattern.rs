@@ -108,6 +108,17 @@ pub(in crate::interpreter) fn eval_preg_modifiers(
             b'U' => parsed.swap_greed = true,
             b'u' => parsed.unicode = true,
             b'A' => parsed.anchored = true,
+            b'x' => parsed.extended = true,
+            b'D' => parsed.dollar_endonly = true,
+            b'J' => parsed.dupnames = true,
+            b'n' => parsed.no_auto_capture = true,
+            // `S` ("study", a no-op since PCRE2's JIT replaced PCRE1's
+            // optional study pass) and `X` (PCRE2_EXTRA's stricter backslash
+            // rejection, which is PCRE2's unconditional default already) are
+            // both valid PHP modifiers that change nothing PCRE2 needs a
+            // compile option for — accepting them without a flag reproduces
+            // PHP's own behavior instead of refusing a modifier PHP allows.
+            b'S' | b'X' => {}
             _ => return Err(EvalStatus::RuntimeFatal),
         }
     }
