@@ -257,19 +257,27 @@ emulated-amd64 bisection for one entry that should never have been there.
       1. **exceptions**: `_exc_handler_top`, `_exc_value`, `_exc_call_frame_top`
          — a thread that throws walks the MAIN thread's handler chain. Not "may
          corrupt": structurally wrong. **Blocks M1.**
-         *Inventory 2026-09-11 — the family is far cheaper than its site count.*
-         301 references across ~45 files, but **245 of them go through four
-         accessors**: `abi::emit_store_reg_to_symbol` (117),
-         `abi::emit_load_symbol_to_reg` (96), `abi::emit_store_zero_to_symbol`
-         (19) and `abi::emit_symbol_address` (12). Route those on the family name
-         and the migration is one change plus a hand-audit of the residue. The
-         residue is **three** hand-rolled accesses, all already located:
-         `lower_inst/builtins/math.rs:696` and `math/binary.rs:252`
-         (`mov QWORD PTR [rip + _exc_value], rax`, x86 only) and
-         `runtime/system/json_throw_error.rs:88` (`str x0, [x9]`, AArch64, the
-         address materialized two instructions earlier). Split roughly 82 runtime
-         / 56 user-codegen for `_exc_value` alone — so the tripwire has to cover
-         BOTH, the lesson round 4 paid five SIGSEGVs for.
+         *Inventory 2026-09-11, corrected — and the correction is the point.*
+         301 references across ~45 files, of which 245 already went through four
+         accessors. The first inventory then said the residue was **three**
+         hand-rolled accesses "all already located". It was **fifteen**, and the
+         three greps that produced that number all matched a SPELLING rather than
+         the symbol: twelve sites took the two-step form
+         (`emit_symbol_address(…, "x9", "_exc_value")` then a bare `str x0, [x9]`,
+         which puts the symbol on the line BEFORE the access), and a thirteenth
+         hand-rolled store hid behind a line break separating `ctx.emitter` from
+         `.instruction(`.
+         **All fifteen are now routed** (`refactor(exceptions)`), with no change to
+         a single emitted byte — the accessor emits exactly the hand-rolled pair
+         for a value in x0, in the plain and PIC paths alike, measured by diffing
+         `--emit-asm` output. `exception_state_is_only_reached_through_the_abi_accessors`
+         keeps the door single, and forbids the two-step shape outright rather than
+         tolerating it, since a raw address's use names no symbol and is invisible
+         to both that audit and the linker tripwire.
+         So the remaining work for this family is the routing itself: point the
+         four accessors at the ctx struct when `RuntimeFeatures::ctx_register` is
+         on. Split roughly 82 runtime / 56 user codegen for `_exc_value` alone, so
+         the tripwire has to cover BOTH — the lesson round 4 paid five SIGSEGVs for.
       2. **fibers/stack**: `_fiber_current`, `_stack_limit`,
          `_fiber_main_saved_sp/_exc/_call_frame` — the stack guard compares
          against main's bounds, so a thread on its own mmap'd stack either never
