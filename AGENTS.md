@@ -352,7 +352,8 @@ Key invariants:
   `python3 scripts/docs/extract_builtins.py --render --force`,
   `python3 scripts/docs/audit_builtins.py`, and
   `python3 scripts/docs/elephc_builtins/validate_site_compat.py`, plus
-  `python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture`.
+  `python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture` and
+  `python3 scripts/audit_php_text_parse.py --enforce`.
   Commit the
   generated docs and registry.
 
@@ -381,12 +382,15 @@ the parser, and never implement one builtin by generating another's PHP source.
 The one legitimate home for PHP source text is **tests** — probes, fixtures, `.phpt` cases,
 and oracle inputs are PHP by nature.
 
-**Prove it with the compiler, not with review.** A converted surface keeps its PHP constant
-only under `#[cfg(test)]`, so the constant does not exist in a release build and a relapse
-fails to compile rather than passing review. `PDO_PRELUDE_SRC` (`src/pdo_prelude.rs`) is the
-model and states the contract outright. If you convert a site, mark its constant in the same
-commit; an unmarked constant is the only thing standing between a conversion and a silent
-relapse.
+**Prove it mechanically, not by review.** `python3 scripts/audit_php_text_parse.py --enforce`
+is a ratchet: it lists every PHP literal and parser call outside test code and fails on any
+drift from `scripts/php_text_parse_allowlist.json`. A new site fails it — and so does a
+converted site still listed, because an entry nobody removes is an entry that lets the site
+come back. Convert, then re-record with `--write` in the same commit. The list may only shrink.
+
+A converted surface additionally keeps its PHP constant only under `#[cfg(test)]`, so the
+constant does not exist in a release build and a relapse fails to compile. `PDO_PRELUDE_SRC`
+(`src/pdo_prelude.rs`) is the model and states that contract outright.
 
 Legacy sites still parsing text are tracked, bounded, and **must not be extended**: 8 sites,
 ~3,750 lines across 13 files, all in `src/*_prelude*` (`dom`, `mysqli`, `backend_gap`,
