@@ -12,6 +12,7 @@
 //! - Pending class declarations are checked before they are registered in the eval context.
 
 use super::*;
+use crate::context::eval_array_iterator_class_is_a;
 
 /// Returns whether an implementation can accept every required declared parameter type.
 pub(super) fn method_parameter_type_signature_accepts(
@@ -530,6 +531,19 @@ fn eval_return_class_type_is_a(
             .interface_parent_names(&actual_resolved)
             .iter()
             .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved));
+    }
+    // `ArrayIterator` is a native CLASS with no eval declaration and no eval-interface entry, so
+    // it reaches none of the three branches above -- `has_class`, `has_interface`, and the
+    // eval-parent walk all answer false, and the builtin-interface fallback below only has
+    // entries for INTERFACE names, not concrete native classes. Symfony's `ParameterBag`,
+    // `HeaderBag`, and `RouteCollection` all declare `getIterator(): \ArrayIterator`, which is
+    // php's covariant narrowing of `IteratorAggregate::getIterator(): Traversable`. This table
+    // already answers the identical question for `instanceof`
+    // (`dynamic_object_is_a` -> `eval_array_iterator_class_is_a`); wire it in here too so the
+    // declared-return-type/parameter check agrees with the runtime check instead of refusing the
+    // class before any object exists.
+    if actual_resolved.eq_ignore_ascii_case("ArrayIterator") {
+        return eval_array_iterator_class_is_a(&expected_resolved);
     }
     if context
         .class_parent_names(&actual_resolved)
