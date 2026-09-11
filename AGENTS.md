@@ -144,6 +144,32 @@ All measured in this repository:
 - Two agents writing a packet about the same finding within an hour happens; the later one supersedes the earlier, with the reason.
 
 
+## Locating code (Graft)
+
+Graft is a second index over the same source, and it answers a different question
+from Kage's. Kage explains **why** a thing is the way it is; Graft finds **where**
+a behaviour lives when you cannot name the symbol. `graft/` is a local, regenerable
+cache and is git-ignored — run `graft build` once per checkout.
+
+- `graft ask "<behaviour in your own words>"` returns ranked symbols with exact
+  `file:L<start>-L<end>`. Ask it in terms of what the code DOES, not what it is
+  called: the query "spl doubly linked list offsetUnset delete shift storage
+  compaction x86_64" returned `emit_iterator_delete_step_x86_64`, a symbol no grep
+  over register names or instruction text would have surfaced, and that function
+  was the bug.
+- `graft skeleton <file>` is the cheapest way to see one file's API surface before
+  opening it.
+- Reach for it **before** a broad grep, not after one fails. A grep finds a string
+  you already guessed; Graft finds the function you have not thought of yet. It is
+  also the right tool when the symptom is a test name and the cause is unnamed.
+- It stays lexical unless built with `--deep`, so it is fast and free, and its
+  ranking is a starting point rather than a verdict — confirm by reading the file
+  it names.
+
+The working order is: **`kage_context` to recall, `graft ask` to locate, a reducer
+to decide.** Neither index is evidence. They tell you where to look and what was
+learned there; only running something settles what is true now.
+
 ## Architecture
 
 ```
@@ -660,6 +686,11 @@ When cutting a release:
 ## Conventions
 
 - No `Co-Authored-By` lines in commits
+- `kage_risk` on the changed files before every commit, not before the first one of
+  a session. Its co-change partners are candidate twins of your change — the same
+  defect usually also sits in the sibling arm.
+- A fix commits **with** its `kage_learn` packet, the way it commits with its test.
+  A finding recorded a week later has already cost the next session the same hunt.
 - Use commit message prefixes such as `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, or `test:`
 - Keep commit messages concise
 - Run the focused pre-commit verification above before committing code changes. Do not knowingly commit with relevant focused tests failing; the full suite must pass in CI.
