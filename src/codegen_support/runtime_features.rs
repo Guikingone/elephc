@@ -516,7 +516,8 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
-        | StmtKind::ExternGlobalDecl { .. } => false,
+        | StmtKind::ExternGlobalDecl { .. }
+        | StmtKind::ClassLikeActivate { .. } => false,
     }
 }
 
@@ -870,7 +871,8 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
-        | StmtKind::ExternGlobalDecl { .. } => false,
+        | StmtKind::ExternGlobalDecl { .. }
+        | StmtKind::ClassLikeActivate { .. } => false,
     }
 }
 

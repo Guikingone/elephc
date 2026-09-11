@@ -98,8 +98,10 @@ pub(super) fn eval_sync_globals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncGlobal
             })
         })
         .collect::<Vec<_>>();
-    push_eval_process_superglobal(&mut globals, "argc", PhpType::Int);
-    push_eval_process_superglobal(&mut globals, "argv", PhpType::Array(Box::new(PhpType::Str)));
+    // Process arguments become mutable PHP globals, so their native global
+    // storage uses the same boxed contract as ordinary global variables.
+    push_eval_process_superglobal(&mut globals, "argc", PhpType::Mixed);
+    push_eval_process_superglobal(&mut globals, "argv", PhpType::Mixed);
     globals
 }
 
@@ -142,7 +144,7 @@ pub(super) fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Op
             // Only real global storage instructions make a name a program
             // global; eval scope ops reference names through the same data
             // pool without any global storage behind them.
-            if !matches!(inst.op, Op::LoadGlobal | Op::StoreGlobal) {
+            if !matches!(inst.op, Op::LoadGlobal | Op::StoreGlobal | Op::GlobalRefCell | Op::UnsetGlobal) {
                 continue;
             }
             if !is_typed_superglobal {
@@ -259,7 +261,7 @@ pub(super) fn flush_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[E
 }
 
 /// Marks one statically named local as absent from the materialized eval scope.
-fn emit_eval_scope_unset_name(ctx: &mut FunctionContext<'_>, name: &str) {
+pub(super) fn emit_eval_scope_unset_name(ctx: &mut FunctionContext<'_>, name: &str) {
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
     load_eval_scope_to_arg(ctx, 0);
     abi::emit_symbol_address(
@@ -315,7 +317,7 @@ pub(super) fn load_global_to_result(ctx: &mut FunctionContext<'_>, global: &Eval
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
     if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
-        super::super::super::globals_constants::load_shared_web_global_to_result(ctx, &symbol);
+        super::super::super::globals_constants::load_shared_global_to_result(ctx, &symbol);
         return;
     }
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));

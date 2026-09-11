@@ -10,6 +10,7 @@
 
 use crate::names::Name;
 use crate::span::Span;
+use std::path::PathBuf;
 
 use super::{
     AttributeGroup, CType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
@@ -90,6 +91,19 @@ pub enum UseKind {
     Class,
     Function,
     Const,
+}
+
+/// The kind of a compiler-generated declaration activation event.
+///
+/// This is deliberately separate from declaration metadata: discovery may make a declaration
+/// known without activating it. The source path and enclosing statement span together preserve
+/// the physical declaration identity until the typed source registry is wired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassLikeKind {
+    Class,
+    Interface,
+    Trait,
+    Enum,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,10 +190,10 @@ pub enum StmtKind {
         required: bool,
     },
     IncludeOnceMark {
-        label: String,
+        source_path: std::path::PathBuf,
     },
     IncludeOnceGuard {
-        label: String,
+        source_path: std::path::PathBuf,
         body: Vec<Stmt>,
     },
     Throw(Expr),
@@ -289,6 +303,13 @@ pub enum StmtKind {
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
         constants: Vec<ClassConst>,
+    },
+    /// Compiler-generated activation event for a class-like declaration.
+    /// This variant is never produced by the PHP parser.
+    ClassLikeActivate {
+        name: String,
+        kind: ClassLikeKind,
+        source_path: PathBuf,
     },
     PropertyAssign {
         object: Box<Expr>,

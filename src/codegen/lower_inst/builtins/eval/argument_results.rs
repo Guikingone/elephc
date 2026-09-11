@@ -345,6 +345,12 @@ pub(super) fn emit_eval_result_as_type(ctx: &mut FunctionContext<'_>, result_ty:
             emit_eval_mixed_array_as_owned_object_array(ctx);
             Ok(())
         }
+        PhpType::AssocArray { value, .. }
+            if matches!(value.codegen_repr(), PhpType::Object(_)) =>
+        {
+            super::associative_results::emit_eval_owned_object_hash(ctx);
+            Ok(())
+        }
         PhpType::Array(_) | PhpType::AssocArray { .. }
         | PhpType::Iterable
         | PhpType::Object(_)

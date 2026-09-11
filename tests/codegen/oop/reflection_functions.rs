@@ -142,6 +142,24 @@ echo $ref->isUserDefined() ? "U" : "u";
     assert_eq!(out, "ReflectFunctionMetaNs\\sample:sample:ReflectFunctionMetaNs:Y:i:U");
 }
 
+/// An eval-enabled program still routes an abstract reflection receiver to the
+/// concrete reflection object that owns the synthetic metadata slots.
+#[test]
+fn test_reflection_function_abstract_metadata_slot_uses_concrete_dispatch_with_eval() {
+    let out = compile_and_run(
+        r#"<?php
+function reflected_abstract_eval_target(): void {}
+function reflection_abstract_name(ReflectionFunctionAbstract $reflection): string {
+    return $reflection->getName();
+}
+
+$reflection = new ReflectionFunction("reflected_abstract_eval_target");
+echo reflection_abstract_name($reflection), ":", eval('return "eval";');
+"#,
+    );
+    assert_eq!(out, "reflected_abstract_eval_target:eval");
+}
+
 /// Verifies `ReflectionFunction` exposes supported callable-builtin metadata.
 #[test]
 fn test_reflection_function_reports_builtin_metadata() {

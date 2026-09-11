@@ -271,6 +271,14 @@ impl<'a> FunctionContext<'a> {
             .map(|group| group.name)
     }
 
+    /// Returns whether this module has interface metadata whose visibility is
+    /// selected by an explicit request-time activation event.
+    pub(super) fn module_has_interface_activation_events(&self) -> bool {
+        !super::classlike_activation::collect_activation_registry_names(self.module)
+            .interfaces
+            .is_empty()
+    }
+
     /// Returns the concrete function whose signature should be used for a PHP call target.
     pub(super) fn callable_function_by_name(&self, name: &str) -> Option<&'a Function> {
         self.function_by_name(name)
@@ -956,7 +964,7 @@ impl<'a> FunctionContext<'a> {
         let ty = self.value_php_type(value)?;
         if crate::superglobals::uses_shared_ref_cell(self.module, &name) {
             self.load_value_to_result(value)?;
-            return crate::codegen::lower_inst::lower_store_web_superglobal(
+            return crate::codegen::lower_inst::lower_store_shared_global(
                 self,
                 &symbol,
                 &ty,
@@ -1142,9 +1150,7 @@ impl<'a> FunctionContext<'a> {
         &self,
         value: ValueId,
     ) -> Result<bool> {
-        if self.value_ownership(value)? != Ownership::Owned {
-            return Ok(false);
-        }
+        let mut transfers_owned = self.value_ownership(value)? == Ownership::Owned;
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
         };
@@ -1153,6 +1159,12 @@ impl<'a> FunctionContext<'a> {
                 .function
                 .instruction(inst)
                 .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+            // String Acquire persists the payload even when conservative EIR
+            // metadata says MaybeOwned. Its new owner may be transferred, but
+            // only if no explicit Release below still consumes that owner.
+            if defining_inst.op == Op::Acquire && self.value_php_type(value)? == PhpType::Str {
+                transfers_owned = true;
+            }
             if defining_inst.op == Op::LoadLocal {
                 if let Some(Immediate::LocalSlot(slot)) = defining_inst.immediate {
                     if self.local_kind(slot)? == LocalKind::OwnedTemp {
@@ -1168,7 +1180,7 @@ impl<'a> FunctionContext<'a> {
                 }
             }
         }
-        Ok(!self.function.instructions.iter().any(|inst| {
+        Ok(transfers_owned && !self.function.instructions.iter().any(|inst| {
             inst.op == Op::Release && inst.operands.first().copied() == Some(value)
         }))
     }

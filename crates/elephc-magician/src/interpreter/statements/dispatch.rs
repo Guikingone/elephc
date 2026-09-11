@@ -237,8 +237,7 @@ pub(in crate::interpreter) fn execute_stmt(
             then_branch,
             else_branch,
         } => {
-            let condition = eval_expr(condition, context, scope, values)?;
-            if values.truthy(condition)? {
+            if crate::interpreter::expressions::eval_truthy_expr(condition, context, scope, values)? {
                 execute_statements(then_branch, context, scope, values)
             } else {
                 execute_statements(else_branch, context, scope, values)
@@ -311,8 +310,14 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {
+            let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
             let copies_borrowed_variable = matches!(value, EvalExpr::LoadVar(_));
-            let value = eval_expr(value, context, scope, values)?;
+            let value = eval_expr(value, context, scope, values).map_err(|status| {
+                if trace {
+                    eprintln!("[elephc-eval-trace] phase=store_var_error stage=value name={name:?} status={status:?}");
+                }
+                status
+            })?;
             let value = if copies_borrowed_variable {
                 values.copy_value(value)?
             } else {
@@ -320,9 +325,14 @@ pub(in crate::interpreter) fn execute_stmt(
             };
             let reference_target = scope.reference_target(name).cloned();
             if let Some(target) = reference_target {
-                write_back_method_ref_target(&target, value, context, values)?;
+                write_back_method_ref_target(&target, value, context, values).map_err(|status| {
+                    if trace {
+                        eprintln!("[elephc-eval-trace] phase=store_var_error stage=writeback name={name:?} status={status:?}");
+                    }
+                    status
+                })?;
             }
-            for replaced in set_scope_cell(
+            let replaced = set_scope_cell(
                 context,
                 scope,
                 name.clone(),
@@ -332,8 +342,19 @@ pub(in crate::interpreter) fn execute_stmt(
                 } else {
                     ScopeCellOwnership::Owned
                 },
-            )? {
-                eval_release_value(context, values, replaced)?;
+            ).map_err(|status| {
+                if trace {
+                    eprintln!("[elephc-eval-trace] phase=store_var_error stage=scope name={name:?} status={status:?}");
+                }
+                status
+            })?;
+            for replaced in replaced {
+                eval_release_value(context, values, replaced).map_err(|status| {
+                    if trace {
+                        eprintln!("[elephc-eval-trace] phase=store_var_error stage=release name={name:?} status={status:?}");
+                    }
+                    status
+                })?;
             }
             Ok(EvalControl::None)
         }
@@ -363,10 +384,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::While { condition, body } => {
-            while {
-                let condition = eval_expr(condition, context, scope, values)?;
-                values.truthy(condition)?
-            } {
+            while crate::interpreter::expressions::eval_truthy_expr(condition, context, scope, values)? {
                 match execute_statements(body, context, scope, values)? {
                     EvalControl::None | EvalControl::Continue(1) => {}
                     EvalControl::Break(1) => break,

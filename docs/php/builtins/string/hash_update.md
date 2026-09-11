@@ -2,7 +2,7 @@
 title: "hash_update()"
 description: "Feeds data into an incremental hashing context. Provided by the compiler-injected hash prelude in compiled code."
 sidebar:
-  order: 418
+  order: 420
 ---
 
 ## hash_update()

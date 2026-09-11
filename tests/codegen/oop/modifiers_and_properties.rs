@@ -318,6 +318,111 @@ echo $factory()->path();
     assert_eq!(out, "closure");
 }
 
+/// A compiled first-class callable stored behind `mixed` must retain its
+/// descriptor when a dynamic receiver requires a callable/Closure parameter.
+#[test]
+fn test_dynamic_method_callable_parameter_preserves_first_class_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+interface Processor {
+    public function getEnv(string $prefix, string $name, Closure $getEnv): string;
+}
+
+class ProcessorImpl implements Processor {
+    public function getEnv(string $prefix, string $name, Closure $getEnv): string {
+        return $getEnv instanceof Closure ? 'closure' : 'wrong';
+    }
+}
+
+class ParentHolder {
+    private Closure $getEnv;
+    private Processor $processor;
+
+    public function __construct() {
+        $this->processor = new ProcessorImpl();
+    }
+
+    protected function processor(): mixed {
+        return $this->processor;
+    }
+
+    protected function getEnv(string $name): string {
+        $this->getEnv ??= $this->getEnv(...);
+        $processor = $this->processor();
+
+        return $processor->getEnv('default', $name, $this->getEnv);
+    }
+}
+
+class ChildHolder extends ParentHolder {
+    public function run(): string {
+        return $this->getEnv('ok');
+    }
+}
+
+eval('');
+echo (new ChildHolder())->run();
+"#,
+    );
+    assert_eq!(out, "closure");
+}
+
+/// A native first-class method callable stored in a typed property remains a Closure when a
+/// dynamically evaluated receiver validates its declared parameter type.
+#[test]
+fn test_eval_method_closure_parameter_accepts_native_property_callable() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    private Closure $getEnv;
+
+    private function native(string $name): string {
+        return $name;
+    }
+
+    public function run(): string {
+        $this->getEnv ??= $this->native(...);
+        $processor = eval('return new class {
+            public function getEnv(string $prefix, string $name, Closure $getEnv): string {
+                return $getEnv instanceof Closure ? $getEnv($name) : "wrong";
+            }
+        };');
+
+        return $processor->getEnv('default', 'ok', $this->getEnv);
+    }
+}
+
+echo (new Holder())->run();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// A private typed property declared by an AOT parent remains parent-owned when an eval-created
+/// child invokes that parent method. The child cannot override the private slot, so `??=` must
+/// initialize and later read the native property rather than an eval overlay entry.
+#[test]
+fn test_eval_subclass_reads_parent_private_closure_slot_natively() {
+    let out = compile_and_run(
+        r#"<?php
+class NativeBase {
+    private Closure $callback;
+
+    protected function resolve(string $name): string {
+        $this->callback ??= static fn (string $value): string => $value;
+        return ($this->callback)($name);
+    }
+}
+
+$child = eval('return new class extends NativeBase {
+    public function run(): string { return $this->resolve("ok"); }
+};');
+echo $child->run();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies lazy source-directory discovery across transitive inheritance,
 /// reflection, and a closure-created object without depending on a fixture path.
 #[test]

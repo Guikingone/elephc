@@ -561,6 +561,7 @@ fn lower_nullable_generic_object_prop_get(
     Ok(())
 }
 
+
 /// Emits PHP's warning for reading a property from null.
 pub(super) fn emit_property_on_null_warning(ctx: &mut FunctionContext<'_>, property: &str) {
     let message = format!(

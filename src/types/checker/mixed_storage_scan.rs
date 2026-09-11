@@ -938,7 +938,7 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
         }
         // Conditional groups. The checker raises its depth for the whole statement, condition
         // included, so this does the same.
-        StmtKind::IncludeOnceGuard { label: _, body } => {
+        StmtKind::IncludeOnceGuard { body, .. } => {
             collect_block(checker, body, depth + 1, facts)
         }
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
@@ -1021,6 +1021,7 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }
         // Leaves: no sub-statements and no sub-expressions.
         | StmtKind::Break(_)

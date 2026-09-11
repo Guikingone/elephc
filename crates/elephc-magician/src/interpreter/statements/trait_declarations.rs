@@ -24,6 +24,10 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
         || values.class_exists(name)?
         || values.enum_exists(name)?
     {
+        note_eval_runtime_failure(
+            format!("Cannot redeclare interface {}", name),
+            context,
+        );
         return Err(EvalStatus::RuntimeFatal);
     }
     ensure_eval_interface_parents_available(interface.parents(), context, values)?;
@@ -813,41 +817,67 @@ pub(super) fn validate_eval_class_modifiers(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if class.is_abstract() && class.is_final() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    validate_eval_class_attribute_targets(class.attributes())?;
-    if class.is_readonly_class() && eval_class_has_allow_dynamic_properties_attribute(class) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    validate_eval_declared_constants(class.constants())?;
-    for constant in class.constants() {
-        validate_constant_parent_redeclaration(class, constant, context, values)?;
-    }
-    validate_eval_declared_properties(class, context)?;
-    for property in class.properties() {
-        validate_property_parent_redeclaration(class, property, context, values)?;
-    }
-    for method in class.methods() {
-        validate_eval_method_attribute_targets(method.attributes())?;
-        validate_eval_magic_method(method)?;
-        if method.is_abstract() && method.is_final() {
+    let mut stage = "class_flags";
+    let mut member = None;
+    let result = (|| {
+        if class.is_abstract() && class.is_final() {
             return Err(EvalStatus::RuntimeFatal);
         }
-        if method.is_abstract() && method.visibility() == EvalVisibility::Private {
+        stage = "class_attribute_targets";
+        validate_eval_class_attribute_targets(class.attributes())?;
+        stage = "readonly_dynamic_properties";
+        if class.is_readonly_class() && eval_class_has_allow_dynamic_properties_attribute(class) {
             return Err(EvalStatus::RuntimeFatal);
         }
-        if method.is_static() && method.name().eq_ignore_ascii_case("__construct") {
-            return Err(EvalStatus::RuntimeFatal);
+        stage = "declared_constants";
+        validate_eval_declared_constants(class.constants())?;
+        for constant in class.constants() {
+            stage = "constant_parent_redeclaration";
+            validate_constant_parent_redeclaration(class, constant, context, values)?;
         }
-        if method.is_abstract() && !class.is_abstract() {
-            return Err(EvalStatus::RuntimeFatal);
+        stage = "declared_properties";
+        validate_eval_declared_properties(class, context)?;
+        for property in class.properties() {
+            stage = "property_parent_redeclaration";
+            validate_property_parent_redeclaration(class, property, context, values)?;
         }
-        validate_method_parent_override(class, method, context)?;
-        validate_method_aot_parent_override(class, method, context, values)?;
-        validate_eval_override_attribute(class, method, context, values)?;
+        for method in class.methods() {
+            member = Some(method.name());
+            stage = "method_attribute_targets";
+            validate_eval_method_attribute_targets(method.attributes())?;
+            stage = "magic_method";
+            validate_eval_magic_method(method)?;
+            stage = "method_flags";
+            if method.is_abstract() && method.is_final() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if method.is_abstract() && method.visibility() == EvalVisibility::Private {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if method.is_static() && method.name().eq_ignore_ascii_case("__construct") {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if method.is_abstract() && !class.is_abstract() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            stage = "eval_parent_override";
+            validate_method_parent_override(class, method, context)?;
+            stage = "aot_parent_override";
+            validate_method_aot_parent_override(class, method, context, values)?;
+            stage = "override_attribute";
+            validate_eval_override_attribute(class, method, context, values)?;
+        }
+        Ok(())
+    })();
+    if let Err(status) = result.as_ref() {
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            eprintln!(
+                "[elephc-eval-trace] phase=class_modifier_error class={:?} member={member:?} stage={stage} status={status:?}",
+                class.name(),
+            );
+        }
     }
-    Ok(())
+    result
 }
 
 /// Returns whether a class carries PHP's global `#[AllowDynamicProperties]` attribute.

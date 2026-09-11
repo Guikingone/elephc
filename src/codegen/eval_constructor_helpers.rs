@@ -318,11 +318,14 @@ fn emit_constructor_aarch64(
     let success_label = "__elephc_eval_value_construct_success";
     let fail_label = "__elephc_eval_value_construct_fail";
     let done_label = "__elephc_eval_value_construct_done";
+    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0).max(3);
+    let frame_size = super::eval_argument_owners::frame_size(emitter, CONSTRUCTOR_HELPER_FRAME_SIZE, owner_count);
     emitter.instruction(
-        &format!("sub sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
+        &format!("sub sp, sp, #{}", frame_size)
     );                                                                          //reserve helper frame plus a boundary exception handler
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
+    super::eval_argument_owners::initialize(emitter, owner_count);
     emitter.instruction("str x2, [sp, #0]");                                    // save the active eval class-scope pointer
     emitter.instruction("str x3, [sp, #8]");                                    // save the active eval class-scope length
     emitter.instruction("str x1, [sp, #24]");                                   // save the boxed eval argument array
@@ -362,9 +365,10 @@ fn emit_constructor_aarch64(
     emitter.label(success_label);
     emitter.instruction("mov x0, #1");                                          // report successful construction or no-op
     emitter.label(done_label);
+    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
     emitter.instruction(
-        &format!("add sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
+        &format!("add sp, sp, #{}", frame_size)
     );                                                                          //release the constructor helper frame and boundary handler
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
 }
@@ -381,9 +385,12 @@ fn emit_constructor_x86_64(
     let success_label = "__elephc_eval_value_construct_success_x";
     let fail_label = "__elephc_eval_value_construct_fail_x";
     let done_label = "__elephc_eval_value_construct_done_x";
+    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0).max(3);
+    let frame_size = super::eval_argument_owners::frame_size(emitter, CONSTRUCTOR_HELPER_FRAME_SIZE, owner_count);
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction(&format!("sub rsp, {}", CONSTRUCTOR_HELPER_FRAME_SIZE));//reserve aligned slots plus a boundary exception handler
+    emitter.instruction(&format!("sub rsp, {}", frame_size));                   // reserve aligned slots plus a boundary exception handler and argument owners
+    super::eval_argument_owners::initialize(emitter, owner_count);
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the active eval class-scope length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
@@ -425,6 +432,8 @@ fn emit_constructor_x86_64(
     emitter.label(success_label);
     emitter.instruction("mov eax, 1");                                          // report successful construction or no-op
     emitter.label(done_label);
+    emitter.instruction(&format!("lea rsp, [rbp - {}]", frame_size));           // restore the full frame before cleanup after any argument-preparation failure
+    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
@@ -596,7 +605,6 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     callable_support: &EvalCallableDescriptorSupport,
 ) {
     emit_aarch64_validate_builtin_throwable_arg_count(module, emitter, fail_label);
-    emit_aarch64_default_builtin_throwable_fields(emitter);
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the message argument
     emitter.instruction("cmp x9, #0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("b.eq {}", success_label));                    // keep the empty Throwable defaults when no message was supplied
@@ -610,9 +618,11 @@ fn emit_aarch64_builtin_throwable_constructor_body(
         data,
         callable_support,
     );
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the initialized Throwable for message replacement
+    emitter.instruction("ldr x0, [x9, #8]");                                    // release the previous owned message before replacing its field
     emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
     emitter.instruction("str x2, [x9, #16]");                                   // store the message length in the compact Throwable payload
+    abi::emit_call_label(emitter, "__rt_decref_any");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the code argument
     emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep code zero when only the message was supplied
@@ -646,7 +656,6 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     callable_support: &EvalCallableDescriptorSupport,
 ) {
     emit_x86_64_validate_builtin_throwable_arg_count(module, emitter, fail_label);
-    emit_x86_64_default_builtin_throwable_fields(emitter);
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the message argument
     emitter.instruction("cmp r11, 0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("je {}", success_label));                      // keep the empty Throwable defaults when no message was supplied
@@ -660,9 +669,12 @@ fn emit_x86_64_builtin_throwable_constructor_body(
         data,
         callable_support,
     );
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the initialized Throwable while preserving the new message
+    emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                        // preserve the previous message owner before publishing the new string
     emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the message pointer in the compact Throwable payload
     emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                       // store the message length in the compact Throwable payload
+    emitter.instruction("mov rax, r10");                                        // release the old string only after the replacement is visible
+    abi::emit_call_label(emitter, "__rt_decref_any");
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the code argument
     emitter.instruction("cmp r11, 1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep code zero when only the message was supplied
@@ -706,7 +718,10 @@ fn emit_aarch64_builtin_throwable_previous_arg(
     emitter.instruction("mov x0, x1");                                          // move the previous object payload into the retain ABI
     abi::emit_call_label(emitter, "__rt_incref");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object after retaining previous
-    emitter.instruction("str x0, [x9, #40]");                                   // store the retained previous object pointer
+    emitter.instruction(&format!("ldr x10, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // preserve the old previous-field owner before publishing its replacement
+    emitter.instruction(&format!("str x0, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // store the retained previous object pointer
+    emitter.instruction("mov x0, x10");                                         // release the old owner after destructors can observe the new previous field
+    abi::emit_call_label(emitter, "__rt_decref_any");
     emitter.instruction(&format!("b {}", success_label));                       // builtin Throwable construction completed
 }
 
@@ -730,7 +745,10 @@ fn emit_x86_64_builtin_throwable_previous_arg(
     emitter.instruction("mov rax, rdi");                                        // move the previous object payload into the retain ABI
     abi::emit_call_label(emitter, "__rt_incref");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object after retaining previous
-    emitter.instruction("mov QWORD PTR [r11 + 40], rax");                       // store the retained previous object pointer
+    emitter.instruction(&format!("mov r10, QWORD PTR [r11 + {}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // preserve the old previous-field owner before publishing its replacement
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // store the retained previous object pointer
+    emitter.instruction("mov rax, r10");                                        // release the old owner after destructors can observe the new previous field
+    abi::emit_call_label(emitter, "__rt_decref_any");
     emitter.instruction(&format!("jmp {}", success_label));                     // builtin Throwable construction completed
 }
 
@@ -760,24 +778,6 @@ fn emit_x86_64_validate_builtin_throwable_arg_count(
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save constructor argc for message/code initialization
     emitter.instruction("cmp rax, 3");                                          // compact Throwable initialization supports message/code/previous
     emitter.instruction(&format!("jg {}", fail_label));                         // reject excess builtin Throwable arguments from eval
-}
-
-/// Writes ARM64 empty-message, zero-code, and null-previous Throwable defaults.
-fn emit_aarch64_default_builtin_throwable_fields(emitter: &mut Emitter) {
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for default initialization
-    emitter.instruction("str xzr, [x9, #8]");                                   // default the message pointer to an empty string payload
-    emitter.instruction("str xzr, [x9, #16]");                                  // default the message length to zero
-    emitter.instruction("str xzr, [x9, #24]");                                  // default the exception code to zero
-    emitter.instruction("str xzr, [x9, #40]");                                  // default the previous Throwable pointer to null
-}
-
-/// Writes x86_64 empty-message, zero-code, and null-previous Throwable defaults.
-fn emit_x86_64_default_builtin_throwable_fields(emitter: &mut Emitter) {
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for default initialization
-    emitter.instruction("mov QWORD PTR [r11 + 8], 0");                          // default the message pointer to an empty string payload
-    emitter.instruction("mov QWORD PTR [r11 + 16], 0");                         // default the message length to zero
-    emitter.instruction("mov QWORD PTR [r11 + 24], 0");                         // default the exception code to zero
-    emitter.instruction("mov QWORD PTR [r11 + 40], 0");                         // default the previous Throwable pointer to null
 }
 
 /// Selects the constructor dispatch id from either an AOT target name or the receiver on ARM64.
@@ -910,6 +910,7 @@ fn emit_aarch64_constructor_body(
             callable_support,
         );
     let escape_label = format!("{}_escape", body_label);
+    super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
     emit_aarch64_constructor_exception_boundary_push(emitter, &escape_label);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     let overflow_bytes =
@@ -975,6 +976,7 @@ fn emit_x86_64_constructor_body(
             callable_support,
         );
     let escape_label = format!("{}_escape_x", body_label);
+    super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
     emit_x86_64_constructor_exception_boundary_push(emitter, &escape_label);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     let overflow_bytes =
@@ -1160,6 +1162,7 @@ fn emit_aarch64_prepare_constructor_args(
                 data,
                 callable_support,
             );
+            super::eval_argument_owners::record_constructor_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
             emitter.instruction(&format!("b {}", done_label));                  // skip default materialization after an explicit argument
             emitter.label(&default_label);
@@ -1185,6 +1188,7 @@ fn emit_aarch64_prepare_constructor_args(
                 data,
                 callable_support,
             );
+            super::eval_argument_owners::record_constructor_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1235,6 +1239,7 @@ fn emit_x86_64_prepare_constructor_args(
                 data,
                 callable_support,
             );
+            super::eval_argument_owners::record_constructor_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
             emitter.instruction(&format!("jmp {}", done_label));                // skip default materialization after an explicit argument
             emitter.label(&default_label);
@@ -1260,6 +1265,7 @@ fn emit_x86_64_prepare_constructor_args(
                 data,
                 callable_support,
             );
+            super::eval_argument_owners::record_constructor_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1364,6 +1370,11 @@ fn emit_aarch64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usi
     emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the boxed index to the eval array reader
     emitter.instruction("ldr x0, [x29, #-24]");                                 // pass the eval argument array to the reader
     abi::emit_call_label(emitter, &array_get_symbol);
+    abi::emit_push_reg(emitter, "x0");
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // release the temporary index borrowed by the array reader
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_pop_reg(emitter, "x0");
+    super::eval_argument_owners::record(emitter, index);
     emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed eval argument for coercion
 }
 
@@ -1377,6 +1388,11 @@ fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usiz
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the boxed index to the eval array reader
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the eval argument array to the reader
     abi::emit_call_label(emitter, &array_get_symbol);
+    abi::emit_push_reg(emitter, "rax");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // release the temporary index borrowed by the array reader
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_pop_reg(emitter, "rax");
+    super::eval_argument_owners::record(emitter, index);
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed eval argument for coercion
 }
 

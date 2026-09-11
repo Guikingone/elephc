@@ -2,7 +2,7 @@
 title: "strpbrk()"
 description: "Returns the suffix beginning at the first byte found in a character list, or false."
 sidebar:
-  order: 478
+  order: 480
 ---
 
 ## strpbrk()

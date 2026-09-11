@@ -37,6 +37,26 @@ pub enum EvalClosureObjectTarget {
     },
 }
 
+impl EvalClosureObjectTarget {
+    /// Returns the receiver cell owned by this closure target, when it has one.
+    pub(crate) fn receiver(&self) -> Option<RuntimeCellHandle> {
+        match self {
+            Self::BoundNamed { bound_this, .. } => *bound_this,
+            Self::InvokableObject { object } | Self::ObjectMethod { object, .. } => Some(*object),
+            Self::Named(_) | Self::StaticMethod { .. } => None,
+        }
+    }
+
+    /// Allows closure construction to replace a borrowed receiver with its retained cell.
+    pub(crate) fn receiver_mut(&mut self) -> Option<&mut RuntimeCellHandle> {
+        match self {
+            Self::BoundNamed { bound_this, .. } => bound_this.as_mut(),
+            Self::InvokableObject { object } | Self::ObjectMethod { object, .. } => Some(object),
+            Self::Named(_) | Self::StaticMethod { .. } => None,
+        }
+    }
+}
+
 /// Runtime value captured by an eval closure literal.
 #[derive(Clone)]
 pub struct EvalClosureCaptureBinding {
@@ -81,6 +101,12 @@ pub struct EvalClosure {
     pub(super) function: EvalFunction,
     pub(super) captures: Vec<EvalClosureCaptureBinding>,
     pub(super) is_static: bool,
+    /// Class scope at the closure's declaration site, retained for deferred invocation.
+    pub(super) declaring_class_scope: Option<String>,
+    /// Late-static class at the declaration site, retained independently from `self` scope.
+    pub(super) declaring_called_class_scope: Option<String>,
+    /// File, directory, line, and `__FILE__` override active at the declaration site.
+    pub(super) declaring_call_site: Option<(String, String, i64, Option<String>)>,
     /// The unique name `define_closure` minted for THIS closure, used to key its `static` slots.
     ///
     /// php gives each closure OBJECT its own static storage: two closures produced by calling the
@@ -112,6 +138,9 @@ impl EvalClosure {
             function,
             captures,
             is_static,
+            declaring_class_scope: None,
+            declaring_called_class_scope: None,
+            declaring_call_site: None,
         }
     }
 
@@ -128,5 +157,38 @@ impl EvalClosure {
     /// Returns whether this closure was declared with PHP's `static function` form.
     pub const fn is_static(&self) -> bool {
         self.is_static
+    }
+
+    /// Records the lexical and late-static scopes active where this closure was declared.
+    pub(crate) fn set_declaring_class_scopes(
+        &mut self,
+        class_scope: Option<String>,
+        called_class_scope: Option<String>,
+    ) {
+        self.declaring_class_scope = class_scope;
+        self.declaring_called_class_scope = called_class_scope;
+    }
+
+    /// Returns the lexical class whose non-public members this closure may access.
+    pub(crate) fn declaring_class_scope(&self) -> Option<&str> {
+        self.declaring_class_scope.as_deref()
+    }
+
+    /// Returns the late-static class captured at the declaration site.
+    pub(crate) fn declaring_called_class_scope(&self) -> Option<&str> {
+        self.declaring_called_class_scope.as_deref()
+    }
+
+    /// Records the file-local execution frame that declared this closure.
+    pub(crate) fn set_declaring_call_site(
+        &mut self,
+        call_site: (String, String, i64, Option<String>),
+    ) {
+        self.declaring_call_site = Some(call_site);
+    }
+
+    /// Returns the declaration frame used for file-relative code inside the closure body.
+    pub(crate) fn declaring_call_site(&self) -> Option<&(String, String, i64, Option<String>)> {
+        self.declaring_call_site.as_ref()
     }
 }

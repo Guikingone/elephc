@@ -613,6 +613,9 @@ impl Scanner<'_> {
             StmtKind::ExternClassDecl { name, .. } if declarations => {
                 self.record_class(name);
             }
+            // Activation consumes an existing implementation; it does not define
+            // metadata here, but that implementation must survive reachability.
+            StmtKind::ClassLikeActivate { name, .. } => { self.record_class(name); }
             StmtKind::ExternFunctionDecl { name, .. } if declarations => {
                 self.record_callable(name);
             }

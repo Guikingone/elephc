@@ -35,13 +35,19 @@ use walk::{collect_declared_fqns, collect_reference_points};
 pub struct DeclarationSourceFiles {
     pub class_likes: HashMap<String, String>,
     pub functions: HashMap<String, String>,
+    /// Parsed source inputs, independent of whether PHP has entered their files.
+    pub source_units: std::collections::BTreeMap<PathBuf, crate::resolver::SourceUnit>,
 }
 
 impl DeclarationSourceFiles {
     /// Merges declaration paths from another loaded source set.
-    fn extend(&mut self, other: DeclarationSourceFiles) {
+    fn extend(&mut self, other: DeclarationSourceFiles) -> Result<(), CompileError> {
+        for unit in other.source_units.into_values() {
+            unit.insert_into(&mut self.source_units, Span::dummy())?;
+        }
         self.class_likes.extend(other.class_likes);
         self.functions.extend(other.functions);
+        Ok(())
     }
 }
 
@@ -227,7 +233,7 @@ pub fn run_collecting_included_with_defines_and_sources(
             let (loaded, loaded_includes, loaded_sources) =
                 load_autoloaded_file(&canonical, base_dir, defines)?;
             nested_includes.extend(loaded_includes);
-            declaration_sources.extend(loaded_sources);
+            declaration_sources.extend(loaded_sources)?;
             prefix.extend(loaded);
         }
     }
@@ -259,7 +265,7 @@ pub fn run_collecting_included_with_defines_and_sources(
                         continue;
                     }
                     nested_includes.extend(loaded_includes);
-                    declaration_sources.extend(loaded_sources);
+                    declaration_sources.extend(loaded_sources)?;
                     insertions.push((stmt_idx, loaded));
                 }
             }
@@ -468,6 +474,14 @@ fn load_autoloaded_file(
     // indistinguishable from this file's. Per-file attribution therefore overwrites it.
     declaration_sources.class_likes.extend(included_sources.class_likes);
     declaration_sources.functions.extend(included_sources.functions);
+    for unit in included_sources.source_units.into_values() {
+        unit.insert_into(&mut declaration_sources.source_units, Span::dummy())?;
+    }
+    crate::resolver::SourceUnit {
+        canonical_path: path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+        mode: source_mode,
+        source: content.into(),
+    }.insert_into(&mut declaration_sources.source_units, Span::dummy())?;
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level
     // program.
@@ -517,6 +531,9 @@ fn collect_declaration_source_files(
         }
     }
 }
+
+#[cfg(test)]
+mod source_units_tests;
 
 #[cfg(test)]
 mod tests {

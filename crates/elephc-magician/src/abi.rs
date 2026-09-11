@@ -29,6 +29,10 @@ pub const SCOPE_FLAG_DIRTY: u32 = 1 << 2;
 pub const SCOPE_FLAG_BY_REF: u32 = 1 << 3;
 /// Scope-entry ABI flag indicating that the scope owns the runtime cell handle.
 pub const SCOPE_FLAG_OWNED: u32 = 1 << 4;
+/// Compiled scope entry holds a marker borrowing native storage for the call.
+pub const SCOPE_FLAG_NATIVE_REF: u32 = 1 << 5;
+/// Compiled scope entry names native global storage rather than a copied value.
+pub const SCOPE_FLAG_NATIVE_GLOBAL: u32 = 1 << 6;
 
 /// Result storage written by `__elephc_eval_execute`.
 #[repr(C)]

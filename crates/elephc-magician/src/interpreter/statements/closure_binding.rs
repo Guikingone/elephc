@@ -116,10 +116,7 @@ pub(super) fn eval_closure_object_from_target(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let object = values.new_object("stdClass")?;
-    let identity = values.object_identity(object)?;
-    context.register_closure_object_target(identity, target);
-    Ok(object)
+    eval_closure_object_expr(target, context, values)
 }
 
 /// Materializes `Closure::bind()` from a closure object and a persistent receiver.

@@ -86,6 +86,15 @@ fn eval_empty_arg_quiet(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if let EvalExpr::ArrayGet { array, index } = arg {
+        if is_globals_array(array) {
+            let name = eval_global_name(index, context, scope, values)?;
+            let value = read_global_value(&name, true, context, scope, values)?;
+            let result = values.truthy(value);
+            let released = eval_release_value(context, values, value);
+            return result.and_then(|truthy| { released?; Ok(!truthy) });
+        }
+    }
     if let EvalExpr::LoadVar(name) = arg {
         let Some(value) = visible_scope_cell(context, scope, name) else {
             return Ok(true);

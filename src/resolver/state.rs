@@ -33,6 +33,8 @@ pub(super) struct ResolveState {
     pub(super) declared_class_files: HashMap<String, String>,
     /// Canonical function name to the physical file that declares it, same rule as above.
     pub(super) declared_function_files: HashMap<String, String>,
+    /// Immutable source inputs remain shared when semantic resolver scopes are cloned.
+    pub(super) source_units: super::source_units::SourceUnitCollector,
 }
 
 impl ResolveState {

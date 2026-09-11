@@ -26,6 +26,9 @@ use crate::names::{method_symbol, php_symbol_key};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
+use super::arrays::{
+    emit_box_loaded_invoker_ref_cell_value_as_mixed, emit_branch_if_invoker_ref_cell_tag,
+};
 use super::{direct_call_stack_pad_bytes, expect_local_slot, expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
@@ -1587,13 +1590,21 @@ fn load_current_hash_value_as_mixed_x86_64(ctx: &mut FunctionContext<'_>, offset
 /// Boxes or retains an AArch64 hash payload as an owned `Mixed` value.
 fn box_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
     let inspect_tagged_box = ctx.next_label("iter_hash_value_inspect_box");
+    let ref_marker = ctx.next_label("iter_hash_value_ref_marker");
+    let after_tagged_box = ctx.next_label("iter_hash_value_after_tagged_box");
     let done = ctx.next_label("iter_hash_value_boxed");
     ctx.emitter.instruction("cmp x5, #7");                                      // does the hash entry use the Mixed-or-iterable runtime tag?
     ctx.emitter.instruction(&format!("b.eq {}", inspect_tagged_box));           // inspect tag-7 payloads because iterable hashes also use that tag
     emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
     ctx.emitter.instruction(&format!("b {}", done));                            // skip tag-7 inspection after boxing a concrete payload
     ctx.emitter.label(&inspect_tagged_box);
+    ctx.emitter.instruction("ldr x9, [x3]");                                    // inspect boxed hash entries for array-reference markers
+    emit_branch_if_invoker_ref_cell_tag(ctx, "x9", &ref_marker);
     box_tagged_hash_payload_as_mixed_aarch64(ctx);
+    abi::emit_jump(ctx.emitter, &after_tagged_box);
+    ctx.emitter.label(&ref_marker);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "x3");
+    ctx.emitter.label(&after_tagged_box);
     ctx.emitter.label(&done);
 }
 
@@ -1618,13 +1629,21 @@ fn box_tagged_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
 /// Boxes or retains an x86_64 hash payload as an owned `Mixed` value.
 fn box_hash_payload_as_mixed_x86_64(ctx: &mut FunctionContext<'_>) {
     let inspect_tagged_box = ctx.next_label("iter_hash_value_inspect_box");
+    let ref_marker = ctx.next_label("iter_hash_value_ref_marker");
+    let after_tagged_box = ctx.next_label("iter_hash_value_after_tagged_box");
     let done = ctx.next_label("iter_hash_value_boxed");
     ctx.emitter.instruction("cmp r9, 7");                                       // does the hash entry use the Mixed-or-iterable runtime tag?
     ctx.emitter.instruction(&format!("je {}", inspect_tagged_box));             // inspect tag-7 payloads because iterable hashes also use that tag
     emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip tag-7 inspection after boxing a concrete payload
     ctx.emitter.label(&inspect_tagged_box);
+    ctx.emitter.instruction("mov r11, QWORD PTR [rcx]");                        // inspect boxed hash entries for array-reference markers
+    emit_branch_if_invoker_ref_cell_tag(ctx, "r11", &ref_marker);
     box_tagged_hash_payload_as_mixed_x86_64(ctx);
+    abi::emit_jump(ctx.emitter, &after_tagged_box);
+    ctx.emitter.label(&ref_marker);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "rcx");
+    ctx.emitter.label(&after_tagged_box);
     ctx.emitter.label(&done);
 }
 
@@ -1653,7 +1672,9 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
 ) {
     let string_case = ctx.next_label("iter_dynamic_indexed_string");
     let loaded = ctx.next_label("iter_dynamic_indexed_loaded");
+    let box_value = ctx.next_label("iter_dynamic_indexed_box");
     let reuse_box = ctx.next_label("iter_dynamic_indexed_reuse_box");
+    let ref_marker = ctx.next_label("iter_dynamic_indexed_ref_marker");
     let done = ctx.next_label("iter_dynamic_indexed_done");
     abi::load_at_offset_scratch(ctx.emitter, "x11", offset - ITER_SOURCE_OFFSET_DELTA, "x9");
     abi::load_at_offset(ctx.emitter, "x0", offset - ITER_CURSOR_OFFSET_DELTA);
@@ -1676,9 +1697,19 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
 
     ctx.emitter.label(&loaded);
     ctx.emitter.instruction("cmp x5, #7");                                      // does the slot already hold a boxed Mixed value?
-    ctx.emitter.instruction(&format!("b.eq {}", reuse_box));                    // retain existing Mixed boxes instead of nesting them
+    ctx.emitter.instruction(&format!("b.ne {}", box_value));                    // concrete slots need ordinary boxing
+    ctx.emitter.instruction("ldr x9, [x3]");                                    // inspect a boxed value for an array-reference marker
+    emit_branch_if_invoker_ref_cell_tag(ctx, "x9", &ref_marker);
+    abi::emit_jump(ctx.emitter, &reuse_box);                                     // retain ordinary boxed Mixed values
+
+    ctx.emitter.label(&box_value);
     emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing-box retention path
+
+    ctx.emitter.label(&ref_marker);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "x3");
+    ctx.emitter.instruction(&format!("b {}", done));                            // expose the referenced PHP value, not its internal marker
+
     ctx.emitter.label(&reuse_box);
     ctx.emitter.instruction("mov x0, x3");                                      // pass the existing Mixed box to the retain helper
     abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -1692,7 +1723,9 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
 ) {
     let string_case = ctx.next_label("iter_dynamic_indexed_string");
     let loaded = ctx.next_label("iter_dynamic_indexed_loaded");
+    let box_value = ctx.next_label("iter_dynamic_indexed_box");
     let reuse_box = ctx.next_label("iter_dynamic_indexed_reuse_box");
+    let ref_marker = ctx.next_label("iter_dynamic_indexed_ref_marker");
     let done = ctx.next_label("iter_dynamic_indexed_done");
     abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "r10", offset - ITER_CURSOR_OFFSET_DELTA);
@@ -1715,9 +1748,19 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
 
     ctx.emitter.label(&loaded);
     ctx.emitter.instruction("cmp r9, 7");                                       // does the slot already hold a boxed Mixed value?
-    ctx.emitter.instruction(&format!("je {}", reuse_box));                      // retain existing Mixed boxes instead of nesting them
+    ctx.emitter.instruction(&format!("jne {}", box_value));                     // concrete slots need ordinary boxing
+    ctx.emitter.instruction("mov r11, QWORD PTR [rcx]");                        // inspect a boxed value for an array-reference marker
+    emit_branch_if_invoker_ref_cell_tag(ctx, "r11", &ref_marker);
+    abi::emit_jump(ctx.emitter, &reuse_box);                                     // retain ordinary boxed Mixed values
+
+    ctx.emitter.label(&box_value);
     emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing-box retention path
+
+    ctx.emitter.label(&ref_marker);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "rcx");
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // expose the referenced PHP value, not its internal marker
+
     ctx.emitter.label(&reuse_box);
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the existing Mixed box to the retain helper
     abi::emit_call_label(ctx.emitter, "__rt_incref");

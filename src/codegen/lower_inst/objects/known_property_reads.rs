@@ -65,11 +65,100 @@ pub(super) fn lower_prop_get_nonnull(
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property);
     }
+    // A private declared slot belongs to its declaring class even when `$this` is an
+    // eval-owned subclass. PHP cannot override that storage from the child, and PropSet already
+    // writes this native slot directly, so routing only reads through the eval overlay loses the
+    // value (notably a lazily initialized Closure) and splits one PHP property in two.
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(class_name) if !class_name.trim_start_matches('\\').is_empty())
+        && property_interface_receiver(ctx, object)?.is_none()
+        && private_declared_property_slot(ctx, object, property, inst)?
+    {
+        return lower_native_prop_get_nonnull(ctx, inst, object, property);
+    }
     if builtins::has_eval_context(ctx)
         && matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_))
     {
-        return builtins::lower_eval_property_get(ctx, inst, object, property);
+        if !eval_bridge_can_defer_to_native_declared_slot(ctx, inst, object, property)? {
+            return builtins::lower_eval_property_get(ctx, inst, object, property);
+        }
+        let native_label = ctx.next_label("prop_get_native_dispatch");
+        let done_label = ctx.next_label("prop_get_dynamic_dispatch_done");
+        builtins::lower_eval_owned_property_get(
+            ctx,
+            inst,
+            object,
+            property,
+            &native_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&native_label);
+        lower_native_prop_get_nonnull(ctx, inst, object, property)?;
+        ctx.emitter.label(&done_label);
+        return Ok(());
     }
+    lower_native_prop_get_nonnull(ctx, inst, object, property)
+}
+
+/// Returns true when `property` resolves to a private declared slot of the static receiver.
+fn private_declared_property_slot(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<bool> {
+    // Abstract receiver metadata may be implemented by a concrete descendant. It has no
+    // physical slot on the abstract class itself, so let the ordinary polymorphic path select
+    // the runtime class before attempting static slot resolution.
+    if property_abstract_receiver(ctx, object, property)?.is_some() {
+        return Ok(false);
+    }
+    let slot = resolve_property_slot(ctx, object, property, inst)?;
+    if !slot.is_declared {
+        return Ok(false);
+    }
+    Ok(ctx
+        .module
+        .class_infos
+        .get(&slot.class_name)
+        .and_then(|class_info| class_info.property_visibilities.get(property))
+        .is_some_and(|visibility| matches!(visibility, crate::parser::ast::Visibility::Private)))
+}
+
+/// Returns whether an eval-context property read has a concrete AOT slot to fall back to.
+///
+/// An eval context alone is not enough to choose the overlay: native declared slots remain the
+/// source of truth for native objects. Conversely, `stdClass`, allow-dynamic and magic
+/// properties live in the bridge's dynamic representation even when their receiver has no
+/// dynamic-class owner, so they must keep the bridge path.
+fn eval_bridge_can_defer_to_native_declared_slot(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<bool> {
+    // A nominal interface has no own object-slot layout. Let the bridge retain the
+    // existing dynamic/polymorphic route instead of asking the class-only dynamic-property
+    // resolver for a layout it cannot have.
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(name) if name.trim_start_matches('\\').is_empty())
+        || property_interface_receiver(ctx, object)?.is_some()
+        || object_is_builtin_stdclass(ctx, object)?
+        || dynamic_property_hash_offset_for_object(ctx, object, property)?.is_some()
+        || magic_get_receiver_class(ctx, object, property)?.is_some()
+    {
+        return Ok(false);
+    }
+    Ok(resolve_property_slot(ctx, object, property, inst)
+        .map(|slot| slot.is_declared)
+        .unwrap_or(false))
+}
+
+/// Lowers a property read once native dispatch has been selected.
+fn lower_native_prop_get_nonnull(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
     if let Some(class_name) = union_object_member_class(ctx, object)? {
         return lower_union_object_prop_get(ctx, inst, object, &class_name, property);
     }
@@ -318,7 +407,15 @@ pub(super) fn magic_get_receiver_class(
         .iter()
         .any(|(name, _)| name == property)
     {
-        return Ok(None);
+        let visibility = class_info.property_visibilities.get(property)
+            .unwrap_or(&crate::parser::ast::Visibility::Public);
+        let declaring_class = class_info.property_declaring_classes.get(property)
+            .map(String::as_str).unwrap_or(normalized);
+        if super::super::callable_descriptors::codegen_can_access_member(
+            ctx, declaring_class, visibility,
+        ) {
+            return Ok(None);
+        }
     }
     if class_info.methods.contains_key(&php_symbol_key("__get")) {
         return Ok(Some(normalized.to_string()));

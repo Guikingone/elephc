@@ -166,14 +166,14 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             let (stmts, next_env) = propagate_block(stmts, env);
             (Stmt::new(StmtKind::Synthetic(stmts), span), next_env)
         }
-        StmtKind::IncludeOnceMark { label } => (
-            Stmt::new(StmtKind::IncludeOnceMark { label }, span),
+        StmtKind::IncludeOnceMark { source_path } => (
+            Stmt::new(StmtKind::IncludeOnceMark { source_path }, span),
             HashMap::new(),
         ),
-        StmtKind::IncludeOnceGuard { label, body } => {
+        StmtKind::IncludeOnceGuard { source_path, body } => {
             let (body, _) = propagate_block(body, HashMap::new());
             (
-                Stmt::new(StmtKind::IncludeOnceGuard { label, body }, span),
+                Stmt::new(StmtKind::IncludeOnceGuard { source_path, body }, span),
                 HashMap::new(),
             )
         }
@@ -721,6 +721,10 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         ),
         StmtKind::ExternClassDecl { name, fields } => (
             Stmt::new(StmtKind::ExternClassDecl { name, fields }, span),
+            env,
+        ),
+        StmtKind::ClassLikeActivate { name, kind, source_path } => (
+            Stmt::new(StmtKind::ClassLikeActivate { name, kind, source_path }, span),
             env,
         ),
         StmtKind::ExternGlobalDecl { name, c_type } => (

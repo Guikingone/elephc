@@ -320,11 +320,10 @@ pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
     (X86_64_HEAP_MAGIC_HI32 << 32) | u64::from(low_bits)
 }
 
-/// Byte offset of the creation line inside the 56-byte compact Throwable payload.
+/// Byte offset of the ordinary declared Throwable line property.
 ///
-/// The payload is `class_id@0`, `message ptr@8`, `message len@16`, `code@24`, `previous@40`;
-/// offset 32 was the one word never written, so the line fits without growing the allocation or
-/// disturbing any existing reader.
+/// Keeping this separate from the code property's high word makes protected
+/// property writes, reflection, intrinsic getters and generated errors agree.
 ///
 /// PHP records the line where a Throwable is CONSTRUCTED, so every emitter that allocates this
 /// payload must write the slot — `__rt_heap_alloc` recycles blocks without zeroing them, and an
@@ -332,7 +331,7 @@ pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
 /// know the line write `0`, which the readers treat as "origin unknown" and omit.
 ///
 /// Read by `Throwable::getLine()` in `lower_inst.rs` and by `__rt_report_uncaught_exception`.
-pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
+pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = super::throwable_layout::LINE_OFFSET as u64;
 
 /// Clears the creation-line slot of a freshly allocated Throwable payload in `payload_reg`.
 ///

@@ -830,7 +830,12 @@ impl ExceptionFlowAnalysis {
                 .expr_throws(value, bindings, class_context)
                 .combined(self.expr_throws(callable, bindings, class_context))
                 .combined(self.callable_expr_throws(callable, bindings, class_context)),
-            ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => ThrownTypes::default(),
+            ExprKind::Closure { .. } => ThrownTypes::default(),
+            // Creating a callable resolves its target now, not on invocation.
+            // Function lookup can fail with Error; method lookup may additionally
+            // evaluate a receiver or run an autoloader that throws any Throwable.
+            ExprKind::FirstClassCallable(CallableTarget::Function(_)) => ThrownTypes::exact("Error"),
+            ExprKind::FirstClassCallable(_) => ThrownTypes::unknown(),
             ExprKind::ArrayLiteral(items) => self.expr_list_throws(items, bindings, class_context),
             ExprKind::ArrayLiteralAssoc(items) => items.iter().fold(
                 ThrownTypes::default(),

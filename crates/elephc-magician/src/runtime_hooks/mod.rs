@@ -28,6 +28,7 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 use externs::{
     __elephc_eval_install_dynamic_object_destructor_hook, __elephc_eval_value_array_new,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
+    __elephc_eval_value_release,
 };
 
 /// Runtime hook adapter that produces and consumes boxed elephc Mixed cells.
@@ -71,10 +72,26 @@ impl ElephcRuntimeOps {
         let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
         let mut arg_array = Self::handle(arg_array)?;
         for (index, value) in args.into_iter().enumerate() {
-            let index = Self::handle(unsafe { __elephc_eval_value_int(index as i64) })?;
-            arg_array = Self::handle(unsafe {
+            let index = match Self::handle(unsafe { __elephc_eval_value_int(index as i64) }) {
+                Ok(index) => index,
+                Err(status) => {
+                    unsafe { __elephc_eval_value_release(arg_array.as_ptr()); }
+                    return Err(status);
+                }
+            };
+            let updated = Self::handle(unsafe {
                 __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
-            })?;
+            });
+            // The setter borrows its key and retains its value. Only the fresh
+            // index belongs to this adapter; the source argument stays borrowed.
+            unsafe { __elephc_eval_value_release(index.as_ptr()); }
+            match updated {
+                Ok(array) => arg_array = array,
+                Err(status) => {
+                    unsafe { __elephc_eval_value_release(arg_array.as_ptr()); }
+                    return Err(status);
+                }
+            }
         }
         Ok(arg_array)
     }

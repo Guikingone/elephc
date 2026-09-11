@@ -37,12 +37,12 @@ pub(super) fn lower_include(
 }
 
 /// Lowers an include-once marker.
-pub(super) fn lower_include_once_mark(ctx: &mut LoweringContext<'_, '_>, label: &str, span: Span) {
-    let data = ctx.intern_string(label);
+pub(super) fn lower_include_once_mark(ctx: &mut LoweringContext<'_, '_>, source_path: &std::path::Path, span: Span) {
+    let source = source_immediate(ctx, source_path);
     ctx.emit_void(
         Op::IncludeOnceMark,
         Vec::new(),
-        Some(Immediate::Data(data)),
+        Some(source),
         Op::IncludeOnceMark.default_effects(),
         Some(span),
     );
@@ -51,17 +51,17 @@ pub(super) fn lower_include_once_mark(ctx: &mut LoweringContext<'_, '_>, label: 
 /// Lowers an include-once guarded body.
 pub(super) fn lower_include_once_guard(
     ctx: &mut LoweringContext<'_, '_>,
-    label: &str,
+    source_path: &std::path::Path,
     body: &[Stmt],
     span: Span,
 ) {
-    let data = ctx.intern_string(label);
+    let source = source_immediate(ctx, source_path);
     let should_run = ctx
         .builder
         .emit_with_effects(
             Op::IncludeOnceGuard,
             Vec::new(),
-            Some(Immediate::Data(data)),
+            Some(source),
             IrType::I64,
             PhpType::Bool,
             Ownership::NonHeap,
@@ -90,4 +90,12 @@ pub(super) fn lower_include_once_guard(
     ctx.builder.position_at_end(after_block);
     ctx.try_handler_stack = surrounding_try_handler_stack;
     ctx.clear_static_callable_locals();
+}
+
+/// Resolves against frozen input metadata; a missing input is a compile diagnostic.
+fn source_immediate(ctx: &LoweringContext<'_, '_>, path: &std::path::Path) -> Immediate {
+    match ctx.source_catalog.as_ref().and_then(|catalog| catalog.id_for_path(path)) {
+        Some(id) => Immediate::Source(id),
+        None => Immediate::UnresolvedSource(path.to_path_buf()),
+    }
 }

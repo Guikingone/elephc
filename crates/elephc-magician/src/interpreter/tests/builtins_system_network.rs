@@ -10,6 +10,29 @@
 use super::super::*;
 use super::support::*;
 
+/// Eval exposes the same scalar validation filters that the static compiler
+/// supports, including the constants and callable lookup used by dynamic code.
+#[test]
+fn execute_program_dispatches_filter_var_scalar_validation_filters() {
+    let program = parse_fragment(
+        br#"echo filter_var('yes', FILTER_VALIDATE_BOOL) ? 'Y' : '?';
+echo filter_var('off', FILTER_VALIDATE_BOOL) === false ? 'F' : '?';
+echo filter_var('invalid', FILTER_VALIDATE_BOOL) === false ? 'B' : '?';
+echo filter_var('42', FILTER_VALIDATE_INT) === 42 ? 'I' : '?';
+echo filter_var('1.5e2', FILTER_VALIDATE_FLOAT) === 150.0 ? 'L' : '?';
+return function_exists('filter_var');"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute eval filter validation");
+
+    assert_eq!(values.output, "YFBIL");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval zero-argument system builtins return native-compatible values.
 #[test]
 fn execute_program_dispatches_zero_arg_system_builtins() {

@@ -360,14 +360,41 @@ pub(in crate::interpreter) fn eval_new_object_result(
             return eval_throw_class_not_found_error(class_name, context, values);
         }
     };
-    if let Err(err) =
-        eval_native_constructor_with_evaluated_args(class_name, object, args, context, values)
+    if let Err(err) = initialize_native_throwable_source(object, context, values)
+        .and_then(|()| eval_native_constructor_with_evaluated_args(class_name, object, args, context, values))
     {
         trace_new_object_error("native_constructor", class_name, err, context);
         let _ = values.release(object);
         return Err(err);
     }
     Ok(object)
+}
+
+/// PHP captures Throwable source properties at allocation, before user constructors.
+fn initialize_native_throwable_source(
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !values.object_is_a(object, "Throwable", false)? {
+        return Ok(());
+    }
+    let base = if values.object_is_a(object, "Exception", false)? { "Exception" } else { "Error" };
+    context.push_class_scope(base);
+    let result = (|| {
+        let file = values.string(&context.eval_file_magic())?;
+        let write = values.property_set(object, "file", file);
+        let release = values.release(file);
+        write?;
+        release?;
+        let line = values.int(context.call_line())?;
+        let write = values.property_set(object, "line", line);
+        let release = values.release(line);
+        write?;
+        release
+    })();
+    context.pop_class_scope();
+    result
 }
 
 /// Emits the failing AOT/eval construction substage under opt-in runtime tracing.
@@ -466,16 +493,23 @@ pub(super) fn eval_instanceof_expr(
     let value = eval_expr(value, context, scope, values)?;
     let result = match target {
         EvalInstanceOfTarget::ClassName(class_name) => {
-            if values.type_tag(value)? != EVAL_TAG_OBJECT {
+            let tag = values.type_tag(value)?;
+            let target_class = eval_instanceof_static_target_name(class_name, context)?;
+            if tag == EVAL_TAG_CALLABLE {
+                return values.bool_value(eval_callable_descriptor_is_closure(&target_class));
+            }
+            if tag != EVAL_TAG_OBJECT {
                 return values.bool_value(false);
             }
-            let target_class = eval_instanceof_static_target_name(class_name, context)?;
             eval_instanceof_object_result(value, &target_class, context, values)?
         }
         EvalInstanceOfTarget::Expr(target) => {
             let target = eval_expr(target, context, scope, values)?;
             let target_class = eval_instanceof_dynamic_target_name(target, context, values)?;
-            if values.type_tag(value)? == EVAL_TAG_OBJECT {
+            let tag = values.type_tag(value)?;
+            if tag == EVAL_TAG_CALLABLE {
+                eval_callable_descriptor_is_closure(&target_class)
+            } else if tag == EVAL_TAG_OBJECT {
                 eval_instanceof_object_result(value, &target_class, context, values)?
             } else {
                 false
@@ -483,6 +517,14 @@ pub(super) fn eval_instanceof_expr(
         }
     };
     values.bool_value(result)
+}
+
+/// Native first-class callable descriptors cross the eval ABI as a dedicated cell tag, but PHP
+/// exposes them as Closure instances.
+fn eval_callable_descriptor_is_closure(target_class: &str) -> bool {
+    target_class
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Closure")
 }
 
 /// Resolves a static `instanceof` target according to eval class aliases and scope keywords.
@@ -570,19 +612,47 @@ pub(super) fn eval_closure_expr(
     for capture in captures {
         bindings.push(eval_closure_capture(capture, context, scope, values)?);
     }
-    let closure = EvalClosure::new(function.clone(), bindings, is_static);
+    let mut closure = EvalClosure::new(function.clone(), bindings, is_static);
+    closure.set_declaring_class_scopes(
+        context.current_class_scope().map(str::to_string),
+        context.current_called_class_scope().map(str::to_string),
+    );
+    closure.set_declaring_call_site(context.call_site());
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=closure_create function={:?} lexical_class={:?} called_class={:?}",
+            function.name(),
+            closure.declaring_class_scope(),
+            closure.declaring_called_class_scope(),
+        );
+    }
     let name = context.define_closure(closure);
     eval_closure_object_expr(EvalClosureObjectTarget::Named(name), context, values)
 }
 
 /// Materializes one PHP-visible `Closure` object for an eval callable target.
 pub(in crate::interpreter) fn eval_closure_object_expr(
-    target: EvalClosureObjectTarget,
+    mut target: EvalClosureObjectTarget,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = values.new_object("stdClass")?;
-    let identity = values.object_identity(object)?;
+    let identity = match values.object_identity(object) {
+        Ok(identity) => identity,
+        Err(status) => {
+            values.release(object)?;
+            return Err(status);
+        }
+    };
+    if let Some(receiver) = target.receiver_mut() {
+        match values.retain(*receiver) {
+            Ok(retained) => *receiver = retained,
+            Err(status) => {
+                values.release(object)?;
+                return Err(status);
+            }
+        }
+    }
     context.register_closure_object_target(identity, target);
     Ok(object)
 }
@@ -596,7 +666,15 @@ fn eval_closure_capture(
 ) -> Result<EvalClosureCaptureBinding, EvalStatus> {
     if capture.by_ref() {
         let expr = EvalExpr::LoadVar(capture.name().to_string());
-        let (value, target) = eval_call_arg_value(&expr, context, scope, values)?;
+        let (value, target) = eval_call_arg_value(&expr, context, scope, values).map_err(|status| {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=closure_capture_error capture={:?} by_ref=true status={status:?}",
+                    capture.name(),
+                );
+            }
+            status
+        })?;
         return Ok(EvalClosureCaptureBinding::new(
             capture.name(),
             value,

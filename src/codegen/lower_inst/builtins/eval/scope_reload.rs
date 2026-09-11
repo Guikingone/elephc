@@ -68,6 +68,14 @@ pub(super) fn store_mixed_scope_cell_to_global(
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
     match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
+            if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
+                // The replacing store releases its old owner even if this is
+                // the same borrowed cell. Acquire the new share first.
+                abi::emit_call_label(ctx.emitter, "__rt_incref");
+                return super::super::super::globals_constants::lower_store_shared_global(
+                    ctx, &symbol, &PhpType::Mixed,
+                );
+            }
             emit_retain_scope_cell_if_owned(ctx);
             abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
         }
@@ -98,7 +106,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
                 .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed array payload into the ABI result register
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
             if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
-                return super::super::super::globals_constants::lower_store_web_superglobal(
+                return super::super::super::globals_constants::lower_store_shared_global(
                     ctx,
                     &symbol,
                     &ty,
@@ -142,6 +150,16 @@ pub(super) fn store_missing_scope_entry_to_local(
     ctx: &mut FunctionContext<'_>,
     local: &EvalSyncLocal,
 ) -> Result<()> {
+    let ty = local.ty.codegen_repr();
+    if (ty == PhpType::Str || ty.is_refcounted())
+        && !ctx.local_ref_cell_representation_is_definite(local.slot)
+    {
+        // Removing the eval entry does not consume the raw native slot's owner.
+        // That slot still owns its previous payload. Use the existing
+        // cleanup guard so a runtime-promoted reference is not treated as raw.
+        let offset = ctx.local_offset(local.slot)?;
+        crate::codegen::frame::emit_owned_local_cleanup(ctx, local.slot, offset, &ty);
+    }
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
             let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
@@ -184,6 +202,12 @@ pub(super) fn store_missing_scope_entry_to_global(
     ctx: &mut FunctionContext<'_>,
     global: &EvalSyncGlobal,
 ) -> Result<()> {
+    if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name)
+        && !crate::superglobals::is_superglobal(&global.name)
+    {
+        super::super::super::globals_constants::unset_global_name(ctx, &global.name);
+        return Ok(());
+    }
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
@@ -215,7 +239,7 @@ pub(super) fn store_missing_scope_entry_to_global(
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
-                return super::super::super::globals_constants::lower_store_web_superglobal(
+                return super::super::super::globals_constants::lower_store_shared_global(
                     ctx,
                     &symbol,
                     &ty,

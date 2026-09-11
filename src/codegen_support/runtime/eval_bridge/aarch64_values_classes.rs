@@ -135,13 +135,10 @@ pub(super) fn emit_aarch64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release the class-exists helper frame
     emitter.instruction("ret");                                                 // return the class-exists flag to Rust
 
-    emit_aarch64_eval_name_table_exists(
-        emitter,
-        "__elephc_eval_interface_exists",
-        "_interface_names_count",
-        "_interface_names",
-        "__elephc_eval_interface_exists",
-    );
+    // Interface activation is request-local. Reuse the native helper rather
+    // than the immutable eval registration table, which only proves discovery.
+    label_c_global(emitter, "__elephc_eval_interface_exists");
+    emitter.instruction("b __rt_interface_exists");                             // tail-call the shared request-active interface lookup
 
     emit_aarch64_eval_name_table_exists(
         emitter,

@@ -130,6 +130,17 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "STR_PAD_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_BOTH)),
         "COUNT_NORMAL" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_NORMAL)),
         "COUNT_RECURSIVE" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_RECURSIVE)),
+        "FILTER_DEFAULT" | "FILTER_UNSAFE_RAW" => Some(EvalPredefinedConstant::Int(516)),
+        "FILTER_VALIDATE_INT" => Some(EvalPredefinedConstant::Int(257)),
+        "FILTER_VALIDATE_BOOL" | "FILTER_VALIDATE_BOOLEAN" => {
+            Some(EvalPredefinedConstant::Int(258))
+        }
+        "FILTER_VALIDATE_FLOAT" => Some(EvalPredefinedConstant::Int(259)),
+        "FILTER_VALIDATE_IP" => Some(EvalPredefinedConstant::Int(275)),
+        "FILTER_NULL_ON_FAILURE" => Some(EvalPredefinedConstant::Int(134_217_728)),
+        "FILTER_REQUIRE_SCALAR" => Some(EvalPredefinedConstant::Int(33_554_432)),
+        "FILTER_FLAG_IPV4" => Some(EvalPredefinedConstant::Int(1_048_576)),
+        "FILTER_FLAG_IPV6" => Some(EvalPredefinedConstant::Int(2_097_152)),
         "PHP_ROUND_HALF_UP" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_UP)),
         "PHP_ROUND_HALF_DOWN" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_DOWN)),
         "PHP_ROUND_HALF_EVEN" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_EVEN)),

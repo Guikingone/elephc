@@ -39,6 +39,7 @@ mod checked_numeric_chain;
 mod runtime_functions;
 pub(crate) mod builtins;
 mod callables;
+mod classlike_activation;
 mod comparisons;
 mod conversions;
 mod enums;
@@ -75,7 +76,7 @@ pub(super) use exception_instructions::lower_mixed_throw_value;
 mod fiber_methods;
 mod generator_instructions;
 mod globals_constants;
-pub(in crate::codegen) use globals_constants::lower_store_web_superglobal;
+pub(in crate::codegen) use globals_constants::lower_store_shared_global;
 mod instruction_helpers;
 mod local_loads;
 mod local_stores;
@@ -94,6 +95,7 @@ mod throwable_methods;
 use array_access_runtime::*;
 use call_cleanup::*;
 use call_operands::*;
+use classlike_activation::*;
 use callable_descriptors::*;
 pub(in crate::codegen) use callables::lower_mixed_callable_descriptor_invoke_inline;
 use core_closures::*;
@@ -179,6 +181,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
+        Op::GlobalRefCell => lower_global_ref_cell(ctx, &inst),
+        Op::UnsetGlobal => lower_unset_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
         Op::ExternGlobalStore => lower_extern_global_store(ctx, &inst),
         Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),
@@ -415,6 +419,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ErrorSuppressEnd => lower_runtime_void_call(ctx, "__rt_diag_pop_suppression"),
         Op::IncludeOnceMark => lower_include_once_mark(ctx, &inst),
         Op::IncludeOnceGuard => lower_include_once_guard(ctx, &inst),
+        Op::ClassLikeActivate => lower_classlike_activate(ctx, &inst),
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),

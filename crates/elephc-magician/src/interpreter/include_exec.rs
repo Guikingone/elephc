@@ -16,6 +16,26 @@ use crate::parse_cache::{parse_fragment_cached, parse_source_file_cached};
 
 const EVAL_TRACE_ENV: &str = "ELEPHC_EVAL_TRACE";
 
+#[cfg(all(test, unix))]
+mod source_identity_tests {
+    use super::*;
+    use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn include_keys_preserve_distinct_non_utf8_paths() {
+        let a = std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/nonexistent-source/\xff.php".to_vec()));
+        let b = std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/nonexistent-source/\xfe.php".to_vec()));
+        assert_eq!(a.to_string_lossy(), b.to_string_lossy());
+        let first = eval_include_key(&a);
+        let second = eval_include_key(&b);
+        assert_ne!(first, second, "physical identity must not use lossy display text");
+        let mut context = ElephcEvalContext::new();
+        context.mark_included_file(first.clone());
+        assert!(context.has_included_file(&first));
+        assert!(!context.has_included_file(&second));
+    }
+}
+
 /// Evaluates nested `eval(...)` calls against the current materialized scope.
 pub(super) fn eval_nested_eval(
     args: &[EvalExpr],
@@ -129,11 +149,9 @@ fn eval_resolve_include_path(path: &str, context: &ElephcEvalContext) -> std::pa
 }
 
 /// Builds the stable include_once key for a resolved path.
-fn eval_include_key(path: &std::path::Path) -> String {
+fn eval_include_key(path: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(path)
         .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .into_owned()
 }
 
 /// Executes a local include file as one program covering its inline HTML and every PHP block.
@@ -240,4 +258,3 @@ fn trace_include_fragment(
         }
     }));
 }
-

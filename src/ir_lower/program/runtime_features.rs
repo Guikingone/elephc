@@ -48,6 +48,11 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
         }
         for (inst_index, inst) in function.instructions.iter().enumerate() {
             match inst.op {
+                Op::ClassLikeActivate => {
+                    // The activation overlay and its existence helpers must be
+                    // emitted even when every source query is a literal.
+                    features.class_introspection = true;
+                }
                 Op::RuntimeCall => {
                     features.eval_bridge |= matches!(
                         inst.immediate,
@@ -261,7 +266,9 @@ fn member_exists_call_requires_runtime_registry(
         .is_some_and(|value| {
             matches!(
                 value.php_type.codegen_repr(),
-                crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)
+                crate::types::PhpType::Mixed
+                    | crate::types::PhpType::Union(_)
+                    | crate::types::PhpType::Object(_)
             )
         });
     let dynamic_string_target = inst

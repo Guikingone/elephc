@@ -32130,3 +32130,325 @@ echo coalesceProp($probe), ';', coalesceNullable($probe), ';', filledStillWorks(
     );
     assert_eq!(out, "ynny;D;D;n");
 }
+
+/// A compiled indexed mutation quietly fetches an eval-owned uninitialized property container.
+///
+/// PHP auto-initializes the property for writes and `??=`, while `unset` is a no-op that leaves
+/// the property uninitialized. The include path is computed so the class remains runtime-owned;
+/// a literal include would exercise only the ordinary AOT property path.
+#[test]
+fn test_compiled_indexed_mutation_of_eval_owned_uninitialized_property_matches_php() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+return new MutationBridgeProbe();
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class MutationBridgeProbe
+{
+    public array $values;
+
+    public function assignAndAppend(): string {
+        $this->values['first'] = 1;
+        $this->values[] = 2;
+        $this->values['last'] ??= 3;
+        return $this->values['first'] . ',' . $this->values[0] . ',' . $this->values['last'];
+    }
+
+    private function key(): string {
+        echo 'K';
+        return 'missing';
+    }
+
+    public function unsetOneLevel(): string {
+        unset($this->values[$this->key()]);
+        return isset($this->values) ? 'set' : 'unset';
+    }
+}
+
+$name = 'piece';
+$one = include __DIR__ . '/' . $name . '.php';
+$two = include __DIR__ . '/' . $name . '.php';
+
+echo $one->assignAndAppend(), ';';
+echo $two->unsetOneLevel();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1,2,3;Kunset");
+}
+
+/// A compiled callable array can target a static method declared by a runtime include.
+///
+/// The caller has no local eval context: only the request-wide declaration owner can dispatch
+/// the class-string selected at runtime. PHP resolves that owner before invoking the method.
+#[test]
+fn test_compiled_callable_array_invokes_runtime_declared_static_method() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+class RuntimeCallableTarget
+{
+    public static function events(): array { return ['ready']; }
+    public static function fail(): void { throw new RuntimeException('probe'); }
+}
+
+return RuntimeCallableTarget::class;
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+class RuntimeCallableDispatcher
+{
+    public static string $target;
+
+    public static function run(): string {
+        return [self::$target, 'events']()[0];
+    }
+
+    public static function catchFailure(): string {
+        try {
+            ([self::$target, 'fail'])();
+        } catch (RuntimeException $exception) {
+            return 'caught';
+        }
+        return 'not-caught';
+    }
+
+}
+
+$name = 'piece';
+RuntimeCallableDispatcher::$target = include __DIR__ . '/' . $name . '.php';
+echo RuntimeCallableDispatcher::run(), ';';
+echo RuntimeCallableDispatcher::catchFailure();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ready;caught");
+}
+
+/// ReflectionClass::hasMethod sees inherited AOT methods on a runtime-declared child.
+#[test]
+fn test_compiled_reflection_has_method_sees_aot_parent_of_runtime_declared_class() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "piece.php",
+                r#"<?php
+
+namespace RuntimeReflectionLoaded;
+
+use RuntimeReflectionBase\RuntimeReflectionParent as ImportedParent;
+
+class RuntimeReflectionChild extends ImportedParent {}
+return RuntimeReflectionChild::class;
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+
+namespace RuntimeReflectionBase {
+    class RuntimeReflectionParent
+    {
+        public function inherited(): void {}
+    }
+}
+
+namespace {
+    class RuntimeReflectionDispatcher
+    {
+        public static function inspect(string $class): string {
+            $reflection = new ReflectionClass($class);
+            $subclass = $reflection->isSubclassOf(\RuntimeReflectionBase\RuntimeReflectionParent::class) ? 'sub' : 'not-sub';
+            $method = $reflection->hasMethod('inherited') ? 'method' : 'no-method';
+            return $subclass . ';' . $method;
+        }
+    }
+
+    $piece = 'piece';
+    $class = include __DIR__ . '/' . $piece . '.php';
+    echo RuntimeReflectionDispatcher::inspect($class);
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "sub;method");
+}
+
+/// ReflectionClass::implementsInterface autoloads an interface named at runtime.
+#[test]
+fn test_eval_reflection_implements_interface_autoloads_target() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "class.php",
+                r#"<?php
+class RuntimeReflectedClass {}
+return RuntimeReflectedClass::class;
+"#,
+            ),
+            (
+                "runner.php",
+                r#"<?php
+function inspectRuntimeInterface(mixed $reflection): bool {
+    return $reflection->implementsInterface('RuntimeLoadedInterface');
+}
+
+function inspectMissingRuntimeInterface(mixed $reflection): bool {
+    return $reflection->implementsInterface('RuntimeMissingInterface');
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+class RuntimeInterfaceLoader
+{
+    public function __construct(private string $path) {}
+
+    public function load(string $class): void {
+        if ($class === 'RuntimeLoadedInterface') {
+            include $this->path;
+        }
+    }
+}
+
+$interfacePath = __DIR__ . '/runtime-interface.php';
+file_put_contents($interfacePath, '<?php interface RuntimeLoadedInterface {}');
+$loader = new RuntimeInterfaceLoader($interfacePath);
+spl_autoload_register([$loader, 'load']);
+$classFile = 'class';
+$class = include __DIR__ . '/' . $classFile . '.php';
+$reflection = new ReflectionClass($class);
+$runner = 'runner';
+include __DIR__ . '/' . $runner . '.php';
+var_dump(inspectRuntimeInterface($reflection));
+try {
+    inspectMissingRuntimeInterface($reflection);
+} catch (ReflectionException $exception) {
+    echo get_class($exception), ':', $exception->getMessage(), "\n";
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nReflectionException:Interface \"RuntimeMissingInterface\" does not exist\n"
+    );
+}
+
+/// Repeating eval-backed getConstructor must not accumulate live heap allocations.
+/// Immutable eval metadata survives a CLI request, so compare the same binary at two
+/// iteration counts instead of requiring an empty process-global metadata heap.
+#[test]
+fn test_eval_reflection_get_constructor_result_has_balanced_ownership() {
+    let dir = make_cli_test_dir("elephc_eval_reflection_constructor_ownership");
+    fs::write(
+        dir.join("runner.php"),
+        r#"<?php
+function getRuntimeConstructor(mixed $reflection): ?ReflectionMethod {
+    if (!$constructor = $reflection->getConstructor()) {
+        return null;
+    }
+    if (!$constructor->isPublic()) {
+        return null;
+    }
+    return $constructor;
+}
+
+function inspectRuntimeConstructor(mixed $reflection): string {
+    $calls = [];
+    if ($constructor = getRuntimeConstructor($reflection)) {
+        $calls[] = [$constructor, []];
+    }
+
+    $seen = 'none';
+    foreach ($calls as $call) {
+        [$method, $arguments] = $call;
+        if ($method instanceof ReflectionFunctionAbstract) {
+            $seen = $method instanceof ReflectionMethod ? 'method' : 'function';
+        }
+    }
+    return $seen;
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$classPath = __DIR__ . '/runtime-constructor.php';
+file_put_contents($classPath, '<?php class RuntimeConstructorTarget { public function __construct(string $value = "x") {} }');
+include $classPath;
+$reflection = new ReflectionClass('RuntimeConstructorTarget');
+$runner = 'runner';
+include __DIR__ . '/' . $runner . '.php';
+$iterations = $argv[1] === 'once' ? 1 : 16;
+for ($i = 0; $i < $iterations; $i++) {
+    $seen = inspectRuntimeConstructor($reflection);
+}
+echo $seen;
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--heap-debug", "--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "eval reflection ownership fixture should compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let output = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .arg("once")
+        .output()
+        .expect("failed to run eval reflection ownership fixture");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "eval reflection ownership fixture failed:\n{stderr}"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "method");
+    let baseline = stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .expect("baseline run must report its live heap");
+    let repeated = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .arg("many")
+        .output()
+        .expect("failed to run repeated eval reflection ownership fixture");
+    let repeated_stderr = String::from_utf8_lossy(&repeated.stderr);
+    assert!(repeated.status.success(), "{repeated_stderr}");
+    assert_eq!(String::from_utf8_lossy(&repeated.stdout), "method");
+    let repeated_heap = repeated_stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .expect("repeated run must report its live heap");
+    assert_eq!(baseline, repeated_heap, "constructor calls accumulated live allocations");
+
+    let _ = fs::remove_dir_all(&dir);
+}

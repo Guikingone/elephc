@@ -144,6 +144,7 @@ fn prune_statement_children(statement: &mut Stmt, reachability: &Reachability) {
         | StmtKind::PropertyArrayAssign { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => {}
     }
 }

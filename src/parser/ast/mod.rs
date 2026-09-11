@@ -25,7 +25,7 @@ pub use oop::{
     Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl,
     PropertyHooks, TraitAdaptation, TraitUse, Visibility,
 };
-pub use stmt::{CatchClause, Program, Stmt, StmtKind, UseItem, UseKind};
+pub use stmt::{CatchClause, ClassLikeKind, Program, Stmt, StmtKind, UseItem, UseKind};
 pub use types::TypeExpr;
 
 /// Name prefix of the temporary a nested append (`$a[$k][] = $v`) reads its bucket into.

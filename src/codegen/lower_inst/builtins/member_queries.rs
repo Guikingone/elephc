@@ -22,6 +22,12 @@ pub(crate) fn lower_class_like_exists(
     {
         return lower_bridge_class_like_exists(ctx, inst, value, name);
     }
+    // Compiled interfaces with activation events must consult their request cell
+    // even when the queried name is a literal; immutable metadata alone only
+    // means the compiler retained a possible declaration.
+    if name == "interface_exists" && ctx.module_has_interface_activation_events() {
+        return lower_runtime_interface_exists(ctx, inst, value);
+    }
     if let Some(symbol_name) = maybe_const_string_operand(ctx, value)? {
         let exists = match name {
             "class_exists" => contains_folded(
@@ -40,6 +46,31 @@ pub(crate) fn lower_class_like_exists(
     } else {
         lower_dynamic_class_like_exists(ctx, name, value)?;
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers interface existence through the native activation overlay.
+fn lower_runtime_interface_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+) -> Result<()> {
+    if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(
+            "interface_exists with non-string dynamic name",
+        ));
+    }
+    let (pointer, length) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(value, pointer, length)?;
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let length_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    if name_arg != pointer {
+        ctx.emitter.instruction(&format!("mov {}, {}", name_arg, pointer));
+    }
+    if length_arg != length {
+        ctx.emitter.instruction(&format!("mov {}, {}", length_arg, length));
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_interface_exists");
     store_if_result(ctx, inst)
 }
 
@@ -368,8 +399,11 @@ pub(in crate::codegen::lower_inst) fn lower_member_exists(
         );
     };
     let exists = match ctx.value_php_type(target)?.codegen_repr() {
-        PhpType::Object(class_name) => {
-            static_member_exists_on_class(ctx, &class_name, &member_name, name, true)
+        PhpType::Object(_) => {
+            // The declared type does not determine the runtime instance's members.
+            return super::member_exists::lower_dynamic_member_exists(
+                ctx, inst, target, member, name,
+            );
         }
         PhpType::Str => {
             let Some(class_name) = maybe_const_string_operand(ctx, target)? else {

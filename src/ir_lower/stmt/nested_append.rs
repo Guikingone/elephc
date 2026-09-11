@@ -47,6 +47,7 @@ pub(super) struct NestedAppendGroup<'a> {
     read: &'a Stmt,
     push: &'a Stmt,
     write_back: &'a Stmt,
+    target: &'a Expr,
     base: BaseKind<'a>,
     index: &'a Expr,
 }
@@ -68,6 +69,13 @@ enum BaseKind<'a> {
         receiver: &'a StaticReceiver,
         property: &'a str,
     },
+    /// A bucket below another array access, such as `$o->items[$first][$second][]`.
+    ///
+    /// The parser's generic read/push/write-back desugaring cannot safely read this bucket
+    /// before it has established every missing parent: that ordinary read emits undefined-key
+    /// warnings. The dedicated path probes it with PHP's quiet `isset` semantics first, then
+    /// creates the bucket through the existing nested-write lowering only when absent.
+    Nested,
 }
 
 /// Returns the nested-append group a synthetic body encodes, or `None` to fall back to
@@ -109,12 +117,19 @@ pub(super) fn recognize<'a>(
                         },
                         index.as_ref(),
                     ),
+                    ExprKind::ArrayAccess { .. } => {
+                        (name.as_str(), BaseKind::Nested, index.as_ref())
+                    }
                     _ => return None,
                 },
                 _ => return None,
             }
         }
         _ => return None,
+    };
+    let value_target = match &triple[0].kind {
+        StmtKind::Assign { value, .. } => value,
+        _ => unreachable!("nested append group was matched from an assignment"),
     };
 
     match &triple[1].kind {
@@ -159,6 +174,14 @@ pub(super) fn recognize<'a>(
             ExprKind::Variable(name) if name == temp => {}
             _ => return None,
         },
+        (StmtKind::NestedArrayAssign { target: write_target, value }, BaseKind::Nested)
+            if write_target == value_target =>
+        {
+            match &value.kind {
+                ExprKind::Variable(name) if name == temp => {}
+                _ => return None,
+            }
+        }
         _ => return None,
     }
 
@@ -178,6 +201,7 @@ pub(super) fn recognize<'a>(
         read: &triple[0],
         push: &triple[1],
         write_back: &triple[2],
+        target: value_target,
         base,
         index,
     })
@@ -202,6 +226,17 @@ pub(super) fn recognize<'a>(
 pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup<'_>, span: Span) {
     for stmt in group.prefix {
         super::lower_stmt(ctx, stmt);
+    }
+
+    if matches!(group.base, BaseKind::Nested) {
+        if !nested_target_has_safe_quiet_probe(ctx, group.target) {
+            super::lower_stmt(ctx, group.read);
+            super::lower_stmt(ctx, group.push);
+            super::lower_stmt(ctx, group.write_back);
+            return;
+        }
+        lower_deep_nested_append(ctx, group, span);
+        return;
     }
 
     // Load the container and probe the key. For a local this is a `LoadLocal`; for a property it is
@@ -320,6 +355,84 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     super::lower_stmt(ctx, group.write_back);
 }
 
+/// Lowers an append whose bucket has more than one array-access parent.
+///
+/// A parser-generated group for `$object->items[$first][$second][] = $value` starts with a
+/// normal read of `$object->items[$first][$second]`. Unlike a direct property bucket, that read
+/// cannot be fused into a one-level `ArrayIsset`/`HashIsset` probe. Reuse `isset`'s quiet,
+/// recursive fetch semantics instead. The parser has stabilized every effectful subexpression in
+/// the target, and the guarded root is a native array slot, so the probe does not duplicate a
+/// PHP-visible operation. It does not warn for legal missing write parents and preserves PHP's
+/// distinction between a missing/null bucket (which must be vivified) and a scalar bucket (which
+/// must retain the ordinary append error).
+fn lower_deep_nested_append(
+    ctx: &mut LoweringContext<'_, '_>,
+    group: &NestedAppendGroup<'_>,
+    span: Span,
+) {
+    let Some(present) = crate::ir_lower::expr::lower_synthesized_isset_for_write_target(
+        ctx,
+        group.target,
+    )
+    else {
+        // The synthetic target has one ordinary positional operand, so the lazy lowering is
+        // expected to accept it. Preserve the pre-existing desugar if a future AST shape makes
+        // that assumption false rather than partially lowering the group.
+        super::lower_stmt(ctx, group.read);
+        super::lower_stmt(ctx, group.push);
+        super::lower_stmt(ctx, group.write_back);
+        return;
+    };
+
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let vivify_block = ctx
+        .builder
+        .create_named_block("napp.deep.vivify", Vec::new());
+    let body_block = ctx.builder.create_named_block("napp.deep.body", Vec::new());
+    ctx.builder.terminate(crate::ir::Terminator::CondBr {
+        cond: present.value,
+        then_target: body_block,
+        then_args: Vec::new(),
+        else_target: vivify_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(vivify_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    let empty = Expr::new(ExprKind::ArrayLiteral(Vec::new()), span);
+    super::lower_nested_array_assign(ctx, group.target, &empty, span);
+    ctx.builder.terminate(crate::ir::Terminator::Br {
+        target: body_block,
+        args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(body_block);
+    ctx.restore_initialized_slots(split_initialized);
+    super::lower_stmt(ctx, group.read);
+    super::lower_stmt(ctx, group.push);
+    super::lower_stmt(ctx, group.write_back);
+}
+
+/// Returns whether a nested target can be probed quietly without adding magic-method calls.
+///
+/// The direct one-parent lowering already has precise native probes for statically-known
+/// containers. This broader path is intentionally narrower than PHP's entire indirect-write
+/// surface: an unknown `Mixed`, `ArrayAccess`, or virtual property retains the original desugar
+/// until it has a similarly exact write-context implementation.
+fn nested_target_has_safe_quiet_probe(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::ArrayAccess { array, .. } => nested_target_has_safe_quiet_probe(ctx, array),
+        ExprKind::Variable(name) => matches!(
+            ctx.local_type(name).codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ),
+        ExprKind::PropertyAccess { object, property } => {
+            crate::ir_lower::expr::property_access_is_declared_native_array(ctx, object, property)
+        }
+        _ => false,
+    }
+}
+
 /// Returns whether a nested append key needs PHP's runtime mixed-key normalization.
 fn nested_append_key_is_dynamic(
     ctx: &LoweringContext<'_, '_>,
@@ -404,6 +517,7 @@ fn load_container(
             );
             lower_expr(ctx, &access)
         }
+        BaseKind::Nested => unreachable!("deep nested append does not load a direct container"),
     }
 }
 
@@ -435,6 +549,7 @@ fn vivify_stmt(group: &NestedAppendGroup<'_>, span: Span) -> Stmt {
             index: group.index.clone(),
             value: empty,
         },
+        BaseKind::Nested => unreachable!("deep nested append vivifies through NestedArrayAssign"),
     };
     Stmt::new(kind, span)
 }

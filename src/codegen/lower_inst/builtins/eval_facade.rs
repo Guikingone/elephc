@@ -122,6 +122,18 @@ pub(in crate::codegen::lower_inst) fn lower_eval_property_get(
     eval::lower_eval_property_get(ctx, inst, object, property)
 }
 
+/// Probes a native receiver before routing an instance-property read through eval.
+pub(in crate::codegen::lower_inst) fn lower_eval_owned_property_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+    miss_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_owned_property_get(ctx, inst, object, property, miss_label, done_label)
+}
+
 /// Probes a typed receiver for an eval-owned dynamic override before native dispatch.
 pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     ctx: &mut FunctionContext<'_>,
@@ -211,6 +223,16 @@ pub(in crate::codegen::lower_inst) fn lower_eval_callable_call_array(
     arg_array: ValueId,
 ) -> Result<()> {
     eval::lower_eval_callable_call_array(ctx, inst, callback, arg_array)
+}
+
+/// Lowers post-eval callable-array dispatch without a local eval context.
+pub(in crate::codegen::lower_inst) fn lower_eval_global_callable_call_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+    arg_array: ValueId,
+) -> Result<()> {
+    eval::lower_eval_global_callable_call_array(ctx, inst, callback, arg_array)
 }
 
 /// Lowers post-eval callable probes against eval dynamic callables.

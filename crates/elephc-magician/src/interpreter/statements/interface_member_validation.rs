@@ -214,15 +214,11 @@ pub(super) fn validate_method_parent_override(
     else {
         return Ok(());
     };
-    if parent_method.visibility() == EvalVisibility::Private {
+    let is_constructor = method.name().eq_ignore_ascii_case("__construct");
+    if parent_method.visibility() == EvalVisibility::Private && !is_constructor {
         return Ok(());
     }
     if parent_method.is_static() != method.is_static() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    if method_visibility_rank(method.visibility())
-        < method_visibility_rank(parent_method.visibility())
-    {
         return Err(EvalStatus::RuntimeFatal);
     }
     if parent_method.is_final() {
@@ -231,11 +227,38 @@ pub(super) fn validate_method_parent_override(
     if method.is_abstract() && !parent_method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let prototype = if is_constructor {
+        // A concrete implementation retains the original abstract constructor
+        // contract. Interface contracts are validated independently below.
+        let mut prototype = None;
+        for owner in std::iter::once(parent_declaring_class.clone())
+            .chain(context.class_parent_names(&parent_declaring_class))
+        {
+            if let Some((owner, candidate)) = context.class_own_method(&owner, method.name()) {
+                if candidate.is_abstract() {
+                    prototype = Some((owner, candidate));
+                }
+            }
+        }
+        prototype
+    } else {
+        None
+    };
+    let (prototype_owner, prototype_method) = match prototype.as_ref() {
+        Some((owner, method)) => (owner, method),
+        None if is_constructor => return Ok(()),
+        None => (&parent_declaring_class, &parent_method),
+    };
+    if method_visibility_rank(method.visibility())
+        < method_visibility_rank(parent_method.visibility())
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     if !class_method_signature_accepts(
         method,
         class.name(),
-        &parent_method,
-        &parent_declaring_class,
+        prototype_method,
+        prototype_owner,
         Some(class),
         context,
     ) {
@@ -260,7 +283,9 @@ pub(super) fn validate_method_aot_parent_override(
     let Some(flags) = values.reflection_method_flags(&parent, method.name())? else {
         return Ok(());
     };
-    if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0
+        && !method.name().eq_ignore_ascii_case("__construct")
+    {
         return Ok(());
     }
     let parent_is_static = flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;

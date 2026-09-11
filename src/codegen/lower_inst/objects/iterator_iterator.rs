@@ -260,8 +260,7 @@ pub(super) fn emit_validate_iterator_iterator_aggregate_downcast(ctx: &mut Funct
 pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous)
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks object instances
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
@@ -277,7 +276,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store static exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
@@ -286,8 +285,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("push rbp");                                // preserve caller frame pointer for exception allocation
             ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned helper frame
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call aligned
-            ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction(
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
             );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
@@ -305,7 +303,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ));                                                                 // store static exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             ctx.emitter
                 .instruction("mov QWORD PTR [rip + _exc_value], rax"); // publish the active exception object
             ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing

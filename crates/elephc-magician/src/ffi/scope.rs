@@ -65,10 +65,32 @@ pub unsafe extern "C" fn __elephc_eval_scope_set(
     } else {
         ScopeCellOwnership::Borrowed
     };
-    if let Some(replaced) = scope.set(name, RuntimeCellHandle::from_raw(cell), ownership) {
+    let binding = match flags & (crate::abi::SCOPE_FLAG_NATIVE_REF | crate::abi::SCOPE_FLAG_NATIVE_GLOBAL) {
+        0 => crate::scope::NativeScopeBinding::Value,
+        crate::abi::SCOPE_FLAG_NATIVE_REF => crate::scope::NativeScopeBinding::ReferenceCell,
+        crate::abi::SCOPE_FLAG_NATIVE_GLOBAL => crate::scope::NativeScopeBinding::GlobalName,
+        _ => return EvalStatus::RuntimeFatal.code(),
+    };
+    if let Some(replaced) = scope.set_with_native_binding(name, RuntimeCellHandle::from_raw(cell), ownership, binding) {
         release_scope_cell(replaced);
     }
     EvalStatus::Ok.code()
+}
+
+/// Installs compiled native-binding metadata through an explicit capability
+/// symbol, so an older bridge cannot silently discard the new flags.
+///
+/// # Safety
+/// The pointer and lifetime requirements are the same as `__elephc_eval_scope_set`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_scope_bind_native(
+    scope: *mut ElephcEvalScope,
+    name_ptr: *const u8,
+    name_len: u64,
+    cell: *mut RuntimeCell,
+    flags: u32,
+) -> i32 {
+    unsafe { __elephc_eval_scope_set(scope, name_ptr, name_len, cell, flags) }
 }
 
 /// Looks up a named runtime cell in a materialized eval scope.

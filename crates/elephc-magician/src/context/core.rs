@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 /// grow dynamic registries without exposing them to generated assembly.
 pub struct ElephcEvalContext {
     pub(super) abi_version: u32,
+    pub(crate) native_global_sync: Option<NativeGlobalSyncHooks>,
     pub(super) classes: HashMap<String, EvalClass>,
     pub(super) class_source_files: HashMap<String, String>,
     pub(super) class_aliases: HashMap<String, EvalClassAlias>,
@@ -70,7 +71,7 @@ pub struct ElephcEvalContext {
     pub(super) static_properties: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) static_property_aliases: HashMap<(String, String), EvalReferenceTarget>,
     pub(super) class_constants: HashMap<(String, String), RuntimeCellHandle>,
-    pub(super) included_files: HashSet<String>,
+    pub(super) include_state: super::request_includes::SharedIncludeState,
     pub(super) claimed_aot_include_classlikes: HashSet<String>,
     pub(super) include_execution_stack: Vec<bool>,
     pub(super) dynamic_objects: HashMap<u64, String>,
@@ -142,6 +143,7 @@ impl ElephcEvalContext {
     pub fn new() -> Self {
         Self {
             abi_version: ABI_VERSION,
+            native_global_sync: None,
             classes: HashMap::new(),
             class_source_files: HashMap::new(),
             class_aliases: HashMap::new(),
@@ -182,7 +184,7 @@ impl ElephcEvalContext {
             static_properties: HashMap::new(),
             static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
-            included_files: HashSet::new(),
+            include_state: super::request_includes::current_include_state(),
             claimed_aot_include_classlikes: HashSet::new(),
             include_execution_stack: Vec::new(),
             dynamic_objects: HashMap::new(),
@@ -241,6 +243,7 @@ impl ElephcEvalContext {
     pub fn for_abi_version(abi_version: u32) -> Self {
         Self {
             abi_version,
+            native_global_sync: None,
             classes: HashMap::new(),
             class_source_files: HashMap::new(),
             class_aliases: HashMap::new(),
@@ -281,7 +284,7 @@ impl ElephcEvalContext {
             static_properties: HashMap::new(),
             static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
-            included_files: HashSet::new(),
+            include_state: super::request_includes::current_include_state(),
             claimed_aot_include_classlikes: HashSet::new(),
             include_execution_stack: Vec::new(),
             dynamic_objects: HashMap::new(),

@@ -27,9 +27,9 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
     let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(fold_block(stmts)),
-        StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark { label },
-        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
-            label,
+        StmtKind::IncludeOnceMark { source_path } => StmtKind::IncludeOnceMark { source_path },
+        StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+            source_path,
             body: fold_block(body),
         },
         StmtKind::Echo(expr) => StmtKind::Echo(fold_expr(expr)),
@@ -378,6 +378,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             library,
         },
         StmtKind::ExternClassDecl { name, fields } => StmtKind::ExternClassDecl { name, fields },
+        StmtKind::ClassLikeActivate { name, kind, source_path } => StmtKind::ClassLikeActivate { name, kind, source_path },
         StmtKind::ExternGlobalDecl { name, c_type } => {
             StmtKind::ExternGlobalDecl { name, c_type }
         }

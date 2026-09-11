@@ -95,9 +95,11 @@ pub(super) fn eval_reflection_class_owner_object_result(
         else {
             return Ok(None);
         };
+        let resolved_name = context.resolve_class_like_name(reflected_name);
+        let resolved_name = resolved_name.as_deref().unwrap_or(reflected_name);
         let canonical_name = values
-            .reflection_canonical_class_name(reflected_name)?
-            .unwrap_or_else(|| reflected_name.trim_start_matches('\\').to_string());
+            .reflection_canonical_class_name(resolved_name)?
+            .unwrap_or_else(|| resolved_name.trim_start_matches('\\').to_string());
         let method_names = eval_reflection_aot_member_names(
             EVAL_REFLECTION_OWNER_METHOD,
             &canonical_name,

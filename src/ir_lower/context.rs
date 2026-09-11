@@ -222,6 +222,8 @@ pub(crate) fn enable_runtime_dynamic_function_resolution(
 pub(crate) struct LoweringContext<'m, 'f> {
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
+    pub source_catalog: Option<std::sync::Arc<crate::ir::SourceCatalog>>,
+    pub runtime_bound_functions: std::sync::Arc<std::collections::HashSet<String>>,
     pub local_slots: HashMap<String, LocalSlotId>,
     pub local_kinds: HashMap<String, LocalKind>,
     pub local_types: TypeEnv,
@@ -325,6 +327,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub by_ref_return: bool,
     pub in_main: bool,
     pub all_global_var_names: HashSet<String>,
+    /// Names whose local binding can switch to a global cell at runtime.
+    pub(crate) runtime_global_bindings: HashSet<String>,
     /// `true` when lowering for a `--web` compile. Gates whether a bare
     /// request-superglobal name (`$_SERVER`/`$_SESSION`/…) is trusted to
     /// resolve to the fixed `AssocArray{Str, Mixed}` type: only `--web`
@@ -409,6 +413,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let return_type = return_ir_type(&return_php_type);
         Self {
             builder,
+            source_catalog: None,
+            runtime_bound_functions: Default::default(),
             data,
             local_slots: HashMap::new(),
             local_kinds: HashMap::new(),
@@ -461,6 +467,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             by_ref_return: false,
             in_main,
             all_global_var_names,
+            runtime_global_bindings: HashSet::new(),
             web,
             owner_name,
             closures: Vec::new(),
@@ -848,6 +855,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// first store — including the incoming-parameter store — keeps every access on the
     /// ordinary boxed-Mixed path instead.
     fn required_local_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
+        if self.runtime_global_bindings.contains(name)
+            && !crate::superglobals::is_superglobal(name)
+            && !self.extern_globals.contains_key(name)
+        {
+            return PhpType::Mixed;
+        }
         let key = (self.loop_storage_scope.clone(), name.to_string());
         if let Some(required) = self.by_ref_local_storage_types.get(&key) {
             return required.clone();
@@ -1282,6 +1295,32 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_cell_owner_locals.get(variable).copied()
     }
 
+    /// Returns the physical representation of a local's referenced storage.
+    ///
+    /// A reference may be semantically narrowed after it aliases a `Mixed` array element (notably
+    /// a recursive closure assigned through `$array[]`). The hidden owner slot retains the cell's
+    /// original storage contract; using the current local type would write a raw callable pointer
+    /// into a cell that readers correctly interpret as a boxed Mixed value.
+    fn ref_cell_storage_type(&self, variable: &str, fallback: &PhpType) -> PhpType {
+        self.ref_cell_owner_slot(variable)
+            .map(|slot| self.builder.local_php_type(slot))
+            .unwrap_or_else(|| fallback.clone())
+    }
+
+    /// Returns the physical value representation a closure must use for a by-reference capture.
+    ///
+    /// A recursive closure benefits from a callable *logical* binding for call resolution, but a
+    /// captured array element can still be a `Mixed` ref-cell. The hidden closure ABI carries the
+    /// latter representation because its loads, stores, and cleanup operate directly on that cell.
+    pub(crate) fn ref_cell_capture_storage_type(&self, variable: &str) -> PhpType {
+        let fallback = self
+            .local_slots
+            .get(variable)
+            .map(|slot| self.builder.local_php_type(*slot))
+            .unwrap_or_else(|| self.local_type(variable));
+        self.ref_cell_storage_type(variable, &fallback)
+    }
+
     /// PHP-visible name of the body being lowered (`"Class::method"` for methods), as
     /// runtime error messages spell it.
     pub(crate) fn owner_name(&self) -> &str {
@@ -1430,7 +1469,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         };
         name != scope_param
-            && !self.local_slots.contains_key(name)
+            && !crate::globals_array::is_alias(name)
             && (self.eval_scope_read_names.contains(name)
                 || self.eval_scope_write_names.contains(name))
     }
@@ -1467,7 +1506,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(scope_param) = &self.eval_scope_read_param else {
             return false;
         };
-        name != scope_param && self.eval_scope_write_names.contains(name)
+        name != scope_param && !crate::globals_array::is_alias(name)
+            && self.eval_scope_write_names.contains(name)
     }
 
     /// Emits an `EvalScopeSet` for a selected eval-scope variable write.
@@ -1580,7 +1620,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         slot: LocalSlotId,
         span: Option<Span>,
     ) {
-        let storage_type = self.builder.local_php_type(slot);
+        // A by-reference local can retain a narrower logical type after its backing cell was
+        // promoted to Mixed storage. Cleanup must use that physical cell contract, just like
+        // loads and stores, or it can pass a Mixed box to the callable/object destructor.
+        let slot_type = self.builder.local_php_type(slot);
+        let storage_type = self.ref_cell_storage_type(name, &slot_type);
         if !Ownership::php_type_needs_lifetime_tracking(&storage_type) {
             return;
         }
@@ -1600,7 +1644,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         stored: LoweredValue,
         span: Option<Span>,
     ) {
-        let storage_type = self.builder.local_php_type(slot);
+        let slot_type = self.builder.local_php_type(slot);
+        let storage_type = self.ref_cell_storage_type(name, &slot_type);
         if !Ownership::php_type_needs_lifetime_tracking(&storage_type) {
             return;
         }
@@ -1643,7 +1688,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         stored: Option<LoweredValue>,
         span: Option<Span>,
     ) {
-        let storage_type = self.builder.local_php_type(slot);
+        let slot_type = self.builder.local_php_type(slot);
+        let storage_type = self.ref_cell_storage_type(name, &slot_type);
         if Ownership::php_type_needs_lifetime_tracking(&storage_type) {
             // `$acc = f($acc, …)`: when the callee hands one of its parameters back, the value
             // about to be stored IS the occupant we are about to release. Releasing it deeply
@@ -1788,6 +1834,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // Int→Mixed mid-function (which would break earlier loads that expect I64).
         // The codegen narrows Mixed→Int at the store point instead.
         let is_ref_bound = self.is_ref_bound_local(name);
+        let ref_cell_storage_type = is_ref_bound
+            .then(|| self.ref_cell_storage_type(name, &previous_type))
+            .unwrap_or_else(|| previous_type.clone());
         let widen_type = if is_ref_bound || preserve_storage_type {
             previous_type.clone()
         } else if matches!(php_type.codegen_repr(), PhpType::Void) {
@@ -1900,7 +1949,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 self.builder.value_php_type(value.value).codegen_repr(),
                 PhpType::Mixed
             );
-            let target_is_int = matches!(previous_type.codegen_repr(), PhpType::Int);
+            let target_is_int = matches!(ref_cell_storage_type.codegen_repr(), PhpType::Int);
             if !(source_is_mixed && target_is_int) {
                 crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
             } else {
@@ -1971,10 +2020,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 self.builder.value_php_type(value.value).codegen_repr(),
                 PhpType::Mixed
             )
-            && matches!(previous_type.codegen_repr(), PhpType::Int);
+            && matches!(ref_cell_storage_type.codegen_repr(), PhpType::Int);
         if is_ref_bound {
-            let value = self.box_typed_array_for_mixed_ref_cell(value, &previous_type, span);
-            self.store_ref_cell_slot(slot, value, previous_type.clone(), span);
+            let value = self.box_typed_array_for_mixed_ref_cell(value, &ref_cell_storage_type, span);
+            self.store_ref_cell_slot(slot, value, ref_cell_storage_type, span);
         } else {
             self.store_slot_with_op(slot, value, op, span);
         }
@@ -2325,6 +2374,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         null: LoweredValue,
         span: Option<Span>,
     ) -> LoweredValue {
+        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        let global_name = crate::globals_array::alias_target(name).unwrap_or(name);
+        if self.uses_global_storage(name, kind)
+            && !crate::superglobals::is_superglobal(global_name)
+            && !self.extern_globals.contains_key(global_name)
+        {
+            let data = self.intern_global_storage_name(name);
+            self.emit_void(
+                Op::UnsetGlobal, Vec::new(), Some(Immediate::GlobalName(data)),
+                Op::UnsetGlobal.default_effects(), span,
+            );
+            return null;
+        }
         let abandons_binding = span.is_some_and(|span| {
             span.identifies_a_node()
                 && self
@@ -2665,6 +2727,38 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
+    /// Rebinds a local at the executed global declaration, retaining both sides
+    /// until the new target is installed so old-value destruction cannot see
+    /// an intermediate dangling binding.
+    pub(crate) fn bind_global_local(&mut self, name: &str, span: Option<Span>) {
+        if self.in_main || crate::superglobals::is_superglobal(name) || self.extern_globals.contains_key(name) {
+            let ty = self.global_alias_type(name);
+            self.declare_local_with_kind(name, ty, LocalKind::GlobalAlias);
+            return;
+        }
+        let previous = self.local_slots.get(name).copied()
+            .filter(|slot| self.initialized_slots.contains(slot))
+            .map(|_| {
+                let value = self.load_local(name, span);
+                crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
+            });
+        let global = self.intern_global_storage_name(name);
+        let cell = self.emit_value(
+            Op::GlobalRefCell, Vec::new(), Some(Immediate::GlobalName(global)),
+            PhpType::Int, Op::GlobalRefCell.default_effects(), span,
+        );
+        self.bind_local_ref_cell_ptr(name, cell, PhpType::Mixed, span);
+        let owner = self.declare_ref_cell_owner(name, PhpType::Mixed);
+        self.emit_void(
+            Op::BindRefCellPtr, vec![cell.value], Some(Immediate::LocalSlot(owner)),
+            Op::BindRefCellPtr.default_effects(), span,
+        );
+        self.initialized_slots.insert(owner);
+        if let Some(previous) = previous {
+            crate::ir_lower::ownership::release_if_owned(self, previous, span);
+        }
+    }
+
     /// Binds one local name to the same ref-cell pointer as another local.
     pub(crate) fn alias_local_ref_cell(&mut self, target: &str, source: &str, span: Option<Span>) {
         if target == source {
@@ -2695,13 +2789,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 second: source_slot,
             }),
             IrType::Void,
-            source_ty,
+            source_ty.clone(),
             Ownership::NonHeap,
             Op::AliasLocalRefCell.default_effects(),
             span,
         );
         self.mark_ref_bound_local(target);
         self.initialized_slots.insert(target_slot);
+        let owner_slot = self.declare_ref_cell_owner(target, source_ty.clone());
+        self.builder.emit_with_effects(
+            Op::AliasLocalRefCell, Vec::new(),
+            Some(Immediate::LocalSlotPair { first: owner_slot, second: source_slot }),
+            IrType::Void, source_ty, Ownership::NonHeap,
+            Op::AliasLocalRefCell.default_effects(), span,
+        );
+        self.initialized_slots.insert(owner_slot);
     }
 
     /// Binds `target` as a NON-owning reference alias to an already-materialized ref-cell
@@ -3025,6 +3127,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 return_alias.may_alias_parameter(*parameter_index)
                     && !return_alias.proven_aliases_parameter(*parameter_index)
                     && self.call_result_may_alias_arg(**argument, result)
+                    // An owned argument that comes back unchanged transfers its reference
+                    // to the result: argument cleanup already skips that alias. Suppressing
+                    // result cleanup after a retaining store as well would leak the owner.
+                    && !self.value_is_owning_temporary(LoweredValue {
+                        value: **argument,
+                        ir_type: self.builder.value_type(**argument),
+                    })
             })
             .map(|(_, argument)| *argument)
     }

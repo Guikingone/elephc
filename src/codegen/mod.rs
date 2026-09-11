@@ -11,9 +11,12 @@
 
 mod aarch64_relax;
 mod block_emit;
+mod classlike_activation;
+mod source_units;
 pub(crate) mod callable_reachability;
 pub(crate) mod context;
 mod enum_singletons;
+mod eval_argument_owners;
 mod eval_callable_helpers;
 mod eval_class_constant_helpers;
 mod eval_constructor_helpers;
@@ -448,6 +451,19 @@ fn finalize_user_asm(
         module.target,
     );
 
+    let activation_names = classlike_activation::collect_activation_registry_names(module);
+    if module.required_runtime_features.class_introspection {
+        for name in &activation_names.interfaces {
+            data.add_comm(
+                crate::names::classlike_activation_symbol(
+                    crate::parser::ast::ClassLikeKind::Interface,
+                    name,
+                ),
+                8,
+            );
+        }
+    }
+
     let data_output = data.emit(module.target);
     let mut user_asm = emitter.output();
     if !data_output.is_empty() {
@@ -489,6 +505,18 @@ fn finalize_user_asm(
             &class_names,
             &interface_names,
             &trait_names,
+            &activation_names.interfaces,
+        ));
+    } else if module.required_runtime_features.eval_bridge {
+        // Eval-owned interface declarations are visible through the same
+        // request-active registry as AOT declarations. The eval bridge can
+        // call its interface lookup helper without an AOT class-introspection
+        // expression; emit only the two tables that helper needs.
+        let interface_names = sorted_lowercased_registry_names(module.interface_infos.keys());
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_interface_registry_data(
+            &interface_names,
+            &activation_names.interfaces,
         ));
     }
     if module.required_runtime_features.class_relation_introspection {

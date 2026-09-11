@@ -172,7 +172,7 @@ pub(super) fn collect_symbols(
                     canonical_name_for_decl(namespace.as_deref(), name),
                 );
             }
-            StmtKind::ExternClassDecl { name, .. } => {
+        StmtKind::ExternClassDecl { name, .. } => {
                 insert_folded_symbol(
                     &mut symbols.extern_classes,
                     canonical_name_for_decl(namespace.as_deref(), name),

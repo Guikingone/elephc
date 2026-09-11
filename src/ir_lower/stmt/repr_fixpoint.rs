@@ -487,7 +487,7 @@ impl<'a> ConversionScan<'a> {
                 self.mutation();
                 self.expr(path);
             }
-            StmtKind::IncludeOnceGuard { label: _, body } => {
+            StmtKind::IncludeOnceGuard { body, .. } => {
                 // A once-guard executes its body conditionally.
                 self.hiding();
                 self.mutation();
@@ -600,6 +600,7 @@ impl<'a> ConversionScan<'a> {
             | StmtKind::TraitDecl { .. }
             | StmtKind::ExternFunctionDecl { .. }
             | StmtKind::ExternClassDecl { .. }
+            | StmtKind::ClassLikeActivate { .. }
             | StmtKind::ExternGlobalDecl { .. } => {}
         }
     }

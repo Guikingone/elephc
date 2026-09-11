@@ -452,6 +452,7 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
     constructor_arg_container: Option<ValueId>,
     dummy_receiver_operand: ValueId,
     result: ValueId,
+    creation_line: u32,
 ) -> Result<()> {
     if candidate.class_name == "SplFixedArray" && constructor_arg_container.is_none() {
         return emit_dynamic_new_mixed_spl_fixed_array_candidate(
@@ -480,6 +481,10 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
     for default in &candidate.property_defaults {
         abi::emit_load_temporary_stack_slot(ctx.emitter, object_base_reg, 0);
         emit_property_default(ctx, object_base_reg, default)?;
+    }
+    if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+        throwable_new::emit_throwable_creation_site(ctx, object_reg, creation_line);
     }
     if let Some(constructor) = &candidate.constructor_impl {
         if let Some(arg_container) = constructor_arg_container {

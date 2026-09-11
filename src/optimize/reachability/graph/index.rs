@@ -237,6 +237,7 @@ impl DeclarationIndex {
                 StmtKind::ExternClassDecl { name, .. } => {
                     self.extern_classes.insert(php_symbol_key(name));
                 }
+                StmtKind::ClassLikeActivate { .. } => {}
                 StmtKind::ExternFunctionDecl { name, .. } => {
                     self.externs.insert(php_symbol_key(name));
                 }

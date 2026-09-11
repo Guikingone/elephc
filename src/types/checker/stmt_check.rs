@@ -195,6 +195,7 @@ impl Checker {
             | StmtKind::TraitDecl { .. } => Ok(()),
             StmtKind::ExternFunctionDecl { .. }
             | StmtKind::ExternClassDecl { .. }
+            | StmtKind::ClassLikeActivate { .. }
             | StmtKind::ExternGlobalDecl { .. } => Ok(()),
         }
     }

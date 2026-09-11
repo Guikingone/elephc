@@ -251,7 +251,9 @@ fn try_compile_source_to_asm_with_defines_repr(
     let ast = elephc::conditional::apply(ast, defines);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
-    let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
+    let (resolved, _, included_sources) =
+        elephc::resolver::resolve_collecting_includes_with_defines_and_sources(ast, dir, defines)
+            .expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::dom_prelude::inject(resolved);
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
@@ -350,10 +352,20 @@ fn try_compile_source_to_asm_with_defines_repr(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let mut ir_module =
-        lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
+    let source_catalog = elephc::ir::SourceCatalog::from_units(std::iter::once(elephc::resolver::SourceUnit {
+        canonical_path: synthetic_main.canonicalize().unwrap_or_else(|_| synthetic_main.clone()),
+        mode: elephc::source::SourceMode::Php,
+        source: std::sync::Arc::from(source),
+    }).chain(included_sources.source_units.into_values())
+      .chain(declaration_source_files.source_units.into_values()))
+        .expect("source snapshot merge failed");
+    let mut ir_module = lower_and_validate_ir_for_codegen_fixture(
+        &optimized, &check_result, &synthetic_main, source_catalog,
+    );
     ir_module.declared_class_source_files = declaration_source_files.class_likes;
     ir_module.declared_function_source_files = declaration_source_files.functions;
+    ir_module.declared_class_source_files.extend(included_sources.class_likes);
+    ir_module.declared_function_source_files.extend(included_sources.functions);
     if with_regex {
         ir_module.required_runtime_features.regex = true;
     }
@@ -391,12 +403,15 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
     source_path: &Path,
+    source_catalog: elephc::ir::SourceCatalog,
 ) -> elephc::ir::Module {
-    let mut module = elephc::ir_lower::lower_program_with_source_path(
+    let mut module = elephc::ir_lower::lower_program_with_source_catalog(
         program,
         check_result,
         target(),
         source_path,
+        false,
+        source_catalog,
     )
         .expect("AST-to-EIR lowering failed for codegen fixture");
     if ir_opt_enabled_for_codegen_fixture() {

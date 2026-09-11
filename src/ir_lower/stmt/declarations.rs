@@ -116,10 +116,9 @@ pub(super) fn normalize_array_write_element_type(item_type: PhpType) -> PhpType 
 }
 
 /// Declares global aliases in the local slot table.
-pub(super) fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String]) {
+pub(super) fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String], span: Span) {
     for var in vars {
-        let php_type = ctx.global_alias_type(var);
-        ctx.declare_local_with_kind(var, php_type, LocalKind::GlobalAlias);
+        ctx.bind_global_local(var, Some(span));
     }
 }
 

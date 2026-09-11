@@ -259,7 +259,7 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
         StmtKind::Include { path, once: _, required: _ } => count_expr(path, tally),
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { name: _, body }
-        | StmtKind::IncludeOnceGuard { label: _, body } => count_block(body, tally),
+        | StmtKind::IncludeOnceGuard { body, .. } => count_block(body, tally),
         StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
             count_expr(condition, tally);
             count_block(body, tally);
@@ -347,12 +347,13 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
         // Externs are C declarations: types and names, never PHP statements.
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }
         // Leaves: no sub-statements and no sub-expressions.
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::Global { vars: _ }
-        | StmtKind::IncludeOnceMark { label: _ }
+        | StmtKind::IncludeOnceMark { .. }
         | StmtKind::NamespaceDecl { name: _ }
         | StmtKind::UseDecl { imports: _ }
         // Variant groups/marks carry function NAMES; the bodies live in their own `FunctionDecl`s.

@@ -93,6 +93,12 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
 ];
 const BUILTIN_THROWABLE_GET_MESSAGE_LABEL: &str = "__elephc_eval_builtin_throwable_getmessage";
 const BUILTIN_THROWABLE_GET_CODE_LABEL: &str = "__elephc_eval_builtin_throwable_getcode";
+const BUILTIN_THROWABLE_SCALAR_GETTERS: &[(&str, &str, usize, bool)] = &[
+    ("getmessage", BUILTIN_THROWABLE_GET_MESSAGE_LABEL, 8, true),
+    ("getcode", BUILTIN_THROWABLE_GET_CODE_LABEL, 24, false),
+    ("getfile", "__elephc_eval_builtin_throwable_getfile", crate::codegen_support::throwable_layout::FILE_OFFSET, true),
+    ("getline", "__elephc_eval_builtin_throwable_getline", crate::codegen_support::throwable_layout::LINE_OFFSET, false),
+];
 const METHOD_HELPER_BASE_FRAME_SIZE: usize = 80;
 const METHOD_HELPER_HANDLER_OFFSET: usize = METHOD_HELPER_BASE_FRAME_SIZE;
 const METHOD_HELPER_FRAME_SIZE: usize = METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
@@ -498,11 +504,14 @@ fn emit_static_method_call_aarch64(
 ) {
     let fail_label = "__elephc_eval_value_static_method_call_fail";
     let done_label = "__elephc_eval_value_static_method_call_done";
+    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0);
+    let frame_size = super::eval_argument_owners::frame_size(emitter, STATIC_METHOD_HELPER_FRAME_SIZE, owner_count);
     emitter.instruction(
-        &format!("sub sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)
+        &format!("sub sp, sp, #{}", frame_size)
     );                                                                          // reserve helper frame plus a boundary exception handler
     emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #64");                                    // establish a stable helper frame pointer
+    super::eval_argument_owners::initialize(emitter, owner_count);
     emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
     emitter.instruction("str x2, [sp, #16]");                                   // save the requested method-name pointer
@@ -525,9 +534,10 @@ fn emit_static_method_call_aarch64(
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
+    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the Rust caller frame
     emitter.instruction(
-        &format!("add sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)
+        &format!("add sp, sp, #{}", frame_size)
     );                                                                          // release the helper frame and boundary handler
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
 }
@@ -542,11 +552,14 @@ fn emit_static_method_call_x86_64(
 ) {
     let fail_label = "__elephc_eval_value_static_method_call_fail_x";
     let done_label = "__elephc_eval_value_static_method_call_done_x";
+    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0);
+    let frame_size = super::eval_argument_owners::frame_size(emitter, STATIC_METHOD_HELPER_FRAME_SIZE, owner_count);
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction(
-        &format!("sub rsp, {}", STATIC_METHOD_HELPER_FRAME_SIZE)
+        &format!("sub rsp, {}", frame_size)
     );                                                                          // reserve aligned slots plus a boundary exception handler
+    super::eval_argument_owners::initialize(emitter, owner_count);
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested method-name pointer
@@ -571,6 +584,8 @@ fn emit_static_method_call_x86_64(
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
+    emitter.instruction(&format!("lea rsp, [rbp - {}]", frame_size));           // restore the full frame before releasing argument reader owners
+    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
@@ -601,9 +616,12 @@ fn emit_method_call_aarch64(
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail";
     let done_label = "__elephc_eval_value_method_call_done";
-    emitter.instruction(&format!("sub sp, sp, #{}", METHOD_HELPER_FRAME_SIZE)); // reserve helper frame plus a boundary exception handler
+    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0);
+    let frame_size = super::eval_argument_owners::frame_size(emitter, METHOD_HELPER_FRAME_SIZE, owner_count);
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // reserve helper frame plus a boundary exception handler and argument owners
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
+    super::eval_argument_owners::initialize(emitter, owner_count);
     emitter.instruction("str x1, [sp, #0]");                                    // save the requested method-name pointer
     emitter.instruction("str x2, [sp, #8]");                                    // save the requested method-name length
     emitter.instruction("str x3, [sp, #24]");                                   // save the boxed eval argument array
@@ -636,8 +654,9 @@ fn emit_method_call_aarch64(
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
+    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
-    emitter.instruction(&format!("add sp, sp, #{}", METHOD_HELPER_FRAME_SIZE)); // release the helper frame and boundary handler
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // release the helper frame, boundary handler and argument owners
     emitter.instruction("ret");                                                 // return the boxed method result to Rust
 }
 
@@ -652,9 +671,12 @@ fn emit_method_call_x86_64(
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail_x";
     let done_label = "__elephc_eval_value_method_call_done_x";
+    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0);
+    let frame_size = super::eval_argument_owners::frame_size(emitter, METHOD_HELPER_FRAME_SIZE, owner_count);
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction(&format!("sub rsp, {}", METHOD_HELPER_FRAME_SIZE));     // reserve aligned slots plus a boundary exception handler
+    emitter.instruction(&format!("sub rsp, {}", frame_size));                   // reserve aligned slots plus a boundary exception handler and argument owners
+    super::eval_argument_owners::initialize(emitter, owner_count);
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested method-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested method-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed eval argument array
@@ -690,6 +712,8 @@ fn emit_method_call_x86_64(
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
+    emitter.instruction(&format!("lea rsp, [rbp - {}]", frame_size));           // restore the full frame before releasing argument reader owners
+    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed method result to Rust
@@ -929,20 +953,9 @@ fn emit_aarch64_builtin_throwable_method_dispatch(
         abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this builtin Throwable class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next builtin Throwable class when ids differ
-        emit_aarch64_builtin_throwable_method_name_branch(
-            module,
-            emitter,
-            data,
-            "getmessage",
-            BUILTIN_THROWABLE_GET_MESSAGE_LABEL,
-        );
-        emit_aarch64_builtin_throwable_method_name_branch(
-            module,
-            emitter,
-            data,
-            "getcode",
-            BUILTIN_THROWABLE_GET_CODE_LABEL,
-        );
+        for (method, label, _, _) in BUILTIN_THROWABLE_SCALAR_GETTERS {
+            emit_aarch64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
         emitter.label(&next_label);
     }
 }
@@ -961,20 +974,9 @@ fn emit_x86_64_builtin_throwable_method_dispatch(
         abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this builtin Throwable class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next builtin Throwable class when ids differ
-        emit_x86_64_builtin_throwable_method_name_branch(
-            module,
-            emitter,
-            data,
-            "getmessage",
-            BUILTIN_THROWABLE_GET_MESSAGE_LABEL,
-        );
-        emit_x86_64_builtin_throwable_method_name_branch(
-            module,
-            emitter,
-            data,
-            "getcode",
-            BUILTIN_THROWABLE_GET_CODE_LABEL,
-        );
+        for (method, label, _, _) in BUILTIN_THROWABLE_SCALAR_GETTERS {
+            emit_x86_64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
         emitter.label(&next_label);
     }
 }
@@ -1225,23 +1227,20 @@ fn emit_aarch64_builtin_throwable_method_bodies(
     done_label: &str,
     fail_label: &str,
 ) {
-    emitter.label(BUILTIN_THROWABLE_GET_MESSAGE_LABEL);
-    emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for getMessage()
-    emitter.instruction("ldr x1, [x9, #8]");                                    // load Throwable message pointer
-    emitter.instruction("ldr x2, [x9, #16]");                                   // load Throwable message length
-    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable message as a Mixed string
-    emitter.instruction(&format!("b {}", done_label));                          // return the boxed Throwable method result
-
-    emitter.label(BUILTIN_THROWABLE_GET_CODE_LABEL);
-    emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for getCode()
-    emitter.instruction("ldr x1, [x9, #24]");                                   // load Throwable integer code
-    emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
-    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable code as a Mixed integer
-    emitter.instruction(&format!("b {}", done_label));                          // return the boxed Throwable method result
+    for (_, label, offset, string_field) in BUILTIN_THROWABLE_SCALAR_GETTERS {
+        emitter.label(label);
+        emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+        emitter.instruction("ldr x9, [sp, #16]");                               // reload the Throwable receiver before reading its declared property
+        abi::emit_load_from_address(emitter, "x1", "x9", *offset);
+        if *string_field {
+            abi::emit_load_from_address(emitter, "x2", "x9", offset + 8);
+        } else {
+            abi::emit_load_int_immediate(emitter, "x2", 0);
+        }
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::from(*string_field));
+        abi::emit_call_label(emitter, "__rt_mixed_from_value");
+        abi::emit_jump(emitter, done_label);
+    }
 }
 
 /// Emits x86_64 bodies for compact Throwable methods used by eval.
@@ -1251,23 +1250,20 @@ fn emit_x86_64_builtin_throwable_method_bodies(
     done_label: &str,
     fail_label: &str,
 ) {
-    emitter.label(BUILTIN_THROWABLE_GET_MESSAGE_LABEL);
-    emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for getMessage()
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // load Throwable message pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // load Throwable message length
-    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
-    emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable message as a Mixed string
-    emitter.instruction(&format!("jmp {}", done_label));                        // return the boxed Throwable method result
-
-    emitter.label(BUILTIN_THROWABLE_GET_CODE_LABEL);
-    emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for getCode()
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 24]");                       // load Throwable integer code
-    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
-    emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer
-    emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable code as a Mixed integer
-    emitter.instruction(&format!("jmp {}", done_label));                        // return the boxed Throwable method result
+    for (_, label, offset, string_field) in BUILTIN_THROWABLE_SCALAR_GETTERS {
+        emitter.label(label);
+        emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+        emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                   // reload the Throwable receiver before reading its declared property
+        abi::emit_load_from_address(emitter, "rdi", "r10", *offset);
+        if *string_field {
+            abi::emit_load_from_address(emitter, "rsi", "r10", offset + 8);
+        } else {
+            abi::emit_load_int_immediate(emitter, "rsi", 0);
+        }
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::from(*string_field));
+        abi::emit_call_label(emitter, "__rt_mixed_from_value");
+        abi::emit_jump(emitter, done_label);
+    }
 }
 
 /// Emits ARM64 zero-argument validation for compact Throwable eval methods.
@@ -1321,6 +1317,7 @@ fn emit_aarch64_method_bodies(
                 callable_support,
             );
         let escape_label = format!("{}_escape", body_label);
+        super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
         emit_aarch64_method_exception_boundary_push(
             emitter,
             METHOD_HELPER_HANDLER_OFFSET - 48,
@@ -1380,6 +1377,7 @@ fn emit_x86_64_method_bodies(
                 callable_support,
             );
         let escape_label = format!("{}_escape_x", body_label);
+        super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
         emit_x86_64_method_exception_boundary_push(emitter, METHOD_HELPER_FRAME_SIZE, &escape_label);
         let receiver_ty = PhpType::Object(slot.class_name.clone());
         let overflow_bytes =
@@ -1435,6 +1433,7 @@ fn emit_aarch64_static_method_bodies(
                 callable_support,
             );
         let escape_label = format!("{}_escape", body_label);
+        super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
         emit_aarch64_method_exception_boundary_push(
             emitter,
             STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
@@ -1497,6 +1496,7 @@ fn emit_x86_64_static_method_bodies(
                 callable_support,
             );
         let escape_label = format!("{}_escape_x", body_label);
+        super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
         emit_x86_64_method_exception_boundary_push(
             emitter,
             STATIC_METHOD_HELPER_FRAME_SIZE,
@@ -1650,6 +1650,7 @@ fn emit_aarch64_prepare_method_args(
                 fail_label,
                 callable_support,
             );
+            super::eval_argument_owners::record_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1702,6 +1703,7 @@ fn emit_aarch64_prepare_static_method_args(
                 fail_label,
                 callable_support,
             );
+            super::eval_argument_owners::record_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1756,6 +1758,7 @@ fn emit_x86_64_prepare_method_args(
                 callable_support,
                 X86_64_METHOD_CONTEXT_FRAME_OFFSET,
             );
+            super::eval_argument_owners::record_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1809,6 +1812,7 @@ fn emit_x86_64_prepare_static_method_args(
                 callable_support,
                 X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET,
             );
+            super::eval_argument_owners::record_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1966,6 +1970,11 @@ fn emit_aarch64_load_eval_arg(
         &format!("ldr x0, [x29, #-{}]", arg_array_frame_offset)
     );                                                                          // pass the eval argument array to the reader
     abi::emit_call_label(emitter, &array_get_symbol);
+    abi::emit_push_reg(emitter, "x0");
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // release the temporary index borrowed by the array reader
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_pop_reg(emitter, "x0");
+    super::eval_argument_owners::record(emitter, index);
     emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed eval argument for coercion
 }
 
@@ -1979,6 +1988,11 @@ fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usiz
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the boxed index to the eval array reader
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the eval argument array to the reader
     abi::emit_call_label(emitter, &array_get_symbol);
+    abi::emit_push_reg(emitter, "rax");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // release the temporary index borrowed by the array reader
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_pop_reg(emitter, "rax");
+    super::eval_argument_owners::record(emitter, index);
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed eval argument for coercion
 }
 
@@ -2068,14 +2082,16 @@ fn emit_aarch64_cast_eval_object_arg(
     class_name: &str,
     fail_label: &str,
 ) {
-    let (label, len) = data.add_string(class_name.as_bytes());
-    let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
-    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object type validation
-    abi::emit_symbol_address(emitter, "x1", &label);
-    abi::emit_load_int_immediate(emitter, "x2", len as i64);
-    emitter.instruction("mov x3, xzr");                                         // allow exact class matches for object type hints
-    abi::emit_call_label(emitter, &is_a_symbol);
-    emit_aarch64_branch_if_zero_far(emitter, "x0", fail_label);
+    if !class_name.is_empty() {
+        let (label, len) = data.add_string(class_name.as_bytes());
+        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        emitter.instruction("ldr x0, [x29, #-16]");                             // reload the boxed eval argument for named object type validation
+        abi::emit_symbol_address(emitter, "x1", &label);
+        abi::emit_load_int_immediate(emitter, "x2", len as i64);
+        emitter.instruction("mov x3, xzr");                                     // allow exact class matches for named object type hints
+        abi::emit_call_label(emitter, &is_a_symbol);
+        emit_aarch64_branch_if_zero_far(emitter, "x0", fail_label);
+    }
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the object payload for the native method call
     emitter.instruction("cmp x0, #6");                                          // object type hints require an object payload, not a class string
@@ -2249,15 +2265,17 @@ fn emit_x86_64_cast_eval_object_arg(
     class_name: &str,
     fail_label: &str,
 ) {
-    let (label, len) = data.add_string(class_name.as_bytes());
-    let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for object type validation
-    abi::emit_symbol_address(emitter, "rsi", &label);
-    abi::emit_load_int_immediate(emitter, "rdx", len as i64);
-    emitter.instruction("xor ecx, ecx");                                        // allow exact class matches for object type hints
-    abi::emit_call_label(emitter, &is_a_symbol);
-    emitter.instruction("test rax, rax");                                       // check whether the value satisfied the object type hint
-    emitter.instruction(&format!("je {}", fail_label));                         // reject values that fail the object type hint
+    if !class_name.is_empty() {
+        let (label, len) = data.add_string(class_name.as_bytes());
+        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                   // reload the boxed eval argument for named object type validation
+        abi::emit_symbol_address(emitter, "rsi", &label);
+        abi::emit_load_int_immediate(emitter, "rdx", len as i64);
+        emitter.instruction("xor ecx, ecx");                                    // allow exact class matches for named object type hints
+        abi::emit_call_label(emitter, &is_a_symbol);
+        emitter.instruction("test rax, rax");                                   // check whether the value satisfied the named object type hint
+        emitter.instruction(&format!("je {}", fail_label));                     // reject values that fail the named object type hint
+    }
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for object unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // expose the object payload for the native method call
     emitter.instruction("cmp rax, 6");                                          // object type hints require an object payload, not a class string

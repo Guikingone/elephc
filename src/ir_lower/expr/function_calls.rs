@@ -11,6 +11,7 @@ use super::*;
 
 /// Lowers a direct function, builtin, or extern call.
 pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
+    super::late_bound_call::guard_runtime_function_binding(ctx, name.as_str(), expr);
     constants::register_static_define_call(ctx, name, args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;

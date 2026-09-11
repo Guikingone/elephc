@@ -12,6 +12,9 @@ use crate::ir_lower::ownership;
 
 /// Lowers first-class callable creation.
 pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
+    if let CallableTarget::Function(name) = target {
+        super::late_bound_call::guard_runtime_function_binding(ctx, name.as_str(), expr);
+    }
     let operands = match target {
         CallableTarget::Method { object, method } => {
             let receiver = lower_expr(ctx, object);

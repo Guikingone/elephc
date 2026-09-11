@@ -131,7 +131,11 @@ pub(super) fn lower_closure_with_context(
             (lower_null(ctx, expr), PhpType::Mixed)
         } else {
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
-                Some(PhpType::Callable)
+                // Recursive call resolution is seeded separately in the closure body. Its hidden
+                // capture parameter must instead retain the backing reference cell's physical
+                // representation: a reference stored in an array often owns a Mixed box even
+                // though the recursive local is logically callable.
+                Some(ctx.ref_cell_capture_storage_type(capture))
             } else if by_ref && body_contains_eval {
                 ctx.set_local_type(capture, PhpType::Mixed);
                 Some(PhpType::Mixed)
@@ -399,6 +403,7 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
     }
 }
@@ -721,6 +726,7 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
     }
 }

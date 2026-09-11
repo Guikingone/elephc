@@ -17,6 +17,7 @@ mod function;
 pub(crate) mod function_variants;
 mod instr;
 mod module;
+mod source_units;
 mod print;
 mod runtime_call;
 mod types;
@@ -46,6 +47,7 @@ pub use module::{
     Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use print::{print_function, print_module};
+pub use source_units::{SourceCatalog, SourceId};
 pub use runtime_call::{
     ArrayKeySort, RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime,
 };

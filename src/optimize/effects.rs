@@ -235,6 +235,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => Effect::PURE,
+        StmtKind::ClassLikeActivate { .. } => Effect::PURE.with_side_effects().with_may_throw().with_writes_globals(),
         StmtKind::FunctionVariantGroup { .. } => Effect::PURE,
         StmtKind::FunctionVariantMark { .. } => Effect::PURE.with_side_effects(),
         StmtKind::Include { .. } => Effect::PURE.with_side_effects().with_may_throw(),

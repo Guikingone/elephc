@@ -592,6 +592,7 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
             value,
             ..
         } => expr_refs_image(object) || expr_refs_image(index) || expr_refs_image(value),
+        StmtKind::ClassLikeActivate { .. } => false,
     }
 }
 

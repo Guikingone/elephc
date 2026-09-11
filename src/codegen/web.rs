@@ -7,7 +7,7 @@
 //! properties (their initializers re-run in the handler body and restore the
 //! defaults), releases and zeroes ordinary globals plus request superglobals
 //! ($_SERVER/$_GET/$_POST) that survive between requests, and resets the
-//! dynamic include-once bookkeeping, and the concat-buffer write offset.
+//! native and dynamic include-once bookkeeping, and the concat-buffer write offset.
 //!
 //! Called from:
 //! - `crate::codegen::block_emit::emit_module()`, after every function and the
@@ -31,9 +31,115 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::ir::Module;
-use crate::names::{ir_global_symbol, static_property_symbol};
+use crate::names::{classlike_activation_symbol, ir_global_symbol, static_property_symbol};
+use std::collections::BTreeSet;
 use crate::superglobals;
 use crate::types::PhpType;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{AppleVariant, Platform, Target};
+    use crate::ir::{Builder, Function, Immediate, IrType, Op, Ownership};
+
+    #[test]
+    fn native_include_reset_covers_catalog_cells_without_native_instructions() {
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let path = std::path::PathBuf::from("/dynamic-only.php");
+        let catalog = crate::ir::SourceCatalog::from_units([crate::resolver::SourceUnit {
+            canonical_path: path.clone(), mode: crate::source::SourceMode::Php, source: "<?php".into(),
+        }]).unwrap();
+        let module = Module::with_source_catalog(target, catalog);
+        let mut data = DataSection::new();
+        let symbol = super::super::source_units::include_guard_symbol(&path);
+        data.add_comm(symbol.clone(), 8);
+        let mut emitter = Emitter::new(target);
+        emit_web_reset(&mut emitter, &module, &data);
+        let asm = emitter.output();
+        assert!(asm.find(&symbol).unwrap() < asm.find("_heap_off").unwrap());
+    }
+
+    #[test]
+    fn native_include_guards_reset_without_eval_bridge() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+            Target { apple_variant: AppleVariant::IOS, ..Target::new(Platform::MacOS, Arch::AArch64) },
+            Target { apple_variant: AppleVariant::IOSSimulator, ..Target::new(Platform::MacOS, Arch::AArch64) },
+        ] {
+            let path = std::path::PathBuf::from("/fixture/module.php");
+            let symbol = super::super::source_units::include_guard_symbol(&path);
+            let catalog = crate::ir::SourceCatalog::from_units([crate::resolver::SourceUnit {
+                canonical_path: path.clone(), mode: crate::source::SourceMode::Php, source: "<?php".into(),
+            }]).unwrap();
+            let id = catalog.id_for_path(&path).unwrap();
+            let mut module = Module::with_source_catalog(target, catalog);
+            let mut function = Function::new("included".into(), IrType::Void, PhpType::Void);
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.emit(Op::IncludeOnceMark, vec![], Some(Immediate::Source(id)),
+                IrType::Void, PhpType::Void, Ownership::NonHeap);
+            // A method-only include must participate too, not just the entry body.
+            module.class_methods.push(function);
+            let mut data = DataSection::new();
+            data.add_comm(symbol.clone(), 8);
+            data.add_comm("_include_once_unrelated".into(), 8);
+            let mut emitter = Emitter::new(target);
+            emit_web_reset(&mut emitter, &module, &data);
+            let asm = emitter.output();
+            assert!(!asm.contains("__elephc_eval_include_request_reset"));
+            assert!(!asm.contains("_include_once_unrelated"));
+            let guard = asm.find(&symbol).expect("native guard must reset");
+            assert!(guard < asm.find("_heap_off").unwrap());
+        }
+    }
+
+    #[test]
+    fn compiled_interface_activation_cells_reset_before_heap() {
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let catalog = crate::ir::SourceCatalog::from_units([crate::resolver::SourceUnit {
+            canonical_path: "/fixture/interface.php".into(),
+            mode: crate::source::SourceMode::Php,
+            source: "<?php".into(),
+        }])
+        .unwrap();
+        let mut module = Module::with_source_catalog(target, catalog);
+        let name = module.data.intern_string("Fixture\\Probe");
+        let mut function = Function::new("main".into(), IrType::Void, PhpType::Void);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.emit(
+            Op::ClassLikeActivate,
+            vec![],
+            Some(Immediate::ClassLikeActivation {
+                source: crate::ir::SourceId::from_raw(0),
+                site: crate::span::Span::dummy(),
+                kind: crate::parser::ast::ClassLikeKind::Interface,
+                name,
+            }),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.terminate(crate::ir::Terminator::Return { value: None });
+        module.add_function(function);
+        let cell = crate::names::classlike_activation_symbol(
+            crate::parser::ast::ClassLikeKind::Interface,
+            "Fixture\\Probe",
+        );
+        let mut data = DataSection::new();
+        data.add_comm(cell.clone(), 8);
+        let mut emitter = Emitter::new(target);
+        emit_web_reset(&mut emitter, &module, &data);
+        let asm = emitter.output();
+        assert!(asm.find(&cell).unwrap() < asm.find("_heap_off").unwrap());
+    }
+}
 
 /// Minimal frame: just the x29/x30 footer (AArch64) or `push rbp` (x86_64),
 /// which keeps the stack 16-byte aligned across the runtime helper calls.
@@ -87,7 +193,11 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
             && !module.extern_globals.contains_key(name)
             && data.has_comm(&symbol)
         {
-            emit_ordinary_global_reset(emitter, &symbol, &mut labels);
+            if superglobals::uses_shared_ref_cell(module, name) {
+                emit_shared_superglobal_reset(emitter, &symbol, &mut labels);
+            } else {
+                emit_ordinary_global_reset(emitter, &symbol, &mut labels);
+            }
         }
     }
     // Request superglobals ($_SERVER/$_GET/$_POST) live in `_eir_global_*` symbol
@@ -108,6 +218,8 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
             .extern_symbol("__elephc_eval_include_request_reset");
         abi::emit_call_label(emitter, &symbol);
     }
+    emit_native_include_resets(emitter, module, data);
+    emit_native_classlike_activation_resets(emitter, module, data);
 
     // Clear every lazy enum case slot so request N+1 re-materializes its cases on
     // demand instead of reusing request N's object. This keeps the pre-existing
@@ -130,6 +242,65 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);
     abi::emit_return(emitter);
+}
+
+/// Clears request-active compiled interface bindings after PHP-visible cleanup.
+///
+/// Discovery metadata remains immutable, but the cells consulted by existence
+/// queries must not leak declaration activation from request N into request N+1.
+fn emit_native_classlike_activation_resets(
+    emitter: &mut Emitter,
+    module: &Module,
+    data: &DataSection,
+) {
+    let mut cells = BTreeSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for instruction in &function.instructions {
+            let Some(crate::ir::Immediate::ClassLikeActivation { kind, name, .. }) =
+                &instruction.immediate
+            else {
+                continue;
+            };
+            if *kind != crate::parser::ast::ClassLikeKind::Interface {
+                continue;
+            }
+            let Some(name) = module.data.strings.get(name.as_raw() as usize) else {
+                continue;
+            };
+            let cell = classlike_activation_symbol(*kind, name);
+            if data.has_comm(&cell) {
+                cells.insert(cell);
+            }
+        }
+    }
+    if cells.is_empty() {
+        return;
+    }
+    emitter.comment("reset request-active compiled interface bindings");
+    let zero = abi::temp_int_reg(emitter.target);
+    abi::emit_load_int_immediate(emitter, zero, 0);
+    for cell in cells {
+        abi::emit_store_reg_to_symbol(emitter, zero, &cell, 0);
+    }
+}
+
+/// Clears emitted once guards after PHP-visible cleanup, including native-only builds.
+/// The catalog includes cells accessed only through the native lookup callback too.
+fn emit_native_include_resets(emitter: &mut Emitter, module: &Module, data: &DataSection) {
+    if let Some(catalog) = module.source_catalog() {
+        for (_, source) in catalog.iter() {
+            let label = super::source_units::include_guard_symbol(&source.canonical_path);
+            if data.has_comm(&label) { abi::emit_store_zero_to_symbol(emitter, &label, 0); }
+        }
+    }
 }
 
 /// Resets the PHP heap arena to a pristine bump-only state: `_heap_off = 0`, an empty
@@ -267,15 +438,11 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
     abi::emit_load_int_immediate(emitter, scratch, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(
-                &format!("cmp {}, {}", abi::int_result_reg(emitter), scratch)
-            );                                                                  // compare the property marker against the uninitialized sentinel
+            emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), scratch)); // compare the property marker against the uninitialized sentinel
             emitter.instruction(&format!("b.eq {}", label));                    // skip the release when the property was never written
         }
         Arch::X86_64 => {
-            emitter.instruction(
-                &format!("cmp {}, {}", abi::int_result_reg(emitter), scratch)
-            );                                                                  // compare the property marker against the uninitialized sentinel
+            emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), scratch)); // compare the property marker against the uninitialized sentinel
             emitter.instruction(&format!("je {}", label));                      // skip the release when the property was never written
         }
     }

@@ -374,6 +374,15 @@ pub(super) fn property_get_result_type(
             property_ty
         };
     }
+    if !property_is_accessible_for_ir(ctx, normalized, class_info, property) {
+        if let Some(magic_ty) = magic_get_result_type(ctx, normalized) {
+            return if nullable {
+                nullable_result_type(magic_ty)
+            } else {
+                magic_ty
+            };
+        }
+    }
     let Some((_, (_, property_ty))) = class_info.visible_property(property) else {
         if let Some(magic_ty) = magic_get_result_type(ctx, normalized) {
             return if nullable {

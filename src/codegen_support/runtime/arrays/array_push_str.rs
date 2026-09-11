@@ -11,6 +11,27 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+/// Recounts existing backing bytes as sixteen-byte slots before changing stride.
+/// The array must be empty and uniquely owned; its pointer stays in x0/rax.
+pub(super) fn emit_empty_string_capacity(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x10, [x0, #16]");                          // load the old element width before specializing storage
+            emitter.instruction("ldr x11, [x0, #8]");                           // load capacity expressed in old-width slots
+            emitter.instruction("mul x11, x11, x10");                           // recover the number of allocated backing bytes
+            emitter.instruction("lsr x11, x11, #4");                            // count only complete sixteen-byte string slots
+            emitter.instruction("str x11, [x0, #8]");                           // force growth before a string write exceeds the original allocation
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the old element width before specializing storage
+            emitter.instruction("mov r11, QWORD PTR [rax + 8]");                // load capacity expressed in old-width slots
+            emitter.instruction("imul r11, r10");                               // recover the number of allocated backing bytes
+            emitter.instruction("shr r11, 4");                                  // count only complete sixteen-byte string slots
+            emitter.instruction("mov QWORD PTR [rax + 8], r11");                // force growth before a string write exceeds the original allocation
+        }
+    }
+}
+
 /// Emits the `__rt_array_push_str` runtime helper for appending a string element to a PHP array.
 /// Input:  x0 = array pointer, x1 = string ptr, x2 = string len (ARM64 convention).
 /// Output: x0 = array pointer (may differ if the array was reallocated during growth).
@@ -48,11 +69,7 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     // -- specialize freshly empty arrays to 16-byte string slots --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length before first-write specialization
     emitter.instruction("cbnz x9, __rt_array_push_str_shape_ready");            // existing arrays already have their element shape fixed
-    emitter.instruction("ldr x10, [x0, #16]");                                  // x10 = old elem_size (8 for empty array<never> buffers, 16 for string buffers)
-    emitter.instruction("ldr x11, [x0, #8]");                                   // x11 = old capacity counted in old-elem_size slots
-    emitter.instruction("mul x11, x11, x10");                                   // x11 = backing-store data bytes already reserved by __rt_array_new
-    emitter.instruction("lsr x11, x11, #4");                                    // reinterpret the same bytes as 16-byte string slots so capacity matches the buffer
-    emitter.instruction("str x11, [x0, #8]");                                   // publish slot-accurate capacity so an 8-byte-sized buffer grows before a 16-byte slot overflows it
+    emit_empty_string_capacity(emitter);
     emitter.instruction("mov x10, #16");                                        // string append slots carry pointer and length
     emitter.instruction("str x10, [x0, #16]");                                  // elem_size = 16 before any future grow copies live string slots
     emitter.instruction("ldr x10, [x0, #-8]");                                  // load packed array metadata for value_type stamping
@@ -121,11 +138,7 @@ fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load length before first-write string shape specialization
     emitter.instruction("test r10, r10");                                       // is this the first append into a freshly empty indexed array?
     emitter.instruction("jnz __rt_array_push_str_shape_ready");                 // existing arrays already have their element shape fixed
-    emitter.instruction("mov r10, QWORD PTR [rax + 16]");                       // r10 = old elem_size (8 for empty array<never> buffers, 16 for string buffers)
-    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // r11 = old capacity counted in old-elem_size slots
-    emitter.instruction("imul r11, r10");                                       // r11 = backing-store data bytes already reserved by __rt_array_new
-    emitter.instruction("shr r11, 4");                                          // reinterpret the same bytes as 16-byte string slots so capacity matches the buffer
-    emitter.instruction("mov QWORD PTR [rax + 8], r11");                        // publish slot-accurate capacity so an 8-byte-sized buffer grows before a 16-byte slot overflows it
+    emit_empty_string_capacity(emitter);
     emitter.instruction("mov QWORD PTR [rax + 16], 16");                        // elem_size = 16 before any future growth copies live string slots
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load packed indexed-array metadata for value_type stamping
     emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap marker, indexed-array kind, and persistent COW metadata

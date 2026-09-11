@@ -40,7 +40,7 @@ pub(super) fn eval_indexed_array(
         let (value, owned, target) = match element {
             EvalArrayElement::Value(element) => (
                 eval_expr(element, context, scope, values)?,
-                eval_expr_is_owning_temporary(element),
+                !expressions::eval_expr_result_aliases_storage(element),
                 None,
             ),
             EvalArrayElement::Reference(element) => {
@@ -53,11 +53,20 @@ pub(super) fn eval_indexed_array(
                 return Err(EvalStatus::UnsupportedConstruct);
             }
         };
-        array = values.array_set(array, index, value)?;
-        settle_stored_array_element(value, owned, values)?;
-        if let Some(target) = target {
-            bind_array_element_reference(context, array, index, target, values)?;
-        }
+        let stored = values.array_set(array, index, value);
+        let settled = settle_stored_array_element(value, owned, values);
+        let bound = match (stored, target) {
+            (Ok(stored), Some(target)) => {
+                bind_array_element_reference(context, stored, index, target, values)
+            }
+            _ => Ok(()),
+        };
+        // Integer keys are fresh boxed cells; neither insertion nor reference binding owns them.
+        let released_key = values.release(index);
+        array = stored?;
+        settled?;
+        bound?;
+        released_key?;
     }
     Ok(array)
 }
@@ -143,6 +152,15 @@ pub(super) fn eval_assoc_array(
         if let Some(target) = target {
             bind_array_element_reference(context, array, key, target, values)?;
         }
+        if let EvalArrayElement::KeyValue { key: key_expr, .. }
+            | EvalArrayElement::KeyReference { key: key_expr, .. } = element
+        {
+            // Like indexed-literal keys, explicit literal keys are borrowed by
+            // insertion and reference binding; their fresh cell remains ours.
+            if eval_expr_is_owning_temporary(key_expr) {
+                values.release(key)?;
+            }
+        }
     }
     Ok(array)
 }
@@ -165,21 +183,55 @@ fn eval_spread_into_array(
     let source = eval_expr(operand, context, scope, values)?;
     let source_owned = eval_expr_is_owning_temporary(operand);
     let entries = eval_spread_source_entries(source, context, values);
-    if source_owned {
-        values.release(source)?;
-    }
-    for (key, value) in entries? {
-        let storage_key = if values.type_tag(key)? == EVAL_TAG_STRING {
-            key
-        } else {
-            values.release(key)?;
-            let index = values.int(*next_index)?;
-            *next_index += 1;
-            index
-        };
-        array = values.array_set(array, storage_key, value)?;
+    let released_source = if source_owned { values.release(source) } else { Ok(()) };
+    let entries = match (entries, released_source) {
+        (Ok(entries), Ok(())) => entries,
+        (Ok(entries), Err(status)) => {
+            let _ = release_spread_entry_owners(entries, values);
+            return Err(status);
+        }
+        (Err(status), _) => return Err(status),
+    };
+    let mut entries = entries.into_iter();
+    while let Some((key, value)) = entries.next() {
+        let stored = (|| {
+            if values.type_tag(key)? == EVAL_TAG_STRING {
+                array = values.array_set(array, key, value)?;
+            } else {
+                let index = values.int(*next_index)?;
+                *next_index += 1;
+                let stored = values.array_set(array, index, value);
+                let released_index = values.release(index);
+                array = stored?;
+                released_index?;
+            }
+            Ok(())
+        })();
+        // Both cells came from owned iterator/array reads. The destination
+        // retains the value and borrows the key, even when its shape changes.
+        let released = release_spread_entry_owners([(key, value)], values);
+        if let Err(status) = stored.and(released) {
+            let _ = release_spread_entry_owners(entries, values);
+            return Err(status);
+        }
     }
     Ok(array)
+}
+
+/// Drains every pair even if releasing one cell reports an error.
+fn release_spread_entry_owners(
+    entries: impl IntoIterator<Item = (RuntimeCellHandle, RuntimeCellHandle)>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut first_error = None;
+    for (key, value) in entries {
+        for cell in [key, value] {
+            if let Err(status) = values.release(cell) {
+                first_error.get_or_insert(status);
+            }
+        }
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 /// Reads one array or Traversable into owned key/value pairs.

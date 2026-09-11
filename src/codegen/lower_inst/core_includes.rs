@@ -51,15 +51,14 @@ pub(super) fn lower_include_once_guard(ctx: &mut FunctionContext<'_>, inst: &Ins
     store_if_result(ctx, inst)
 }
 
-/// Returns the include-once guard symbol stored in the module data pool.
+/// Resolves a typed source identity to its native request-state symbol.
 pub(super) fn include_once_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<String> {
-    let data = expect_data(inst)?;
-    ctx.module
-        .data
-        .strings
-        .get(data.as_raw() as usize)
-        .cloned()
-        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+    let Some(Immediate::Source(id)) = &inst.immediate else {
+        return Err(CodegenIrError::invalid_module("include marker requires a source id"));
+    };
+    let source = ctx.module.source_catalog().and_then(|catalog| catalog.get(*id))
+        .ok_or_else(|| CodegenIrError::missing_entry("source", id.as_raw()))?;
+    Ok(crate::codegen::source_units::include_guard_symbol(&source.canonical_path))
 }
 
 /// Lowers a void EIR opcode that maps directly to one runtime helper call.
@@ -67,4 +66,3 @@ pub(super) fn lower_runtime_void_call(ctx: &mut FunctionContext<'_>, label: &str
     abi::emit_call_label(ctx.emitter, label);
     Ok(())
 }
-

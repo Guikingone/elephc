@@ -398,6 +398,7 @@ pub(super) fn collect_scope_reads(
             | StmtKind::FunctionVariantMark { .. }
             | StmtKind::ExternFunctionDecl { .. }
             | StmtKind::ExternClassDecl { .. }
+            | StmtKind::ClassLikeActivate { .. }
             | StmtKind::ExternGlobalDecl { .. } => collect_closure_warnings_in_stmt(stmt, warnings),
         }
     }

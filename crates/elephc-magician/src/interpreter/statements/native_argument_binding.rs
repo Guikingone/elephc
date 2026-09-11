@@ -202,7 +202,7 @@ pub(super) fn bind_native_signature_args(
             value: materialize_native_callable_default(default, context, values)?,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
-            owned: false,
+            owned: true,
         });
     }
 

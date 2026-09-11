@@ -12,6 +12,39 @@ use crate::parser::ast::ExprKind;
 
 /// Lowers a direct instance-method call on a statically known object receiver.
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return lower_native_method_call(ctx, inst);
+    }
+    let object = expect_operand(inst, 0)?;
+    let method_name = method_name_data(ctx, inst)?.to_string();
+    let class_name = objects::nullable_object_receiver_class(ctx, object)?
+        .map(|(name, _)| name);
+    let statically_bound = class_name.as_ref()
+        .and_then(|name| ctx.module.class_infos.get(name.trim_start_matches('\\')))
+        .is_some_and(|info| {
+            let key = php_symbol_key(&method_name);
+            info.final_methods.contains(&key)
+                || matches!(info.method_visibilities.get(&key),
+                    Some(crate::parser::ast::Visibility::Private))
+        });
+    if statically_bound {
+        return lower_native_method_call(ctx, inst);
+    }
+    // Dynamic ownership belongs to the receiver, not to the caller's eval state.
+    // Probe before the typed, nullable, interface and Mixed native dispatch split.
+    let native_label = ctx.next_label("method_native_dispatch");
+    let done_label = ctx.next_label("method_dynamic_dispatch_done");
+    builtins::lower_eval_owned_method_call(
+        ctx, inst, object, &method_name, &native_label, &done_label,
+    )?;
+    ctx.emitter.label(&native_label);
+    lower_native_method_call(ctx, inst)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Dispatches a receiver after dynamic ownership has been ruled out.
+fn lower_native_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
     if builtins::has_eval_context(ctx)
@@ -99,22 +132,6 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
             &method_name,
         );
     }
-    let owned_dynamic_done_label = if builtins::has_eval_context(ctx) {
-        let native_label = ctx.next_label("typed_method_native_dispatch");
-        let done_label = ctx.next_label("typed_method_dynamic_dispatch_done");
-        builtins::lower_eval_owned_method_call(
-            ctx,
-            inst,
-            object,
-            &method_name,
-            &native_label,
-            &done_label,
-        )?;
-        ctx.emitter.label(&native_label);
-        Some(done_label)
-    } else {
-        None
-    };
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
@@ -144,10 +161,6 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_method_call_result(ctx, inst, &target)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
-    if let Some(done_label) = owned_dynamic_done_label {
-        abi::emit_jump(ctx.emitter, &done_label);
-        ctx.emitter.label(&done_label);
-    }
     Ok(())
 }
 
@@ -621,14 +634,6 @@ fn lower_narrowed_interface_method_call_with_failure(
 ) -> Result<()> {
     let candidates =
         narrowed_interface_candidates(ctx, interface_name, method_name, inst.operands.len())?;
-    if candidates.is_empty() {
-        if let Some(message) = type_error {
-            exceptions::emit_type_error(ctx, message);
-        } else {
-            emit_method_call_on_null_fatal(ctx, method_name);
-        }
-        return Ok(());
-    }
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     let no_match_label = ctx.next_label("iface_narrowed_no_match");
     let done_label = ctx.next_label("iface_narrowed_done");
@@ -648,7 +653,7 @@ fn lower_narrowed_interface_method_call_with_failure(
     if let Some(message) = type_error {
         exceptions::emit_type_error(ctx, message);
     } else {
-        emit_method_call_on_null_fatal(ctx, method_name);
+        emit_missing_method_error(ctx, receiver_reg, method_name);
     }
     ctx.emitter.label(&done_label);
     Ok(())
@@ -664,10 +669,6 @@ pub(super) fn lower_narrowed_nullable_interface_method_call(
 ) -> Result<()> {
     let candidates =
         narrowed_interface_candidates(ctx, interface_name, method_name, inst.operands.len())?;
-    if candidates.is_empty() {
-        emit_method_call_on_null_fatal(ctx, method_name);
-        return Ok(());
-    }
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     let null_label = ctx.next_label("iface_narrowed_null");
     let no_match_label = ctx.next_label("iface_narrowed_no_match");
@@ -684,11 +685,35 @@ pub(super) fn lower_narrowed_nullable_interface_method_call(
     )?;
 
     ctx.emitter.label(&no_match_label);
-    emit_method_call_on_null_fatal(ctx, method_name);
+    emit_missing_method_error(ctx, receiver_reg, method_name);
     ctx.emitter.label(&null_label);
     emit_method_call_on_null_fatal(ctx, method_name);
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Names the real native receiver when runtime method lookup fails.
+fn emit_missing_method_error(ctx: &mut FunctionContext<'_>, receiver_reg: &str, method: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, result_reg, receiver_reg);
+    builtins::types::emit_dynamic_object_class_name(ctx, "get_class");
+    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
+    let (right_ptr, right_len) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_reg_move(ctx.emitter, right_ptr, text_ptr);
+    abi::emit_reg_move(ctx.emitter, right_len, text_len);
+    let (prefix, prefix_len) = ctx.data.add_string(b"Call to undefined method ");
+    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix);
+    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+    let (suffix, suffix_len) = ctx.data.add_string(format!("::{method}()").as_bytes());
+    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix);
+    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    exceptions::emit_error_from_string_result(ctx);
 }
 
 /// Collects concrete runtime classes compatible with the receiver type and requested method.

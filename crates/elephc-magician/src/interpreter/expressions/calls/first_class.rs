@@ -49,13 +49,15 @@ pub(in crate::interpreter) fn eval_invokable_callable_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let temporary = eval_method_receiver_is_temporary(object);
     let object = eval_expr(object, context, scope, values)?;
-    eval_invokable_object_precheck(object, context, values)?;
-    eval_closure_object_expr(
-        EvalClosureObjectTarget::InvokableObject { object },
-        context,
-        values,
-    )
+    let result = (|| {
+        eval_invokable_object_precheck(object, context, values)?;
+        eval_closure_object_expr(
+            EvalClosureObjectTarget::InvokableObject { object }, context, values,
+        )
+    })();
+    eval_method_call_with_temporary_receiver_cleanup(object, temporary, result, context, values)
 }
 
 /// Materializes an object method first-class callable and records captured AOT bridge scope.
@@ -66,10 +68,14 @@ pub(in crate::interpreter) fn eval_method_callable_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let temporary = eval_method_receiver_is_temporary(object);
     let object = eval_expr(object, context, scope, values)?;
-    let method = eval_dynamic_member_name(method, context, scope, values)?;
-    let target = eval_method_callable_target(object, method, context, values)?;
-    eval_closure_object_expr(target, context, values)
+    let result = (|| {
+        let method = eval_dynamic_member_name(method, context, scope, values)?;
+        let target = eval_method_callable_target(object, method, context, values)?;
+        eval_closure_object_expr(target, context, values)
+    })();
+    eval_method_call_with_temporary_receiver_cleanup(object, temporary, result, context, values)
 }
 
 /// Validates and builds the retained target for an object method first-class callable.

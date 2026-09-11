@@ -213,8 +213,14 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     }
     if features.class_introspection {
         system::emit_rt_class_exists(emitter);
-        system::emit_rt_interface_exists(emitter);
         system::emit_rt_trait_exists(emitter);
+    }
+    // The eval bridge forwards interface_exists() to the shared runtime
+    // helper so request-local interface declarations participate in lookup.
+    // A program can use that bridge without statically requiring class
+    // introspection, so the helper must follow either capability.
+    if features.class_introspection || features.eval_bridge {
+        system::emit_rt_interface_exists(emitter);
     }
     if features.class_relation_introspection {
         system::emit_rt_class_relation_probe(emitter);

@@ -555,16 +555,16 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             strict_types,
             attributes: Vec::new(),
         }],
-        StmtKind::IncludeOnceMark { label } => vec![Stmt {
-            kind: StmtKind::IncludeOnceMark { label },
+        StmtKind::IncludeOnceMark { source_path } => vec![Stmt {
+            kind: StmtKind::IncludeOnceMark { source_path },
             span,
             source_mode,
             strict_types,
             attributes: Vec::new(),
         }],
-        StmtKind::IncludeOnceGuard { label, body } => vec![Stmt {
+        StmtKind::IncludeOnceGuard { source_path, body } => vec![Stmt {
             kind: StmtKind::IncludeOnceGuard {
-                label,
+                source_path,
                 body: dce_block_with_guards(body, guards.clone()),
             },
             span,

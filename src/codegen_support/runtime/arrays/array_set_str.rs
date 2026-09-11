@@ -11,6 +11,30 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    #[test]
+    fn string_set_recounts_empty_capacity_before_publishing_stride() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_array_set_str(&mut emitter);
+            let asm = emitter.output();
+            let (count, capacity, stride) = match target.arch {
+                Arch::AArch64 => ("mul x11, x11, x10", "str x11, [x0, #8]", "str x10, [x0, #16]"),
+                Arch::X86_64 => ("imul r11, r10", "mov QWORD PTR [rax + 8], r11", "mov QWORD PTR [rax + 16], 16"),
+            };
+            let count_at = asm.find(count).expect("recount allocated bytes as string slots");
+            let capacity_at = asm.find(capacity).expect("publish the adjusted slot capacity");
+            let stride_at = asm.find(stride).expect("publish the sixteen-byte stride");
+            assert!(count_at < capacity_at && capacity_at < stride_at, "{name}: {asm}");
+        }
+    }
+}
+
 /// Emits the string indexed-array set helper for the current target.
 pub fn emit_array_set_str(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -35,6 +59,7 @@ pub fn emit_array_set_str(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x9, [x0]");                                        // load logical length before first-write string layout normalization
     emitter.instruction("cbnz x9, __rt_array_set_str_shape_ready");             // non-empty indexed arrays already have a stable element layout
+    super::array_push_str::emit_empty_string_capacity(emitter);
     emitter.instruction("mov x10, #16");                                        // string indexed arrays use pointer-plus-length payload slots
     emitter.instruction("str x10, [x0, #16]");                                  // publish the string slot width before any later growth copies payload bytes
     emitter.instruction("ldr x10, [x0, #-8]");                                  // load packed indexed-array metadata from the heap header
@@ -128,6 +153,7 @@ fn emit_array_set_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load logical length before first-write string layout normalization
     emitter.instruction("test r10, r10");                                       // is this the first write into the indexed array?
     emitter.instruction("jnz __rt_array_set_str_shape_ready");                  // non-empty indexed arrays already have a stable element layout
+    super::array_push_str::emit_empty_string_capacity(emitter);
     emitter.instruction("mov QWORD PTR [rax + 16], 16");                        // string indexed arrays use pointer-plus-length payload slots
     emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load packed indexed-array metadata from the heap header
     emitter.instruction("mov r8, 0xffffffff000080ff");                          // preserve heap marker, indexed-array kind, and copy-on-write metadata

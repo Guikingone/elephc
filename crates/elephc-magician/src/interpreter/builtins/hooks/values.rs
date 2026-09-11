@@ -71,6 +71,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Ctype,
     /// Dispatches filesystem and path builtins.
     Filesystem,
+    /// Dispatches `filter_var(...)`.
+    FilterVar,
     /// Dispatches `acos(...)`.
     Acos,
     /// Dispatches `asin(...)`.
@@ -400,6 +402,7 @@ impl EvalValuesHook {
             Self::Deg2rad => one_arg(evaluated_args, values, eval_deg2rad_result),
             Self::Exp => one_arg(evaluated_args, values, eval_exp_result),
             Self::Filesystem => eval_filesystem_values_result(name, evaluated_args, context, values),
+            Self::FilterVar => eval_filter_var_values_result(evaluated_args, values),
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Intval => match evaluated_args {

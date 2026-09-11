@@ -130,7 +130,7 @@ fn bind_evaluated_native_function_args_with_mode(
             value: materialize_native_callable_default(default, context, values)?,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
-            owned: false,
+            owned: true,
         });
     }
 
@@ -219,7 +219,7 @@ fn bind_evaluated_native_variadic_function_args(
             value: materialize_native_callable_default(default, context, values)?,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
-            owned: false,
+            owned: true,
         });
     }
 

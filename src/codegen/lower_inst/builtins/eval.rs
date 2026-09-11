@@ -303,6 +303,7 @@ mod extract;
 mod introspection;
 mod symbol_queries;
 mod argument_results;
+mod associative_results;
 mod context_registration;
 mod registration_collection;
 mod member_collection;
@@ -319,6 +320,8 @@ mod scope_context;
 mod sync_inventory;
 mod scope_io;
 mod scope_reload;
+mod native_scope;
+use native_scope::*;
 mod status;
 
 #[allow(unused_imports)]
@@ -375,7 +378,9 @@ pub(super) use dynamic_calls::{
     lower_eval_native_frame_static_property_set, lower_eval_object_new,
     lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
 };
-pub(in crate::codegen::lower_inst) use dynamic_calls::lower_eval_owned_method_call;
+pub(in crate::codegen::lower_inst) use dynamic_calls::{
+    lower_eval_owned_method_call, lower_eval_owned_property_get,
+};
 pub(super) use native_object_construction::{
     lower_eval_native_object_new, lower_eval_native_object_new_fallback,
 };

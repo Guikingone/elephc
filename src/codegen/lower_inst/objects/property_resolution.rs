@@ -95,12 +95,22 @@ pub(super) fn property_interface_receiver(
         return Ok(None);
     };
     let key = php_symbol_key(interface_name.trim_start_matches('\\'));
-    Ok(ctx
+    let resolved = ctx
         .module
         .interface_infos
         .keys()
         .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
-        .cloned())
+        .cloned();
+    if std::env::var("ELEPHC_METADATA_TRACE")
+        .ok()
+        .is_some_and(|target| target.trim_start_matches('\\') == interface_name.trim_start_matches('\\'))
+    {
+        eprintln!(
+            "[elephc-metadata-trace] property_interface_receiver={interface_name} resolved={:?}",
+            resolved
+        );
+    }
+    Ok(resolved)
 }
 
 /// Returns an abstract class whose virtual property must dispatch through a concrete subtype.

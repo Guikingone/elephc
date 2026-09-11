@@ -20,6 +20,13 @@ fn link_requirements_for_runtime_features(
     )
 }
 
+/// Source inputs retained before project-fixture transformations.
+struct ProjectSourceInputs<'a> {
+    source: &'a str,
+    included: elephc::resolver::IncludedDeclarationSources,
+    autoload: elephc::autoload::DeclarationSourceFiles,
+}
+
 /// Generates user and runtime assembly for project fixtures through the canonical EIR backend.
 fn generate_project_asm(
     program: &elephc::parser::ast::Program,
@@ -29,8 +36,22 @@ fn generate_project_asm(
     gc_stats: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
+    sources: ProjectSourceInputs<'_>,
 ) -> (String, String, elephc::codegen::RuntimeFeatures) {
-    let ir_module = lower_and_validate_ir_for_codegen_fixture(program, check_result, source_path);
+    let source_catalog = elephc::ir::SourceCatalog::from_units(std::iter::once(elephc::resolver::SourceUnit {
+        canonical_path: source_path.canonicalize().unwrap_or_else(|_| source_path.to_path_buf()),
+        mode: elephc::source::SourceMode::Php,
+        source: std::sync::Arc::from(sources.source),
+    }).chain(sources.included.source_units.into_values())
+      .chain(sources.autoload.source_units.into_values()))
+        .expect("project source snapshot merge failed");
+    let mut ir_module = lower_and_validate_ir_for_codegen_fixture(
+        program, check_result, source_path, source_catalog,
+    );
+    ir_module.declared_class_source_files = sources.autoload.class_likes;
+    ir_module.declared_function_source_files = sources.autoload.functions;
+    ir_module.declared_class_source_files.extend(sources.included.class_likes);
+    ir_module.declared_function_source_files.extend(sources.included.functions);
     let exported_functions = HashMap::new();
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
     let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
@@ -385,7 +406,9 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
     let define_set = HashSet::new();
     let ast = elephc::conditional::apply(ast, &define_set);
-    let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
+    let (resolved, _, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
+        ast, base_dir, &define_set,
+    ).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
@@ -420,6 +443,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
         false,
         false,
         requires_elephc_tls,
+        ProjectSourceInputs { source: &source, included: included_sources, autoload: Default::default() },
     );
     let required_libraries =
         link_requirements_for_runtime_features(&check_result, runtime_features);
@@ -470,11 +494,15 @@ pub(crate) fn compile_and_run_files_with_defines(
     let ast = elephc::conditional::apply(ast, &define_set);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(base_dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
-    let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
+    let (resolved, _, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
+        ast, base_dir, &define_set,
+    ).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved =
-        elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
+    let (resolved, _, autoload_sources) =
+        elephc::autoload::run_collecting_included_with_defines_and_sources(
+            resolved, base_dir, &autoload_registry, &define_set,
+        ).expect("autoload failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
@@ -518,6 +546,7 @@ pub(crate) fn compile_and_run_files_with_defines(
         false,
         false,
         requires_elephc_tls,
+        ProjectSourceInputs { source: &source, included: included_sources, autoload: autoload_sources },
     );
     let required_libraries =
         link_requirements_for_runtime_features(&check_result, runtime_features);
@@ -709,7 +738,9 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
-    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let (resolved, _, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
+        ast, &dir, &HashSet::new(),
+    ).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
@@ -744,6 +775,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         false,
         false,
         requires_elephc_tls,
+        ProjectSourceInputs { source, included: included_sources, autoload: Default::default() },
     );
     let required_libraries =
         link_requirements_for_runtime_features(&check_result, runtime_features);

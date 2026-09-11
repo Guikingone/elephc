@@ -176,7 +176,11 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // save the caller's out_ptr storage address
     emitter.instruction("str x2, [sp, #8]");                                    // save the caller's out_len storage address
-    emitter.instruction("bl __rt_mixed_cast_string");                           // cast the boxed eval value to a PHP string pair
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the concrete tag and payload through any nested Mixed cells
+    emitter.instruction("cmp x0, #1");                                          // an existing string already has stable bytes owned by the input cell
+    emitter.instruction("b.eq __elephc_eval_value_string_bytes_store");        // borrow the payload while Rust immediately copies it
+    emitter.instruction("bl __rt_value_cast_string");                           // render non-string values through the shared PHP conversion helper
+    emitter.label("__elephc_eval_value_string_bytes_store");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the optional out_ptr storage address
     emitter.instruction("cbz x9, __elephc_eval_value_string_bytes_len");        // skip pointer storage when the caller passed null
     emitter.instruction("str x1, [x9]");                                        // store the string pointer for Rust to copy immediately

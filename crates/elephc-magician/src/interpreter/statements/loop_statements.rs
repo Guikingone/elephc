@@ -109,8 +109,7 @@ pub(in crate::interpreter) fn execute_do_while_stmt(
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
             EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
-        let condition = eval_expr(condition, context, scope, values)?;
-        if !values.truthy(condition)? {
+        if !crate::interpreter::expressions::eval_truthy_expr(condition, context, scope, values)? {
             break;
         }
     }
@@ -139,8 +138,7 @@ pub(in crate::interpreter) fn execute_for_stmt(
     }
     loop {
         if let Some(condition) = condition {
-            let condition = eval_expr(condition, context, scope, values)?;
-            if !values.truthy(condition)? {
+            if !crate::interpreter::expressions::eval_truthy_expr(condition, context, scope, values)? {
                 break;
             }
         }
@@ -189,7 +187,14 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
     } else {
         (eval_expr(array, context, scope, values)?, None)
     };
-    match values.type_tag(array)? {
+    let array_tag = values.type_tag(array)?;
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=foreach_subject value={value_name:?} by_ref={value_by_ref} tag={array_tag:?} raw={:?}",
+            values.raw_value_word(array).ok(),
+        );
+    }
+    match array_tag {
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
             let iteration_array = if value_by_ref {
                 values.retain(array)?
@@ -275,10 +280,29 @@ pub(super) fn execute_foreach_array_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let len = values.array_len(array)?;
+    let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
+    let len = values.array_len(array).map_err(|status| {
+        if trace {
+            eprintln!("[elephc-eval-trace] phase=foreach_error stage=array_len status={status:?}");
+        }
+        status
+    })?;
+    if trace {
+        eprintln!("[elephc-eval-trace] phase=foreach_array_begin value={value_name:?} by_ref={value_by_ref} len={len}");
+    }
     for index in 0..len {
-        let key = values.array_iter_key(array, index)?;
-        let value = values.array_get(array, key)?;
+        let key = values.array_iter_key(array, index).map_err(|status| {
+            if trace {
+                eprintln!("[elephc-eval-trace] phase=foreach_error stage=iter_key index={index} status={status:?}");
+            }
+            status
+        })?;
+        let value = values.array_get(array, key).map_err(|status| {
+            if trace {
+                eprintln!("[elephc-eval-trace] phase=foreach_error stage=array_get index={index} status={status:?}");
+            }
+            status
+        })?;
         if let Some(key_name) = key_name {
             for replaced in set_scope_cell(
                 context,
@@ -321,7 +345,16 @@ pub(super) fn execute_foreach_array_stmt(
         if key_name.is_none() && !value_by_ref {
             values.release(key)?;
         }
-        match execute_statements(body, context, scope, values)? {
+        let control = execute_statements(body, context, scope, values).map_err(|status| {
+            if trace {
+                eprintln!("[elephc-eval-trace] phase=foreach_error stage=body index={index} by_ref={value_by_ref} status={status:?}");
+            }
+            status
+        })?;
+        if trace {
+            eprintln!("[elephc-eval-trace] phase=foreach_body_done index={index} by_ref={value_by_ref}");
+        }
+        match control {
             EvalControl::None | EvalControl::Continue(1) => {}
             EvalControl::Break(1) => break,
             EvalControl::Break(level) => return Ok(EvalControl::Break(level - 1)),
@@ -663,7 +696,8 @@ pub(in crate::interpreter) fn eval_foreach_object_is_a(
         .map_or_else(|| values.object_is_a(object, target, false), Ok)
 }
 
-/// Returns PHP's next automatic integer key for `$array[]` append writes.
+/// Computes the current append candidate, balancing every scan temporary.
+/// Persistent next-free-index semantics are separate from this legacy key scan.
 pub(in crate::interpreter) fn eval_array_append_key(
     array: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -671,20 +705,46 @@ pub(in crate::interpreter) fn eval_array_append_key(
     let len = values.array_len(array)?;
     let mut next_key = None;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        if values.type_tag(key)? != EVAL_TAG_INT {
-            continue;
+        let mut temporaries = [None; 4];
+        let step = (|| {
+            let key = values.array_iter_key(array, position)?;
+            temporaries[0] = Some(key);
+            if values.type_tag(key)? != EVAL_TAG_INT {
+                return Ok(false);
+            }
+            let one = values.int(1)?;
+            temporaries[1] = Some(one);
+            let candidate = values.add(key, one)?;
+            temporaries[2] = Some(candidate);
+            if let Some(current) = next_key {
+                let comparison = values.compare(EvalBinOp::Gt, candidate, current)?;
+                temporaries[3] = Some(comparison);
+                values.truthy(comparison)
+            } else {
+                Ok(true)
+            }
+        })();
+        // Track ownership by slot rather than pointer identity: two owned
+        // results may legitimately refer to the same runtime cell.
+        let candidate = if matches!(step, Ok(true)) { temporaries[2].take() } else { None };
+        let mut cleanup_error = None;
+        for cell in temporaries.into_iter().flatten() {
+            if let Err(status) = values.release(cell) {
+                cleanup_error.get_or_insert(status);
+            }
         }
-        let one = values.int(1)?;
-        let candidate = values.add(key, one)?;
-        let replace = if let Some(current) = next_key {
-            let is_greater = values.compare(EvalBinOp::Gt, candidate, current)?;
-            values.truthy(is_greater)?
-        } else {
-            true
-        };
-        if replace {
-            next_key = Some(candidate);
+        if let Some(status) = step.err().or(cleanup_error) {
+            if let Some(cell) = candidate { let _ = values.release(cell); }
+            if let Some(cell) = next_key { let _ = values.release(cell); }
+            return Err(status);
+        }
+        if let Some(candidate) = candidate {
+            if let Some(previous) = next_key.replace(candidate) {
+                if let Err(status) = values.release(previous) {
+                    let _ = values.release(candidate);
+                    return Err(status);
+                }
+            }
         }
     }
     next_key.map_or_else(|| values.int(0), Ok)

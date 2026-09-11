@@ -33,6 +33,9 @@ pub enum ValidationError {
     BlockMissingTerminator(BlockId),
     UnknownBlock(BlockId),
     UnknownInstruction(InstId),
+    UnknownSource(crate::ir::SourceId),
+    InvalidDeclarationName(crate::ir::DataId),
+    UnresolvedSource(std::path::PathBuf),
     UnknownValue(ValueId),
     DuplicateInstructionInBlocks(InstId),
     ValueDefMismatch(ValueId),
@@ -107,6 +110,21 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
         .chain(module.runtime_callable_invokers.iter())
     {
         validate_function(function)?;
+        for inst in &function.instructions {
+            if let Some(Immediate::Source(id)) = &inst.immediate {
+                if module.source_catalog().and_then(|catalog| catalog.get(*id)).is_none() {
+                    return Err(ValidationError::UnknownSource(*id));
+                }
+            }
+            if let Some(Immediate::ClassLikeActivation { source, name, .. }) = &inst.immediate {
+                if module.source_catalog().and_then(|catalog| catalog.get(*source)).is_none() {
+                    return Err(ValidationError::UnknownSource(*source));
+                }
+                if module.data.strings.get(name.as_raw() as usize).is_none_or(|name| name.is_empty()) {
+                    return Err(ValidationError::InvalidDeclarationName(*name));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -300,11 +318,20 @@ fn validate_instruction_immediate(
 ) -> Result<(), ValidationError> {
     use Immediate as Imm;
     use Op::*;
+    if let Some(Imm::UnresolvedSource(path)) = &inst.immediate {
+        return Err(ValidationError::UnresolvedSource(path.clone()));
+    }
     match inst.op {
         ConstI64 => require_immediate(inst_id, inst, "i64", |imm| matches!(imm, Imm::I64(_))),
+        ClassLikeActivate => require_immediate(inst_id, inst, "declaration site", |imm| {
+            matches!(imm, Imm::ClassLikeActivation { .. })
+        }),
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
-        ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
+        IncludeOnceMark | IncludeOnceGuard => {
+            require_immediate(inst_id, inst, "source id", |imm| matches!(imm, Imm::Source(_)))
+        }
+        ConstStr | ConstClassName | DataAddr | Warn
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | BindPropRefCell
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
@@ -336,7 +363,7 @@ fn validate_instruction_immediate(
         PromoteLocalRefCell | AliasLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
-        EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
+        EvalScopeGet | EvalScopeSet | GlobalRefCell | UnsetGlobal => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
         ICmp | FCmp | PhpRelCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
@@ -430,7 +457,7 @@ fn validate_opcode_rules(
         | CallableArrayNew | GeneratorNew | InvokerRefArg | ArrayLocalRefCell
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
-        | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
+        | IncludeOnceGuard | ClassLikeActivate | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
         | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
@@ -502,6 +529,8 @@ fn validate_opcode_rules(
         LoadLocal
         | LoadRefCell
         | LoadGlobal
+        | GlobalRefCell
+        | UnsetGlobal
         | LoadStaticLocal
         | LoadStaticProperty
         | LoadReflectionStaticProperty

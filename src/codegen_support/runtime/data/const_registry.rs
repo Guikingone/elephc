@@ -142,6 +142,7 @@ pub(crate) fn emit_class_registry_data(
     class_names: &[String],
     interface_names: &[String],
     trait_names: &[String],
+    interface_activation_names: &[String],
 ) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
@@ -151,9 +152,65 @@ pub(crate) fn emit_class_registry_data(
     out.push_str(".p2align 3\n");
     emit_name_table(&mut out, "_interface_table", "_ifacereg_name", interface_names);
     out.push_str(".p2align 3\n");
+    emit_activation_table(
+        &mut out,
+        "_interface_activation_table",
+        "_interface_active_name",
+        interface_activation_names,
+    );
+    out.push_str(".p2align 3\n");
     emit_name_table(&mut out, "_trait_table", "_traitreg_name", trait_names);
 
     out
+}
+
+/// Emits only the interface lookup tables required by eval-owned
+/// `interface_exists()` calls. This keeps the eval bridge independent from the
+/// class and trait registries when no AOT class-introspection operation needs
+/// them.
+pub(crate) fn emit_interface_registry_data(
+    interface_names: &[String],
+    interface_activation_names: &[String],
+) -> String {
+    let mut out = String::new();
+    out.push_str(".data\n");
+    out.push_str(".p2align 3\n");
+    emit_name_table(&mut out, "_interface_table", "_ifacereg_name", interface_names);
+    out.push_str(".p2align 3\n");
+    emit_activation_table(
+        &mut out,
+        "_interface_activation_table",
+        "_interface_active_name",
+        interface_activation_names,
+    );
+    out
+}
+
+/// Emits 24-byte `{name_ptr, name_len, active_cell_ptr}` lookup rows.
+fn emit_activation_table(
+    out: &mut String,
+    table_symbol: &str,
+    name_label_prefix: &str,
+    names: &[String],
+) {
+    out.push_str(&format!(".globl {0}_count\n{0}_count:\n", table_symbol));
+    out.push_str(&format!("    .quad {}\n", names.len()));
+    out.push_str(&format!(".globl {0}\n{0}:\n", table_symbol));
+    for (index, name) in names.iter().enumerate() {
+        out.push_str(&format!("    .quad {}_{}\n", name_label_prefix, index));
+        out.push_str(&format!("    .quad {}\n", name.len()));
+        out.push_str(&format!(
+            "    .quad {}\n",
+            crate::names::classlike_activation_symbol(
+                crate::parser::ast::ClassLikeKind::Interface,
+                name,
+            )
+        ));
+    }
+    for (index, name) in names.iter().enumerate() {
+        out.push_str(&format!("{}_{}:\n", name_label_prefix, index));
+        out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(name)));
+    }
 }
 
 /// Appends one 16-byte `{name_ptr, name_len}` name-sorted table to `out`.
@@ -174,4 +231,3 @@ fn emit_name_table(out: &mut String, table_symbol: &str, name_label_prefix: &str
         out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(name)));
     }
 }
-

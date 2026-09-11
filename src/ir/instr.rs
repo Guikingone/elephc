@@ -123,6 +123,17 @@ pub enum Immediate {
     F64(f64),
     Bool(bool),
     Data(DataId),
+    /// Frozen physical-source identity, separate from the literal pool.
+    Source(crate::ir::SourceId),
+    /// A physical declaration site, not proof of an active PHP symbol binding.
+    ClassLikeActivation {
+        source: crate::ir::SourceId,
+        site: Span,
+        kind: crate::parser::ast::ClassLikeKind,
+        name: DataId,
+    },
+    /// Diagnostic-only lowering recovery; validation rejects this before codegen.
+    UnresolvedSource(std::path::PathBuf),
     /// Named object target plus the PHP boundary that requested its runtime guard.
     NominalObject {
         target: DataId,
@@ -307,6 +318,11 @@ pub enum Op {
     ReleaseLocalSlot,
     LoadGlobal,
     StoreGlobal,
+    /// Acquires one ownership share of a named global's durable reference cell.
+    /// Returns an internal pointer; the binding's hidden owner must consume it.
+    GlobalRefCell,
+    /// Removes the global name while existing reference-cell owners stay live.
+    UnsetGlobal,
     LoadStaticLocal,
     StoreStaticLocal,
     InitStaticLocal,
@@ -643,6 +659,7 @@ pub enum Op {
     GeneratorReturn,
     IncludeOnceMark,
     IncludeOnceGuard,
+    ClassLikeActivate,
     FunctionVariantMark,
     FunctionVariantDispatch,
     Acquire,
@@ -726,11 +743,16 @@ impl Op {
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
-            AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
+            AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL
+                | E::WRITES_HEAP | E::REFCOUNT_OP,
             ReleaseLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP
             }
             ReleaseLocalSlot => E::READS_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            GlobalRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::ALLOC_HEAP
+                | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
+            UnsetGlobal => E::READS_GLOBAL | E::WRITES_GLOBAL | E::WRITES_HEAP
+                | E::REFCOUNT_OP | E::MAY_FATAL,
             LoadGlobal
             | LoadStaticProperty
             | StaticPropInitialized
@@ -883,6 +905,7 @@ impl Op {
                 E::READS_GLOBAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
             }
             Call
+            | ClassLikeActivate
             | FunctionVariantCall
             | ClosureBind
             | LanguageConstructCall
@@ -990,6 +1013,8 @@ impl Op {
             ReleaseLocalSlot => "release_local_slot",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
+            GlobalRefCell => "global_ref_cell",
+            UnsetGlobal => "unset_global",
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
@@ -1239,6 +1264,7 @@ impl Op {
             GeneratorReturn => "generator_return",
             IncludeOnceMark => "include_once_mark",
             IncludeOnceGuard => "include_once_guard",
+            ClassLikeActivate => "class_like_activate",
             FunctionVariantMark => "function_variant_mark",
             FunctionVariantDispatch => "function_variant_dispatch",
             Acquire => "acquire",

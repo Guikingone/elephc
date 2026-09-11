@@ -364,6 +364,7 @@ pub(super) fn emit_dynamic_new_candidate(
     candidate: &DynamicNewCandidate,
     constructor_args: &[ValueId],
     result: ValueId,
+    creation_line: u32,
 ) -> Result<()> {
     emit_object_allocation(
         ctx,
@@ -375,6 +376,11 @@ pub(super) fn emit_dynamic_new_candidate(
     )?;
     ctx.store_result_value(result)?;
     emit_property_defaults(ctx, result, &candidate.property_defaults)?;
+    if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
+        ctx.load_value_to_result(result)?;
+        let object_reg = abi::int_result_reg(ctx.emitter);
+        throwable_new::emit_throwable_creation_site(ctx, object_reg, creation_line);
+    }
     if let Some(constructor) = &candidate.constructor_impl {
         emit_constructor_call(
             ctx,

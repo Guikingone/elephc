@@ -169,6 +169,11 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
     emit_property_defaults(ctx, result, &property_defaults)?;
+    if super::super::is_throwable_like_class(ctx, &class_name) {
+        ctx.load_value_to_result(result)?;
+        let object_reg = abi::int_result_reg(ctx.emitter);
+        throwable_new::emit_throwable_creation_site(ctx, object_reg, inst.span.map_or(0, |span| span.line));
+    }
     if initialize_inherited_builtin_throwable {
         ctx.load_value_to_result(result)?;
         preserve_throwable_for_init(ctx);

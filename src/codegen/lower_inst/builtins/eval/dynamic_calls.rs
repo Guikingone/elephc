@@ -382,7 +382,8 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
         CodegenIrError::invalid_module("eval dynamic object new missing class operand")
     })?;
     let args_offset = EVAL_STACK_BYTES;
-    let stack_bytes = eval_function_call_stack_bytes(constructor_args.len());
+    let site_offset = args_offset + constructor_args.len() * 8;
+    let stack_bytes = eval_function_call_stack_bytes(constructor_args.len() + 4);
     let eval_miss_label = ctx.next_label("eval_dynamic_new_missing_class");
     let done_label = ctx.next_label("eval_dynamic_new_done");
     let name_ptr_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -394,6 +395,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
     abi::emit_store_to_sp(ctx.emitter, name_len_reg, EVAL_CODE_LEN_OFFSET);
     load_eval_context_or_null(ctx)?;
     let boxed = store_eval_function_call_operands(ctx, constructor_args, args_offset)?;
+    emit_eval_construction_site(ctx, inst, constructor_args.len(), site_offset);
     load_eval_context_to_arg(ctx, 0);
     let name_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr_arg, EVAL_CODE_PTR_OFFSET);
@@ -405,17 +407,17 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
     } else {
         abi::emit_temporary_stack_address(ctx.emitter, args_arg, args_offset);
     }
-    abi::emit_load_int_immediate(
+    abi::emit_temporary_stack_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 4),
-        constructor_args.len() as i64,
+        site_offset,
     );
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
-        .extern_symbol("__elephc_eval_try_new_object");
+        .extern_symbol("__elephc_eval_try_new_object_at");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_branch_if_eval_c_int_negative(ctx, &eval_miss_label);
     emit_eval_status_check(ctx);
@@ -536,6 +538,54 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_property_get(
     store_if_result(ctx, inst)
 }
 
+/// Probes a statically typed receiver for eval ownership before reading its property.
+///
+/// Native and eval-created objects deliberately keep their property state in different
+/// representations. A module may use the eval bridge for one unrelated expression, so the
+/// presence of that bridge alone is not evidence that a particular native receiver must be
+/// read through its eval overlay. Only an object registered to an eval context takes the
+/// bridge; every other receiver continues through its native property slot.
+pub(in crate::codegen::lower_inst) fn lower_eval_owned_property_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+    miss_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
+    if matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #6"); // only object payloads can have an eval owner
+                ctx.emitter.instruction(&format!("b.ne {}", miss_label));
+                ctx.emitter.instruction("mov x0, x1"); // pass the raw object identity to the owner probe
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp rax, 6"); // only object payloads can have an eval owner
+                ctx.emitter.instruction(&format!("jne {}", miss_label));
+                // The unboxed object identity already occupies the first C argument register.
+            }
+        }
+    } else {
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::int_result_reg(ctx.emitter),
+        );
+    }
+    let owner_probe = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_object_has_dynamic_owner");
+    abi::emit_call_label(ctx.emitter, &owner_probe);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, miss_label);
+    lower_eval_property_get(ctx, inst, object, property)?;
+    abi::emit_jump(ctx.emitter, done_label);
+    Ok(())
+}
+
 /// Probes a statically typed method receiver for an eval-owned dynamic class.
 ///
 /// The caller supplies native fallback and completion labels. A negative probe
@@ -549,6 +599,31 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     miss_label: &str,
     done_label: &str,
 ) -> Result<()> {
+    // Native receivers need neither boxed arguments nor reference markers. Look up
+    // dynamic ownership before preparing that pack, including on the fallback path.
+    let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
+    if matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #6"); // only object payloads can have a dynamic owner
+                ctx.emitter.instruction(&format!("b.ne {}", miss_label)); // preserve native diagnostics for other tags
+                ctx.emitter.instruction("mov x0, x1"); // raw identity becomes the C ABI argument
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp rax, 6"); // only object payloads can have a dynamic owner
+                ctx.emitter.instruction(&format!("jne {}", miss_label)); // preserve native diagnostics for other tags
+                // The unboxed object identity is already in the first C argument register, rdi.
+            }
+        }
+    } else {
+        abi::emit_reg_move(ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::int_result_reg(ctx.emitter));
+    }
+    let owner_probe = ctx.emitter.target.extern_symbol("__elephc_eval_object_has_dynamic_owner");
+    abi::emit_call_label(ctx.emitter, &owner_probe);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, miss_label);
     let arg_count = inst.operands.len().saturating_sub(1);
     let args_offset = EVAL_STACK_BYTES;
     let stack_bytes = eval_method_call_stack_bytes(arg_count);

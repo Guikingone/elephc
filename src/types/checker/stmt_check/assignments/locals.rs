@@ -1497,9 +1497,9 @@ fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
 
 /// Type-checks a `global` declaration and registers the variables as globals.
 ///
-/// For each variable name, marks it as a global in `checker.active_globals` and
-/// populates the local type environment with the variable's type from
-/// `checker.top_level_env` if available, otherwise defaults to `Int`.
+/// A global declaration replaces a same-named local binding. Ordinary PHP
+/// globals use boxed Mixed storage and may change type at runtime; neither a
+/// local's old type nor the top-level initial value constrains that storage.
 pub(super) fn check_global(
     checker: &mut Checker,
     vars: &[String],
@@ -1507,13 +1507,15 @@ pub(super) fn check_global(
 ) -> Result<(), CompileError> {
     for var in vars {
         checker.active_globals.insert(var.clone());
-        if !env.contains_key(var) {
-            if let Some(global_ty) = checker.top_level_env.get(var) {
-                env.insert(var.clone(), global_ty.clone());
+        let ty = checker.extern_globals.get(var).cloned().unwrap_or_else(|| {
+            if crate::superglobals::is_superglobal(var) {
+                crate::superglobals::superglobal_type()
             } else {
-                env.insert(var.clone(), PhpType::Int);
+                PhpType::Mixed
             }
-        }
+        });
+        clear_callable_metadata(checker, var);
+        env.insert(var.clone(), ty);
     }
     Ok(())
 }

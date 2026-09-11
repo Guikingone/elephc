@@ -118,10 +118,54 @@ use array_builtin_args::*;
 use builtin_special_args::*;
 pub(crate) use call_arg_coercion::apply_scalar_param_cast;
 pub(in crate::ir_lower) use call_arg_coercion::param_accepts_object_without_string_coercion;
+pub(in crate::ir_lower) use lazy_isset::emit_quiet_property_fetch;
 use call_arg_coercion::*;
 use positional_spreads::*;
 use named_args::*;
 use named_spreads::*;
+
+/// Lowers the quiet `isset($target)` probe used by write-context desugarings.
+///
+/// The target is parser-stabilized before this entry point is reached, so it is
+/// safe for the ensuing write path to replay it after a negative probe.
+pub(in crate::ir_lower) fn lower_synthesized_isset_for_write_target(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+) -> Option<LoweredValue> {
+    let args = [target.clone()];
+    lower_lazy_isset(ctx, "isset", &args, target)
+}
+
+/// Whether a property walk is known to end at a declared native array slot.
+///
+/// Write-context lowering may use a quiet `isset` probe only for this shape. A
+/// virtual property can observe `__isset` separately from the ordinary `__get`
+/// performed by an indirect write, so introducing that probe there would change
+/// PHP-visible behavior.
+pub(in crate::ir_lower) fn property_access_is_declared_native_array(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    if !matches!(
+        property_isset_action(ctx, object, property),
+        Some(IssetPropertyAction::Initialized)
+    ) {
+        return false;
+    }
+    let Some((class_name, _)) = isset_object_expr_class(ctx, object) else {
+        return false;
+    };
+    ctx.classes
+        .get(class_name.trim_start_matches('\\'))
+        .and_then(|class_info| class_info.visible_property(property))
+        .is_some_and(|(_, (_, property_ty))| {
+            matches!(
+                property_ty.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+        })
+}
 use variadic_args::*;
 use indexed_array_literals::*;
 use assoc_array_literals::*;

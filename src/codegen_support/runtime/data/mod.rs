@@ -20,7 +20,7 @@ pub(crate) mod instanceof;
 mod user;
 
 /// Emit the closed-world class/interface/trait registry data tables for runtime lookups.
-pub(crate) use const_registry::emit_class_registry_data;
+pub(crate) use const_registry::{emit_class_registry_data, emit_interface_registry_data};
 /// Emit the closed-world per-class public-method payload registry.
 pub(crate) use class_methods_registry::emit_class_methods_registry_data;
 /// Emit the closed-world per-class relation payload registry.

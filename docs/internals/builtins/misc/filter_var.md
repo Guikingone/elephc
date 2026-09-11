@@ -46,7 +46,10 @@ function filter_var(mixed $value, int $filter = 516, mixed $options = 0): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/filter_var.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/filter_var.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

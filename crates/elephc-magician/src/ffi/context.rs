@@ -20,6 +20,62 @@ use crate::ffi::dynamic_destructors::install_dynamic_object_destructor_hook;
 use crate::ffi::ob_handlers::install_ob_handler_hook;
 use std::ptr;
 
+/// Registers the module's paired global transfer routines before publishing AOT
+/// metadata. Missing halves are rejected without replacing an existing pair.
+///
+/// # Safety
+/// `ctx` must be null or a live context handle. Both hooks must remain executable
+/// for the context's lifetime and obey the live-scope transfer ABI.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_set_global_sync_hooks(
+    ctx: *mut ElephcEvalContext,
+    native_to_eval: Option<crate::context::NativeGlobalSyncHook>,
+    eval_to_native: Option<crate::context::NativeGlobalSyncHook>,
+) -> i64 {
+    let Some(context) = (unsafe { ctx.as_mut() }) else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let (Some(native_to_eval), Some(eval_to_native)) = (native_to_eval, eval_to_native) else {
+        return 0;
+    };
+    context.native_global_sync = Some(crate::context::NativeGlobalSyncHooks {
+        native_to_eval,
+        eval_to_native,
+    });
+    1
+}
+
+#[cfg(test)]
+mod global_sync_tests {
+    use super::*;
+
+    unsafe extern "C" fn transfer(_scope: *mut ElephcEvalScope) {}
+
+    #[test]
+    fn global_sync_registration_requires_a_complete_pair() {
+        let mut context = ElephcEvalContext::new();
+        let mut incompatible = ElephcEvalContext::for_abi_version(ABI_VERSION + 1);
+        unsafe {
+            assert_eq!(__elephc_eval_context_set_global_sync_hooks(
+                &mut incompatible, Some(transfer), Some(transfer)), 0);
+            assert!(incompatible.native_global_sync.is_none());
+            assert_eq!(__elephc_eval_context_set_global_sync_hooks(
+                ptr::null_mut(), Some(transfer), Some(transfer)), 0);
+            assert_eq!(__elephc_eval_context_set_global_sync_hooks(
+                &mut context, Some(transfer), None), 0);
+            assert!(context.native_global_sync.is_none());
+            assert_eq!(__elephc_eval_context_set_global_sync_hooks(
+                &mut context, Some(transfer), Some(transfer)), 1);
+            assert_eq!(__elephc_eval_context_set_global_sync_hooks(
+                &mut context, None, Some(transfer)), 0);
+            assert!(context.native_global_sync.is_some());
+        }
+    }
+}
+
 /// Returns the ABI version expected by generated elephc eval call sites.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_abi_version() -> u32 {

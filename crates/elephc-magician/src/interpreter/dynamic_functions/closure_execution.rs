@@ -186,11 +186,28 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let binding = closure.declaring_class_scope().map(|class_scope| EvalClosureBinding {
+        this_object: None,
+        class_scope: class_scope.to_string(),
+        called_class: closure
+            .declaring_called_class_scope()
+            .unwrap_or(class_scope)
+            .to_string(),
+    });
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=closure_invoke function={:?} lexical_class={:?} called_class={:?} binding={}",
+            closure.function().name(),
+            closure.declaring_class_scope(),
+            closure.declaring_called_class_scope(),
+            binding.is_some(),
+        );
+    }
     eval_closure_with_optional_binding(
         closure,
         function_ref_flags(closure),
         EvalByRefBindingMode::RequireTarget,
-        None,
+        binding,
         evaluated_args,
         context,
         values,
@@ -394,6 +411,29 @@ struct EvalClosureBinding {
     called_class: String,
 }
 
+/// Installs the physical file that declared a closure until its deferred body returns.
+fn enter_closure_declaration_source(
+    closure: &EvalClosure,
+    context: &mut ElephcEvalContext,
+) -> Option<(String, String, i64, Option<String>)> {
+    let (file, dir, line, file_magic) = closure.declaring_call_site()?.clone();
+    let previous = context.call_site();
+    context.set_call_site(file, dir, line);
+    context.set_file_magic_override(file_magic);
+    Some(previous)
+}
+
+/// Restores the caller's source frame after a closure body completes or fails.
+fn leave_closure_declaration_source(
+    previous: Option<(String, String, i64, Option<String>)>,
+    context: &mut ElephcEvalContext,
+) {
+    if let Some((file, dir, line, file_magic)) = previous {
+        context.set_call_site(file, dir, line);
+        context.set_file_magic_override(file_magic);
+    }
+}
+
 /// Returns the closure function's declared by-reference parameter flags.
 fn function_ref_flags(closure: &EvalClosure) -> &[bool] {
     closure.function().parameter_is_by_ref()
@@ -419,6 +459,7 @@ fn eval_closure_with_optional_binding(
     // it was created under rather than inheriting whoever resumes it.
     let bound_class_scope = binding.as_ref().map(|binding| binding.class_scope.clone());
     let bound_called_class = binding.as_ref().map(|binding| binding.called_class.clone());
+    let previous_source = enter_closure_declaration_source(closure, context);
     context.push_function(function.name());
     if let Some(binding) = &binding {
         context.push_class_scope(binding.class_scope.clone());
@@ -449,6 +490,7 @@ fn eval_closure_with_optional_binding(
             context.pop_call_frame();
             context.pop_function();
             context.pop_static_slot_key();
+            leave_closure_declaration_source(previous_source, context);
             return Err(status);
         }
     };
@@ -484,6 +526,7 @@ fn eval_closure_with_optional_binding(
         }
         context.pop_function();
         context.pop_static_slot_key();
+        leave_closure_declaration_source(previous_source, context);
         return match (generator, arg_cleanup) {
             (Err(status), _) | (_, Err(status)) => Err(status),
             (Ok(generator), Ok(())) => Ok(generator),
@@ -556,6 +599,7 @@ fn eval_closure_with_optional_binding(
     context.pop_call_frame();
     context.pop_function();
     context.pop_static_slot_key();
+    leave_closure_declaration_source(previous_source, context);
     merge_activation_result(return_result, cleanup_result)
 }
 

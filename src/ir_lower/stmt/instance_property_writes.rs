@@ -148,45 +148,9 @@ fn lower_statement_property_null_coalesce_assignment(
         return;
     }
     let object_type = ctx.builder.value_php_type(object_value.value).clone();
-    let property_type = object_property_type(ctx, object_value.value, property);
     let object_temp = ctx.declare_synthetic_php_local(object_type.clone());
     ctx.store_local(&object_temp, object_value, object_type, Some(span));
     let object_expr = Expr::new(ExprKind::Variable(object_temp), span);
-    if property_type
-        .as_ref()
-        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Object(_)))
-    {
-        let object_value = lower_expr(ctx, &object_expr);
-        let property_data = ctx.intern_string(property);
-        let initialized = ctx.emit_value(
-            Op::PropInitialized,
-            vec![object_value.value],
-            Some(Immediate::Data(property_data)),
-            PhpType::Bool,
-            Op::PropInitialized.default_effects(),
-            Some(span),
-        );
-        let assign_block = ctx
-            .builder
-            .create_named_block("coalesce_assign.property_default", Vec::new());
-        let done_block = ctx
-            .builder
-            .create_named_block("coalesce_assign.property_done", Vec::new());
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: initialized.value,
-            then_target: done_block,
-            then_args: Vec::new(),
-            else_target: assign_block,
-            else_args: Vec::new(),
-        });
-        ctx.builder.position_at_end(assign_block);
-        lower_property_assign(ctx, &object_expr, property, default, span);
-        if !ctx.builder.insertion_block_is_terminated() {
-            branch_to(ctx, done_block);
-        }
-        ctx.builder.position_at_end(done_block);
-        return;
-    }
     let target = Expr::new(
         ExprKind::PropertyAccess {
             object: Box::new(object_expr),

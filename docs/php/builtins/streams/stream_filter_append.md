@@ -2,7 +2,7 @@
 title: "stream_filter_append()"
 description: "Attaches a filter to a stream."
 sidebar:
-  order: 394
+  order: 396
 ---
 
 ## stream_filter_append()

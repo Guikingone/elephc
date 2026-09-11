@@ -10,6 +10,7 @@
 //!   PHP-visible direct/by-value wrappers.
 
 mod boolval;
+mod filter_var;
 mod floatval;
 mod gettype;
 mod intval;
@@ -35,6 +36,7 @@ mod settype;
 mod strval;
 
 pub(in crate::interpreter) use gettype::*;
+pub(in crate::interpreter) use filter_var::*;
 pub(in crate::interpreter) use intval::*;
 pub(in crate::interpreter) use is_bool::*;
 pub(in crate::interpreter) use is_double::*;

@@ -129,13 +129,10 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the class-exists flag to Rust
 
-    emit_x86_64_eval_name_table_exists(
-        emitter,
-        "__elephc_eval_interface_exists",
-        "_interface_names_count",
-        "_interface_names",
-        "__elephc_eval_interface_exists_x86",
-    );
+    // Interface activation is request-local. Reuse the native helper rather
+    // than the immutable eval registration table, which only proves discovery.
+    label_c_global(emitter, "__elephc_eval_interface_exists");
+    emitter.instruction("jmp __rt_interface_exists");                           // tail-call the shared request-active interface lookup
 
     emit_x86_64_eval_name_table_exists(
         emitter,

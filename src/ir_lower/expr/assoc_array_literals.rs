@@ -49,7 +49,11 @@ pub(in crate::ir_lower) fn lower_array_reference_or_value(
             Some(value.span),
         );
     }
-    ctx.promote_local_ref_cell(name, Some(value.span));
+    // A PHP reference stored in an array can subsequently receive any PHP value, irrespective
+    // of the source variable's current value. Promote through Mixed before emitting the marker:
+    // the marker records its referenced storage tag once, so preserving an initial null tag would
+    // make a later closure/callable assignment read back as null.
+    ctx.promote_local_mixed_ref_cell(name, Some(value.span));
     let local_type = ctx.local_type(name);
     let slot = ctx.declare_local(name, local_type);
     ctx.emit_value(
@@ -259,11 +263,16 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
         return Some(normalize_value_php_type(property_ty));
     }
     let class_info = ctx.classes.get(normalized)?;
+    if !property_is_accessible_for_ir(ctx, normalized, class_info, property) {
+        return magic_get_result_type(ctx, normalized).map(normalize_value_php_type);
+    }
     class_info
         .properties
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()))
+        // Keep nullable nominal types available to receiver/isset analysis; storage
+        // erasure belongs to the consumer that actually chooses an EIR layout.
+        .map(|(_, ty)| normalize_value_php_type(ty.clone()))
 }
 
 /// Returns the declared property result type plus `null` when a nullsafe receiver may be null.
@@ -290,7 +299,7 @@ pub(in crate::ir_lower) fn method_call_expr_type_for_ir(
     let class_name = instance_callable_object_class(ctx, object)?;
     let method_key = php_symbol_key(method);
     class_method_signature(ctx, &class_name, &method_key)
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(signature.return_type.clone()))
 }
 
 /// Returns the declared method result type plus `null` when a nullsafe receiver may be null.

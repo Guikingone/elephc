@@ -262,6 +262,11 @@ pub(super) fn resolve_decl_stmt(
             stmt.span,
             stmt_attributes,
         ))),
+        StmtKind::ClassLikeActivate { name, kind, source_path } => Ok(Some(Stmt::with_attributes(
+            StmtKind::ClassLikeActivate { name: canonical_name_for_decl(namespace, name), kind: *kind, source_path: source_path.clone() },
+            stmt.span,
+            stmt_attributes,
+        ))),
         StmtKind::ConstDecl { name, value } => Ok(Some(Stmt::with_attributes(
             StmtKind::ConstDecl {
                 name: canonical_name_for_decl(namespace, name),

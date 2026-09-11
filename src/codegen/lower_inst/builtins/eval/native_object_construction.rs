@@ -85,12 +85,14 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new_fallback(
 ) -> Result<()> {
     let (name_label, name_len) = ctx.intern_class_name_data(expect_data(inst)?)?;
     let args_offset = EVAL_STACK_BYTES;
-    let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
+    let site_offset = args_offset + inst.operands.len() * 8;
+    let stack_bytes = eval_function_call_stack_bytes(inst.operands.len() + 4);
     let eval_miss_label = ctx.next_label("eval_native_new_missing_class");
     let done_label = ctx.next_label("eval_native_new_done");
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     let boxed = store_eval_function_call_args(ctx, inst, args_offset)?;
     load_eval_context_or_null(ctx)?;
+    emit_eval_construction_site(ctx, inst, inst.operands.len(), site_offset);
     load_eval_context_to_arg(ctx, 0);
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
@@ -105,17 +107,17 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new_fallback(
     } else {
         abi::emit_temporary_stack_address(ctx.emitter, args_arg, args_offset);
     }
-    abi::emit_load_int_immediate(
+    abi::emit_temporary_stack_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 4),
-        inst.operands.len() as i64,
+        site_offset,
     );
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
-        .extern_symbol("__elephc_eval_try_new_object");
+        .extern_symbol("__elephc_eval_try_new_object_at");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_branch_if_eval_c_int_negative(ctx, &eval_miss_label);
     emit_eval_status_check(ctx);

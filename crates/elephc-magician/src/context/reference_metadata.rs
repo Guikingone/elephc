@@ -14,6 +14,18 @@ use super::*;
 pub type NativeFunctionInvoker =
     unsafe extern "C" fn(*mut c_void, *mut RuntimeCell) -> *mut RuntimeCell;
 
+/// Module-generated global transfer routine. The argument is the live global
+/// scope for this invocation, never a captured caller-frame address.
+pub type NativeGlobalSyncHook = unsafe extern "C" fn(*mut ElephcEvalScope);
+
+/// Both directions are registered together so a bridge cannot silently install
+/// only half of the native/eval global visibility protocol.
+#[derive(Clone, Copy)]
+pub struct NativeGlobalSyncHooks {
+    pub native_to_eval: NativeGlobalSyncHook,
+    pub eval_to_native: NativeGlobalSyncHook,
+}
+
 /// Snapshot of eval execution stacks used to restore caller-sensitive access checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElephcEvalExecutionScope {

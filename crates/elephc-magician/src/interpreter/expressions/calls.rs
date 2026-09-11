@@ -11,6 +11,7 @@
 //!   normalized callable invocation.
 
 use super::*;
+use crate::context::decode_eval_callback_adapter_capture;
 
 mod first_class;
 mod first_class_support;
@@ -134,6 +135,9 @@ pub(in crate::interpreter) fn eval_call(
     if name == "stream_socket_recvfrom" {
         return eval_builtin_stream_socket_recvfrom_call(args, context, scope, values);
     }
+    if name == "parse_str" {
+        return eval_builtin_parse_str_call(args, context, scope, values);
+    }
     if matches!(
         name,
         "array_pop"
@@ -212,7 +216,51 @@ pub(in crate::interpreter) fn eval_dynamic_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_expr(callee, context, scope, values)?;
-    if values.type_tag(callback)? == EVAL_TAG_OBJECT {
+    let callback_tag = values.type_tag(callback)?;
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!("[elephc-eval-trace] phase=dynamic_call callback_tag={callback_tag}");
+    }
+    if callback_tag == EVAL_TAG_CALLABLE {
+        let descriptor = values.raw_value_word(callback)? as usize as *mut std::ffi::c_void;
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            let word0 = (descriptor as usize >= 4096)
+                .then(|| unsafe { *(descriptor as *const u64) });
+            eprintln!(
+                "[elephc-eval-trace] phase=dynamic_call descriptor={descriptor:p} word0={word0:?}",
+            );
+        }
+        if let Some(decoded) = unsafe { decode_callable_descriptor(descriptor) } {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!("[elephc-eval-trace] phase=dynamic_call descriptor=direct");
+            }
+            return eval_native_function(decoded.function, args, context, scope, values);
+        }
+        if let Some((captured_context, captured)) =
+            unsafe { decode_eval_callback_adapter_capture(descriptor.cast()) }
+        {
+            let captured = if captured.type_tag == EVAL_TAG_MIXED {
+                RuntimeCellHandle::from_raw(
+                    captured.value_word as usize as *mut crate::value::RuntimeCell,
+                )
+            } else {
+                values.raw_word_value(captured.type_tag, captured.value_word)?
+            };
+            let captured_context = unsafe {
+                (captured_context as usize as *mut ElephcEvalContext).as_mut()
+            }
+            .ok_or(EvalStatus::RuntimeFatal)?;
+            let callback = eval_callable(captured, captured_context, values)?;
+            let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+            return eval_evaluated_callable_with_call_array_args(
+                &callback,
+                evaluated_args,
+                captured_context,
+                values,
+            );
+        }
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    if callback_tag == EVAL_TAG_OBJECT {
         let is_closure_object = values
             .object_identity(callback)
             .ok()

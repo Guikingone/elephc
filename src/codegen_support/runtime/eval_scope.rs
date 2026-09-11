@@ -26,6 +26,12 @@ const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 pub(crate) fn emit_eval_scope_runtime(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: eval scope core helpers ---");
+    label_c_global(emitter, "__elephc_eval_scope_bind_native");
+    let setter = emitter.target.extern_symbol("__elephc_eval_scope_set");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("b {setter}")), // tail-dispatch with the original scope setter ABI
+        Arch::X86_64 => emitter.instruction(&format!("jmp {setter}")), // tail-dispatch with the original scope setter ABI
+    }
     match emitter.target.arch {
         Arch::AArch64 => emit_aarch64_eval_scope_runtime(emitter),
         Arch::X86_64 => emit_x86_64_eval_scope_runtime(emitter),
@@ -94,6 +100,9 @@ fn emit_aarch64_eval_scope_free(emitter: &mut Emitter) {
 fn emit_aarch64_eval_scope_set(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_scope_set");
     emitter.instruction("cbz x0, __elephc_eval_scope_set_fatal");               // reject null scope handles
+    emitter.instruction("and x9, x4, #96");                                   // isolate mutually exclusive native binding flags
+    emitter.instruction("cmp x9, #96");                                      // an entry cannot be both a reference and a global name
+    emitter.instruction("b.eq __elephc_eval_scope_set_fatal");                // reject invalid binding metadata like the Rust scope ABI
     emitter.instruction("cbz x2, __elephc_eval_scope_set_frame");               // empty names do not need a readable pointer
     emitter.instruction("cbz x1, __elephc_eval_scope_set_fatal");               // non-empty names must provide bytes
     emitter.label("__elephc_eval_scope_set_frame");
@@ -137,7 +146,10 @@ fn emit_aarch64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction("b.eq __elephc_eval_scope_set_store");                  // borrowed old cells do not need release
     emitter.instruction("ldr x0, [x25, #24]");                                  // load the old Mixed cell pointer
     emitter.instruction("cmp x0, x22");                                         // compare old and replacement cells
-    emitter.instruction("b.eq __elephc_eval_scope_set_store");                  // retaining the same cell must not decref it
+    emitter.instruction("b.ne __elephc_eval_scope_set_release");               // a different cell releases the prior owner
+    emitter.instruction(&format!("tst x23, #{}", EVAL_SCOPE_FLAG_OWNED));       // a same-cell borrowed replacement still drops the scope owner
+    emitter.instruction("b.ne __elephc_eval_scope_set_store");                 // unchanged owned storage keeps its existing ownership share
+    emitter.label("__elephc_eval_scope_set_release");
     emitter.instruction("cbz x0, __elephc_eval_scope_set_store");               // tolerate null old cells defensively
     emitter.instruction("bl __rt_decref_mixed");                                // release the overwritten owned Mixed cell
     emitter.label("__elephc_eval_scope_set_store");
@@ -363,6 +375,10 @@ fn emit_x86_64_eval_scope_set(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_scope_set");
     emitter.instruction("test rdi, rdi");                                       // reject null scope handles
     emitter.instruction("jz __elephc_eval_scope_set_fatal");                    // return a runtime-fatal status for null scope
+    emitter.instruction("mov r10, r8");                                      // copy caller flags without disturbing the ABI input
+    emitter.instruction("and r10, 96");                                      // isolate mutually exclusive native binding flags
+    emitter.instruction("cmp r10, 96");                                      // an entry cannot be both a reference and a global name
+    emitter.instruction("je __elephc_eval_scope_set_fatal");                  // reject invalid binding metadata like the Rust scope ABI
     emitter.instruction("test rdx, rdx");                                       // empty names do not need a readable pointer
     emitter.instruction("jz __elephc_eval_scope_set_frame");                    // skip the pointer check for empty names
     emitter.instruction("test rsi, rsi");                                       // non-empty names must provide bytes
@@ -408,7 +424,10 @@ fn emit_x86_64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction("jz __elephc_eval_scope_set_store");                    // borrowed old cells do not need release
     emitter.instruction("mov rax, QWORD PTR [r9 + 24]");                        // load the old Mixed cell pointer
     emitter.instruction("cmp rax, QWORD PTR [rbp - 32]");                       // compare old and replacement cells
-    emitter.instruction("je __elephc_eval_scope_set_store");                    // retaining the same cell must not decref it
+    emitter.instruction("jne __elephc_eval_scope_set_release");                // a different cell releases the prior owner
+    emitter.instruction(&format!("test QWORD PTR [rbp - 40], {}", EVAL_SCOPE_FLAG_OWNED)); // same-cell borrowed replacement drops the scope owner
+    emitter.instruction("jnz __elephc_eval_scope_set_store");                   // unchanged owned storage keeps its existing ownership share
+    emitter.label("__elephc_eval_scope_set_release");
     emitter.instruction("test rax, rax");                                       // tolerate null old cells defensively
     emitter.instruction("jz __elephc_eval_scope_set_store");                    // skip release when the old cell is null
     emitter.instruction("call __rt_decref_mixed");                              // release the overwritten owned Mixed cell
@@ -589,4 +608,31 @@ fn emit_x86_64_eval_scope_unset(emitter: &mut Emitter) {
 fn label_c_global(emitter: &mut Emitter, name: &str) {
     let symbol = emitter.target.extern_symbol(name);
     emitter.label_global(&symbol);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{AppleVariant, Platform, Target};
+
+    #[test]
+    fn native_scope_binding_capability_on_all_targets() {
+        let targets = [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target { platform: Platform::MacOS, arch: Arch::AArch64, apple_variant: AppleVariant::IOS },
+            Target { platform: Platform::MacOS, arch: Arch::AArch64, apple_variant: AppleVariant::IOSSimulator },
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ];
+        for target in targets {
+            let mut emitter = Emitter::new(target);
+            emit_eval_scope_runtime(&mut emitter);
+            let assembly = emitter.output();
+            let entry = target.extern_symbol("__elephc_eval_scope_bind_native");
+            let setter = target.extern_symbol("__elephc_eval_scope_set");
+            let jump = if target.arch == Arch::AArch64 { "b" } else { "jmp" };
+            assert!(assembly.contains(&format!("{entry}:")), "{target:?}");
+            assert!(assembly.contains(&format!("{jump} {setter}")), "{target:?}");
+        }
+    }
 }

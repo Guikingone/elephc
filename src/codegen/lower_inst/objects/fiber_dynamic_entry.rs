@@ -130,7 +130,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        emit_dynamic_new_candidate(ctx, candidate, constructor_args, result)?;
+        emit_dynamic_new_candidate(ctx, candidate, constructor_args, result, inst.span.map_or(0, |span| span.line))?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
@@ -239,6 +239,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
             constructor_arg_container,
             class_name_value,
             result,
+            inst.span.map_or(0, |span| span.line),
         )?;
         abi::emit_jump(ctx.emitter, &done_label);
     }

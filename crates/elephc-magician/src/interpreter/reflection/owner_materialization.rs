@@ -10,6 +10,28 @@
 
 use super::*;
 
+/// Stores owned metadata cells, releasing the builder's key/value references.
+/// Array writes borrow the key and retain the value; the receiver is returned unchanged.
+pub(super) fn eval_reflection_array_set_owned(
+    array: RuntimeCellHandle,
+    key: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = values.array_set(array, key, value);
+    let key_release = values.release(key);
+    let value_release = values.release(value);
+    let result = result.and_then(|array| {
+        key_release?;
+        value_release?;
+        Ok(array)
+    });
+    if result.is_err() {
+        let _ = values.release(array);
+    }
+    result
+}
+
 /// Materializes one Reflection owner object and transfers the temporary attribute array.
 pub(super) fn eval_reflection_owner_object(
     owner_kind: u64,
@@ -229,14 +251,19 @@ pub(super) fn eval_reflection_owner_object_with_members(
         } else {
             "ReflectionMethod"
         };
-        eval_reflection_with_declaring_class_scope(
+        let configured = eval_reflection_with_declaring_class_scope(
             declaring_class,
             context,
             |_| -> Result<(), EvalStatus> {
                 values.property_set(object, "__has_return_type", has_return_type)?;
                 values.property_set(object, "__type", return_type)
             },
-        )?;
+        );
+        let has_return_type_release = values.release(has_return_type);
+        let return_type_release = values.release(return_type);
+        configured?;
+        has_return_type_release?;
+        return_type_release?;
     }
     if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
         let has_type = values.bool_value(type_metadata.is_some())?;
@@ -244,14 +271,19 @@ pub(super) fn eval_reflection_owner_object_with_members(
             Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
             None => values.null()?,
         };
-        eval_reflection_with_declaring_class_scope(
+        let configured = eval_reflection_with_declaring_class_scope(
             "ReflectionClassConstant",
             context,
             |_| -> Result<(), EvalStatus> {
                 values.property_set(object, "__has_type", has_type)?;
                 values.property_set(object, "__type", type_value)
             },
-        )?;
+        );
+        let has_type_release = values.release(has_type);
+        let type_value_release = values.release(type_value);
+        configured?;
+        has_type_release?;
+        type_value_release?;
     }
     if matches!(
         owner_kind,
@@ -549,7 +581,7 @@ pub(super) fn eval_reflection_string_assoc_result(
     for (key, value) in pairs {
         let key = values.string(&key)?;
         let value = values.string(&value)?;
-        result = values.array_set(result, key, value)?;
+        result = eval_reflection_array_set_owned(result, key, value, values)?;
     }
     Ok(result)
 }
@@ -564,7 +596,7 @@ pub(super) fn eval_reflection_class_object_map_result(
     for name in names {
         let key = values.string(name)?;
         let object = eval_reflection_full_class_object_result(name, context, values)?;
-        result = values.array_set(result, key, object)?;
+        result = eval_reflection_array_set_owned(result, key, object, values)?;
     }
     Ok(result)
 }
@@ -603,7 +635,7 @@ pub(super) fn eval_reflection_parameter_object_array_result(
     for parameter in parameters {
         let parameter_object = eval_reflection_parameter_object_result(parameter, context, values)?;
         let key = values.int(parameter.position as i64)?;
-        result = values.array_set(result, key, parameter_object)?;
+        result = eval_reflection_array_set_owned(result, key, parameter_object, values)?;
     }
     Ok(result)
 }
@@ -983,7 +1015,7 @@ pub(super) fn eval_reflection_named_type_object_array_result(
     for (position, type_metadata) in types.iter().enumerate() {
         let type_object = eval_reflection_named_type_object_result(type_metadata, values)?;
         let key = values.int(position as i64)?;
-        result = values.array_set(result, key, type_object)?;
+        result = eval_reflection_array_set_owned(result, key, type_object, values)?;
     }
     Ok(result)
 }
@@ -1126,7 +1158,7 @@ pub(super) fn eval_reflection_member_object_array_result(
         let member_object =
             eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
-        result = values.array_set(result, key, member_object)?;
+        result = eval_reflection_array_set_owned(result, key, member_object, values)?;
         index += 1;
     }
     Ok(result)
@@ -1169,7 +1201,7 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
         let member_object =
             eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
-        result = values.array_set(result, key, member_object)?;
+        result = eval_reflection_array_set_owned(result, key, member_object, values)?;
         index += 1;
     }
     Ok(result)

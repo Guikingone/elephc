@@ -138,6 +138,17 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
                 .map(Some)
         }
         "getfilename" | "getstartline" | "getendline" => {
+            if let EvalReflectionFunctionMethodTarget::Method {
+                declaring_class: Some(declaring_class),
+                ..
+            } = &target
+            {
+                if eval_reflection_class_like_attributes(declaring_class, context).is_none() {
+                    // Preserve the generated method's own declaration metadata, not the
+                    // global entry-file fallback carried by the AOT eval metadata adapter.
+                    return Ok(None);
+                }
+            }
             let (source_file, source_location) =
                 eval_reflection_function_method_source_location(&target);
             eval_reflection_source_location_result(

@@ -192,6 +192,7 @@ fn collect_in_stmt(stmt: &Stmt, names: &mut HashSet<String>) {
         | StmtKind::UseDecl { .. }
         // Variant groups/marks carry function NAMES; the bodies live in their own `FunctionDecl`s.
         | StmtKind::FunctionVariantGroup { .. }
-        | StmtKind::FunctionVariantMark { .. } => {}
+        | StmtKind::FunctionVariantMark { .. }
+        | StmtKind::ClassLikeActivate { .. } => {}
     }
 }

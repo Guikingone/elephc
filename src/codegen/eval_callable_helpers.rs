@@ -1509,6 +1509,7 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
     let string_label = format!("{}_callable_string", label_prefix);
     let array_label = format!("{}_callable_array", label_prefix);
     let object_label = format!("{}_callable_object", label_prefix);
+    let descriptor_label = format!("{}_callable_descriptor", label_prefix);
     let dynamic_label = format!("{}_callable_dynamic", label_prefix);
     let miss_label = if support.has_dynamic_descriptor() {
         dynamic_label.as_str()
@@ -1525,7 +1526,12 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
     emitter.instruction(&format!("b.eq {}", array_label));                      // resolve static callable arrays with numeric keys
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means an invokable object candidate
     emitter.instruction(&format!("b.eq {}", object_label));                     // resolve invokable objects through descriptor metadata
+    emitter.instruction("cmp x0, #10");                                         // runtime tag 10 is an AOT first-class callable descriptor
+    emitter.instruction(&format!("b.eq {}", descriptor_label));                 // preserve the already-valid callable ABI payload
     abi::emit_jump(emitter, miss_label);
+    emitter.label(&descriptor_label);
+    emitter.instruction("mov x0, x1");                                          // return the unboxed callable descriptor pointer
+    abi::emit_jump(emitter, &format!("{}_callable_cast_done", label_prefix));
     emitter.label(&string_label);
     abi::emit_push_reg_pair(emitter, "x1", "x2");
     emit_eval_string_callable_descriptor_lookup(
@@ -1589,6 +1595,7 @@ pub(super) fn emit_x86_64_cast_eval_callable_arg(
     let string_label = format!("{}_callable_string", label_prefix);
     let array_label = format!("{}_callable_array", label_prefix);
     let object_label = format!("{}_callable_object", label_prefix);
+    let descriptor_label = format!("{}_callable_descriptor", label_prefix);
     let dynamic_label = format!("{}_callable_dynamic", label_prefix);
     let miss_label = if support.has_dynamic_descriptor() {
         dynamic_label.as_str()
@@ -1605,7 +1612,12 @@ pub(super) fn emit_x86_64_cast_eval_callable_arg(
     emitter.instruction(&format!("je {}", array_label));                        // resolve static callable arrays with numeric keys
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means an invokable object candidate
     emitter.instruction(&format!("je {}", object_label));                       // resolve invokable objects through descriptor metadata
+    emitter.instruction("cmp rax, 10");                                         // runtime tag 10 is an AOT first-class callable descriptor
+    emitter.instruction(&format!("je {}", descriptor_label));                   // preserve the already-valid callable ABI payload
     abi::emit_jump(emitter, miss_label);
+    emitter.label(&descriptor_label);
+    emitter.instruction("mov rax, rdi");                                        // return the unboxed callable descriptor pointer
+    abi::emit_jump(emitter, &format!("{}_callable_cast_done", label_prefix));
     emitter.label(&string_label);
     abi::emit_push_reg_pair(emitter, "rdi", "rdx");
     emit_eval_string_callable_descriptor_lookup(

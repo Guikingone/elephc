@@ -116,6 +116,23 @@ pub(crate) fn eval_arg_temp_slot_size(ty: &PhpType) -> usize {
     }
 }
 
+/// Gives mutable Mixed pointer slots their own owner once preparation succeeds.
+/// A native assignment can consume that owner independently of the reader cell.
+/// Do not call before argument validation: prep-failure paths never enter writeback.
+pub(crate) fn emit_retain_mixed_ref_arg_slots(
+    emitter: &mut Emitter,
+    ref_slots: &[EvalRefArgSlot],
+    stack_offset: usize,
+) {
+    for slot in ref_slots {
+        if slot.param_ty.codegen_repr() == PhpType::Mixed {
+            let result = abi::int_result_reg(emitter);
+            abi::emit_load_temporary_stack_slot(emitter, result, stack_offset + slot.raw_offset);
+            abi::emit_call_label(emitter, "__rt_incref");
+        }
+    }
+}
+
 /// Writes changed ARM64 ref-argument cells back into the original eval cells.
 pub(crate) fn emit_aarch64_write_back_ref_args(
     emitter: &mut Emitter,
@@ -156,11 +173,29 @@ fn emit_aarch64_write_back_mixed_ref_arg(
     label_prefix: &str,
 ) {
     let done_label = format!("{}_ref_{}_done", label_prefix, slot.param_index);
+    let unchanged_label = format!("{}_ref_{}_unchanged", label_prefix, slot.param_index);
     abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
     abi::emit_load_temporary_stack_slot(emitter, "x10", stack_offset + slot.raw_offset);
     emitter.instruction("cmp x9, x10");                                         // skip writeback when the native call kept the same Mixed cell
-    emitter.instruction(&format!("b.eq {}", done_label));                       // avoid self-copying and releasing the original cell payload
+    emitter.instruction(&format!("b.eq {}", unchanged_label));                  // unchanged slots only owe their separate mutable-slot owner
+    let unique_label = format!("{}_ref_{}_unique", label_prefix, slot.param_index);
+    emitter.instruction("ldr w11, [x10, #-12]");                                // inspect whether another variable also owns the replacement cell
+    emitter.instruction("cmp w11, #1");                                         // only an exclusively owned cell can surrender its payload and storage
+    emitter.instruction(&format!("b.eq {}", unique_label));                     // transfer a unique replacement without allocating a clone
+    abi::emit_push_reg_pair(emitter, "x9", "x10");
+    emitter.instruction("mov x0, x10");                                         // clone a shared replacement before consuming the mutable-slot owner
+    abi::emit_call_label(emitter, "__rt_mixed_clone");
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the shared replacement owner
+    emitter.instruction("str x0, [sp, #8]");                                    // preserve the independent clone as the payload transfer source
+    emitter.instruction("mov x0, x10");                                         // release only this slot's reference to the shared source
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_pop_reg_pair(emitter, "x9", "x10");
+    emitter.label(&unique_label);
     emit_aarch64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "x9", "x10");
+    emitter.instruction(&format!("b {}", done_label));                          // replacement consumed the mutable slot's new cell
+    emitter.label(&unchanged_label);
+    emitter.instruction("mov x0, x10");                                         // consume the unchanged mutable-slot owner without touching the reader owner
+    abi::emit_call_label(emitter, "__rt_decref_any");
     emitter.label(&done_label);
 }
 
@@ -172,11 +207,28 @@ fn emit_x86_64_write_back_mixed_ref_arg(
     label_prefix: &str,
 ) {
     let done_label = format!("{}_ref_{}_done_x", label_prefix, slot.param_index);
+    let unchanged_label = format!("{}_ref_{}_unchanged_x", label_prefix, slot.param_index);
     abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
     abi::emit_load_temporary_stack_slot(emitter, "r11", stack_offset + slot.raw_offset);
     emitter.instruction("cmp r10, r11");                                        // skip writeback when the native call kept the same Mixed cell
-    emitter.instruction(&format!("je {}", done_label));                         // avoid self-copying and releasing the original cell payload
+    emitter.instruction(&format!("je {}", unchanged_label));                    // unchanged slots only owe their separate mutable-slot owner
+    let unique_label = format!("{}_ref_{}_unique_x", label_prefix, slot.param_index);
+    emitter.instruction("cmp DWORD PTR [r11 - 12], 1");                         // only an exclusively owned replacement can surrender its payload and storage
+    emitter.instruction(&format!("je {}", unique_label));                       // transfer a unique replacement without allocating a clone
+    abi::emit_push_reg_pair(emitter, "r10", "r11");
+    emitter.instruction("mov rax, r11");                                        // clone a shared replacement before consuming the mutable-slot owner
+    abi::emit_call_label(emitter, "__rt_mixed_clone");
+    emitter.instruction("mov r11, QWORD PTR [rsp + 8]");                        // reload the shared replacement owner
+    emitter.instruction("mov QWORD PTR [rsp + 8], rax");                        // preserve the independent clone as the payload transfer source
+    emitter.instruction("mov rax, r11");                                        // release only this slot's reference to the shared source
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_pop_reg_pair(emitter, "r10", "r11");
+    emitter.label(&unique_label);
     emit_x86_64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "r10", "r11");
+    emitter.instruction(&format!("jmp {}", done_label));                        // replacement consumed the mutable slot's new cell
+    emitter.label(&unchanged_label);
+    emitter.instruction("mov rax, r11");                                        // consume the unchanged mutable-slot owner without touching the reader owner
+    abi::emit_call_label(emitter, "__rt_decref_any");
     emitter.label(&done_label);
 }
 

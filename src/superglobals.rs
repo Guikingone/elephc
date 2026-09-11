@@ -92,7 +92,7 @@ pub fn superglobal_type() -> PhpType {
     }
 }
 
-/// Returns true when EIR contains an owning array-reference marker for this superglobal.
+/// Returns true when any EIR body requires shared reference-cell storage for this global.
 ///
 /// Only those symbols change from direct hash storage to shared ref-cell storage, keeping the
 /// ordinary fast path and eval/pointer ABI unchanged for every other request superglobal.
@@ -100,10 +100,15 @@ pub(crate) fn uses_shared_ref_cell(module: &Module, name: &str) -> bool {
     module
         .functions
         .iter()
+        .chain(module.class_methods.iter())
         .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
         .flat_map(|function| function.instructions.iter())
         .any(|inst| {
-            if inst.op != Op::InvokerRefArg {
+            if !matches!(inst.op, Op::InvokerRefArg | Op::GlobalRefCell) {
                 return false;
             }
             let Some(Immediate::GlobalName(data)) = inst.immediate else {

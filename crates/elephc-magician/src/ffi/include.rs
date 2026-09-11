@@ -25,6 +25,80 @@ use crate::runtime_hooks::ElephcRuntimeOps;
 use crate::value::RuntimeCellHandle;
 use std::ffi::c_void;
 
+#[cfg(test)]
+mod native_state_registration_tests {
+    use super::*;
+    thread_local! { static CELL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
+
+    unsafe extern "C" fn lookup(path: *const u8, length: u64) -> *mut u64 {
+        if unsafe { std::slice::from_raw_parts(path, length as usize) } == b"/native.php" {
+            CELL.with(std::cell::Cell::as_ptr)
+        } else { std::ptr::null_mut() }
+    }
+    unsafe extern "C" fn other_lookup(_: *const u8, _: u64) -> *mut u64 { std::ptr::null_mut() }
+    unsafe extern "C" fn reset() { CELL.with(|cell| cell.set(0)); }
+
+    #[test]
+    fn native_include_registration_uses_the_context_request_state() {
+        let mut context = ElephcEvalContext::new();
+        unsafe {
+            reset();
+            assert_eq!(__elephc_eval_register_native_include_state(&mut context, Some(lookup), Some(reset)), 0);
+        }
+        context.mark_included_file("/native.php");
+        CELL.with(|cell| assert_eq!(cell.get(), 1));
+        unsafe {
+            assert_eq!(__elephc_eval_register_native_include_state(&mut context, Some(lookup), Some(reset)), 0);
+            assert_eq!(__elephc_eval_register_native_include_state(&mut context, Some(other_lookup), Some(reset)), EvalStatus::RuntimeFatal.code());
+            reset();
+        }
+        assert!(!context.has_included_file("/native.php"));
+        context.mark_included_file("/native.php");
+        CELL.with(|cell| assert_eq!(cell.get(), 1));
+        unsafe { reset(); }
+    }
+
+    #[test]
+    fn native_include_registration_rejects_missing_callbacks_and_bad_abi() {
+        let mut context = ElephcEvalContext::new();
+        let mut bad = ElephcEvalContext::for_abi_version(ABI_VERSION + 1);
+        unsafe {
+            assert_eq!(__elephc_eval_register_native_include_state(&mut context, None, Some(reset)), EvalStatus::RuntimeFatal.code());
+            assert_eq!(__elephc_eval_register_native_include_state(&mut bad, Some(lookup), Some(reset)), EvalStatus::AbiMismatch.code());
+        }
+    }
+}
+
+/// Connects inclusion state to the generated program's actual native guard cells.
+/// This registers state access only, not a compiled source provider or declaration.
+///
+/// # Safety
+/// Context must be null or live. Callbacks must remain valid for the program's
+/// lifetime, must not execute PHP/reenter, and lookup must return null or an aligned
+/// writable u64 cell. All native/bridge cell access must be serialized by the caller.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_include_state(
+    ctx: *mut ElephcEvalContext,
+    lookup: Option<unsafe extern "C" fn(*const u8, u64) -> *mut u64>,
+    reset: Option<unsafe extern "C" fn()>,
+) -> i32 {
+    std::panic::catch_unwind(|| {
+        let context = unsafe { ctx.as_ref() };
+        if context.is_some_and(|context| context.abi_version() != ABI_VERSION) {
+            return EvalStatus::AbiMismatch.code();
+        }
+        let (Some(lookup), Some(reset)) = (lookup, reset) else {
+            return EvalStatus::RuntimeFatal.code();
+        };
+        if unsafe { crate::context::install_native_include_hooks(context, crate::context::NativeIncludeHooks { lookup, reset }) } {
+            EvalStatus::Ok.code()
+        } else {
+            eprintln!("Fatal error: conflicting native inclusion-state owner");
+            EvalStatus::RuntimeFatal.code()
+        }
+    }).unwrap_or(EvalStatus::RuntimeFatal.code())
+}
+
 /// Clears dynamic include bookkeeping before a generated web request starts.
 ///
 /// CLI binaries never call this entry point, so their include registry naturally
@@ -33,9 +107,13 @@ use std::ffi::c_void;
 pub extern "C" fn __elephc_eval_include_request_reset() {
     crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_include_request_reset");
     let _ = std::panic::catch_unwind(|| {
-        crate::context::reset_global_eval_included_files();
         crate::context::reset_global_eval_function_contexts();
         crate::context::reset_global_eval_autoload_contexts();
+        #[cfg(not(test))]
+        crate::context::reset_global_eval_classes();
+        // Context cleanup may execute PHP destructors, which must still observe
+        // the current request's inclusion state until cleanup has completed.
+        crate::context::reset_global_eval_included_files();
     });
 }
 

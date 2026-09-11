@@ -20,6 +20,13 @@ use crate::ir::value::{Ownership, ValueId};
 pub fn print_module(module: &Module) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "module target={} {{", module.target);
+    if let Some(catalog) = module.source_catalog() {
+        out.push_str("  sources {\n");
+        for (id, source) in catalog.iter() {
+            let _ = writeln!(out, "    source[{}] = {:?}", id.as_raw(), source.canonical_path);
+        }
+        out.push_str("  }\n");
+    }
     print_data_pool(&mut out, &module.data);
     for function in module
         .functions
@@ -176,6 +183,16 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
+        }
+        Immediate::Source(id) => {
+            let _ = write!(out, " source[{}]", id.as_raw());
+        }
+        Immediate::ClassLikeActivation { source, site, kind, name } => {
+            let _ = write!(out, " declaration[{}:{}:{}:{:?}:data[{}]]",
+                source.as_raw(), site.line, site.col, kind, name.as_raw());
+        }
+        Immediate::UnresolvedSource(path) => {
+            let _ = write!(out, " unresolved_source[{:?}]", path);
         }
         Immediate::NominalObject { target, boundary } => {
             let _ = write!(

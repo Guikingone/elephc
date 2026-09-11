@@ -389,6 +389,7 @@ fn stmt_refs_mysqli(stmt: &Stmt) -> bool {
         | StmtKind::Global { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
 
         // An aliased import (`use mysqli as Db;`) names mysqli only here; the

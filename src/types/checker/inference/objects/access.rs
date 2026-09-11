@@ -271,6 +271,12 @@ impl Checker {
                 if !self.can_access_member(declaring_class, visibility)
                     && !inaccessible_dead_this_branch
                 {
+                    // An inaccessible declared property is read through __get when the
+                    // class provides that hook.  Do not expose the private slot type: the
+                    // caller observes the magic result, not the hidden storage.
+                    if let Some(sig) = class_info.methods.get("__get") {
+                        return Ok(sig.return_type.clone());
+                    }
                     return Err(CompileError::new(
                         expr.span,
                         &format!(

@@ -49,7 +49,17 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
             return Err(status);
         }
     };
+    // Copy the hooks and scope pointer before invoking generated code: nested
+    // native/eval calls may reenter the context. Synchronize before observing
+    // the native result or performing reference writeback, including errors.
+    let global_sync = context.native_global_sync.zip(context.global_scope_ptr());
+    if let Some((hooks, scope)) = global_sync {
+        unsafe { (hooks.eval_to_native)(scope) };
+    }
     let result = unsafe { function.call(arg_array) };
+    if let Some((hooks, scope)) = global_sync {
+        unsafe { (hooks.native_to_eval)(scope) };
+    }
     if let Err(status) = values.release(arg_array) {
         cleanup_native_function_ref_args(&bound_args, values)?;
         release_native_function_owned_temporaries(&bound_args, None, context, values)?;

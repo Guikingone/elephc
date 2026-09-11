@@ -153,6 +153,10 @@ pub(super) fn eval_array_unset_element_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if is_globals_array(array) {
+        let name = eval_global_name(index, context, scope, values)?;
+        return unset_global_value(&name, context, scope, values);
+    }
     match array {
         EvalExpr::LoadVar(name) => {
             let existing = scope_entry(context, scope, name)
@@ -359,8 +363,32 @@ pub(super) fn eval_non_object_array_append_var_stmt(
         values.array_new(1)?
     };
     let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
-    let array = values.array_set(array, index, value)?;
+    let owns_value = !super::super::expressions::eval_expr_result_aliases_storage(value);
+    let evaluated = eval_expr(value, context, scope, values);
+    let value = match evaluated {
+        Ok(value) => value,
+        Err(status) => {
+            values.release(index)?;
+            if existing.is_none_or(|(cell, _)| cell != array) {
+                values.release(array)?;
+            }
+            return Err(status);
+        }
+    };
+    // The setter borrows the key and retains its own element reference.
+    let stored = values.array_set(array, index, value);
+    let released_index = values.release(index);
+    let released_value = if owns_value {
+        eval_release_value(context, values, value)
+    } else {
+        Ok(())
+    };
+    if stored.is_err() && existing.is_none_or(|(cell, _)| cell != array) {
+        values.release(array)?;
+    }
+    let array = stored?;
+    released_index?;
+    released_value?;
     for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
         values.release(replaced)?;
     }
@@ -376,6 +404,14 @@ pub(super) fn eval_array_set_var_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if name == "GLOBALS" {
+        let target = EvalExpr::ArrayGet {
+            array: Box::new(EvalExpr::LoadVar(name.to_string())),
+            index: Box::new(index.clone()),
+        };
+        let result = eval_assign(&target, value, context, scope, values)?;
+        return eval_release_value(context, values, result);
+    }
     let existing = scope_entry(context, scope, name)
         .filter(|entry| entry.flags().is_visible())
         .map(|entry| (entry.cell(), entry.flags().ownership));
@@ -476,7 +512,7 @@ pub(in crate::interpreter) fn eval_destructure_into(
             let key_is_owned = target
                 .key
                 .as_ref()
-                .map_or(true, eval_expr_is_owning_temporary);
+                .is_none_or(|key| !super::super::expressions::eval_expr_result_aliases_storage(key));
             if key_is_owned {
                 eval_release_value(context, values, key)?;
             }
@@ -491,6 +527,16 @@ pub(in crate::interpreter) fn eval_destructure_into(
                 result?;
             }
             EvalDestructureSlot::Lvalue(EvalExpr::LoadVar(name)) => {
+                // Array reads own a reference but may return the very cell already in the
+                // destination. Scope replacement treats identical cells as an in-place
+                // write, so detach that assignment result before transferring its owner.
+                let element = if visible_scope_cell(context, scope, name) == Some(element) {
+                    let copied = values.copy_value(element);
+                    eval_release_value(context, values, element)?;
+                    copied?
+                } else {
+                    element
+                };
                 for replaced in set_scope_cell(
                     context,
                     scope,

@@ -113,7 +113,7 @@ pub(super) fn lower_static_method_call(
     let data = ctx.intern_string(&name);
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(signature.return_type.clone()))
         .unwrap_or_else(|| {
             if ctx.has_eval_barrier() && matches!(receiver, StaticReceiver::Named(_)) {
                 PhpType::Mixed
@@ -452,7 +452,7 @@ pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
 ) -> Option<PhpType> {
     let nominal = static_method_implementation_signature(ctx, receiver, method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))?;
+        .map(|signature| normalize_value_php_type(signature.return_type.clone()))?;
     match (
         static_method_late_static_return_for_ir(ctx, receiver, method),
         static_late_binding_receiver_type_for_ir(ctx, receiver),

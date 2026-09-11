@@ -104,9 +104,9 @@ mod tests {
 fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
     match kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(apply_stmts(stmts, defines)),
-        StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark { label },
-        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
-            label,
+        StmtKind::IncludeOnceMark { source_path } => StmtKind::IncludeOnceMark { source_path },
+        StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+            source_path,
             body: apply_stmts(body, defines),
         },
         StmtKind::Echo(expr) => StmtKind::Echo(rewrite_expr(expr, defines)),
@@ -489,6 +489,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             library,
         },
         StmtKind::ExternClassDecl { name, fields } => StmtKind::ExternClassDecl { name, fields },
+        StmtKind::ClassLikeActivate { name, kind, source_path } => StmtKind::ClassLikeActivate { name, kind, source_path },
         StmtKind::ExternGlobalDecl { name, c_type } => {
             StmtKind::ExternGlobalDecl { name, c_type }
         }

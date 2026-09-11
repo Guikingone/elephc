@@ -66,6 +66,10 @@ pub struct TraitMethodInfo {
 pub struct Module {
     pub target: Target,
     pub source_path: Option<String>,
+    /// Immutable inputs for compiled source entries, not runtime inclusion state.
+    source_catalog: Option<std::sync::Arc<super::SourceCatalog>>,
+    /// Public function names whose implementation is selected during execution.
+    pub(crate) runtime_bound_functions: std::sync::Arc<std::collections::HashSet<String>>,
     /// `--probe` build key, embedded as `_elephc_probe_key` so the probe endpoint
     /// can prove the binary's identity through the HMAC handshake. `None` unless
     /// `--probe` is set.
@@ -125,6 +129,8 @@ impl Module {
     /// Creates an empty module for the given target.
     pub fn new(target: Target) -> Self {
         Self {
+            source_catalog: None,
+            runtime_bound_functions: Default::default(),
             target,
             source_path: None,
             probe_key: None,
@@ -169,6 +175,35 @@ impl Module {
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
         }
+    }
+
+    /// Creates a module whose source identities are frozen before any body is lowered.
+    pub fn with_source_catalog(target: Target, catalog: super::SourceCatalog) -> Self {
+        let mut module = Self::new(target);
+        module.source_catalog = Some(std::sync::Arc::new(catalog));
+        module
+    }
+
+    /// Freezes the module's complete source catalog exactly once.
+    pub fn bind_source_units(
+        &mut self,
+        units: impl IntoIterator<Item = crate::resolver::SourceUnit>,
+    ) -> Result<(), crate::errors::CompileError> {
+        if self.source_catalog.is_some() {
+            return Err(crate::errors::CompileError::new(
+                crate::span::Span::dummy(), "Source catalog is already bound",
+            ));
+        }
+        self.source_catalog = Some(std::sync::Arc::new(super::SourceCatalog::from_units(units)?));
+        Ok(())
+    }
+
+    /// Returns source metadata without exposing mutable ID assignment.
+    pub fn source_catalog(&self) -> Option<&super::SourceCatalog> { self.source_catalog.as_deref() }
+
+    /// Shares immutable lookup with a lowering body without copying source maps or text.
+    pub(crate) fn shared_source_catalog(&self) -> Option<std::sync::Arc<super::SourceCatalog>> {
+        self.source_catalog.clone()
     }
 
     /// Adds a user function and returns its module-local identifier.

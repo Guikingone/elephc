@@ -581,13 +581,22 @@ fn eval_method_parameter_class_accepts(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    // Native first-class callables cross the eval ABI as descriptor cells rather than as
+    // interpreter-owned objects. They are nevertheless PHP Closure instances: accepting them
+    // here preserves the same declared-parameter contract as a Closure created in eval.
+    if tag == EVAL_TAG_CALLABLE
+        && class_name
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("Closure")
+    {
+        return Ok(true);
+    }
     if tag != EVAL_TAG_OBJECT {
         return Ok(false);
     }
     let target = eval_method_parameter_runtime_class_name(class_name, context)?;
-    let identity = values.object_identity(value)?;
-    if let Some(class) = context.dynamic_object_class(identity) {
-        return Ok(context.class_is_a(class.name(), &target, false));
+    if let Some(accepted) = dynamic_object_is_a(value, &target, false, context, values)? {
+        return Ok(accepted);
     }
     values.object_is_a(value, &target, false)
 }

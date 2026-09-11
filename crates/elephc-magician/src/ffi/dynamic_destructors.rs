@@ -84,6 +84,13 @@ pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcE
     Some(context as *mut ElephcEvalContext)
 }
 
+/// Checks an object identity without allocating argument cells or dereferencing the object.
+#[cfg(not(test))]
+#[no_mangle]
+pub extern "C" fn __elephc_eval_object_has_dynamic_owner(identity: u64) -> u64 {
+    u64::from(dynamic_object_owner_context(identity).is_some())
+}
+
 /// Runs an eval dynamic object destructor from the native object free path.
 ///
 /// # Safety
@@ -123,6 +130,13 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
     }
     if context.closure_object_target(identity).is_some() {
         let context_ptr = context as *mut ElephcEvalContext;
+        let receiver = context.closure_object_target(identity).and_then(|target| target.receiver());
+        // Keep this closure registered while releasing its receiver: a nested
+        // object destructor must not finalize the owning context underneath us.
+        if let Some(receiver) = receiver {
+            let mut values = ElephcRuntimeOps::with_context(context_ptr);
+            let _ = values.release(receiver);
+        }
         let should_finalize = context.forget_closure_object(identity);
         if should_finalize {
             unsafe { crate::ffi::context::finalize_eval_context_free(context_ptr) };

@@ -199,6 +199,11 @@ pub(super) fn lower_subscript_receiver_silently(
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
     if let Some(value) =
+        super::lazy_branches::lower_magic_property_null_coalesce_probe(ctx, array)
+    {
+        return value;
+    }
+    if let Some(value) =
         super::lazy_branches::lower_initialized_property_null_coalesce_probe(ctx, array)
     {
         return value;

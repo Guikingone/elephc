@@ -307,14 +307,20 @@ pub(crate) fn expr_has_side_effects(expr: &Expr) -> bool {
     expr_effect(expr).has_side_effects
 }
 
-/// Returns the effect summary for a callable target. Static methods and plain
-/// functions are treated as PURE; instance methods carry the effect of the
-/// receiver expression.
+/// Creation resolves a callable immediately and can fail even if never invoked.
+/// Static class lookup can also execute an autoloader with observable effects.
 pub(crate) fn callable_target_effect(target: &CallableTarget) -> Effect {
-    match target {
-        CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => Effect::PURE,
+    let mut effect = match target {
+        CallableTarget::Function(_) => Effect::PURE,
+        CallableTarget::StaticMethod { .. } => Effect {
+            has_side_effects: true,
+            may_throw: true,
+            writes_globals: true,
+        },
         CallableTarget::Method { object, .. } => expr_effect(object),
-    }
+    };
+    effect.may_throw = true;
+    effect
 }
 
 /// Eliminates pure/constant subexpressions in ternary, short-ternary, null coalesce,

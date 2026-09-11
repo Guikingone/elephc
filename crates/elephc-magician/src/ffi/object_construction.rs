@@ -68,9 +68,68 @@ pub unsafe extern "C" fn __elephc_eval_try_new_object(
 ) -> i32 {
     crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_try_new_object");
     std::panic::catch_unwind(|| unsafe {
-        eval_try_new_object_inner(ctx, name_ptr, name_len, args, arg_count, out)
+        eval_try_new_object_inner(ctx, name_ptr, name_len, args, arg_count, out, None)
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Borrowed native construction metadata. All fields are native 64-bit words.
+#[repr(C)]
+pub struct ElephcEvalConstructionSite {
+    pub arg_count: u64,
+    pub file_ptr: *const u8,
+    pub file_len: u64,
+    pub line: i64,
+}
+
+/// Constructs with a source location even when the caller owns no eval context.
+///
+/// # Safety
+/// Same pointer requirements as `__elephc_eval_try_new_object`; `site` must
+/// reference a live metadata record and its file bytes must remain readable.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_try_new_object_at(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    args: *const *mut RuntimeCell,
+    site: *const ElephcEvalConstructionSite,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        let Some(site) = site.as_ref() else { return EvalStatus::RuntimeFatal.code(); };
+        let Ok(file) = abi_name_to_string(site.file_ptr, site.file_len) else {
+            return EvalStatus::RuntimeFatal.code();
+        };
+        let source = (file, site.line);
+        eval_try_new_object_inner(ctx, name_ptr, name_len, args, site.arg_count, out, Some(&source))
+    }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Applies a native call site to the selected context only for this construction.
+#[cfg(not(test))]
+fn execute_native_new_at(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    args: Vec<RuntimeCellHandle>,
+    values: &mut ElephcRuntimeOps,
+    source: Option<&(String, i64)>,
+) -> Result<Option<interpreter::EvalOutcome>, EvalStatus> {
+    let previous = source.map(|(file, line)| {
+        let previous = context.call_site();
+        let dir = std::path::Path::new(file).parent()
+            .map(|path| path.to_string_lossy().into_owned()).unwrap_or_default();
+        context.set_call_site(file.clone(), dir, *line);
+        context.set_file_magic_override(Some(file.clone()));
+        previous
+    });
+    let outcome = interpreter::execute_context_try_new_object_outcome(context, name, args, values);
+    if let Some((file, dir, line, file_override)) = previous {
+        context.set_call_site(file, dir, line);
+        context.set_file_magic_override(file_override);
+    }
+    outcome
 }
 
 /// Calls a method on a value that may be an eval-created object.
@@ -279,6 +338,7 @@ unsafe fn eval_try_new_object_from_global_autoload_contexts(
     name: &str,
     args: &[RuntimeCellHandle],
     out: *mut ElephcEvalResult,
+    source: Option<&(String, i64)>,
 ) -> i32 {
     for owner in crate::context::global_eval_autoload_contexts_snapshot() {
         let Some(context) = owner.as_mut() else {
@@ -288,11 +348,12 @@ unsafe fn eval_try_new_object_from_global_autoload_contexts(
             continue;
         }
         let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-        match interpreter::execute_context_try_new_object_outcome(
+        match execute_native_new_at(
             context,
             name,
             args.to_vec(),
             &mut values,
+            source,
         ) {
             Ok(Some(outcome)) => {
                 if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
@@ -315,11 +376,12 @@ unsafe fn eval_try_new_object_from_global_autoload_contexts(
     let mut fallback_context = ElephcEvalContext::new();
     crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
     let mut values = ElephcRuntimeOps::with_context(&fallback_context);
-    match interpreter::execute_context_try_new_object_outcome(
+    match execute_native_new_at(
         &mut fallback_context,
         name,
         args.to_vec(),
         &mut values,
+        source,
     ) {
         Ok(Some(outcome)) => {
             if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
@@ -352,6 +414,7 @@ unsafe fn eval_try_new_object_inner(
     args: *const *mut RuntimeCell,
     arg_count: u64,
     out: *mut ElephcEvalResult,
+    source: Option<&(String, i64)>,
 ) -> i32 {
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return EvalStatus::RuntimeFatal.code();
@@ -372,13 +435,14 @@ unsafe fn eval_try_new_object_inner(
     };
     clear_result(out);
     let Some(context) = ctx.as_mut() else {
-        return eval_try_new_object_from_global_autoload_contexts(&name, &args, out);
+        return eval_try_new_object_from_global_autoload_contexts(&name, &args, out, source);
     };
     if context.abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
     }
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_try_new_object_outcome(context, &name, args, &mut values) {
+    let outcome = execute_native_new_at(context, &name, args, &mut values, source);
+    match outcome {
         Ok(Some(outcome)) => {
             if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
                 eprintln!("[elephc-eval-trace] phase=try_new_object_ok class={name:?}");

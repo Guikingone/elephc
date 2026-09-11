@@ -34,6 +34,15 @@ pub(super) fn lower_property_array_push(
         generic_object_array_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
         let data = ctx.intern_string(property);
+        // The CONTAINER of an indexed write or unset is fetched quietly, the same as the
+        // container of an `isset`/`empty` operand. PHP does not raise for an uninitialized
+        // typed property here either: an indexed write auto-initializes it and an `unset` of
+        // one of its elements is a no-op that leaves it uninitialized. Over an EVAL-OWNED
+        // receiver this fetch leaves compiled code through the bridge, which raises unless the
+        // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
+        // as the `empty()` above are what still stopped the Symfony request once the operand
+        // form was fixed.
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
             vec![object.value],
@@ -42,6 +51,7 @@ pub(super) fn lower_property_array_push(
             Op::PropGet.default_effects(),
             Some(span),
         );
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
         let value = lower_expr(ctx, value);
@@ -73,6 +83,15 @@ pub(super) fn lower_property_array_push(
         generic_object_array_property_type(ctx, object.value, property).filter(is_assoc_array_type)
     {
         let data = ctx.intern_string(property);
+        // The CONTAINER of an indexed write or unset is fetched quietly, the same as the
+        // container of an `isset`/`empty` operand. PHP does not raise for an uninitialized
+        // typed property here either: an indexed write auto-initializes it and an `unset` of
+        // one of its elements is a no-op that leaves it uninitialized. Over an EVAL-OWNED
+        // receiver this fetch leaves compiled code through the bridge, which raises unless the
+        // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
+        // as the `empty()` above are what still stopped the Symfony request once the operand
+        // form was fixed.
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
             vec![object.value],
@@ -81,6 +100,7 @@ pub(super) fn lower_property_array_push(
             Op::PropGet.default_effects(),
             Some(span),
         );
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
         let value = lower_expr(ctx, value);
@@ -112,6 +132,15 @@ pub(super) fn lower_property_array_push(
         .filter(|ty| property_type_uses_mixed_array_storage(ty))
     {
         let data = ctx.intern_string(property);
+        // The CONTAINER of an indexed write or unset is fetched quietly, the same as the
+        // container of an `isset`/`empty` operand. PHP does not raise for an uninitialized
+        // typed property here either: an indexed write auto-initializes it and an `unset` of
+        // one of its elements is a no-op that leaves it uninitialized. Over an EVAL-OWNED
+        // receiver this fetch leaves compiled code through the bridge, which raises unless the
+        // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
+        // as the `empty()` above are what still stopped the Symfony request once the operand
+        // form was fixed.
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
             vec![object.value],
@@ -120,6 +149,7 @@ pub(super) fn lower_property_array_push(
             Op::PropGet.default_effects(),
             Some(span),
         );
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let value = lower_expr(ctx, value);
         ctx.emit_void(
             Op::MixedArrayAppend,
@@ -232,6 +262,15 @@ pub(super) fn lower_property_array_assign(
         generic_object_array_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
         let data = ctx.intern_string(property);
+        // The CONTAINER of an indexed write or unset is fetched quietly, the same as the
+        // container of an `isset`/`empty` operand. PHP does not raise for an uninitialized
+        // typed property here either: an indexed write auto-initializes it and an `unset` of
+        // one of its elements is a no-op that leaves it uninitialized. Over an EVAL-OWNED
+        // receiver this fetch leaves compiled code through the bridge, which raises unless the
+        // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
+        // as the `empty()` above are what still stopped the Symfony request once the operand
+        // form was fixed.
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
             vec![object.value],
@@ -240,6 +279,7 @@ pub(super) fn lower_property_array_assign(
             Op::PropGet.default_effects(),
             Some(span),
         );
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so
@@ -336,6 +376,15 @@ pub(super) fn lower_property_array_assign(
         generic_object_array_property_type(ctx, object.value, property).filter(is_assoc_array_type)
     {
         let data = ctx.intern_string(property);
+        // The CONTAINER of an indexed write or unset is fetched quietly, the same as the
+        // container of an `isset`/`empty` operand. PHP does not raise for an uninitialized
+        // typed property here either: an indexed write auto-initializes it and an `unset` of
+        // one of its elements is a no-op that leaves it uninitialized. Over an EVAL-OWNED
+        // receiver this fetch leaves compiled code through the bridge, which raises unless the
+        // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
+        // as the `empty()` above are what still stopped the Symfony request once the operand
+        // form was fixed.
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
             vec![object.value],
@@ -344,6 +393,7 @@ pub(super) fn lower_property_array_assign(
             Op::PropGet.default_effects(),
             Some(span),
         );
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so
@@ -408,6 +458,15 @@ pub(super) fn lower_property_array_assign(
         .filter(|ty| property_type_uses_mixed_array_storage(ty))
     {
         let data = ctx.intern_string(property);
+        // The CONTAINER of an indexed write or unset is fetched quietly, the same as the
+        // container of an `isset`/`empty` operand. PHP does not raise for an uninitialized
+        // typed property here either: an indexed write auto-initializes it and an `unset` of
+        // one of its elements is a no-op that leaves it uninitialized. Over an EVAL-OWNED
+        // receiver this fetch leaves compiled code through the bridge, which raises unless the
+        // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
+        // as the `empty()` above are what still stopped the Symfony request once the operand
+        // form was fixed.
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
             vec![object.value],
@@ -416,6 +475,7 @@ pub(super) fn lower_property_array_assign(
             Op::PropGet.default_effects(),
             Some(span),
         );
+        crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
         // Same store-time index rule as every other element write: share the helper so this

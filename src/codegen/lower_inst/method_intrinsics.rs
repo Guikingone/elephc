@@ -309,6 +309,11 @@ pub(super) fn lower_nullable_receiver_method_call(
         );
     }
     let normalized_class = class_name.trim_start_matches('\\');
+    if normalized_class.is_empty() {
+        return lower_narrowed_nullable_interface_method_call(
+            ctx, inst, object, normalized_class, method_name,
+        );
+    }
     if !ctx.module.class_infos.contains_key(normalized_class)
         && !ctx.module.extern_class_infos.contains_key(normalized_class)
         && !ctx.module.packed_class_infos.contains_key(normalized_class)

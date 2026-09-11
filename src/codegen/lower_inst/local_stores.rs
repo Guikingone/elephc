@@ -141,6 +141,13 @@ pub(super) fn lower_alias_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &I
     }
     let source_offset = ctx.local_offset(source_slot)?;
     let target_offset = ctx.local_offset(target_slot)?;
+    if ctx.local_kind(target_slot)? == LocalKind::RefCell {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, result_reg, source_offset);
+        abi::emit_call_label(ctx.emitter, "__rt_global_ref_cell_incref");
+        abi::store_at_offset(ctx.emitter, result_reg, target_offset);
+        return Ok(());
+    }
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, source_offset);
     abi::store_at_offset_scratch(
@@ -170,7 +177,9 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
         target_offset,
         abi::tertiary_scratch_reg(ctx.emitter),
     );
-    ctx.mark_promoted_ref_cell(target_slot);
+    if ctx.local_kind(target_slot)? != LocalKind::RefCell {
+        ctx.mark_promoted_ref_cell(target_slot);
+    }
     Ok(())
 }
 

@@ -68,6 +68,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Ctype,
     /// Dispatches filesystem and path builtins.
     Filesystem,
+    /// Dispatches `filter_var(...)`.
+    FilterVar,
     /// Dispatches `acos(...)`.
     Acos,
     /// Dispatches `asin(...)`.
@@ -371,6 +373,7 @@ impl EvalDirectHook {
             Self::Deg2rad => eval_builtin_deg2rad(args, context, scope, values),
             Self::Exp => eval_builtin_exp(args, context, scope, values),
             Self::Filesystem => eval_builtin_filesystem_call(name, args, context, scope, values),
+            Self::FilterVar => eval_builtin_filter_var(args, context, scope, values),
             Self::Gettype => eval_builtin_gettype(args, context, scope, values),
             Self::Hypot => eval_builtin_hypot(args, context, scope, values),
             Self::Intval => eval_builtin_intval(args, context, scope, values),

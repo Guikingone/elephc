@@ -45,7 +45,19 @@ pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
         }
-        PhpType::Object(_) | PhpType::Packed(_) | PhpType::Resource(_) => {
+        PhpType::Object(_) => {
+            ctx.load_value_to_result(value)?;
+            emit_int_result_null_container_bool(ctx);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("eor x0, x0, #1");                // only a non-null object payload is truthy
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("xor rax, 1");                    // invert the null predicate without dereferencing the receiver
+                }
+            }
+        }
+        PhpType::Packed(_) | PhpType::Resource(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         }
         other => {
@@ -419,4 +431,54 @@ pub(super) fn emit_string_truthiness(ctx: &mut FunctionContext<'_>, value: Value
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen::generate_user_asm_from_ir;
+    use crate::codegen::platform::{AppleVariant, Arch, Platform, Target};
+    use crate::ir::{Builder, Function, Immediate, IrHeapKind, IrType, Module, Op, Ownership, Terminator};
+    use crate::types::PhpType;
+
+    /// Raw object slots can carry a null miss marker, independently of the target ABI.
+    #[test]
+    fn object_truthiness_checks_null_on_every_supported_target() {
+        let targets = [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target { platform: Platform::MacOS, arch: Arch::AArch64, apple_variant: AppleVariant::IOS },
+            Target { platform: Platform::MacOS, arch: Arch::AArch64, apple_variant: AppleVariant::IOSSimulator },
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ];
+        for target in targets {
+            for op in [Op::IsTruthy, Op::Cast] {
+                let mut module = Module::new(target);
+                let mut function = Function::new("main".to_string(), IrType::I64, PhpType::Bool);
+                function.flags.is_main = true;
+                {
+                    let mut builder = Builder::new(&mut function);
+                    let entry = builder.create_named_block("entry", vec![]);
+                    builder.set_entry(entry);
+                    builder.position_at_end(entry);
+                    let object = builder.emit(
+                        Op::ConstNull, vec![], None, IrType::Heap(IrHeapKind::Object),
+                        PhpType::Object("stdClass".to_string()), Ownership::NonHeap,
+                    ).unwrap();
+                    let immediate = (op == Op::Cast).then_some(Immediate::CastTarget(IrType::I64));
+                    let truthy = builder.emit(
+                        op, vec![object], immediate, IrType::I64, PhpType::Bool, Ownership::NonHeap,
+                    ).unwrap();
+                    builder.terminate(Terminator::Return { value: Some(truthy) });
+                }
+                module.add_function(function);
+                let asm = generate_user_asm_from_ir(&module, false, false).unwrap();
+                assert!(asm.contains("is_null_container"), "{target:?} {op:?}: {asm}");
+                let inversion = match target.arch {
+                    Arch::AArch64 => "eor x0, x0, #1",
+                    Arch::X86_64 => "xor rax, 1",
+                };
+                assert!(asm.contains(inversion), "{target:?} {op:?}: {asm}");
+            }
+        }
+    }
 }

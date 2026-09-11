@@ -178,6 +178,26 @@ mod tests {
         emitter.output()
     }
 
+    /// Byte inspection borrows existing string storage rather than leaking a detached copy.
+    #[test]
+    fn eval_string_bytes_borrows_unboxed_strings_on_both_targets() {
+        let arm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        let arm_view = arm.split("__elephc_eval_value_string_bytes:\n").nth(1).unwrap()
+            .split("__elephc_eval_value_truthy:").next().unwrap();
+        assert!(arm_view.contains("bl __rt_mixed_unbox"));
+        assert!(arm_view.contains("b.eq __elephc_eval_value_string_bytes_store"));
+        assert!(arm_view.contains("bl __rt_value_cast_string"));
+        assert!(!arm_view.contains("bl __rt_mixed_cast_string"));
+
+        let x86 = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let x86_view = x86.split("__elephc_eval_value_string_bytes:\n").nth(1).unwrap()
+            .split("__elephc_eval_value_truthy:").next().unwrap();
+        assert!(x86_view.contains("call __rt_mixed_unbox"));
+        assert!(x86_view.contains("mov rax, rdi\n    jmp __elephc_eval_value_string_bytes_store_x86"));
+        assert!(x86_view.contains("call __rt_value_cast_string"));
+        assert!(!x86_view.contains("call __rt_mixed_cast_string"));
+    }
+
     /// Pins the AArch64 tag-9 arm of `__elephc_eval_value_cast_string`.
     ///
     /// The eval bridge re-implements its own tag dispatch rather than calling

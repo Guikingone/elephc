@@ -3240,3 +3240,81 @@ echo implode(',', $registry->ids);
         "second request diverged from the first; expected a body ending {expected:?}, got {second:?}"
     );
 }
+
+/// A ReflectionMethod returned by an eval-backed ReflectionClass remains live while compiled
+/// code stores it in nested arrays, destructures it, and checks its abstract reflection parent.
+///
+/// This must run through `--web`: the worker enables the allocator's double-free guard, whereas
+/// the same source in a plain CLI binary can complete before the duplicate release is observed.
+#[test]
+fn web_eval_reflection_constructor_survives_array_roundtrip() {
+    let dir = make_test_dir("web_eval_reflection_constructor");
+    fs::write(
+        dir.join("runner.php"),
+        r#"<?php
+class RuntimeConstructorTarget
+{
+    public function __construct(string $value = 'x') {}
+}
+function makeRuntimeReflection(): mixed {
+    return new ReflectionClass('RuntimeConstructorTarget');
+}
+"#,
+    )
+    .unwrap();
+
+    let src = r#"<?php
+function getRuntimeConstructor(mixed $reflection): ?ReflectionFunctionAbstract {
+    if (!$reflection = $reflection->getConstructor()) {
+        return null;
+    }
+    if (!$reflection->isPublic()) {
+        return null;
+    }
+    return $reflection;
+}
+function inspectRuntimeConstructor(mixed $reflection): string {
+    $reflection->isInternal();
+    $reflection->getFileName();
+    $calls = [];
+    if ($constructor = getRuntimeConstructor($reflection)) {
+        $calls[] = [$constructor, []];
+    }
+
+    $seen = 'none';
+    foreach ($calls as $call) {
+        [$method, $arguments] = $call;
+        if ($method instanceof ReflectionFunctionAbstract) {
+            $seen = $method instanceof ReflectionMethod ? 'method' : 'function';
+            $names = [];
+            foreach ($method->getParameters() as $parameter) {
+                $names[] = $parameter->name;
+            }
+        }
+    }
+    return $seen;
+}
+$runnerFile = 'runner';
+if (!function_exists('makeRuntimeReflection')) {
+    include __DIR__ . '/' . $runnerFile . '.php';
+}
+echo inspectRuntimeConstructor(makeRuntimeReflection());
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        first.ends_with("method"),
+        "the first worker request lost or double-freed the ReflectionMethod: {first:?}"
+    );
+    assert!(
+        second.ends_with("method"),
+        "the ReflectionMethod ownership diverged on a later request: {second:?}"
+    );
+}

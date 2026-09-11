@@ -11,6 +11,7 @@ use super::*;
 
 /// Ensures a persistent eval context exists and stores its handle in the scratch frame.
 pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    crate::codegen::source_units::emit_state_install(ctx);
     let slot = eval_context_slot(ctx)?;
     let offset = ctx.local_offset(slot)?;
     let ready = ctx.next_label("eval_context_ready");
@@ -76,6 +77,8 @@ pub(super) fn load_eval_context_or_null(ctx: &mut FunctionContext<'_>) -> Result
 /// assembly body is emitted only at the first eval site. A dedicated ABI frame
 /// preserves both the incoming context handle and the caller's return address.
 fn emit_eval_registration_helper(ctx: &mut FunctionContext<'_>, label: &str) -> Result<()> {
+    let native_to_eval = ctx.next_label("eval_globals_from_native");
+    let eval_to_native = ctx.next_label("eval_globals_to_native");
     ctx.emitter.label_shared(label);
     abi::emit_frame_prologue(ctx.emitter, EVAL_CONTEXT_HELPER_FRAME_SIZE);
     let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -84,8 +87,38 @@ fn emit_eval_registration_helper(ctx: &mut FunctionContext<'_>, label: &str) -> 
     register_eval_declared_symbols(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
     register_eval_native_functions(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET)?;
     register_eval_native_method_signatures(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
+    load_eval_context_local_to_arg(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET, 0);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &native_to_eval);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), &eval_to_native);
+    let register = ctx.emitter.target.extern_symbol("__elephc_eval_context_set_global_sync_hooks");
+    abi::emit_call_label(ctx.emitter, &register);
     publish_eval_aot_metadata(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
     abi::emit_frame_restore(ctx.emitter, EVAL_CONTEXT_HELPER_FRAME_SIZE);
+    abi::emit_return(ctx.emitter);
+    emit_eval_global_sync_helper(ctx, &native_to_eval, true)?;
+    emit_eval_global_sync_helper(ctx, &eval_to_native, false)?;
+    Ok(())
+}
+
+/// Emits one module transfer routine with an explicit live scope and its own
+/// scratch frame. No caller-local eval handle is required by either direction.
+fn emit_eval_global_sync_helper(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    native_to_eval: bool,
+) -> Result<()> {
+    ctx.emitter.label_shared(label);
+    let frame_size = EVAL_STACK_BYTES + 16;
+    abi::emit_frame_prologue(ctx.emitter, frame_size);
+    let scope_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_store_to_sp(ctx.emitter, scope_arg, EVAL_GLOBAL_SCOPE_HANDLE_OFFSET);
+    let globals = eval_sync_globals(ctx);
+    if native_to_eval {
+        flush_eval_global_scope(ctx, &globals)?;
+    } else {
+        reload_eval_global_scope(ctx, &globals)?;
+    }
+    abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
     Ok(())
 }

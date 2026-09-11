@@ -9,6 +9,100 @@
 
 use super::*;
 
+/// Rebinding native metadata must not replace declaration paths with the entry-point path.
+#[test]
+fn test_eval_foreign_reflection_preserves_native_declaration_source() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("main.php", r#"<?php
+require __DIR__ . '/ForeignFile.php';
+$object = new FileMetadataTarget();
+$reflection = new ReflectionObject($object);
+$method = new ReflectionMethod(FileMetadataTarget::class, 'read');
+eval(file_get_contents(__DIR__ . '/inspect.txt'));
+"#),
+            ("ForeignFile.php", "<?php\nclass FileMetadataTarget {\n    public const MARK = 'ok';\n    public function read(): int { return 1; }\n}\n"),
+            ("inspect.txt", "echo count($reflection->getConstants()), ':', basename($reflection->getFileName()), ':', $reflection->getStartLine(), ':', $reflection->getEndLine(), '|'; echo $method->getNumberOfParameters(), ':', basename($method->getFileName()), ':', $method->getStartLine(), ':', $method->getEndLine();"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1:ForeignFile.php:2:5|0:ForeignFile.php:4:4");
+}
+
+/// Native reflection metadata remains usable after returning an object from another eval frame.
+#[test]
+fn test_eval_foreign_frame_reflection_rebinds_native_classlikes() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("main.php", r#"<?php
+class ForeignClass { public const MARK = 'class'; }
+interface ForeignContract { public const MARK = 'interface'; }
+trait ForeignTrait { public const MARK = 'trait'; }
+enum ForeignEnum { case Ready; public const MARK = 'enum'; }
+class_alias(ForeignClass::class, 'ForeignAlias');
+function createForeignReflection(string $name): ReflectionClass {
+    return eval(file_get_contents(__DIR__ . '/create.txt'));
+}
+foreach (['ForeignClass', 'ForeignContract', 'ForeignTrait', 'ForeignEnum', '\\foreignclass', 'ForeignAlias'] as $name) {
+    $reflection = createForeignReflection($name);
+    eval(file_get_contents(__DIR__ . '/inspect.txt'));
+}
+"#),
+            ("create.txt", "return new ReflectionClass($name);"),
+            ("inspect.txt", "echo $reflection->getName(), ':', $reflection->getConstants()['MARK'], '|';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ForeignClass:class|ForeignContract:interface|ForeignTrait:trait|ForeignEnum:enum|ForeignClass:class|ForeignClass:class|");
+}
+
+/// Associative object results must expose raw objects to compiled consumers, not boxed cells.
+#[test]
+fn test_eval_associative_object_return_preserves_identity_and_aliases() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("main.php", r#"<?php
+interface MapContract { public function load(); }
+class MapImplementation implements MapContract { public function load() {} }
+$owner = new ReflectionClass(MapImplementation::class);
+$interfaces = $owner->getInterfaces();
+$copy = $interfaces;
+unset($interfaces);
+$reflection = $copy['MapContract'];
+echo get_class($reflection), ':';
+eval(file_get_contents(__DIR__ . '/inspect.txt'));
+"#),
+            ("inspect.txt", "echo $reflection->getName(), ':', count($reflection->getConstants());"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ReflectionClass:MapContract:0");
+}
+
+/// The same associative-object boundary applies to trait maps and empty maps.
+#[test]
+fn test_eval_associative_object_return_handles_traits_and_empty_maps() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("main.php", r#"<?php
+trait MapTrait {}
+class MapTraitOwner { use MapTrait; }
+class EmptyMapOwner {}
+$owner = new ReflectionClass(MapTraitOwner::class);
+$traits = $owner->getTraits();
+$reflection = $traits['MapTrait'];
+echo get_class($reflection), ':';
+eval(file_get_contents(__DIR__ . '/inspect.txt'));
+$empty = new ReflectionClass(EmptyMapOwner::class);
+echo ':', count($empty->getTraits()), ':', count($empty->getInterfaces());
+"#),
+            ("inspect.txt", "echo $reflection->getName();"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ReflectionClass:MapTrait:0:0");
+}
+
 /// Verifies Reflection materializes indexed and associative literal class constants as arrays.
 #[test]
 fn test_reflection_class_materializes_literal_array_constants() {

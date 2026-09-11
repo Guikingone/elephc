@@ -18,8 +18,8 @@ pub(super) fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instructio
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_global missing result value"))?;
     let ty = ctx.value_php_type(result)?;
-    if ctx.module.web && crate::superglobals::uses_shared_ref_cell(ctx.module, name) {
-        load_shared_web_global_to_result(ctx, &symbol);
+    if crate::superglobals::uses_shared_ref_cell(ctx.module, name) {
+        load_shared_global_to_result(ctx, &symbol);
         return store_if_result(ctx, inst);
     }
     ctx.data
@@ -35,9 +35,6 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let symbol = ir_global_symbol(&name);
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
-    if ctx.module.web && crate::superglobals::uses_shared_ref_cell(ctx.module, &name) {
-        return lower_store_web_superglobal(ctx, &symbol, &ty);
-    }
     let store_ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
         ty.codegen_repr()
     } else {
@@ -51,22 +48,66 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
         PhpType::Mixed
     };
+    if crate::superglobals::uses_shared_ref_cell(ctx.module, &name) {
+        return lower_store_shared_global(ctx, &symbol, &store_ty);
+    }
     ctx.data
         .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(8));
     abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
     Ok(())
 }
 
-/// Stores a web superglobal through its request-lifetime shared reference cell.
-pub(in crate::codegen) fn lower_store_web_superglobal(
+/// Removes the name's global owner while existing aliases retain their cells.
+pub(super) fn lower_unset_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let name = ctx.global_name_data(expect_global_name(inst)?)?.to_string();
+    unset_global_name(ctx, &name);
+    Ok(())
+}
+
+/// Removes the symbol's owner before invoking any payload destructor.
+pub(in crate::codegen) fn unset_global_name(ctx: &mut FunctionContext<'_>, name: &str) {
+    let symbol = ir_global_symbol(name);
+    ctx.data.add_comm(symbol.clone(), 8);
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+    let release = if crate::superglobals::uses_shared_ref_cell(ctx.module, name) {
+        "__rt_global_ref_cell_decref"
+    } else {
+        "__rt_decref_mixed"
+    };
+    abi::emit_call_label(ctx.emitter, release);
+}
+
+/// Acquires a durable reference-cell share before replacing a local binding.
+pub(super) fn lower_global_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data = expect_global_name(inst)?;
+    let name = ctx.global_name_data(data)?.to_string();
+    if crate::superglobals::is_superglobal(&name) {
+        return Err(CodegenIrError::unsupported("global_ref_cell requires boxed global storage"));
+    }
+    let symbol = ir_global_symbol(&name);
+    ctx.data.add_comm(symbol.clone(), 8);
+    let ready = ctx.next_label("global_ref_cell_ready");
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+    lower_store_shared_global(ctx, &symbol, &PhpType::Mixed)?;
+    ctx.emitter.label(&ready);
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_global_ref_cell_incref");
+    store_if_result(ctx, inst)
+}
+
+/// Stores a global through its shared reference cell, preserving live aliases.
+pub(in crate::codegen) fn lower_store_shared_global(
     ctx: &mut FunctionContext<'_>,
     symbol: &str,
     ty: &PhpType,
 ) -> Result<()> {
     let store_ty = ty.codegen_repr();
-    if !matches!(store_ty, PhpType::AssocArray { .. }) {
+    if !matches!(store_ty, PhpType::AssocArray { .. } | PhpType::Mixed) {
         return Err(CodegenIrError::unsupported(format!(
-            "web superglobal reference-cell store for PHP type {:?}",
+            "global reference-cell store for PHP type {:?}",
             store_ty
         )));
     }
@@ -122,7 +163,12 @@ pub(in crate::codegen) fn lower_store_web_superglobal(
         cell_reg,
         0,
     );
-    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+    let release_payload = if store_ty == PhpType::Mixed {
+        "__rt_decref_mixed"
+    } else {
+        "__rt_decref_hash"
+    };
+    abi::emit_call_label(ctx.emitter, release_payload);
     abi::emit_pop_reg(ctx.emitter, cell_reg);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_store_to_address(
@@ -145,8 +191,8 @@ pub(in crate::codegen) fn lower_store_web_superglobal(
     Ok(())
 }
 
-/// Loads the associative-array payload held by a shared web-global ref-cell.
-pub(super) fn load_shared_web_global_to_result(
+/// Loads the pointer-sized payload held by a shared global reference cell.
+pub(super) fn load_shared_global_to_result(
     ctx: &mut FunctionContext<'_>,
     symbol: &str,
 ) {

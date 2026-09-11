@@ -184,6 +184,10 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    // `$object->{$method}()` is lowered through a callable array. Its runtime receiver can be an
+    // eval-owned class, so retain a lazy context slot for the callable bridge to preserve the
+    // current method's PHP visibility scope instead of falling back to global scope.
+    ctx.declare_eval_context_local();
     let receiver_type = strip_void_from_union(ctx.builder.value_php_type(object.value));
     let object = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
         ctx,

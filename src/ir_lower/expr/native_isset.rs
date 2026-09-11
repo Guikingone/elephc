@@ -198,7 +198,7 @@ pub(super) fn lower_lazy_property_isset_operand(
             Some(emit_bool_literal(ctx, false, Some(arg.span)))
         }
         IssetPropertyAction::Initialized => {
-            let object = lower_expr(ctx, object);
+            let object = lower_subscript_receiver_silently(ctx, object);
             Some(lower_initialized_property_isset(ctx, object, property, arg))
         }
     }
@@ -240,22 +240,7 @@ pub(super) fn property_isset_action(
 
 /// Returns the single receiver class and whether that receiver may be null.
 pub(super) fn isset_object_expr_class(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<(String, bool)> {
-    let ty = match &object.kind {
-        ExprKind::Variable(name) => ctx.local_type(name),
-        ExprKind::This => PhpType::Object(ctx.current_class.clone()?),
-        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
-        ExprKind::NewDynamicObject { fallback_class, .. } => {
-            PhpType::Object(fallback_class.to_string())
-        }
-        ExprKind::FunctionCall { name, .. } => ctx
-            .functions
-            .get(name.as_str())
-            .map(|sig| sig.return_type.clone())
-            .unwrap_or_else(|| infer_expr_type_syntactic(object)),
-        _ => infer_expr_type_syntactic(object),
-    };
-    let (class_name, nullable) = singular_object_class(&ty)?;
-    normalized_class_name(class_name).map(|name| (name, nullable))
+    instance_callable_object_class_and_nullability(ctx, object)
 }
 
 /// Returns whether a named property can use normal `isset()` value probing.

@@ -744,6 +744,7 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
         } => expr_refs(object, target)
             .or_else(|| expr_refs(index, target))
             .or_else(|| expr_refs(value, target)),
+        StmtKind::ClassLikeActivate { .. } => None,
     }
 }
 

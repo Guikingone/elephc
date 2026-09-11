@@ -611,6 +611,7 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => {}
     }
 }

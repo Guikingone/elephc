@@ -190,31 +190,16 @@ impl ElephcEvalContext {
         self.array_cursors.insert(key, cursor);
     }
 
-    /// Returns true when an eval include key was loaded in this context or process request.
-    pub fn has_included_file(&self, path: &str) -> bool {
-        if self.included_files.contains(path) {
-            return true;
-        }
-        #[cfg(not(test))]
-        {
-            return global_eval_included_files()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .contains(path);
-        }
-        #[cfg(test)]
-        false
+    /// Queries the request's single include-state owner.
+    pub fn has_included_file(&self, path: impl AsRef<std::path::Path>) -> bool {
+        self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(path.as_ref())
     }
 
-    /// Records one successfully loaded eval include key in local and process-request state.
-    pub fn mark_included_file(&mut self, path: impl Into<String>) {
-        let path = path.into();
-        self.included_files.insert(path.clone());
-        #[cfg(not(test))]
-        global_eval_included_files()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(path);
+    /// Registers an opened source once, without a context-local shadow copy.
+    pub fn mark_included_file(&mut self, path: impl Into<std::path::PathBuf>) {
+        self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mark(path.into());
     }
 
     /// Pushes whether the next interpreter program originates from an actual include file.

@@ -18,7 +18,21 @@ pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> crate::fast_ha
         .filter(|function| is_property_init_thunk_function(function))
         .map(|function| function.name.as_str())
         .collect::<HashSet<_>>();
-    let mut classes = module.class_infos.clone();
+    // Do not clone the entire class map at once: on a framework-scale program each
+    // `method_decls` entry still owns its AST body, so a whole-map clone doubles the
+    // largest compiler graph during code generation. Runtime metadata needs method names,
+    // visibility and signatures, but not ordinary method bodies. Build one trimmed clone at a
+    // time; keep `__debugInfo` intact because its runtime projection inspects that body.
+    let mut classes = crate::fast_hash::FastMap::default();
+    for (name, original) in &module.class_infos {
+        let mut class_info = original.clone();
+        for method in &mut class_info.method_decls {
+            if !method.name.eq_ignore_ascii_case("__debugInfo") {
+                method.body.clear();
+            }
+        }
+        classes.insert(name.clone(), class_info);
+    }
     for class_info in classes.values_mut() {
         class_info
             .method_impl_classes

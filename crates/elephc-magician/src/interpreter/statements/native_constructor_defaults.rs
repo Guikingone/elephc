@@ -330,7 +330,7 @@ pub(super) fn materialize_native_callable_object_default(
             name: arg.name.clone(),
             value: materialize_native_callable_default(&arg.value, context, values)?,
             ref_target: None,
-            owned: false,
+            owned: true,
         });
     }
     if let Err(err) = eval_native_constructor_with_evaluated_args(

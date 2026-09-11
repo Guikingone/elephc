@@ -973,17 +973,38 @@ fn eval_rebind_foreign_reflection_target(
     match owner_class.as_str() {
         "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" => {
             if context.eval_reflection_class_name(identity).is_some() {
+                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=reflection_rebind kind=class identity={identity} stage=already_bound"
+                    );
+                }
                 return Ok(());
             }
+            #[cfg(not(test))]
+            context.sync_global_eval_classes();
             let Some(name) =
                 eval_reflection_slot_string(object, &owner_class, "__name", context, values)?
             else {
+                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=reflection_rebind kind=class identity={identity} stage=missing_name_slot"
+                    );
+                }
                 return Ok(());
             };
-            if !eval_context_declared_class_like(&name, context) {
-                return Ok(());
+            let declared = eval_context_declared_class_like(&name, context);
+            let target_name = eval_rebound_reflection_class_name(&name, context, values)?;
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=reflection_rebind kind=class identity={identity} stage=resolved name={name:?} declared={declared} target_name={target_name:?} has_class={} native_parent={:?}",
+                    context.has_class(&name),
+                    context.class_native_parent_name(&name),
+                );
             }
-            context.register_eval_reflection_class(identity, &name);
+            let Some(target_name) = target_name else {
+                return Ok(());
+            };
+            context.register_eval_reflection_class(identity, &target_name);
         }
         "ReflectionMethod" | "ReflectionProperty" => {
             let is_method = owner_class == "ReflectionMethod";
@@ -1000,9 +1021,11 @@ fn eval_rebind_foreign_reflection_target(
             else {
                 return Ok(());
             };
-            if !eval_context_declared_class_like(&declaring_class, context) {
+            let Some(declaring_class) =
+                eval_rebound_reflection_class_name(&declaring_class, context, values)?
+            else {
                 return Ok(());
-            }
+            };
             if is_method {
                 context.register_eval_reflection_method(identity, &declaring_class, &name);
             } else {
@@ -1023,9 +1046,11 @@ fn eval_rebind_foreign_reflection_target(
             else {
                 return Ok(());
             };
-            if !eval_context_declared_class_like(&declaring_class, context) {
+            let Some(declaring_class) =
+                eval_rebound_reflection_class_name(&declaring_class, context, values)?
+            else {
                 return Ok(());
-            }
+            };
             context.register_eval_reflection_class_constant(
                 identity,
                 &declaring_class,
@@ -1039,16 +1064,28 @@ fn eval_rebind_foreign_reflection_target(
 }
 
 /// Returns whether the interpreter itself declared this class-like symbol.
-///
-/// Re-binding is confined to those. A reflector on a compiled class has metadata the generated
-/// tables answer, in places more completely than eval metadata does — the declaring file among
-/// them — so leaving it unbound keeps the answer it already had; the gap being closed is the
-/// class the generated tables know nothing about.
 fn eval_context_declared_class_like(name: &str, context: &ElephcEvalContext) -> bool {
     context.has_class(name)
         || context.has_interface(name)
         || context.has_enum(name)
         || context.has_trait(name)
+}
+
+/// Resolves a foreign reflector only when eval or emitted AOT metadata can serve its target.
+/// Native interfaces and traits also have reflection rows, despite not satisfying class_exists.
+/// Source-location handlers keep using native getters for targets without eval declarations.
+fn eval_rebound_reflection_class_name(
+    name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let resolved_name = context.resolve_class_like_name(name);
+    let target_name = resolved_name.as_deref().unwrap_or(name);
+    if eval_context_declared_class_like(target_name, context) {
+        Ok(Some(target_name.to_string()))
+    } else {
+        values.reflection_canonical_class_name(target_name)
+    }
 }
 
 /// Reads one reflected member's declaring class name and own name from the reflector's slots.

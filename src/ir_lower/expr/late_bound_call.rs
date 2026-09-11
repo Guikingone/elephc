@@ -14,6 +14,36 @@ use crate::parser::ast::{Expr, ExprKind};
 
 use super::super::context::{LoweredValue, LoweringContext};
 
+/// Resolves a compiled runtime binding before evaluating any call arguments.
+pub(super) fn guard_runtime_function_binding(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    call: &Expr,
+) {
+    if !ctx.runtime_bound_functions.contains(&crate::names::php_symbol_key(name)) {
+        return;
+    }
+    use crate::parser::ast::{Stmt, StmtKind};
+    let span = call.span;
+    let condition = Expr::new(ExprKind::FunctionCall {
+        name: Name::unqualified("function_exists"),
+        args: vec![Expr::new(ExprKind::StringLiteral(name.to_string()), span)],
+    }, span);
+    let error = Expr::new(ExprKind::NewObject {
+        class_name: Name::unqualified("Error"),
+        args: vec![Expr::new(ExprKind::StringLiteral(
+            format!("Call to undefined function {}()", name),
+        ), span)],
+    }, span);
+    let guard = Stmt::new(StmtKind::If {
+        condition,
+        then_body: Vec::new(),
+        elseif_clauses: Vec::new(),
+        else_body: Some(vec![Stmt::new(StmtKind::Throw(error), span)]),
+    }, span);
+    super::super::stmt::lower_stmt(ctx, &guard);
+}
+
 /// Lowers one unresolved direct call to `throw new Error(...)`, or returns `None` otherwise.
 pub(super) fn lower_late_bound_undefined_call(
     ctx: &mut LoweringContext<'_, '_>,

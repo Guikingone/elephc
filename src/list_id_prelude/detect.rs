@@ -442,6 +442,7 @@ fn stmt_refs_listid(stmt: &Stmt) -> bool {
             value,
             ..
         } => expr_refs_listid(object) || expr_refs_listid(index) || expr_refs_listid(value),
+        StmtKind::ClassLikeActivate { .. } => false,
     }
 }
 

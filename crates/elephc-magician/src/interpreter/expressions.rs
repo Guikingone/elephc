@@ -25,47 +25,67 @@ pub(in crate::interpreter) use evaluation::{
 pub(in crate::interpreter) use evaluation::eval_object_array_cast_value;
 use evaluation::*;
 pub(in crate::interpreter) use null_coalesce_assign::{
+    eval_assign,
     eval_array_append, eval_array_append_reference_bind, eval_array_append_result,
     eval_array_reference_bind, eval_by_ref_return, eval_reference_bind_result,
     eval_store_value_in_lvalue,
     eval_var_reference_bind,
 };
 use null_coalesce_assign::{
-    eval_assign, eval_compound_assign, eval_null_coalesce_assign, eval_postfix_inc_dec,
+    eval_compound_assign, eval_null_coalesce_assign, eval_postfix_inc_dec,
 };
 
 /// Evaluates one expression to an opaque runtime-cell handle.
 /// Returns whether this expression's value is an alias of storage that still owns it.
 ///
-/// `eval_expr` normally hands the caller a reference it may keep, but four shapes give back a
-/// cell some storage holds: a variable read returns the scope's own cell, and the three
-/// assignment forms return the very cell they just wrote. A caller that discards such a value
-/// must NOT release it — the variable, property or element is still pointing at it.
+/// Variable reads and some assignment-like forms alias storage that still owns the result.
+/// Plain assignment is different: `eval_assign` preserves an independent result owner as well
+/// as the stored reference. Consumers must release that result after use.
 ///
 /// `?:` and `??` are transparent, so they inherit the answer from whichever side can be taken.
 /// A postfix `++`/`--` is deliberately absent: it retains before returning the old value.
 pub(in crate::interpreter) fn eval_expr_result_aliases_storage(expr: &EvalExpr) -> bool {
     match expr {
         EvalExpr::LoadVar(_)
-        | EvalExpr::Assign { .. }
         | EvalExpr::ReferenceBind { .. }
         | EvalExpr::ArrayAppendAssign { .. }
         | EvalExpr::CompoundAssign { .. }
         | EvalExpr::NullCoalesceAssign { .. } => true,
         EvalExpr::Ternary {
+            condition,
             then_branch,
             else_branch,
-            ..
         } => {
-            then_branch
-                .as_deref()
-                .is_some_and(eval_expr_result_aliases_storage)
+            eval_expr_result_aliases_storage(then_branch.as_deref().unwrap_or(condition))
                 || eval_expr_result_aliases_storage(else_branch)
+        }
+        EvalExpr::Unary { op: EvalUnaryOp::ErrorSuppress, expr } => {
+            eval_expr_result_aliases_storage(expr)
         }
         EvalExpr::NullCoalesce { value, default } => {
             eval_expr_result_aliases_storage(value) || eval_expr_result_aliases_storage(default)
         }
         _ => false,
+    }
+}
+
+/// Evaluates a boolean condition, consuming its temporary but not a borrowed scope value.
+pub(in crate::interpreter) fn eval_truthy_expr(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let value = eval_expr(expr, context, scope, values)?;
+    let result = values.truthy(value);
+    let cleanup = if eval_expr_result_aliases_storage(expr) {
+        Ok(())
+    } else {
+        eval_release_value(context, values, value)
+    };
+    match (result, cleanup) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(result), Ok(())) => Ok(result),
     }
 }
 
@@ -134,6 +154,10 @@ fn eval_expr_dispatch(
         // reaches the reference-source path and never produces a value.
         EvalExpr::ArrayAppendSlot { .. } => Err(EvalStatus::UnsupportedConstruct),
         EvalExpr::ArrayGet { array, index } => {
+            if is_globals_array(array) {
+                let name = eval_global_name(index, context, scope, values)?;
+                return read_global_value(&name, context.quiet_property_fetch(), context, scope, values);
+            }
             let array = eval_expr(array, context, scope, values)?;
             let index = eval_expr(index, context, scope, values)?;
             eval_array_get_result(array, index, context, values)
@@ -511,14 +535,20 @@ fn eval_expr_dispatch(
             then_branch,
             else_branch,
         } => {
-            let condition = eval_expr(condition, context, scope, values)?;
-            if values.truthy(condition)? {
-                if let Some(then_branch) = then_branch {
+            if let Some(then_branch) = then_branch {
+                return if eval_truthy_expr(condition, context, scope, values)? {
                     eval_expr(then_branch, context, scope, values)
                 } else {
-                    Ok(condition)
-                }
+                    eval_expr(else_branch, context, scope, values)
+                };
+            }
+            let condition_value = eval_expr(condition, context, scope, values)?;
+            if values.truthy(condition_value)? {
+                Ok(condition_value)
             } else {
+                if !eval_expr_result_aliases_storage(condition) {
+                    eval_release_value(context, values, condition_value)?;
+                }
                 eval_expr(else_branch, context, scope, values)
             }
         }
@@ -539,6 +569,10 @@ fn eval_expr_dispatch(
             context.pop_error_suppression();
             result
         }
+        EvalExpr::Unary { op: EvalUnaryOp::LogicalNot, expr } => {
+            let truthy = eval_truthy_expr(expr, context, scope, values)?;
+            values.bool_value(!truthy)
+        }
         EvalExpr::Unary { op, expr } => {
             let value = eval_expr(expr, context, scope, values)?;
             match op {
@@ -550,31 +584,23 @@ fn eval_expr_dispatch(
                     let zero = values.int(0)?;
                     values.sub(zero, value)
                 }
-                EvalUnaryOp::LogicalNot => {
-                    let truthy = values.truthy(value)?;
-                    values.bool_value(!truthy)
-                }
                 EvalUnaryOp::BitNot => values.bit_not(value),
-                EvalUnaryOp::ErrorSuppress => unreachable!("handled before unary value evaluation"),
+                EvalUnaryOp::LogicalNot | EvalUnaryOp::ErrorSuppress => unreachable!("handled before unary value evaluation"),
             }
         }
         EvalExpr::Binary { op, left, right } => {
             if *op == EvalBinOp::LogicalAnd {
-                let left = eval_expr(left, context, scope, values)?;
-                if !values.truthy(left)? {
+                if !eval_truthy_expr(left, context, scope, values)? {
                     return values.bool_value(false);
                 }
-                let right = eval_expr(right, context, scope, values)?;
-                let truthy = values.truthy(right)?;
+                let truthy = eval_truthy_expr(right, context, scope, values)?;
                 return values.bool_value(truthy);
             }
             if *op == EvalBinOp::LogicalOr {
-                let left = eval_expr(left, context, scope, values)?;
-                if values.truthy(left)? {
+                if eval_truthy_expr(left, context, scope, values)? {
                     return values.bool_value(true);
                 }
-                let right = eval_expr(right, context, scope, values)?;
-                let truthy = values.truthy(right)?;
+                let truthy = eval_truthy_expr(right, context, scope, values)?;
                 return values.bool_value(truthy);
             }
             let left = eval_expr(left, context, scope, values)?;

@@ -11,6 +11,14 @@
 mod basics;
 #[path = "runtime_gc/nullable_string_return.rs"]
 mod nullable_string_return;
+#[path = "runtime_gc/nominal_return.rs"]
+mod nominal_return;
+#[path = "runtime_gc/throwable_layout.rs"]
+mod throwable_layout;
+#[path = "runtime_gc/eval_assignment.rs"]
+mod eval_assignment;
+#[path = "runtime_gc/eval_globals.rs"]
+mod eval_globals;
 #[path = "runtime_gc/iconv.rs"]
 mod iconv;
 #[path = "runtime_gc/parse_url.rs"]

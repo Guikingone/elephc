@@ -278,6 +278,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     store_argv_global_if_needed(ctx);
     store_argc_local_if_present(ctx);
     store_argv_local_if_present(ctx);
+    super::source_units::emit_state_install(ctx);
     emit_registered_instr_enter(ctx);
 }
 
@@ -541,7 +542,12 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             continue;
         }
         ctx.emitter.comment(&format!("epilogue cleanup global ${}", name));
-        emit_static_symbol_value_cleanup(ctx, &symbol, &ty);
+        if crate::superglobals::uses_shared_ref_cell(ctx.module, &name) {
+            abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
+            abi::emit_call_label(ctx.emitter, "__rt_global_ref_cell_decref");
+        } else {
+            emit_static_symbol_value_cleanup(ctx, &symbol, &ty);
+        }
         abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
         if ty == PhpType::Str {
             abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
@@ -602,6 +608,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // profiler before the bridge invokes this handler.
     register_main_instr(ctx);
     emit_registered_instr_enter(ctx);
+    super::source_units::emit_state_install(ctx);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.
@@ -1269,6 +1276,23 @@ fn return_cleanup_skip_slot_inner(
         Op::Move | Op::Borrow => {
             let source = *inst.operands.first()?;
             return_cleanup_skip_slot_inner(function, source, result_ty, return_ty, visited)
+        }
+        Op::RuntimeCall
+            if matches!(inst.immediate, Some(Immediate::NominalObject { .. }))
+                && matches!(value_ref.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            let source = *inst.operands.first()?;
+            let source_ty = function.value(source)?.php_type.codegen_repr();
+            if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+                || !return_preserves_result_owner(result_ty, return_ty)
+            {
+                return None;
+            }
+            // A nullable nominal guard validates but forwards the very same boxed cell.
+            // Its source local transfers its owner just as a direct return does; dropping
+            // that slot in the epilogue would free the cell being handed to the caller.
+            // Concrete object guards instead retain an unboxed payload, so are excluded.
+            return_cleanup_skip_slot_inner(function, source, &source_ty, &source_ty, visited)
         }
         _ => None,
     }
@@ -1969,7 +1993,8 @@ fn store_argc_global_if_needed(ctx: &mut FunctionContext<'_>) {
     ctx.data.add_comm(symbol.clone(), PhpType::Int.stack_size().max(8));
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Int, false);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    store_process_global_box(ctx, "argc", &symbol);
 }
 
 /// Initializes program-global `$argv` storage for eval or static `global $argv`.
@@ -1982,7 +2007,27 @@ fn store_argv_global_if_needed(ctx: &mut FunctionContext<'_>) {
     ctx.data.add_comm(symbol.clone(), array_ty.stack_size().max(8));
     ctx.emitter.comment("build global $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &array_ty, false);
+    emit_box_current_value_as_mixed(ctx.emitter, &array_ty);
+    store_process_global_box(ctx, "argv", &symbol);
+    // Boxing retains the array payload. Transfer the fresh builder reference to
+    // the box by releasing that original reference after publishing the owner.
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &symbol, 0);
+    if crate::superglobals::uses_shared_ref_cell(ctx.module, "argv") {
+        abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+    }
+    abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 8);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+}
+
+/// Publishes a boxed process argument using the module's global representation.
+fn store_process_global_box(ctx: &mut FunctionContext<'_>, name: &str, symbol: &str) {
+    if crate::superglobals::uses_shared_ref_cell(ctx.module, name) {
+        crate::codegen::lower_inst::lower_store_shared_global(ctx, symbol, &PhpType::Mixed)
+            .expect("boxed process globals have a supported shared-cell representation");
+    } else {
+        abi::emit_store_result_to_symbol(ctx.emitter, symbol, &PhpType::Mixed, false);
+    }
 }
 
 /// Returns true when a process superglobal needs program-global storage.

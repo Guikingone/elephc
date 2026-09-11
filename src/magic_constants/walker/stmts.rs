@@ -35,15 +35,15 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
     let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(walk_program(stmts, pass)),
-        StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark { label },
+        StmtKind::IncludeOnceMark { source_path } => StmtKind::IncludeOnceMark { source_path },
         StmtKind::FunctionVariantGroup { name, variants } => {
             StmtKind::FunctionVariantGroup { name, variants }
         }
         StmtKind::FunctionVariantMark { name, variant } => {
             StmtKind::FunctionVariantMark { name, variant }
         }
-        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
-            label,
+        StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+            source_path,
             body: walk_program(body, pass),
         },
         StmtKind::Echo(e) => StmtKind::Echo(walk_expr(e, pass)),
@@ -471,6 +471,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }) => other,
     };
     Stmt {

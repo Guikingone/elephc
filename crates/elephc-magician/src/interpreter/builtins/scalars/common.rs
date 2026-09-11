@@ -102,9 +102,9 @@ pub(in crate::interpreter) fn eval_int_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
     let value = values.cast_int(value)?;
-    let bytes = values.string_bytes(value)?;
-    std::str::from_utf8(&bytes)
-        .map_err(|_| EvalStatus::RuntimeFatal)?
-        .parse::<i64>()
-        .map_err(|_| EvalStatus::RuntimeFatal)
+    let word = values.raw_value_word(value);
+    let released = values.release(value);
+    let word = word?;
+    released?;
+    Ok(word as i64)
 }

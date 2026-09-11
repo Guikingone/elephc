@@ -1673,7 +1673,7 @@ fn emit_mixed_array_get_deref_invoker_ref_cell(
 }
 
 /// Boxes the current value referenced by a loaded invoker ref-cell marker.
-fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
+pub(super) fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     ctx: &mut FunctionContext<'_>,
     mixed_reg: &str,
 ) {
@@ -1733,7 +1733,7 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
 }
 
 /// Branches when a loaded Mixed tag is an invoker ref-cell marker.
-fn emit_branch_if_invoker_ref_cell_tag(
+pub(super) fn emit_branch_if_invoker_ref_cell_tag(
     ctx: &mut FunctionContext<'_>,
     tag_reg: &str,
     label: &str,

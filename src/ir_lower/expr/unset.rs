@@ -332,6 +332,64 @@ fn lower_unset_property_array_element(
         return false;
     }
     let data = ctx.intern_string(property);
+    // PHP evaluates the dimension even when the property is uninitialized and the unset itself
+    // becomes a no-op. Lower it before the initialization branch, then release it once at the
+    // merge shared by the present and absent paths.
+    let key = lower_expr(ctx, index);
+    // The CONTAINER of an `unset` is fetched QUIETLY, like the container of an `isset`/`empty`
+    // operand: measured with `php -n` 8.5.6, `unset($o->p['k'])` on an uninitialized typed
+    // property neither raises nor initializes it. Over an EVAL-OWNED receiver this fetch leaves
+    // compiled code through the bridge, which raises unless the mode is on.
+    //
+    // This is the ONE-level path. The two- and three-level chains are lowered by
+    // `lower_nested_property_hash_unset`, whose gate is `(2..=3).contains(&chain.len())`, so
+    // wrapping only that one left exactly this shape uncovered -- and it is the shape Symfony
+    // writes: `unset($this->checkedLazyNodes[$id])` in `CheckCircularReferencesPass`.
+    // An UNINITIALIZED typed property makes the whole `unset` a no-op, so the slot is probed
+    // BEFORE the fetch. Doing it after is not enough: the fetch itself is what raises on the
+    // native path, through the compiled typed-property read guard, which no interpreter-side
+    // mode can reach. Measured under `php -n` 8.5.6, `unset($o->p['k'])` on `public array $p;`
+    // left unassigned neither raises nor initializes it -- `isset($o->p)` is still `false`
+    // afterwards -- while the same unset on a written property really does delete the element
+    // and leaves the (now empty) array initialized.
+    //
+    // The probe reads the object's own initialization marker, which is the right store on both
+    // routes: an AOT class keeps its property values in native slots even when the INSTANCE is
+    // eval-owned. An eval-DECLARED class never reaches this lowering, because
+    // `object_property_type` above would not have resolved a declared array type for it.
+    let absent_block = ctx
+        .builder
+        .create_named_block("unset.property_element.absent", Vec::new());
+    let fetch_block = ctx
+        .builder
+        .create_named_block("unset.property_element.fetch", Vec::new());
+    let delete_block = ctx
+        .builder
+        .create_named_block("unset.property_element.delete", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("unset.property_element.merge", Vec::new());
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: fetch_block,
+        then_args: Vec::new(),
+        else_target: absent_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(absent_block);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(fetch_block);
+    crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, expr.span);
     let property_value = ctx.emit_value(
         Op::PropGet,
         vec![object.value],
@@ -340,6 +398,27 @@ fn lower_unset_property_array_element(
         Op::PropGet.default_effects(),
         Some(expr.span),
     );
+    crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, expr.span);
+    // A container that still comes back absent is skipped as well. `ArrayToHash` of a null
+    // container is what segfaulted the Symfony worker once the fetch stopped raising, so the
+    // second guard stays even though the probe above should already have branched away.
+    let is_absent = ctx.emit_value(
+        Op::IsNull,
+        vec![property_value.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_absent.value,
+        then_target: absent_block,
+        then_args: Vec::new(),
+        else_target: delete_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(delete_block);
     let property_value =
         crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(expr.span));
     let hash_ty = match &property_ty {
@@ -362,7 +441,6 @@ fn lower_unset_property_array_element(
     } else {
         property_value
     };
-    let key = lower_expr(ctx, index);
     ctx.emit_void(
         Op::HashUnset,
         vec![hash.value, key.value],
@@ -383,6 +461,9 @@ fn lower_unset_property_array_element(
         hash,
         expr.span,
     );
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
     if ctx.value_is_owning_temporary(key) {
         crate::ir_lower::ownership::release_if_owned(ctx, key, Some(expr.span));
     } else {

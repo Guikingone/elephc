@@ -174,10 +174,73 @@ pub(super) fn pop_eval_context_class_scope(ctx: &mut FunctionContext<'_>, pushed
 
 /// Returns the lexical class encoded in the current EIR callable name.
 pub(super) fn current_eval_method_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&'a str> {
-    ctx.function
+    current_eval_function_class(ctx.function)
+}
+
+/// Returns the PHP lexical class of a callable body, including a synthetic closure.
+pub(super) fn current_eval_function_class(function: &crate::ir::Function) -> Option<&str> {
+    function
         .name
         .rsplit_once("::")
         .map(|(class_name, _)| class_name)
+        .or(function.lexical_class.as_deref())
+}
+
+/// Returns the physical source file that owns a compiled callable body.
+///
+/// A module has one entry path, but included declarations and class-scoped closures retain their
+/// own source identities. Eval/include bridges must use the body's source so relative includes,
+/// magic constants, and diagnostics keep PHP's file-local semantics.
+pub(super) fn eval_source_path_for_function<'a>(
+    module: &'a crate::ir::Module,
+    function: &crate::ir::Function,
+) -> Option<&'a str> {
+    if let Some(class_name) = current_eval_function_class(function) {
+        if let Some(path) = module
+            .declared_class_source_files
+            .get(&crate::names::php_symbol_key(class_name.trim_start_matches('\\')))
+        {
+            return Some(path);
+        }
+    }
+    module
+        .declared_function_source_files
+        .get(&crate::names::php_symbol_key(&function.name))
+        .map(String::as_str)
+        .or(module.source_path.as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Target;
+    use crate::ir::{Function, IrType, Module};
+    use crate::types::PhpType;
+
+    #[test]
+    fn synthetic_closure_keeps_its_lexical_class_for_eval_scope() {
+        let mut closure = Function::new("{closure:Owner:0}".to_string(), IrType::Void, PhpType::Void);
+        closure.lexical_class = Some("Owner".to_string());
+
+        assert_eq!(current_eval_function_class(&closure), Some("Owner"));
+    }
+
+    #[test]
+    fn eval_source_path_prefers_lexical_class_declaration_file() {
+        let mut module = Module::new(Target::detect_host());
+        module.source_path = Some("/entry.php".to_string());
+        module.declared_class_source_files.insert(
+            crate::names::php_symbol_key("Owner"),
+            "/included/Owner.php".to_string(),
+        );
+        let mut closure = Function::new("{closure:Owner:0}".to_string(), IrType::Void, PhpType::Void);
+        closure.lexical_class = Some("Owner".to_string());
+
+        assert_eq!(
+            eval_source_path_for_function(&module, &closure),
+            Some("/included/Owner.php")
+        );
+    }
 }
 
 /// Materializes the runtime called-class name for eval `static::` resolution.

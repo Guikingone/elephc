@@ -251,6 +251,7 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
         | StmtKind::Global { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::IncludeOnceGuard { .. }

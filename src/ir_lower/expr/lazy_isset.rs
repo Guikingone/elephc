@@ -35,7 +35,7 @@ pub(super) fn expr_is_quiet_fetch_chain(expr: &Expr) -> bool {
 }
 
 /// Emits one side of the compiled quiet-fetch scope.
-fn emit_quiet_property_fetch(ctx: &mut LoweringContext<'_, '_>, enter: bool, span: Span) {
+pub(in crate::ir_lower) fn emit_quiet_property_fetch(ctx: &mut LoweringContext<'_, '_>, enter: bool, span: Span) {
     ctx.emit_void(
         Op::RuntimeCall,
         Vec::new(),

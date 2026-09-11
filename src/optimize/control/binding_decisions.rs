@@ -94,7 +94,7 @@ fn stmt_carries_decision(stmt: &Stmt) -> bool {
         StmtKind::Include { path, once: _, required: _ } => expr_carries_decision(path),
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { name: _, body }
-        | StmtKind::IncludeOnceGuard { label: _, body } => stmts_carry_decision(body),
+        | StmtKind::IncludeOnceGuard { body, .. } => stmts_carry_decision(body),
         StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
             expr_carries_decision(condition) || stmts_carry_decision(body)
         }
@@ -157,7 +157,7 @@ fn stmt_carries_decision(stmt: &Stmt) -> bool {
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::Global { vars: _ }
-        | StmtKind::IncludeOnceMark { label: _ }
+        | StmtKind::IncludeOnceMark { .. }
         | StmtKind::NamespaceDecl { name: _ }
         | StmtKind::UseDecl { imports: _ }
         | StmtKind::FunctionDecl { .. }
@@ -168,6 +168,7 @@ fn stmt_carries_decision(stmt: &Stmt) -> bool {
         | StmtKind::TraitDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
     }
 }

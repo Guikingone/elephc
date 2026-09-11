@@ -142,6 +142,7 @@ pub(super) struct GlobalEvalClassRegistry {
 /// is never observed to change.
 #[cfg(not(test))]
 pub(super) struct GlobalEvalAotMetadata {
+    native_global_sync: Option<NativeGlobalSyncHooks>,
     declared_class_names: Arc<Vec<String>>,
     declared_interface_names: Arc<Vec<String>>,
     declared_trait_names: Arc<Vec<String>>,
@@ -173,6 +174,7 @@ pub(crate) fn publish_global_eval_aot_metadata(context: &ElephcEvalContext) {
         return;
     };
     *metadata = Some(Arc::new(GlobalEvalAotMetadata {
+            native_global_sync: context.native_global_sync,
             declared_class_names: Arc::clone(&context.declared_class_names),
             declared_interface_names: Arc::clone(&context.declared_interface_names),
             declared_trait_names: Arc::clone(&context.declared_trait_names),
@@ -207,6 +209,7 @@ pub(crate) fn sync_global_eval_aot_metadata(context: &mut ElephcEvalContext) -> 
         return false;
     };
     context.declared_class_names = Arc::clone(&metadata.declared_class_names);
+    context.native_global_sync = metadata.native_global_sync;
     context.declared_interface_names = Arc::clone(&metadata.declared_interface_names);
     context.declared_trait_names = Arc::clone(&metadata.declared_trait_names);
     context.native_functions = Arc::clone(&metadata.native_functions);
@@ -253,12 +256,6 @@ pub(super) fn global_eval_classes() -> &'static Mutex<GlobalEvalClassRegistry> {
     GLOBAL_EVAL_CLASSES.get_or_init(|| Mutex::new(GlobalEvalClassRegistry::default()))
 }
 
-/// Returns the process-local registry shared by every generated-code eval context.
-#[cfg(not(test))]
-pub(super) fn global_eval_included_files() -> &'static Mutex<HashSet<String>> {
-    GLOBAL_EVAL_INCLUDED_FILES.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
 /// Returns the process-local map from PHP function name to its owning eval context.
 #[cfg(not(test))]
 fn global_eval_functions() -> &'static Mutex<HashMap<String, usize>> {
@@ -286,13 +283,23 @@ pub(crate) fn global_eval_autoload_contexts_snapshot() -> Vec<*mut ElephcEvalCon
         .unwrap_or_default()
 }
 
+/// Clears request-scoped dynamic class-like declarations without discarding AOT metadata.
+#[cfg(not(test))]
+pub(crate) fn reset_global_eval_classes() {
+    let mut registry = global_eval_classes()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // These are declarations executed by the previous request, not immutable AOT
+    // metadata. Retaining them would make an ordinary include in the next request
+    // fail with a redeclaration error. The separate AOT snapshot remains reusable.
+    *registry = GlobalEvalClassRegistry::default();
+}
+
 /// Clears the process-local include registry at a generated web request boundary.
 #[cfg(not(test))]
 pub(crate) fn reset_global_eval_included_files() {
-    let mut files = global_eval_included_files()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    files.clear();
+    super::request_includes::current_include_state()
+        .lock().unwrap_or_else(std::sync::PoisonError::into_inner).reset();
 }
 
 /// Releases request-scoped dynamic function owners before the web heap is recycled.

@@ -355,6 +355,7 @@ fn stmt_refs_pdo(stmt: &Stmt) -> bool {
         | StmtKind::Global { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
 
         // An aliased import (`use PDO as Db;`) names PDO only here; the later

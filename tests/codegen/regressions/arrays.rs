@@ -2335,6 +2335,230 @@ echo count($grow->b["k"]), ":", $grow->b["k"][11], "\n";
     assert_eq!(out.stdout, "2:2:1\n12:11\n");
 }
 
+/// Verifies nested append auto-vivifies every missing property-backed parent.
+///
+/// The additional subscript matters: `$this->listeners[$event][$priority][] = $listener`
+/// first needs a bucket for `$event`, then one for `$priority`. A read/push/write-back
+/// desugaring must not perform its initial read through the ordinary warning-producing array
+/// access path, otherwise each first listener is both diagnosed as a missing key and appended to
+/// a detached temporary. This is a general PHP array-write rule; listener registries are merely a
+/// compact representative shape. Scalar payloads keep this regression focused on array-write
+/// semantics; callable dispatch has independent coverage.
+#[test]
+fn test_nested_append_vivifies_multiple_property_backed_parents_without_warnings() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ListenerRegistry {
+    private array $listeners = [];
+
+    public function add(string $event, string $payload, int $priority = 0): void {
+        $this->listeners[$event][$priority][] = $payload;
+    }
+
+    public function render(string $event): string {
+        $output = "";
+        foreach ($this->listeners[$event] ?? [] as $listeners) {
+            foreach ($listeners as $payload) {
+                $output .= $payload;
+            }
+        }
+
+        return $output;
+    }
+}
+
+$registry = new ListenerRegistry();
+$registry->add("request", "low", -10);
+$registry->add("request", "high", 10);
+$registry->add("request", "second", 10);
+echo $registry->render("request");
+"#,
+    );
+
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "lowhighsecond");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "nested append must not read missing write parents: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a nested property registry survives reverse key sorting.
+///
+/// This is the next generic operation after nested autovivification in a priority registry:
+/// integer priorities are deliberately sparse and include both signs, so the outer bucket must
+/// retain associative-array storage through `krsort()` rather than being traversed as a dense
+/// indexed array.
+#[test]
+fn test_nested_property_priority_buckets_sort_without_missing_index_warnings() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class PriorityRegistry {
+    private array $listeners = [];
+
+    public function add(string $event, string $payload, int $priority): void {
+        $this->listeners[$event][$priority][] = $payload;
+    }
+
+    public function render(string $event): string {
+        krsort($this->listeners[$event]);
+        $output = "";
+        foreach ($this->listeners[$event] as $listeners) {
+            foreach ($listeners as $payload) {
+                $output .= $payload;
+            }
+        }
+
+        return $output;
+    }
+}
+
+$registry = new PriorityRegistry();
+$registry->add("request", "low", -200);
+$registry->add("request", "middle", 0);
+$registry->add("request", "high", 200);
+echo $registry->render("request");
+"#,
+    );
+
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "highmiddlelow");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "sorting sparse priority buckets must not scan missing indexes: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a sorted nested registry can append through a by-reference bucket alias.
+///
+/// The shape is intentionally generic: priority buckets hold callback-shaped array values, are
+/// traversed by reference, then copied into a second property through `$property[$key][]` by
+/// reference. It protects the array layout and reference path independently of any framework.
+#[test]
+fn test_sorted_nested_property_registry_preserves_reference_appends() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class PriorityRegistry {
+    private array $listeners = [];
+    private array $optimized = [];
+
+    public function add(string $event, callable|array $listener, int $priority): void {
+        $this->listeners[$event][$priority][] = $listener;
+    }
+
+    public function optimize(string $event): int {
+        krsort($this->listeners[$event]);
+        $this->optimized[$event] = [];
+        foreach ($this->listeners[$event] as &$listeners) {
+            foreach ($listeners as &$listener) {
+                $closure = &$this->optimized[$event][];
+                $closure = $listener;
+            }
+        }
+
+        return count($this->optimized[$event]);
+    }
+}
+
+$registry = new PriorityRegistry();
+$registry->add("request", ["first"], -200);
+$registry->add("request", ["second"], 0);
+$registry->add("request", ["third"], 200);
+echo $registry->optimize("request");
+"#,
+    );
+
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "reference appends must not scan missing indexes: {}",
+        out.stderr
+    );
+}
+
+/// Verifies first-class callables retain sparse priority-bucket structure.
+///
+/// `$listener(...)` is PHP's first-class callable syntax. The registry is entered through the
+/// dynamic execution boundary, then runs its compiled methods; converting callback-shaped array
+/// values after sorting must not reinterpret the surrounding priority map as a dense array or
+/// retain a detached append target.
+#[test]
+fn test_sorted_priority_buckets_survive_first_class_callable_conversion() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$opaque = $argc > 99 ? 'return null;' : '';
+eval($opaque);
+
+class CallbackTarget {
+    public static int $calls = 0;
+
+    public function handle(): void {
+        self::$calls++;
+    }
+}
+
+class PriorityRegistry {
+    private array $listeners = [];
+    private array $optimized = [];
+
+    public function add(string $event, callable|array $listener, int $priority): void {
+        $this->listeners[$event][$priority][] = $listener;
+    }
+
+    public function dispatch(string $event): string {
+        krsort($this->listeners[$event]);
+        $this->optimized[$event] = [];
+        foreach ($this->listeners[$event] as &$listeners) {
+            foreach ($listeners as &$listener) {
+                $closure = &$this->optimized[$event][];
+                if (is_array($listener) && isset($listener[0]) && $listener[0] instanceof Closure && 2 >= count($listener)) {
+                    $closure = static function (...$args) use (&$listener, &$closure) {
+                        if ($listener[0] instanceof Closure) {
+                            $listener[0] = $listener[0]();
+                            $listener[1] ??= "__invoke";
+                        }
+                        $closure = $listener(...);
+                        $closure(...$args);
+                    };
+                } else {
+                    $closure = $listener(...);
+                }
+            }
+        }
+
+        foreach ($this->optimized[$event] as $closure) {
+            $closure();
+        }
+
+        return count($this->optimized[$event]).":".CallbackTarget::$calls;
+    }
+}
+
+$registry = new PriorityRegistry();
+echo eval('$registry->add("request", [static fn (): object => new CallbackTarget(), "handle"], -200);
+    $registry->add("request", [static fn (): object => new CallbackTarget(), "handle"], 0);
+    $registry->add("request", [static fn (): object => new CallbackTarget(), "handle"], 200);
+    return $registry->dispatch("request");');
+"#,
+    );
+
+    assert!(
+        out.success,
+        "program failed: stdout={:?}, stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "3:3");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "callable conversion must not scan missing indexes: {}",
+        out.stderr
+    );
+}
+
 /// Verifies nested append auto-vivifies on a STATIC-property base.
 ///
 /// This shape needed two separate fixes. The parser was dropping the append outright —

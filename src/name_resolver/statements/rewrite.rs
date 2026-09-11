@@ -35,15 +35,15 @@ pub(super) fn resolve_regular_stmt(
     let span = stmt.span;
     let kind = match &stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(ctx.stmt_list(stmts)?),
-        StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark {
-            label: label.clone(),
+        StmtKind::IncludeOnceMark { source_path } => StmtKind::IncludeOnceMark {
+            source_path: source_path.clone(),
         },
         StmtKind::FunctionVariantMark { name, variant } => StmtKind::FunctionVariantMark {
             name: name.clone(),
             variant: variant.clone(),
         },
-        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
-            label: label.clone(),
+        StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+            source_path: source_path.clone(),
             body: ctx.stmt_list(body)?,
         },
         StmtKind::If {

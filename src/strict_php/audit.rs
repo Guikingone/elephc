@@ -223,8 +223,8 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             once: _,
             required: _,
         } => audit_expr(path, errors),
-        StmtKind::IncludeOnceMark { label: _ } => {}
-        StmtKind::IncludeOnceGuard { label: _, body } => audit_stmts(body, errors),
+        StmtKind::IncludeOnceMark { .. } => {}
+        StmtKind::IncludeOnceGuard { body, .. } => audit_stmts(body, errors),
         StmtKind::Throw(expr) => audit_expr(expr, errors),
         StmtKind::Synthetic(body) => audit_stmts(body, errors),
         StmtKind::Try {
@@ -425,6 +425,7 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
                 "`extern` declarations are an elephc extension and are not valid PHP",
             );
         }
+        StmtKind::ClassLikeActivate { .. } => {}
     }
 }
 

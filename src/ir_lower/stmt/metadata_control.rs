@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Preserves physical declaration identity for later native binding activation.
+pub(super) fn lower_class_like_activation(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    kind: crate::parser::ast::ClassLikeKind,
+    source_path: &std::path::Path,
+    span: Span,
+) {
+    let source = ctx.source_catalog.as_ref().and_then(|catalog| catalog.id_for_path(source_path));
+    let immediate = match source {
+        Some(source) => Immediate::ClassLikeActivation {
+            source, site: span, kind, name: ctx.intern_string(name),
+        },
+        None => Immediate::UnresolvedSource(source_path.to_path_buf()),
+    };
+    ctx.emit_void(Op::ClassLikeActivate, Vec::new(), Some(immediate),
+        Op::ClassLikeActivate.default_effects(), Some(span));
+}
+
 /// Emits a no-op marker for declaration-only or frontend-only statements.
 pub(super) fn lower_noop(ctx: &mut LoweringContext<'_, '_>, span: Span) {
     ctx.emit_void(

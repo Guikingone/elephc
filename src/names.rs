@@ -653,3 +653,22 @@ pub fn property_hook_set_method(property_name: &str) -> String {
 pub fn enum_case_symbol(enum_name: &str, case_name: &str) -> String {
     join_php_symbol("_enum_case", &[enum_name, case_name])
 }
+
+/// Returns the request-active binding cell for one compiled class-like symbol.
+///
+/// The kind is part of the cell identity because PHP maintains distinct class,
+/// interface, trait and enum namespaces. This is storage identity only: the
+/// zero-initialized cell does not make the declaration active.
+pub fn classlike_activation_symbol(
+    kind: crate::parser::ast::ClassLikeKind,
+    name: &str,
+) -> String {
+    let kind = match kind {
+        crate::parser::ast::ClassLikeKind::Class => "class",
+        crate::parser::ast::ClassLikeKind::Interface => "interface",
+        crate::parser::ast::ClassLikeKind::Trait => "trait",
+        crate::parser::ast::ClassLikeKind::Enum => "enum",
+    };
+    let name = php_symbol_key(name.trim_start_matches('\\'));
+    join_php_symbol("_classlike_active", &[kind, &name])
+}

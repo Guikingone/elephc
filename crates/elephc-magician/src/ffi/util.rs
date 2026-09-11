@@ -63,6 +63,11 @@ pub(crate) fn scope_entry_abi_flags(entry: ScopeEntry) -> u32 {
     if flags.ownership == ScopeCellOwnership::Owned {
         abi_flags |= SCOPE_FLAG_OWNED;
     }
+    abi_flags |= match flags.native_binding {
+        crate::scope::NativeScopeBinding::Value => 0,
+        crate::scope::NativeScopeBinding::ReferenceCell => crate::abi::SCOPE_FLAG_NATIVE_REF,
+        crate::scope::NativeScopeBinding::GlobalName => crate::abi::SCOPE_FLAG_NATIVE_GLOBAL,
+    };
     abi_flags
 }
 

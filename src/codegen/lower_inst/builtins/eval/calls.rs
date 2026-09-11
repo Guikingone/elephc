@@ -160,9 +160,10 @@ pub(super) fn lower_eval_literal_scope_eir_function(
         .map(|param| param.php_type.codegen_repr())
         .collect::<Vec<_>>();
     let return_type = callee.return_php_type.codegen_repr();
+    let source_path = eval_source_path_for_function(ctx.module, ctx.function);
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
-        ctx.module.source_path.as_deref(),
+        source_path,
         strict_php,
         |name, args| eval_literal_static_function_supported_by_codegen(ctx, name, args),
         |receiver, method, args| {
@@ -202,20 +203,26 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     let mut flush_names = read_names.clone();
     flush_names.extend(write_names.iter().cloned());
     let sync_locals = eval_sync_locals(ctx);
-    let sync_globals = eval_sync_globals(ctx);
+    // The compiled scope contains lexical locals. A same-named program global
+    // must not overwrite that entry or be restored from its unrelated value.
+    let sync_globals = eval_sync_globals(ctx).into_iter()
+        .filter(|global| !sync_locals.iter().any(|local| local.name == global.name))
+        .collect::<Vec<_>>();
     let flush_locals = filter_eval_sync_locals_by_name(sync_locals.clone(), &flush_names);
     let flush_globals = filter_eval_sync_globals_by_name(sync_globals.clone(), &flush_names);
     let reload_locals = filter_eval_sync_locals_by_name(sync_locals, &write_names);
     let reload_globals = filter_eval_sync_globals_by_name(sync_globals, &write_names);
     flush_eval_scope_locals(ctx, &flush_locals)?;
     flush_eval_globals_to_local_scope(ctx, &flush_globals);
+    prepare_native_scope_bindings(ctx, &flush_locals, &flush_globals)?;
     load_eval_scope_to_arg(ctx, 0);
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
     reload_eval_scope_locals(ctx, &reload_locals)?;
     reload_eval_globals_from_local_scope(ctx, &reload_globals)?;
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    clear_native_scope_bindings(ctx, &flush_locals, &flush_globals);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)?;
     Ok(true)

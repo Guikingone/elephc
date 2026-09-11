@@ -9,7 +9,7 @@
 //! - Pass ordering is observable: magic constants and conditionals run before resolver/name resolution and type checking.
 //! - Check/EIR/assembly-only paths return before read-only native artifact resolution.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process;
@@ -111,7 +111,7 @@ pub(crate) fn compile(config: CliConfig) {
     let output_paths = output_paths(filename, target, emit, output_dir.as_deref());
     let mut timings = CompileTimings::new(emit_timings);
 
-    let parsed = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);
+    let (parsed, entry_source_unit) = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);
 
     crate::progress::phase("autoload-build");
     let phase_started = Instant::now();
@@ -599,6 +599,20 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("decl-reach");
     let phase_started = Instant::now();
+    let metadata_trace_target = std::env::var("ELEPHC_METADATA_TRACE").ok();
+    let metadata_trace_before = metadata_trace_target.as_deref().map(|target| {
+        let normalized = target.trim_start_matches('\\');
+        (
+            check_result
+                .interfaces
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case(normalized)),
+            check_result
+                .classes
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case(normalized)),
+        )
+    });
     let exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
     let ast = optimize::prune_unreachable_declarations(
         ast,
@@ -611,33 +625,93 @@ pub(crate) fn compile(config: CliConfig) {
         },
     );
     timings.record_since("decl-reach", phase_started);
+    if let (Some(target), Some((interface_before, class_before))) =
+        (metadata_trace_target.as_deref(), metadata_trace_before)
+    {
+        let normalized = target.trim_start_matches('\\');
+        let interface_after = check_result
+            .interfaces
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(normalized));
+        let class_after = check_result
+            .classes
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(normalized));
+        eprintln!(
+            "[elephc-metadata-trace] target={normalized} interface_before={interface_before} interface_after={interface_after} class_before={class_before} class_after={class_after}"
+        );
+    }
     codegen::prepare_declared_name_order(
         &ast,
         &check_result.classes,
         &check_result.interfaces,
     );
 
-    if emit_ir {
-        eir_output::emit(
-            &ast,
-            &check_result,
-            target,
-            filename,
-            web,
-            ir_opt,
-            &exported_functions,
-            &mut timings,
-        );
-        return;
-    }
     crate::progress::phase("ir-lower");
     let phase_started = Instant::now();
-    let mut ir_module = match ir_lower::lower_program_with_source_path_and_web(
+    let mut source_units = BTreeMap::new();
+    for unit in std::iter::once(entry_source_unit)
+        .chain(entry_included_sources.source_units.into_values())
+        .chain(declaration_source_files.source_units.into_values())
+    {
+        if let Err(error) = unit.insert_into(&mut source_units, Span::dummy()) {
+            crate::progress::clear();
+            errors::report(&error);
+            process::exit(1);
+        }
+    }
+    // `run_collecting_included` reports every source it actually loaded. Its
+    // declaration map can legitimately omit a file whose declarations were
+    // later eliminated, but a typed activation event still needs that physical
+    // source identity. Fill only absent manifest paths; duplicate snapshots keep
+    // the existing conflict check above rather than silently replacing content.
+    let activation_source_paths = classlike_activation_source_paths(&ast);
+    for path in opcache_included_files
+        .iter()
+        .chain(opcache_autoloaded_files.iter())
+        .chain(activation_source_paths.iter())
+    {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if source_units.contains_key(&canonical) {
+            continue;
+        }
+        let source = match crate::source::read_physical_source(path) {
+            Ok(source) => source,
+            Err(error) => {
+                crate::progress::clear();
+                errors::report(&crate::errors::CompileError::new(
+                    Span::dummy(),
+                    &format!("Autoload source snapshot: cannot read '{}': {}", path.display(), error),
+                ));
+                process::exit(1);
+            }
+        };
+        let unit = resolver::SourceUnit {
+            canonical_path: canonical,
+            mode: SourceMode::from_path(path),
+            source: source.into(),
+        };
+        if let Err(error) = unit.insert_into(&mut source_units, Span::dummy()) {
+            crate::progress::clear();
+            errors::report(&error);
+            process::exit(1);
+        }
+    }
+    let source_catalog = match ir::SourceCatalog::from_units(source_units.into_values()) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            crate::progress::clear();
+            errors::report(&error);
+            process::exit(1);
+        }
+    };
+    let mut ir_module = match ir_lower::lower_program_with_source_catalog(
         &ast,
         &check_result,
         target,
         Path::new(filename),
         web,
+        source_catalog,
     ) {
         Ok(module) => module,
         Err(err) => {
@@ -658,7 +732,25 @@ pub(crate) fn compile(config: CliConfig) {
     ir_module
         .declared_function_source_files
         .extend(entry_included_sources.functions);
+    ir_module.required_runtime_features.class_introspection |= ir_module
+        .interface_infos
+        .values()
+        .any(|info| info.declaration_span != crate::span::Span::dummy());
     timings.record_since("ir-lower", phase_started);
+
+    // EIR owns every backend-visible declaration, signature and source-identity datum now.
+    // Keeping the optimized AST and the complete checker graph through assembly doubles the
+    // peak working set on large applications, even though the backend only still needs the
+    // requested native library names. Move that small list out, then release both graphs before
+    // EIR optimization/codegen starts.
+    let required_libraries = std::mem::take(&mut check_result.required_libraries);
+    drop(ast);
+    drop(check_result);
+
+    if emit_ir {
+        eir_output::emit(ir_module, filename, ir_opt, &exported_functions, &mut timings);
+        return;
+    }
 
     if emit.is_library() || (check_only && !exported_functions.is_empty()) {
         if let Err(error) = exports::validate_cdylib_call_graph(&ir_module, &exported_functions) {
@@ -692,7 +784,7 @@ pub(crate) fn compile(config: CliConfig) {
         extra_link_libs: &extra_link_libs,
         extra_link_paths: &extra_link_paths,
         extra_frameworks: &extra_frameworks,
-        required_libraries: &check_result.required_libraries,
+        required_libraries: &required_libraries,
         target,
         emit,
         heap_size,
@@ -709,4 +801,115 @@ pub(crate) fn compile(config: CliConfig) {
         emit_asm,
         timings: &mut timings,
     });
+}
+
+/// Returns every physical source path named by a retained typed source marker.
+///
+/// The resolver has already established these paths while it still owned the
+/// original source. This final inventory is intentionally after optimization:
+/// only events that can reach EIR need a SourceId, and it closes the gap where
+/// an autoload manifest does not retain a source unit for a nested declaration
+/// or include-once marker.
+fn classlike_activation_source_paths(
+    program: &crate::parser::ast::Program,
+) -> std::collections::BTreeSet<std::path::PathBuf> {
+    use crate::parser::ast::StmtKind;
+
+    fn collect(
+        statements: &[crate::parser::ast::Stmt],
+        paths: &mut std::collections::BTreeSet<std::path::PathBuf>,
+    ) {
+        for statement in statements {
+            match &statement.kind {
+                StmtKind::ClassLikeActivate { source_path, .. } => {
+                    paths.insert(source_path.clone());
+                }
+                StmtKind::IncludeOnceMark { source_path } => {
+                    paths.insert(source_path.clone());
+                }
+                StmtKind::NamespaceBlock { body, .. }
+                | StmtKind::Synthetic(body)
+                | StmtKind::While { body, .. }
+                | StmtKind::DoWhile { body, .. }
+                | StmtKind::Foreach { body, .. } => collect(body, paths),
+                StmtKind::IncludeOnceGuard { source_path, body } => {
+                    paths.insert(source_path.clone());
+                    collect(body, paths);
+                }
+                StmtKind::If {
+                    then_body,
+                    elseif_clauses,
+                    else_body,
+                    ..
+                } => {
+                    collect(then_body, paths);
+                    for (_, body) in elseif_clauses {
+                        collect(body, paths);
+                    }
+                    if let Some(body) = else_body {
+                        collect(body, paths);
+                    }
+                }
+                StmtKind::IfDef {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    collect(then_body, paths);
+                    if let Some(body) = else_body {
+                        collect(body, paths);
+                    }
+                }
+                StmtKind::For {
+                    init,
+                    update,
+                    body,
+                    ..
+                } => {
+                    if let Some(init) = init {
+                        collect(std::slice::from_ref(init.as_ref()), paths);
+                    }
+                    if let Some(update) = update {
+                        collect(std::slice::from_ref(update.as_ref()), paths);
+                    }
+                    collect(body, paths);
+                }
+                StmtKind::FunctionDecl { body, .. } => collect(body, paths),
+                StmtKind::ClassDecl { methods, .. }
+                | StmtKind::InterfaceDecl { methods, .. }
+                | StmtKind::TraitDecl { methods, .. }
+                | StmtKind::EnumDecl { methods, .. } => {
+                    for method in methods {
+                        collect(&method.body, paths);
+                    }
+                }
+                StmtKind::Switch { cases, default, .. } => {
+                    for (_, body) in cases {
+                        collect(body, paths);
+                    }
+                    if let Some(body) = default {
+                        collect(body, paths);
+                    }
+                }
+                StmtKind::Try {
+                    try_body,
+                    catches,
+                    finally_body,
+                } => {
+                    collect(try_body, paths);
+                    for catch in catches {
+                        collect(&catch.body, paths);
+                    }
+                    if let Some(body) = finally_body {
+                        collect(body, paths);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut paths = std::collections::BTreeSet::new();
+    collect(program, &mut paths);
+    paths
 }

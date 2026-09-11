@@ -161,7 +161,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mkdir()`](./builtins/filesystem/mkdir.md) | `(string $directory, int $permissions = 511, bool $recursive = false, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`pathinfo()`](./builtins/filesystem/pathinfo.md) | `(string $path, int $flags = 15): array` | `array` | ✓ | ✓ |
 | [`putenv()`](./builtins/filesystem/putenv.md) | `(string $assignment): bool` | `bool` | ✓ | ✓ |
-| [`readfile()`](./builtins/filesystem/readfile.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
+| [`readfile()`](./builtins/filesystem/readfile.md) | `(string $filename, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`readlink()`](./builtins/filesystem/readlink.md) | `(string $path): mixed` | `mixed` | ✓ | ✓ |
 | [`realpath()`](./builtins/filesystem/realpath.md) | `(string $path): mixed` | `mixed` | ✓ | ✓ |
 | [`realpath_cache_get()`](./builtins/filesystem/realpath_cache_get.md) | `(): array` | `array` | ✓ | ✓ |
@@ -335,7 +335,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`empty()`](./builtins/misc/empty.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`error_log()`](./builtins/misc/error_log.md) | `(string $message, int $message_type = 0, string $destination = '', string $additional_headers = ''): bool` | `bool` | ✓ | — |
 | [`extension_loaded()`](./builtins/misc/extension_loaded.md) | `(string $extension): bool` | `bool` | ✓ | ✓ |
-| [`filter_var()`](./builtins/misc/filter_var.md) | `(mixed $value, int $filter = 516, mixed $options = 0): mixed` | `mixed` | ✓ | — |
+| [`filter_var()`](./builtins/misc/filter_var.md) | `(mixed $value, int $filter = 516, mixed $options = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`get_loaded_extensions()`](./builtins/misc/get_loaded_extensions.md) | `(bool $zend_extensions = false): array` | `array` | ✓ | ✓ |
 | [`header()`](./builtins/misc/header.md) | `(string $header, bool $replace = true, int $response_code = 0): void` | `void` | ✓ | ✓ |
 | [`header_remove()`](./builtins/misc/header_remove.md) | `(string $name = null): void` | `void` | ✓ | — |
@@ -346,8 +346,10 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`preg_grep()`](./builtins/misc/preg_grep.md) | `(string $pattern, mixed $array, int $flags = 0): array` | `array` | ✓ | — |
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
+| [`register_tick_function()`](./builtins/misc/register_tick_function.md) | `(mixed $callback, ...$args): bool` | `bool` | — | ✓ |
 | [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | — |
 | [`setlocale()`](./builtins/misc/setlocale.md) | `(int $category, mixed $locales, ...$rest): mixed` | `mixed` | ✓ | — |
+| [`unregister_tick_function()`](./builtins/misc/unregister_tick_function.md) | `(mixed $callback): void` | `void` | — | ✓ |
 | [`unserialize()`](./builtins/misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` | ✓ | — |
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` | ✓ | ✓ |
 | [`var_dump()`](./builtins/misc/var_dump.md) | `(mixed $value, ...$values): void` | `void` | ✓ | ✓ |

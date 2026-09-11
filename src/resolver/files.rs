@@ -39,6 +39,15 @@ pub(super) fn parse_file(
     include_span: Span,
     defines: &std::collections::HashSet<String>,
 ) -> Result<Vec<Stmt>, CompileError> {
+    parse_file_with_source(path, include_span, defines).map(|(program, _)| program)
+}
+
+/// Parses a file while retaining the exact input before include-site specialization.
+pub(super) fn parse_file_with_source(
+    path: &Path,
+    include_span: Span,
+    defines: &std::collections::HashSet<String>,
+) -> Result<(Vec<Stmt>, super::source_units::SourceUnit), CompileError> {
     let source = crate::source::read_physical_source(path).map_err(|e| {
         CompileError::new(
             include_span,
@@ -53,7 +62,13 @@ pub(super) fn parse_file(
         lexer::tokenize_with_mode(&source, mode).map_err(|e| e.with_file(file.clone()))?;
 
     let parsed = parser::parse_with_mode(&tokens, mode).map_err(|e| e.with_file(file))?;
-    crate::source::finalize_physical_program(parsed, path, mode, defines)
+    let program = crate::source::finalize_physical_program(parsed, path, mode, defines)?;
+    let unit = super::source_units::SourceUnit {
+        canonical_path: path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+        mode,
+        source: source.into(),
+    };
+    Ok((program, unit))
 }
 
 #[cfg(test)]

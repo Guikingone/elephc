@@ -216,9 +216,9 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             once,
             required,
         } => lower_include(ctx, path, *once, *required, stmt.span),
-        StmtKind::IncludeOnceMark { label } => lower_include_once_mark(ctx, label, stmt.span),
-        StmtKind::IncludeOnceGuard { label, body } => {
-            lower_include_once_guard(ctx, label, body, stmt.span);
+        StmtKind::IncludeOnceMark { source_path } => lower_include_once_mark(ctx, source_path, stmt.span),
+        StmtKind::IncludeOnceGuard { source_path, body } => {
+            lower_include_once_guard(ctx, source_path, body, stmt.span);
         }
         StmtKind::Throw(expr) => lower_throw(ctx, expr),
         // Nested appends are parser-generated read/push/write-back groups. Fuse the recognized
@@ -251,6 +251,9 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => lower_noop(ctx, stmt.span),
+        StmtKind::ClassLikeActivate { name, kind, source_path } => {
+            lower_class_like_activation(ctx, name, *kind, source_path, stmt.span);
+        }
         StmtKind::FunctionVariantGroup { name, variants } => {
             lower_function_variant_group(ctx, name, variants, stmt.span);
         }
@@ -260,7 +263,7 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Return(value) => lower_return(ctx, value.as_ref(), stmt.span),
         StmtKind::ConstDecl { name, value } => lower_const_decl(ctx, name, value, stmt.span),
         StmtKind::ListUnpack { vars, value } => lower_list_unpack(ctx, vars, value, stmt.span),
-        StmtKind::Global { vars } => lower_global(ctx, vars),
+        StmtKind::Global { vars } => lower_global(ctx, vars, stmt.span),
         StmtKind::StaticVar { name, init } => lower_static_var(ctx, name, init, stmt.span),
         StmtKind::PropertyAssign {
             object,

@@ -298,10 +298,16 @@ pub(super) fn emit_type_error_at(
 pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) -> Result<()> {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(message, message_ptr_reg, message_len_reg)?;
+    emit_error_from_string_result(ctx);
+    Ok(())
+}
+
+/// Throws an Error using a persisted message in the string-result registers.
+pub(super) fn emit_error_from_string_result(ctx: &mut FunctionContext<'_>) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
     emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "Error");
     emit_dynamic_throwable_object(ctx, "_spl_error_class_id");
-    Ok(())
 }
 
 /// Throws a catchable PHP `ValueError` whose message already sits in the string-result registers.
@@ -376,8 +382,7 @@ fn emit_static_exception_at(
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
@@ -394,13 +399,12 @@ fn emit_static_exception_at(
                 "x9",
                 creation_line,
             );
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction(
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
             );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
@@ -418,7 +422,7 @@ fn emit_static_exception_at(
                 "rax",
                 creation_line,
             );
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
@@ -551,8 +555,7 @@ fn emit_uncaught_exit(ctx: &mut FunctionContext<'_>) {
 fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
@@ -564,14 +567,13 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the runtime exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction(
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
             );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
@@ -585,7 +587,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the runtime exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");

@@ -514,6 +514,7 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
         | StmtKind::Continue(_)
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. } => {}

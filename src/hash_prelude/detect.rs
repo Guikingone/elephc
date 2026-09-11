@@ -567,6 +567,7 @@ fn stmt_refs_hash(stmt: &Stmt) -> bool {
             value,
             ..
         } => expr_refs_hash(object) || expr_refs_hash(index) || expr_refs_hash(value),
+        StmtKind::ClassLikeActivate { .. } => false,
     }
 }
 

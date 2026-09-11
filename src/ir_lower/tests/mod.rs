@@ -50,7 +50,9 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     )
     .expect("physical-source finalization failed");
     let (autoload_registry, parsed) = crate::autoload::Registry::build(parent, parsed);
-    let ast = crate::resolver::resolve(parsed, parent).expect("resolver failed");
+    let (ast, _, included_sources) =
+        crate::resolver::resolve_collecting_includes_with_defines_and_sources(parsed, parent, &defines)
+            .expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast);
     let ast = crate::dom_prelude::inject(ast);
     let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
@@ -69,7 +71,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
-    let (ast, _) = crate::autoload::run_collecting_included_with_defines(
+    let (ast, _, autoload_sources) = crate::autoload::run_collecting_included_with_defines_and_sources(
         ast,
         parent,
         &autoload_registry,
@@ -105,12 +107,37 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
             eval_forced: false,
         },
     );
-    crate::ir_lower::lower_program(&ast, &check_result, target, false).unwrap_or_else(|error| {
+    let catalog = crate::ir::SourceCatalog::from_units(std::iter::once(crate::resolver::SourceUnit {
+        canonical_path: main_file_path.canonicalize().unwrap_or_else(|_| main_file_path.clone()),
+        mode: source_mode,
+        source: std::sync::Arc::from(source),
+    }).chain(included_sources.source_units.into_values())
+      .chain(autoload_sources.source_units.into_values()))
+        .expect("source catalog construction failed");
+    let mut module = crate::ir_lower::lower_program_with_source_catalog(
+        &ast, &check_result, target, &main_file_path, false, catalog,
+    ).unwrap_or_else(|error| {
         panic!(
             "EIR lowering failed for {}: {error:?}",
             main_file_path.display()
         )
-    })
+    });
+    module.declared_class_source_files = autoload_sources.class_likes;
+    module.declared_class_source_files.extend(included_sources.class_likes);
+    module.declared_function_source_files = autoload_sources.functions;
+    module.declared_function_source_files.extend(included_sources.functions);
+    module
+}
+
+#[test]
+fn lowering_source_catalog_preserves_original_entry() {
+    let source = "<?php echo __FILE__;";
+    let module = lower_source(source);
+    let catalog = module.source_catalog().expect("lowering must retain source inputs");
+    let entries: Vec<_> = catalog.iter().collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(&*entries[0].1.source, source);
+    assert_eq!(entries[0].1.mode, crate::source::SourceMode::Php);
 }
 
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.

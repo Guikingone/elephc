@@ -72,6 +72,7 @@ pub(super) fn emit_module(
     web: bool,
     web_isolation: WebIsolation,
 ) -> Result<()> {
+    let size_trace = std::env::var_os("ELEPHC_CODEGEN_SIZE_TRACE").is_some();
     let mut shared = SharedCodegenState::for_module(module);
     shared.counters = counters;
     shared.instrument = instrument;
@@ -88,6 +89,7 @@ pub(super) fn emit_module(
         }
     }
     let mut inventory = BackendInventory::from_env();
+    super::source_units::emit_state_helpers(module, emitter, data);
     function_variants::emit_dispatchers(module, emitter, data);
     // Emitted before the module's own bodies so every string context that calls them is
     // lowered against helpers that already exist.
@@ -122,25 +124,49 @@ pub(super) fn emit_module(
             data.add_comm(crate::names::ir_global_symbol(name), sg_size);
         }
     }
-    for function in module
+    let function_count = module
         .functions
         .iter()
         .filter(|function| !is_main(function))
+        .count();
+    for (index, function) in module
+        .functions
+        .iter()
+        .filter(|function| !is_main(function))
+        .enumerate()
     {
         inventory.run_with_shared(emitter, &mut shared, &function.name, |emitter, shared| {
             emit_user_function(module, function, emitter, data, shared, regalloc_linear)
         })?;
+        trace_size_if_due(size_trace, "function", index + 1, function_count, emitter);
     }
-    for method in &module.class_methods {
+    trace_codegen_size(size_trace, "functions-complete", emitter);
+    for (index, method) in module.class_methods.iter().enumerate() {
         inventory.run_with_shared(emitter, &mut shared, &method.name, |emitter, shared| {
             emit_class_method(module, method, emitter, data, shared, regalloc_linear)
         })?;
+        trace_size_if_due(
+            size_trace,
+            "class-method",
+            index + 1,
+            module.class_methods.len(),
+            emitter,
+        );
     }
-    for closure in &module.closures {
+    trace_codegen_size(size_trace, "class-methods-complete", emitter);
+    for (index, closure) in module.closures.iter().enumerate() {
         inventory.run_with_shared(emitter, &mut shared, &closure.name, |emitter, shared| {
             emit_user_function(module, closure, emitter, data, shared, regalloc_linear)
         })?;
+        trace_size_if_due(
+            size_trace,
+            "closure",
+            index + 1,
+            module.closures.len(),
+            emitter,
+        );
     }
+    trace_codegen_size(size_trace, "closures-complete", emitter);
     inventory.finish()?;
     emit_eir_fiber_wrappers(module, emitter);
     // Enum case materializers are plain out-of-line functions that any user body,
@@ -184,6 +210,37 @@ pub(super) fn emit_module(
         emitter.raw(&format!("{PROBE_TEXT_END_LABEL}:"));
     }
     Ok(())
+}
+
+/// Emits sparse, opt-in progress records while a large module is lowered to assembly.
+///
+/// The trace intentionally reports the already-owned emitter buffer, not process RSS: it is
+/// target-independent, does not allocate a snapshot, and pinpoints which body family causes a
+/// framework-scale code-generation expansion. The environment switch is diagnostic only.
+fn trace_size_if_due(
+    enabled: bool,
+    kind: &str,
+    completed: usize,
+    total: usize,
+    emitter: &Emitter,
+) {
+    const TRACE_INTERVAL: usize = 512;
+    if enabled && (completed % TRACE_INTERVAL == 0 || completed == total) {
+        eprintln!(
+            "[elephc-codegen-size] stage={kind} completed={completed}/{total} emitter_bytes={}",
+            emitter.checkpoint(),
+        );
+    }
+}
+
+/// Emits one opt-in checkpoint between code-generation body families.
+fn trace_codegen_size(enabled: bool, stage: &str, emitter: &Emitter) {
+    if enabled {
+        eprintln!(
+            "[elephc-codegen-size] stage={stage} emitter_bytes={}",
+            emitter.checkpoint(),
+        );
+    }
 }
 
 /// Environment variable enabling the scan-every-body backend survey.

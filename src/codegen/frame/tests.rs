@@ -108,6 +108,49 @@ fn callable_frames_do_not_emit_a_second_stack_budget_guard() {
     }
 }
 
+/// Nullable nominal guards forward a local owner; concrete guards retain a new payload owner.
+#[test]
+fn nominal_return_guard_transfers_only_forwarded_boxed_local() {
+    for (return_ty, expected_transfer) in [
+        (PhpType::Union(vec![PhpType::Object("Value".into()), PhpType::Void]), true),
+        (PhpType::Object("Value".into()), false),
+    ] {
+        let return_ir = if expected_transfer {
+            IrType::Heap(IrHeapKind::Mixed)
+        } else {
+            IrType::Heap(IrHeapKind::Object)
+        };
+        let mut function = Function::new("guarded_return".into(), return_ir, return_ty.clone());
+        let slot = function.add_local(
+            Some("value".into()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let result = {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let source = builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let result = builder.emit(
+                Op::RuntimeCall,
+                vec![source],
+                Some(Immediate::NominalObject {
+                    target: crate::ir::DataId::from_raw(0),
+                    boundary: crate::ir::NominalObjectBoundary::Return,
+                }),
+                return_ir,
+                return_ty,
+                Ownership::MaybeOwned,
+            ).unwrap();
+            builder.terminate(Terminator::Return { value: Some(result) });
+            result
+        };
+        assert_eq!(return_cleanup_skip_slot(&function, result), expected_transfer.then_some(slot));
+    }
+}
+
 /// Builds a callable with an owned string parameter followed by a borrowed Mixed parameter.
 fn owned_string_then_mixed_prologue_asm(target: Target) -> String {
     let mut module = Module::new(target);

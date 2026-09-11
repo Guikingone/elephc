@@ -193,8 +193,15 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve slots for the caller's output pointers
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the caller's out_ptr storage address
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the caller's out_len storage address
-    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_string input
-    emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed eval value to a PHP string pair
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into the internal unbox input register
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the concrete tag and payload through any nested Mixed cells
+    emitter.instruction("cmp rax, 1");                                          // an existing string already has stable bytes owned by the input cell
+    emitter.instruction("jne __elephc_eval_value_string_bytes_cast_x86");      // render non-string values through the shared PHP conversion helper
+    emitter.instruction("mov rax, rdi");                                        // borrow the string payload in the ABI result register
+    emitter.instruction("jmp __elephc_eval_value_string_bytes_store_x86");     // Rust copies these bytes before releasing or mutating the input
+    emitter.label("__elephc_eval_value_string_bytes_cast_x86");
+    emitter.instruction("call __rt_value_cast_string");                         // preserve the ordinary non-string conversion semantics
+    emitter.label("__elephc_eval_value_string_bytes_store_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the optional out_ptr storage address
     emitter.instruction("test r10, r10");                                       // did the caller request the string pointer?
     emitter.instruction("jz __elephc_eval_value_string_bytes_len");             // skip pointer storage when the caller passed null

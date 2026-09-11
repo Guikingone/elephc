@@ -1746,7 +1746,10 @@ fn lower_runtime_mixed_callable_array_descriptor_invoke(
 ) -> Result<()> {
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
     let static_cases = runtime_static_method_descriptor_cases(ctx, None);
-    if instance_targets.is_empty() && static_cases.is_empty() {
+    if instance_targets.is_empty()
+        && static_cases.is_empty()
+        && !ctx.module.required_runtime_features.eval_bridge
+    {
         return Err(CodegenIrError::unsupported(
             "callable_descriptor_invoke for runtime mixed callable array with no descriptor targets",
         ));
@@ -1810,6 +1813,14 @@ fn emit_mixed_callable_array_descriptor_dispatch(
     if super::builtins::has_eval_context(ctx) {
         super::builtins::lower_eval_callable_call_array(ctx, inst, callable, arg_mixed)?;
         abi::emit_jump(ctx.emitter, &done_label);
+    } else if ctx.module.required_runtime_features.eval_bridge {
+        super::builtins::lower_eval_global_callable_call_array(
+            ctx,
+            inst,
+            callable,
+            arg_mixed,
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
     } else {
         emit_runtime_callable_array_no_match_abort(ctx);
     }
@@ -1827,7 +1838,7 @@ fn lower_runtime_string_callable_array_descriptor_invoke(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
-    if super::builtins::has_eval_context(ctx) {
+    if ctx.module.required_runtime_features.eval_bridge {
         normalize_typed_callable_array_to_mixed(ctx, callable)?;
         return lower_runtime_mixed_callable_array_descriptor_invoke(
             ctx,
@@ -3234,6 +3245,7 @@ fn emit_descriptor_reg_invoker_call_with_mixed_arg_and_runtime_ownership(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
+    retain_borrowed_descriptor_for_invocation(ctx, descriptor_reg, owned_flag_reg);
     abi::emit_push_reg(ctx.emitter, descriptor_reg);
     abi::emit_push_reg(ctx.emitter, owned_flag_reg);
     emit_descriptor_reg_invoker_mixed_result_with_arg_container(
@@ -3245,6 +3257,39 @@ fn emit_descriptor_reg_invoker_call_with_mixed_arg_and_runtime_ownership(
     )?;
     release_saved_runtime_descriptor_if_owned_preserving_result(ctx);
     store_descriptor_invoker_result(ctx, inst)
+}
+
+/// Acquires the temporary owner that keeps a borrowed descriptor alive for its invocation.
+///
+/// A descriptor read from a boxed `Mixed` value is normally borrowed from that value. The PHP
+/// callback may nevertheless replace the last owner of that value through a by-reference capture
+/// while its invoker is still executing. Retain the borrowed descriptor before entering the
+/// invoker and represent that retained reference through the existing ownership flag, so the
+/// normal post-invocation release balances it. Fresh descriptors already have such an owner.
+fn retain_borrowed_descriptor_for_invocation(
+    ctx: &mut FunctionContext<'_>,
+    descriptor_reg: &str,
+    owned_flag_reg: &str,
+) {
+    let already_owned_label = ctx.next_label("descriptor_invocation_owner_present");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx
+            .emitter
+            .instruction(&format!("cbnz {}, {}", owned_flag_reg, already_owned_label)),
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", owned_flag_reg, owned_flag_reg));
+            ctx.emitter
+                .instruction(&format!("jnz {}", already_owned_label));
+        }
+    }
+
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_reg_move(ctx.emitter, &result_reg, descriptor_reg);
+    callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, descriptor_reg, &result_reg);
+    abi::emit_load_int_immediate(ctx.emitter, owned_flag_reg, 1);
+    ctx.emitter.label(&already_owned_label);
 }
 
 /// Calls a loaded descriptor invoker with an argument container and leaves a Mixed result.

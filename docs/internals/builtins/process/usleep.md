@@ -2,7 +2,7 @@
 title: "usleep() — internals"
 description: "Compiler internals for usleep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 371
+  order: 373
 ---
 
 ## `usleep()` — internals

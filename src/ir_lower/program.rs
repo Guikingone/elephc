@@ -38,6 +38,7 @@ mod eval_aot;
 /// runtime and can reach anything, including through an `include`.
 pub(crate) use runtime_features::eval_literal_call_requires_bridge;
 mod declaration_metadata;
+mod runtime_bindings;
 mod function_declarations;
 mod class_methods;
 mod spl_discovery;
@@ -75,12 +76,19 @@ pub(crate) fn lower(
     target: Target,
     source_path: Option<&Path>,
     web: bool,
+    source_catalog: Option<crate::ir::SourceCatalog>,
 ) -> Result<Module, LoweringError> {
     let _dynamic_function_resolution =
         super::context::enable_runtime_dynamic_function_resolution(body_contains_eval_call(program));
-    let mut module = Module::new(target);
+    let mut module = match source_catalog {
+        Some(catalog) => Module::with_source_catalog(target, catalog),
+        None => Module::new(target),
+    };
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;
+    module.runtime_bound_functions = std::sync::Arc::new(
+        runtime_bindings::collect_runtime_bound_functions(program),
+    );
     let constants = crate::codegen::collect_constants(program, target.platform);
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);

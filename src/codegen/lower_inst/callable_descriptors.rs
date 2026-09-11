@@ -434,7 +434,7 @@ fn module_has_interface(ctx: &FunctionContext<'_>, interface_name: &str) -> bool
 }
 
 /// Returns whether the current EIR method scope can access a declared member.
-fn codegen_can_access_member(
+pub(super) fn codegen_can_access_member(
     ctx: &FunctionContext<'_>,
     declaring_class: &str,
     visibility: &Visibility,

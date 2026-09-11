@@ -18,6 +18,19 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
         EvaluatedCallable::Named { name, .. } => {
+            if let Some(closure) = context.closure(name).cloned() {
+                return eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
+                    &closure,
+                    closure.declaring_class_scope().map(str::to_string),
+                    closure.function().parameter_is_by_ref(),
+                    evaluated_args,
+                    EvalByRefBindingMode::WarnByValue {
+                        callable_name: closure.function().name(),
+                    },
+                    context,
+                    values,
+                );
+            }
             eval_callable_with_call_array_args(name, evaluated_args, context, values)
         }
         EvaluatedCallable::BoundClosure {
@@ -170,7 +183,7 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
     if let Some(closure) = context.closure(name).cloned() {
         return eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
             &closure,
-            None,
+            closure.declaring_class_scope().map(str::to_string),
             closure.function().parameter_is_by_ref(),
             evaluated_args,
             EvalByRefBindingMode::WarnByValue {

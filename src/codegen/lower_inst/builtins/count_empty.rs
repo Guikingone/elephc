@@ -391,7 +391,10 @@ pub(in crate::codegen::lower_inst) fn lower_empty(ctx: &mut FunctionContext<'_>,
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_is_empty");
         }
-        PhpType::Callable | PhpType::Object(_) | PhpType::Resource(_) => {
+        PhpType::Object(_) => {
+            predicates::emit_is_null_result(ctx, value)?;
+        }
+        PhpType::Callable | PhpType::Resource(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
         other => {

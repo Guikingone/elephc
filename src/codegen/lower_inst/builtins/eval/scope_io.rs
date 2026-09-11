@@ -30,7 +30,12 @@ pub(super) fn emit_eval_scope_set_name(ctx: &mut FunctionContext<'_>, name: &str
         abi::int_arg_reg_name(ctx.emitter.target, 4),
         flags,
     );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
+    let setter = if flags & NATIVE_BINDING != 0 {
+        "__elephc_eval_scope_bind_native"
+    } else {
+        "__elephc_eval_scope_set"
+    };
+    let symbol = ctx.emitter.target.extern_symbol(setter);
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
 }
@@ -123,6 +128,7 @@ pub(super) fn reload_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[
         emit_eval_scope_get(ctx, local);
         let missing = ctx.next_label("eval_scope_reload_missing");
         let done = ctx.next_label("eval_scope_reload_done");
+        branch_scope_binding(ctx, NATIVE_BINDING, &done);
         emit_branch_if_scope_entry_missing(ctx, &missing);
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
@@ -165,6 +171,7 @@ pub(super) fn reload_eval_globals_from_local_scope(
         emit_eval_scope_get_name(ctx, &global.name, 0, 8);
         let missing = ctx.next_label("eval_global_reload_missing");
         let done = ctx.next_label("eval_global_reload_done");
+        branch_scope_binding(ctx, NATIVE_BINDING, &done);
         emit_branch_if_scope_entry_missing(ctx, &missing);
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);

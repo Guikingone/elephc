@@ -1,5 +1,5 @@
 //! Purpose:
-//! Exports post-barrier callable dispatch and probes for callback values that
+//! Exports native-to-eval callable dispatch and probes for callback values that
 //! may reference eval-declared functions, methods, or objects. Generated code
 //! uses this ABI when native descriptor metadata cannot answer dynamically.
 //!
@@ -222,8 +222,8 @@ unsafe fn eval_function_owner_context_inner(
 /// Runs the eval callable-array ABI body after installing a panic boundary.
 ///
 /// # Safety
-/// Mirrors `__elephc_eval_callable_call_array`; callers must provide a valid
-/// context and boxed callback/argument-array cells.
+/// Mirrors `__elephc_eval_callable_call_array`; callers must provide boxed callback and
+/// argument-array cells. A null context requests a temporary request-global fallback.
 #[cfg(not(test))]
 unsafe fn eval_callable_call_array_inner(
     ctx: *mut ElephcEvalContext,
@@ -231,24 +231,97 @@ unsafe fn eval_callable_call_array_inner(
     arg_array: *mut RuntimeCell,
     out: *mut ElephcEvalResult,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
-        return EvalStatus::RuntimeFatal.code();
-    };
-    if context.abi_version() != ABI_VERSION {
-        return EvalStatus::AbiMismatch.code();
-    }
     if callback.is_null() || arg_array.is_null() {
         return EvalStatus::RuntimeFatal.code();
     }
+    let callback = RuntimeCellHandle::from_raw(callback);
+    let caller_context = (!ctx.is_null()).then_some(ctx);
+    let owner_context = eval_callable_owner_context(callback);
+    let (context_ptr, created_context) = if let Some(context) = owner_context.or(caller_context) {
+        (context, false)
+    } else {
+        let context = crate::ffi::context::__elephc_eval_context_new();
+        if context.is_null() {
+            return EvalStatus::RuntimeFatal.code();
+        }
+        (context, true)
+    };
+    let Some(context) = context_ptr.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        if created_context {
+            crate::ffi::context::finalize_eval_context_free(context_ptr);
+        }
+        return EvalStatus::AbiMismatch.code();
+    }
+    if created_context {
+        crate::context::sync_global_eval_aot_metadata(context);
+        context.sync_global_eval_classes();
+    }
+    let forwarded_scopes = caller_context
+        .filter(|caller| !std::ptr::eq(*caller, context))
+        .and_then(|caller| caller.as_ref())
+        .map(|caller| {
+            (
+                caller.current_class_scope().map(str::to_string),
+                caller.current_called_class_scope().map(str::to_string),
+            )
+        });
+    if let Some((class_scope, called_class_scope)) = &forwarded_scopes {
+        if let Some(class_scope) = class_scope {
+            context.push_class_scope(class_scope.clone());
+        }
+        if let Some(called_class_scope) = called_class_scope {
+            context.push_called_class_scope(called_class_scope.clone());
+        }
+    }
+    // Every caller of this ABI is generated native code. Refresh the captured
+    // scope before interpreting the callback, then publish its changes before
+    // returning either a value or an error to the native caller.
+    let global_sync = context.native_global_sync.zip(context.global_scope_ptr());
+    if let Some((hooks, scope)) = global_sync {
+        (hooks.native_to_eval)(scope);
+    }
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_callable_call_array_outcome(
+    let status = match interpreter::execute_context_callable_call_array_outcome(
         context,
-        RuntimeCellHandle::from_raw(callback),
+        callback,
         RuntimeCellHandle::from_raw(arg_array),
         &mut values,
     ) {
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => status.code(),
+    };
+    if let Some((class_scope, called_class_scope)) = forwarded_scopes {
+        if called_class_scope.is_some() {
+            context.pop_called_class_scope();
+        }
+        if class_scope.is_some() {
+            context.pop_class_scope();
+        }
     }
+    if let Some((hooks, scope)) = global_sync {
+        (hooks.eval_to_native)(scope);
+    }
+    if created_context && context.request_retained_context_free() {
+        crate::ffi::context::finalize_eval_context_free(context_ptr);
+    }
+    status
+}
+
+/// Resolves the owner context of an eval-owned Closure or object-method callback array.
+#[cfg(not(test))]
+fn eval_callable_owner_context(
+    callback: RuntimeCellHandle,
+) -> Option<*mut ElephcEvalContext> {
+    let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
+    if let Ok(identity) = values.object_identity(callback) {
+        return crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity);
+    }
+    let key = values.array_iter_key(callback, 0).ok()?;
+    let receiver = values.array_get(callback, key).ok()?;
+    let identity = values.object_identity(receiver).ok()?;
+    crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
 }

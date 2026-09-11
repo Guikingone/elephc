@@ -184,12 +184,11 @@ fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
         class: reflection_owner_layout(module.class_infos.get("ReflectionClass")?, true)?,
         object_class: reflection_owner_layout(module.class_infos.get("ReflectionObject")?, true)?,
         enum_class: reflection_owner_layout(module.class_infos.get("ReflectionEnum")?, true)?,
-        function: reflection_owner_layout(module.class_infos.get("ReflectionFunction")?, true)?,
-        method: reflection_owner_layout(module.class_infos.get("ReflectionMethod")?, true)?,
+        function: reflection_owner_layout_with_deferred_type(module.class_infos.get("ReflectionFunction")?)?,
+        method: reflection_owner_layout_with_deferred_type(module.class_infos.get("ReflectionMethod")?)?,
         property: reflection_owner_layout(module.class_infos.get("ReflectionProperty")?, true)?,
-        class_constant: reflection_owner_layout(
+        class_constant: reflection_owner_layout_with_deferred_type(
             module.class_infos.get("ReflectionClassConstant")?,
-            true,
         )?,
         enum_unit_case: reflection_owner_layout(
             module.class_infos.get("ReflectionEnumUnitCase")?,
@@ -207,6 +206,16 @@ fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
             false,
         )?,
     })
+}
+
+/// Callable and constant types are installed after the common owner is created.
+/// Their member-array argument is not a type value: retaining it in `__type`
+/// first would strand that reference when the real type overwrites the slot.
+fn reflection_owner_layout_with_deferred_type(info: &ClassInfo) -> Option<ReflectionOwnerLayout> {
+    let mut layout = reflection_owner_layout(info, true)?;
+    layout.parameter_type_lo = None;
+    layout.parameter_type_hi = None;
+    Some(layout)
 }
 
 /// Returns one Reflection owner layout from class metadata.
@@ -606,6 +615,7 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the Reflection owner object for eval
+    emit_release_boxed_reflection_owner(emitter);
     emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
@@ -811,6 +821,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
     emitter.instruction("call __rt_mixed_from_value");                          // box the Reflection owner object for eval
+    emit_release_boxed_reflection_owner(emitter);
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
@@ -818,6 +829,27 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed reflection owner to Rust
+}
+
+/// Transfers a freshly allocated owner into the Mixed box that just retained it.
+/// The input argument spills are dead now, so reuse the first spill to preserve
+/// the boxed result while releasing the original allocation reference.
+fn emit_release_boxed_reflection_owner(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("str x0, [sp, #0]");                            // preserve the owned Mixed result in the dead owner-kind spill
+            emitter.instruction("ldr x0, [sp, #32]");                           // load the original unboxed allocation reference
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov QWORD PTR [rbp - 8], rax");              // preserve the owned Mixed result in the dead owner-kind spill
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");             // load the original unboxed allocation reference
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_decref_object");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("ldr x0, [sp, #0]"),             // return the box, now the sole owner of the new object
+        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [rbp - 8]"),   // return the box, now the sole owner of the new object
+    }
 }
 
 /// Emits one ARM64 owner-kind allocation and slot-population body.
@@ -2724,6 +2756,25 @@ fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
 mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
+
+    /// Boxing retains the payload on both ABIs; release only the allocation's reference.
+    #[test]
+    fn reflection_owner_box_releases_allocation_reference() {
+        for (target, load, release, restore) in [
+            (Target::new(Platform::MacOS, Arch::AArch64),
+                "ldr x0, [sp, #32]", "bl __rt_decref_object", "ldr x0, [sp, #0]"),
+            (Target::new(Platform::Linux, Arch::X86_64),
+                "mov rax, QWORD PTR [rbp - 40]", "call __rt_decref_object", "mov rax, QWORD PTR [rbp - 8]"),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_release_boxed_reflection_owner(&mut emitter);
+            let output = emitter.output();
+            let load = output.find(load).unwrap();
+            let release = output.find(release).unwrap();
+            let restore = output.find(restore).unwrap();
+            assert!(load < release && release < restore, "{output}");
+        }
+    }
 
     /// Verifies ARM64 ReflectionAttribute owner storage calls the shared object-slot normalizer.
     #[test]

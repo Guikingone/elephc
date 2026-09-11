@@ -22,11 +22,13 @@ mod engine_includes;
 mod exprs;
 mod files;
 mod function_variants;
-mod include_once;
 mod include_path;
 pub(crate) mod path_eval;
 mod state;
+mod source_units;
 mod stmt_exprs;
+
+pub use source_units::SourceUnit;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Program, Stmt, StmtKind};
@@ -112,6 +114,8 @@ pub struct IncludedDeclarationSources {
     pub class_likes: HashMap<String, String>,
     /// Canonical function name to the physical path that declares it.
     pub functions: HashMap<String, String>,
+    /// Immutable inputs for later compiled file entries, not a list of executed files.
+    pub source_units: std::collections::BTreeMap<PathBuf, SourceUnit>,
 }
 
 /// Resolves includes while applying the invocation's conditional symbols to every loaded file.
@@ -151,6 +155,7 @@ pub fn resolve_collecting_includes_with_defines_and_sources(
     let sources = IncludedDeclarationSources {
         class_likes: std::mem::take(&mut state.declared_class_files),
         functions: std::mem::take(&mut state.declared_function_files),
+        source_units: state.source_units.snapshot(),
     };
 
     let mut included_files: Vec<PathBuf> = declared_once.into_iter().collect();

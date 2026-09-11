@@ -96,6 +96,7 @@ pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
     };
     let args = bind_evaluated_function_args(&[String::from("interface")], evaluated_args)?;
     let interface_name = eval_reflection_string_arg(args[0], values)?;
+    let _ = crate::interpreter::eval_spl_autoload_class(&interface_name, context, values)?;
     if !eval_reflection_interface_exists(&interface_name, context, values)? {
         if eval_reflection_non_interface_exists(&interface_name, context, values)? {
             return eval_throw_reflection_exception(
@@ -172,6 +173,11 @@ pub(in crate::interpreter) fn eval_reflection_class_is_subclass_of_result(
         values.release(reflected_class)?;
         result
     };
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_is_subclass_of reflected={reflected_name:?} target={target_name:?} result={result}"
+        );
+    }
     values.bool_value(result).map(Some)
 }
 
@@ -220,6 +226,11 @@ pub(in crate::interpreter) fn eval_reflection_class_source_location_result(
     let Some(reflected_name) = context.eval_reflection_class_name(identity) else {
         return Ok(None);
     };
+    if eval_reflection_class_like_attributes(reflected_name, context).is_none() {
+        // Native getters retain per-declaration paths and lines in the reflector's slots.
+        // The eval fallback below only has a global AOT source path, not that declaration path.
+        return Ok(None);
+    }
     let (aot_source_file, aot_source_location) =
         eval_reflection_aot_class_source_metadata(reflected_name, values)?;
     // The generated program has ONE source file, the entry point, and answering with it named the
@@ -590,14 +601,27 @@ pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
     let exists = if let Some(metadata) =
         eval_reflection_class_like_attributes(&reflected_name, context)
     {
-        metadata
+        let declared = metadata
             .method_names
             .iter()
-            .any(|name| name.eq_ignore_ascii_case(&requested_name))
+            .any(|name| name.eq_ignore_ascii_case(&requested_name));
+        if declared {
+            true
+        } else if let Some(parent) = context.class_native_parent_name(&reflected_name) {
+            eval_reflection_aot_method_metadata_if_exists(&parent, &requested_name, values)?
+                .is_some()
+        } else {
+            false
+        }
     } else {
         eval_reflection_aot_method_metadata_if_exists(&reflected_name, &requested_name, values)?
             .is_some()
     };
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_has_method reflected={reflected_name:?} method={requested_name:?} result={exists}"
+        );
+    }
     values.bool_value(exists).map(Some)
 }
 

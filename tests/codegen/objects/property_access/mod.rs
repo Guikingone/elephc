@@ -16,3 +16,6 @@ mod mutations;
 mod deep_chains;
 mod nullable_int_defaults;
 mod nullable_string_properties;
+mod isset_chains;
+mod nullable_generic_calls;
+mod inherited_callbacks;

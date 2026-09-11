@@ -126,7 +126,11 @@ pub(super) fn lower_initialized_property_null_coalesce_probe(
         return None;
     }
 
-    let object = lower_expr(ctx, object);
+    let result_type = property_access_expr_type_for_ir(ctx, object, property)
+        .filter(|ty| singular_object_class(ty).is_some())
+        .map(nullable_result_type)
+        .unwrap_or(PhpType::Mixed);
+    let object = lower_subscript_receiver_silently(ctx, object);
     let object_is_owned = ctx.value_is_owning_temporary(object);
     let property_data = ctx.intern_string(property);
     let initialized = ctx.emit_value(
@@ -137,7 +141,7 @@ pub(super) fn lower_initialized_property_null_coalesce_probe(
         Op::PropInitialized.default_effects(),
         Some(value.span),
     );
-    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let missing_block = ctx
         .builder
@@ -159,7 +163,7 @@ pub(super) fn lower_initialized_property_null_coalesce_probe(
     ctx.builder.position_at_end(missing_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     let null = lower_boxed_null(ctx, value);
-    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, null, value.span);
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), null, value.span);
     if object_is_owned {
         crate::ir_lower::ownership::release_if_owned(ctx, object, Some(value.span));
     }
@@ -174,7 +178,7 @@ pub(super) fn lower_initialized_property_null_coalesce_probe(
     store_value_into_temp(
         ctx,
         &temp_name,
-        PhpType::Mixed,
+        result_type,
         property_value,
         value.span,
     );
@@ -193,30 +197,145 @@ pub(super) fn lower_initialized_property_null_coalesce_probe(
     Some(take_owned_temp(ctx, &temp_name, value.span))
 }
 
-/// Returns whether a property receiver is stored as one concrete native object pointer.
+/// Fetches an overloaded prefix quietly, retaining its receiver across the magic callbacks.
+pub(super) fn lower_magic_property_null_coalesce_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::PropertyAccess { object, property } = &value.kind else {
+        return None;
+    };
+    let class_name = super::native_isset::isset_object_expr_class(ctx, object)?.0;
+    let class_info = ctx.classes.get(&class_name)?;
+    if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
+        return None;
+    }
+    let getter = class_method_signature(ctx, &class_name, &php_symbol_key("__get"))?;
+    let declares_isset = class_method_signature(ctx, &class_name, &php_symbol_key("__isset")).is_some();
+    let has_isset = declares_isset || ctx.classes.iter().any(|(name, info)| {
+        info.methods.contains_key("__isset") && class_extends_class(ctx, name, &class_name)
+    });
+    let result_type = nullable_result_type(getter.return_type.clone());
+    let receiver = lower_subscript_receiver_silently(ctx, object);
+    let receiver = if ctx.value_is_owning_temporary(receiver) {
+        receiver
+    } else {
+        // A hook may remove the original variable's last reference. Pin the receiver
+        // for the whole fetch, not merely for the first callback.
+        crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+            ctx, receiver, Some(value.span),
+        )
+    };
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let false_block = ctx.builder.create_named_block("isset.magic_prefix.false", Vec::new());
+    let get_block = ctx.builder.create_named_block("isset.magic_prefix.get", Vec::new());
+    let merge = ctx.builder.create_named_block("isset.magic_prefix.merge", Vec::new());
+    let probe_block = has_isset.then(|| {
+        ctx.builder.create_named_block("isset.magic_prefix.probe", Vec::new())
+    });
+    let lookup_block = (has_isset && !declares_isset).then(|| {
+        ctx.builder.create_named_block("isset.magic_prefix.lookup", Vec::new())
+    });
+    let is_null = ctx.emit_value(
+        Op::IsNull, vec![receiver.value], None, PhpType::Bool,
+        Op::IsNull.default_effects(), Some(value.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: false_block,
+        then_args: Vec::new(),
+        else_target: lookup_block.or(probe_block).unwrap_or(get_block),
+        else_args: Vec::new(),
+    });
+    if let Some(lookup_block) = lookup_block {
+        ctx.builder.position_at_end(lookup_block);
+        ctx.restore_initialized_slots(split_initialized.clone());
+        let method = lower_expr(ctx, &Expr::new(
+            ExprKind::StringLiteral("__isset".to_string()), value.span,
+        ));
+        let target = crate::ir::RuntimeFnId::MethodExists;
+        let available = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![receiver.value, method.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
+            PhpType::Bool, target.effects(), Some(value.span),
+        );
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: available.value,
+            then_target: probe_block.expect("lookup requires a magic probe block"),
+            then_args: Vec::new(),
+            else_target: get_block,
+            else_args: Vec::new(),
+        });
+    }
+    let mut get_initialized = split_initialized.clone();
+    let mut false_initialized = split_initialized.clone();
+    if let Some(probe_block) = probe_block {
+        ctx.builder.position_at_end(probe_block);
+        ctx.restore_initialized_slots(split_initialized.clone());
+        // Borrow from the held owner: method-call cleanup must not release the
+        // reference that is still needed by __get or the missing-value arm.
+        let borrowed = ctx.emit_value(
+            Op::Borrow, vec![receiver.value], None,
+            ctx.builder.value_php_type(receiver.value),
+            Op::Borrow.default_effects(), Some(value.span),
+        );
+        let exists = lower_method_call_with_receiver(
+            ctx, borrowed, "__isset",
+            &[Expr::new(ExprKind::StringLiteral(property.clone()), value.span)],
+            Op::MethodCall, value,
+        );
+        let exists = ctx.truthy_consuming(exists, Some(value.span));
+        get_initialized = ctx.initialized_slots_snapshot();
+        false_initialized = merge_initialized_slots_for_expr(
+            &split_initialized, get_initialized.clone(), true,
+            split_initialized.clone(), true,
+        );
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: exists.value,
+            then_target: get_block,
+            then_args: Vec::new(),
+            else_target: false_block,
+            else_args: Vec::new(),
+        });
+    }
+
+    ctx.builder.position_at_end(false_block);
+    ctx.restore_initialized_slots(false_initialized);
+    let null = lower_boxed_null(ctx, value);
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), null, value.span);
+    crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(value.span));
+    let false_reachable = !ctx.builder.insertion_block_is_terminated();
+    let false_initialized = ctx.initialized_slots_snapshot();
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(get_block);
+    ctx.restore_initialized_slots(get_initialized);
+    let getter_value = lower_method_call_with_receiver(
+        ctx, receiver, "__get",
+        &[Expr::new(ExprKind::StringLiteral(property.clone()), value.span)],
+        Op::MethodCall, value,
+    );
+    store_value_into_temp(ctx, &temp_name, result_type, getter_value, value.span);
+    let get_reachable = !ctx.builder.insertion_block_is_terminated();
+    let get_initialized = ctx.initialized_slots_snapshot();
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized, false_initialized, false_reachable,
+        get_initialized, get_reachable,
+    ));
+    Some(take_owned_temp(ctx, &temp_name, value.span))
+}
+
+/// Returns whether a property receiver has a known native class, including nullable storage.
 fn property_probe_receiver_uses_native_object_storage(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
 ) -> bool {
-    let ty = match &object.kind {
-        ExprKind::Variable(name) => ctx.local_type(name),
-        ExprKind::This => ctx.local_type("this"),
-        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
-        ExprKind::NewDynamicObject { fallback_class, .. } => {
-            PhpType::Object(fallback_class.to_string())
-        }
-        ExprKind::FunctionCall { name, .. } => {
-            let Some(signature) = ctx.functions.get(name.as_str()) else {
-                return false;
-            };
-            signature.return_type.clone()
-        }
-        _ => return false,
-    };
-    matches!(
-        ty.codegen_repr(),
-        PhpType::Object(class_name) if !class_name.trim_start_matches('\\').is_empty()
-    )
+    instance_callable_object_class_and_nullability(ctx, object).is_some()
 }
 
 /// Evaluates the receiver of a statically missing concrete-class property and

@@ -218,6 +218,39 @@ fn eval_property_type_name(declared: &EvalParameterType) -> String {
     rendered
 }
 
+/// Answers ABSENT for a not-yet-initialized property while PHP's quiet fetch is on.
+///
+/// `isset`/`empty`/`??`/`??=` -- and the CONTAINER of an indexed write or an `unset` -- fetch
+/// quietly: measured with `php -n` 8.5.6 against `private array $p;` left unassigned,
+/// `isset($o->p)`, `empty($o->p)`, `$o->p ?? 'D'`, `$o->p['k'] ?? 'D'`, `$o->p['k'] = 1`,
+/// `$o->p[] = 1`, `$o->p['k'] ??= 7` and `unset($o->p['k'])` all answer without raising, while
+/// the ordinary read, `count()`, `foreach`, and a read-modify-write (`++`, `.=`, `+=`) all raise
+/// `Error: Typed property C::$p must not be accessed before initialization`.
+///
+/// The eval-DECLARED branch of `eval_property_get_result` applies that rule from its own property
+/// record. An AOT-backed object has no such record -- `dynamic_object_class` is None for a purely
+/// compiled class, and `eval_dynamic_class_native_property_metadata` only covers an eval class
+/// with a native parent -- so all three of those paths fell through to a raw `values.property_get`
+/// that raises. The initialization marker is therefore asked through the bridge, the same probe
+/// `eval_property_isset` already uses.
+///
+/// Gated on the mode being ON, so an ordinary read still raises. Under the mode, answering null
+/// is right for an undefined property too, which is what PHP does there as well.
+fn eval_quiet_uninitialized_property_null(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !context.quiet_property_fetch() {
+        return Ok(None);
+    }
+    if values.property_is_initialized(object, property_name)? {
+        return Ok(None);
+    }
+    values.null().map(Some)
+}
+
 /// Reads one object property while enforcing eval-declared member visibility.
 pub(in crate::interpreter) fn eval_property_get_result(
     object: RuntimeCellHandle,
@@ -249,6 +282,14 @@ pub(in crate::interpreter) fn eval_property_get_result(
                     values,
                 );
             }
+        }
+        // A purely AOT class has no eval record at all, so this is where the Symfony stop landed:
+        // `CheckCircularReferencesPass::$checkedLazyNodes`, declared `private array` and never
+        // assigned, read through the bridge by compiled `empty()`/indexed-write/`unset`.
+        if let Some(null) =
+            eval_quiet_uninitialized_property_null(object, property_name, context, values)?
+        {
+            return Ok(null);
         }
         return values.property_get(object, property_name);
     };
@@ -356,6 +397,15 @@ pub(in crate::interpreter) fn eval_property_get_result(
                         values,
                     );
                 }
+                // Same rule for an eval class inheriting an AOT typed property: the marker is read
+                // in the declaring class's bridge scope, as `eval_property_isset` does.
+                if context.quiet_property_fetch()
+                    && !eval_with_native_bridge_scope(&declaring_class, context, || {
+                        values.property_is_initialized(object, property_name)
+                    })?
+                {
+                    return values.null();
+                }
                 return eval_with_native_bridge_scope(&declaring_class, context, || {
                     values.property_get(object, property_name)
                 });
@@ -396,6 +446,11 @@ pub(in crate::interpreter) fn eval_property_get_result(
             );
         }
         return values.retain(value);
+    }
+    if let Some(null) =
+        eval_quiet_uninitialized_property_null(object, &storage_property_name, context, values)?
+    {
+        return Ok(null);
     }
     values.property_get(object, &storage_property_name)
 }

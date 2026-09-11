@@ -2,7 +2,7 @@
 title: "unset() — internals"
 description: "Compiler internals for unset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 339
+  order: 341
 ---
 
 ## `unset()` — internals

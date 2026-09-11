@@ -64,6 +64,8 @@ pub(crate) fn lower_main(
     let all_global_var_names = collect_global_var_names(program);
     let top_level_env = web_gated_global_env(&check_result.global_env, web);
     let closures = lower_body_into_function(
+        module.shared_source_catalog(),
+        module.runtime_bound_functions.clone(),
         &mut function,
         &mut module.data,
         program,
@@ -201,6 +203,8 @@ pub(crate) fn lower_user_function(
         .unwrap_or_else(|| collect_attribute_args(attributes));
     attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
     let closures = lower_body_into_function(
+        module.shared_source_catalog(),
+        module.runtime_bound_functions.clone(),
         &mut function,
         &mut module.data,
         body,
@@ -310,6 +314,8 @@ pub(crate) fn lower_class_method(
     function.params.extend(function_params(&signature));
     attach_generator_source_if_needed(&mut function, body, body_params.len());
     let closures = lower_body_into_function(
+        module.shared_source_catalog(),
+        module.runtime_bound_functions.clone(),
         &mut function,
         &mut module.data,
         body,
@@ -409,6 +415,8 @@ pub(crate) fn lower_eval_aot_function(
     function.signature = Some(eir_runtime_metadata_signature(&signature));
     let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
+        module.shared_source_catalog(),
+        module.runtime_bound_functions.clone(),
         &mut function,
         &mut module.data,
         body,
@@ -523,6 +531,8 @@ pub(crate) fn lower_eval_aot_scope_function(
     });
     let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
+        module.shared_source_catalog(),
+        module.runtime_bound_functions.clone(),
         &mut function,
         &mut module.data,
         body,
@@ -630,6 +640,8 @@ pub(crate) fn lower_property_init_thunk(
     env.insert("this".to_string(), this_type.clone());
     let params = vec![("this".to_string(), this_type)];
     let closures = lower_body_into_function(
+        module.shared_source_catalog(),
+        module.runtime_bound_functions.clone(),
         &mut function,
         &mut module.data,
         &body,
@@ -988,6 +1000,8 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     }
     let web = module.web;
     let closures = lower_body_into_function(
+        module.shared_source_catalog(),
+        module.runtime_bound_functions.clone(),
         &mut function,
         &mut module.data,
         &body,
@@ -1200,6 +1214,8 @@ fn lower_closure_function_with_signature(
             .collect(),
     });
     let closures = lower_body_into_function(
+        parent.source_catalog.clone(),
+        parent.runtime_bound_functions.clone(),
         &mut function,
         parent.data,
         body,
@@ -1244,6 +1260,8 @@ fn lower_closure_function_with_signature(
 
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
 fn lower_body_into_function(
+    source_catalog: Option<std::sync::Arc<crate::ir::SourceCatalog>>,
+    runtime_bound_functions: std::sync::Arc<std::collections::HashSet<String>>,
     function: &mut Function,
     data: &mut crate::ir::DataPool,
     body: &[Stmt],
@@ -1337,7 +1355,10 @@ fn lower_body_into_function(
         source_path,
         web,
     );
+    ctx.source_catalog = source_catalog;
+    ctx.runtime_bound_functions = runtime_bound_functions;
     ctx.by_ref_return = function_by_ref_return;
+    ctx.runtime_global_bindings = crate::global_decls::collect_global_var_names(body);
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);

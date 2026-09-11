@@ -82,8 +82,10 @@ pub(in crate::interpreter) fn eval_call_arg_values(
             evaluated_args.push(EvaluatedCallArg {
                 name: Some(name.to_string()),
                 value,
+                // Lvalue preparation keeps its reference target alive separately;
+                // ordinary expressions use the same owner rule as discarded results.
+                owned: ref_target.is_none() && !eval_expr_result_aliases_storage(arg.value()),
                 ref_target,
-                owned: eval_expr_is_owning_temporary(arg.value()),
             });
             continue;
         }
@@ -98,8 +100,8 @@ pub(in crate::interpreter) fn eval_call_arg_values(
         evaluated_args.push(EvaluatedCallArg {
             name: None,
             value,
+            owned: ref_target.is_none() && !eval_expr_result_aliases_storage(arg.value()),
             ref_target,
-            owned: eval_expr_is_owning_temporary(arg.value()),
         });
     }
 
@@ -108,7 +110,7 @@ pub(in crate::interpreter) fn eval_call_arg_values(
 
 /// Returns whether an expression builds a cell nobody else holds.
 ///
-/// These shapes allocate: an array literal, an object construction, a clone. `eval_expr` answers
+/// These shapes allocate: a scalar literal, an array literal, an object construction, a clone. `eval_expr` answers
 /// them with a fresh cell at one reference, while the generated bridge only borrows what it is
 /// handed and `array_set` takes its own reference, so unless the consumer releases them the value
 /// survives the whole process — that is why `->args([new Ref('x')])` never destructed its `Ref`.
@@ -117,7 +119,8 @@ pub(in crate::interpreter) fn eval_call_arg_values(
 pub(in crate::interpreter) fn eval_expr_is_owning_temporary(expr: &EvalExpr) -> bool {
     matches!(
         expr,
-        EvalExpr::Array(_)
+        EvalExpr::Const(_)
+            | EvalExpr::Array(_)
             | EvalExpr::NewObject { .. }
             | EvalExpr::DynamicNewObject { .. }
             | EvalExpr::NewAnonymousClass { .. }

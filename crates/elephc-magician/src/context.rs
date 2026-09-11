@@ -29,6 +29,7 @@ mod normalization;
 mod reference_metadata;
 mod reflection_registry;
 mod runtime_state;
+mod request_includes;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -59,11 +60,10 @@ pub use native_defaults::*;
 pub use native_function::*;
 use normalization::*;
 pub use reference_metadata::*;
+pub(crate) use request_includes::{install_native_include_hooks, NativeIncludeHooks};
 
 #[cfg(not(test))]
 static GLOBAL_EVAL_CLASSES: OnceLock<Mutex<GlobalEvalClassRegistry>> = OnceLock::new();
-#[cfg(not(test))]
-static GLOBAL_EVAL_INCLUDED_FILES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 #[cfg(not(test))]
 static GLOBAL_EVAL_FUNCTIONS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 #[cfg(not(test))]

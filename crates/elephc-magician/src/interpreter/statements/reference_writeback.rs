@@ -253,13 +253,26 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             let Some(scope) = (unsafe { scope.as_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            for replaced in set_scope_cell(
+            if visible_scope_cell(context, scope, name) == Some(value) {
+                // Native writeback can mutate the existing cell in place. Do
+                // not demote its scope owner to a borrow and release that owner.
+                return Ok(());
+            }
+            let stored = values.retain(value)?;
+            let replaced = match set_scope_cell(
                 context,
                 scope,
                 name.clone(),
-                value,
-                ScopeCellOwnership::Borrowed,
-            )? {
+                stored,
+                ScopeCellOwnership::Owned,
+            ) {
+                Ok(replaced) => replaced,
+                Err(status) => {
+                    let _ = values.release(stored);
+                    return Err(status);
+                }
+            };
+            for replaced in replaced {
                 values.release(replaced)?;
             }
             Ok(())

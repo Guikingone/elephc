@@ -25,12 +25,21 @@ pub enum ScopeCellOwnership {
 
 /// Tracks the observable PHP state associated with one named scope cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeScopeBinding {
+    Value,
+    ReferenceCell,
+    GlobalName,
+}
+
+/// Tracks the observable PHP state associated with one named scope cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScopeEntryFlags {
     pub present: bool,
     pub unset: bool,
     pub dirty: bool,
     pub by_ref: bool,
     pub ownership: ScopeCellOwnership,
+    pub native_binding: NativeScopeBinding,
 }
 
 impl ScopeEntryFlags {
@@ -42,6 +51,7 @@ impl ScopeEntryFlags {
             dirty: true,
             by_ref: false,
             ownership,
+            native_binding: NativeScopeBinding::Value,
         }
     }
 
@@ -53,6 +63,7 @@ impl ScopeEntryFlags {
             dirty: true,
             by_ref: true,
             ownership,
+            native_binding: NativeScopeBinding::Value,
         }
     }
 
@@ -64,6 +75,7 @@ impl ScopeEntryFlags {
             dirty: true,
             by_ref: false,
             ownership: ScopeCellOwnership::Borrowed,
+            native_binding: NativeScopeBinding::Value,
         }
     }
 
@@ -176,11 +188,29 @@ impl ElephcEvalScope {
         cell: RuntimeCellHandle,
         ownership: ScopeCellOwnership,
     ) -> Option<RuntimeCellHandle> {
+        self.set_with_native_binding(name, cell, ownership, NativeScopeBinding::Value)
+    }
+
+    /// Installs a compiled-scope binding while keeping marker ownership explicit.
+    pub fn set_with_native_binding(
+        &mut self,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+        ownership: ScopeCellOwnership,
+        binding: NativeScopeBinding,
+    ) -> Option<RuntimeCellHandle> {
         self.bump_generation();
+        let mut entry = ScopeEntry::present(cell, ownership, self.generation);
+        entry.flags.native_binding = binding;
         let previous = self.entries.insert(
             name.into(),
-            ScopeEntry::present(cell, ownership, self.generation),
+            entry,
         );
+        if ownership == ScopeCellOwnership::Borrowed
+            && previous.is_some_and(|entry| entry.cell() == cell && entry.flags().ownership == ScopeCellOwnership::Owned)
+        {
+            return Some(cell);
+        }
         owned_cell_except(previous, cell)
     }
 

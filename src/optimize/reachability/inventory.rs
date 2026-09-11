@@ -177,6 +177,7 @@ fn record_statements(group: &mut PreludeGroup, statements: &[Stmt], namespace: O
                     name,
                 ));
             }
+            StmtKind::ClassLikeActivate { .. } => {}
             StmtKind::Echo(_)
             | StmtKind::Assign { .. }
             | StmtKind::RefAssign { .. }

@@ -8,6 +8,25 @@
 //! Key details:
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
+mod brand;
+mod call_graph;
+mod cli;
+mod cli_entry;
+mod debug_info;
+mod link_planning;
+mod linker;
+mod monitor;
+mod otlp;
+mod pipeline;
+mod pprof_encode;
+mod probe_key;
+mod runtime_cache;
+mod source_map;
+mod timings;
+
+/// Runs command-line dispatch with compiler-owned stack management.
+pub use cli_entry::run as run_cli;
+
 pub mod autoload;
 /// Gradual and associative `array_merge()` compatibility prelude.
 pub mod array_merge_prelude;

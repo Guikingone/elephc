@@ -9,6 +9,7 @@
 //!   scope for Phase 02.
 
 mod builder_test;
+mod classlike_activation_test;
 mod effects_test;
 mod function_test;
 mod print_test;

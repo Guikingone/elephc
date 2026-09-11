@@ -21,6 +21,7 @@ mod control;
 mod dynamic_functions;
 mod expressions;
 mod generators;
+mod globals;
 mod include_exec;
 mod libc_shims;
 mod reflection;
@@ -67,6 +68,7 @@ use control::{
 use dynamic_functions::*;
 use expressions::*;
 use generators::*;
+use globals::*;
 use include_exec::*;
 use libc_shims::*;
 use reflection::*;

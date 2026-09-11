@@ -244,7 +244,15 @@ fn class_info(_class_name: &str) -> ClassInfo {
 fn lower_program(program: Program) -> String {
     let target = Target::detect_host();
     let check_result = dummy_check_result();
-    let module = crate::ir_lower::lower_program(&program, &check_result, target, false)
+    let catalog = crate::ir::SourceCatalog::from_units(["inc", "/included.php"].map(|path| {
+        crate::resolver::SourceUnit {
+            canonical_path: path.into(), mode: crate::source::SourceMode::Php,
+            source: "<?php echo 'guard';".into(),
+        }
+    })).unwrap();
+    let module = crate::ir_lower::lower_program_with_source_catalog(
+        &program, &check_result, target, std::path::Path::new("synthetic.php"), false, catalog,
+    )
         .expect("synthetic AST should lower to valid EIR");
     let text = print_module(&module);
     assert!(text.contains("function main"), "expected main function in {text}");
@@ -374,6 +382,30 @@ fn lowers_every_expr_variant_smoke() {
     assert!(text.contains("function main"), "unexpected empty EIR: {text}");
 }
 
+/// Verifies canonical-path include markers lower to valid native guard instructions.
+#[test]
+fn lowers_include_source_path_markers() {
+    let text = lower_program(vec![
+        stmt(StmtKind::IncludeOnceMark { source_path: "/included.php".into() }),
+        stmt(StmtKind::IncludeOnceGuard {
+            source_path: "/included.php".into(),
+            body: vec![stmt(StmtKind::Echo(str_lit("guard")))],
+        }),
+    ]);
+    assert!(text.contains("include_once_mark"), "{text}");
+    assert!(text.contains("include_once_guard"), "{text}");
+    assert!(text.contains("source[0]"), "{text}");
+}
+
+#[test]
+fn include_source_without_catalog_is_a_lowering_error() {
+    let path = std::path::PathBuf::from("/not-catalogued.php");
+    let program = vec![stmt(StmtKind::IncludeOnceMark { source_path: path.clone() })];
+    let result = crate::ir_lower::lower_program(&program, &dummy_check_result(), Target::detect_host(), false);
+    assert!(matches!(result, Err(crate::ir_lower::LoweringError::Validation(
+        crate::ir::ValidationError::UnresolvedSource(found))) if found == path));
+}
+
 /// Verifies statement variants lower without panicking and produce valid EIR.
 #[test]
 fn lowers_every_stmt_variant_smoke() {
@@ -444,8 +476,8 @@ fn lowers_every_stmt_variant_smoke() {
             default: Some(vec![stmt(StmtKind::Echo(str_lit("default")))]),
         }),
         stmt(StmtKind::Include { path: str_lit("file.php"), once: false, required: false }),
-        stmt(StmtKind::IncludeOnceMark { label: "inc".to_string() }),
-        stmt(StmtKind::IncludeOnceGuard { label: "inc".to_string(), body: vec![stmt(StmtKind::Echo(str_lit("guard")))] }),
+        stmt(StmtKind::IncludeOnceMark { source_path: "inc".into() }),
+        stmt(StmtKind::IncludeOnceGuard { source_path: "inc".into(), body: vec![stmt(StmtKind::Echo(str_lit("guard")))] }),
         stmt(StmtKind::Throw(object.clone())),
         stmt(StmtKind::Synthetic(vec![stmt(StmtKind::Echo(str_lit("synthetic")))])),
         stmt(StmtKind::Try {

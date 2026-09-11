@@ -219,6 +219,7 @@ pub(super) fn collect_stmt_scope_access(stmt: &Stmt, access: &mut EvalScopeAcces
             collect_expr_scope_access(value, access);
         }
         StmtKind::Include { path, .. } => collect_expr_scope_access(path, access),
+        StmtKind::ClassLikeActivate { .. } => {}
     }
 }
 

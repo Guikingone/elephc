@@ -191,9 +191,9 @@ fn collect_aliases_in_stmt(stmt: Stmt, alias_decls: &mut Vec<Stmt>) -> Option<St
             strict_types,
             attributes,
         }),
-        StmtKind::IncludeOnceGuard { label, body } => Some(Stmt {
+        StmtKind::IncludeOnceGuard { source_path, body } => Some(Stmt {
             kind: StmtKind::IncludeOnceGuard {
-                label,
+                source_path,
                 body: collect_aliases_in_top_level(body, alias_decls),
             },
             span,

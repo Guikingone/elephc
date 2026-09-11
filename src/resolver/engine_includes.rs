@@ -19,8 +19,7 @@ use crate::span::Span;
 use super::declarations::strip_discoverable_declarations;
 use super::discovery::FunctionVariantRegistry;
 use super::engine::resolve_stmts;
-use super::files::{parse_file, resolve_path};
-use super::include_once::include_once_label;
+use super::files::{parse_file_with_source, resolve_path};
 use super::include_path::fold_include_path;
 use super::state::ResolveState;
 
@@ -46,7 +45,7 @@ pub(super) enum IncludeValueCapture {
 /// - State (`namespace`, `const_imports`) is saved before recursion and restored after
 /// - `preserve_return`: retains a top-level included-file return only when its value is consumed
 /// - Returns `None` if the file does not exist and `required` is false, or if a once file was already included
-/// - For `once`: wraps body in `IncludeOnceGuard` with the file's label
+/// - For `once`: wraps body in `IncludeOnceGuard` with the canonical source path
 /// - For non-once: emits `IncludeOnceMark` before the body for later once/require_once checks
 pub(super) fn resolve_include_stmt(
     stmt: &Stmt,
@@ -91,8 +90,9 @@ pub(super) fn resolve_include_stmt(
         ));
     }
 
-    let included_stmts =
-        parse_file(&resolved, stmt.span, &state.conditional_defines)?;
+    let (included_stmts, source_unit) =
+        parse_file_with_source(&resolved, stmt.span, &state.conditional_defines)?;
+    state.source_units.record(source_unit, stmt.span)?;
     record_declaration_sources(&included_stmts, &canonical, state)?;
 
     let included_dir = resolved.parent().unwrap_or(base_dir);
@@ -115,7 +115,6 @@ pub(super) fn resolve_include_stmt(
 
     include_chain.pop();
 
-    let include_label = include_once_label(&canonical);
     let mut executable =
         strip_discoverable_declarations(resolved_stmts, Some(&canonical), function_variants);
     if !preserve_return {
@@ -124,10 +123,10 @@ pub(super) fn resolve_include_stmt(
     if once {
         // Declaration discovery already hoisted compile-time declarations;
         // executable include body statements are guarded so runtime order matches PHP.
-        declared_once.insert(canonical);
+        declared_once.insert(canonical.clone());
         return Ok(Some(vec![Stmt::new(
             StmtKind::IncludeOnceGuard {
-                label: include_label,
+                source_path: canonical,
                 body: vec![Stmt::new(
                     StmtKind::NamespaceBlock {
                         name: None,
@@ -143,11 +142,11 @@ pub(super) fn resolve_include_stmt(
     // Regular includes still mark the file as loaded for a later
     // include_once/require_once, while executable statements stay at
     // the include point.
-    declared_once.insert(canonical);
+    declared_once.insert(canonical.clone());
     Ok(Some(vec![
         Stmt::new(
             StmtKind::IncludeOnceMark {
-                label: include_label,
+                source_path: canonical,
             },
             stmt.span,
         ),

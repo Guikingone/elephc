@@ -37,7 +37,8 @@ pub(super) fn stmt_fallback_reason(stmt: &Stmt) -> Option<EvalAotFallbackReason>
         | StmtKind::TraitDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
-        | StmtKind::ExternGlobalDecl { .. } => Some(EvalAotFallbackReason::Declaration),
+        | StmtKind::ExternGlobalDecl { .. }
+        | StmtKind::ClassLikeActivate { .. } => Some(EvalAotFallbackReason::Declaration),
         StmtKind::Global { .. } | StmtKind::StaticVar { .. } => {
             Some(EvalAotFallbackReason::GlobalOrStatic)
         }

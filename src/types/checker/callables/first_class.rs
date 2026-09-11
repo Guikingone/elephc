@@ -36,7 +36,9 @@ impl Checker {
     ) -> Result<FunctionSig, CompileError> {
         match target {
             CallableTarget::Function(name) => {
-                let function_name = name.as_str();
+                let canonical_name = self.canonical_function_name_folded(name.as_str())
+                    .unwrap_or_else(|| name.as_str().to_string());
+                let function_name = canonical_name.as_str();
                 let function_key =
                     crate::names::php_symbol_key(function_name.trim_start_matches('\\'));
                 let prefer_extension_builtin = !crate::strict_php::is_enabled()
@@ -56,6 +58,9 @@ impl Checker {
                                 ),
                             )
                         });
+                }
+                if self.function_variant_groups.contains_key(function_name) {
+                    self.ensure_function_variant_group_signature(function_name, span)?;
                 }
                 if let Some(sig) = self.functions.get(function_name) {
                     let effective_sig =

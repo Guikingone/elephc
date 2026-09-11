@@ -19,8 +19,39 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_callable_call_array(
     callback: ValueId,
     arg_array: ValueId,
 ) -> Result<()> {
+    lower_eval_callable_call_array_with_context(ctx, inst, callback, arg_array, true)
+}
+
+/// Lowers a callable-array dispatch through a request-global fallback context.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_global_callable_call_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+    arg_array: ValueId,
+) -> Result<()> {
+    lower_eval_callable_call_array_with_context(ctx, inst, callback, arg_array, false)
+}
+
+/// Shared callable-array bridge lowering for local-context and request-global dispatch.
+fn lower_eval_callable_call_array_with_context(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+    arg_array: ValueId,
+    use_local_context: bool,
+) -> Result<()> {
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    ensure_eval_context(ctx)?;
+    if use_local_context {
+        ensure_eval_context(ctx)?;
+    }
+    // Dynamic method syntax lowers through a callable array. Preserve the native frame's class
+    // scope around that bridge call so the callback validator applies PHP protected/private
+    // access rules to the original caller rather than to global scope.
+    let pushed_class_scope = if use_local_context {
+        push_eval_context_class_scope(ctx)?
+    } else {
+        false
+    };
     let mut boxed = EvalBoxedOperands::new();
     boxed.extend(store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?);
     boxed.extend(store_eval_mixed_operand_at(
@@ -28,7 +59,12 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_callable_call_array(
         arg_array,
         EVAL_CALLABLE_ARG_ARRAY_OFFSET,
     )?);
-    load_eval_context_to_arg(ctx, 0);
+    if use_local_context {
+        load_eval_context_to_arg(ctx, 0);
+    } else {
+        let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        abi::emit_load_int_immediate(ctx.emitter, context_arg, 0);
+    }
     let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, EVAL_TEMP_CELL_OFFSET);
     let arg_array_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
@@ -40,6 +76,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_callable_call_array(
         .target
         .extern_symbol("__elephc_eval_callable_call_array");
     abi::emit_call_label(ctx.emitter, &symbol);
+    pop_eval_context_class_scope(ctx, pushed_class_scope);
     emit_eval_status_check(ctx);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);

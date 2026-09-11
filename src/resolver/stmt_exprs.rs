@@ -67,15 +67,15 @@ pub(super) fn resolve_stmt_exprs(
             state,
             function_variants,
         )?),
-        StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark { label },
+        StmtKind::IncludeOnceMark { source_path } => StmtKind::IncludeOnceMark { source_path },
         StmtKind::FunctionVariantGroup { name, variants } => {
             StmtKind::FunctionVariantGroup { name, variants }
         }
         StmtKind::FunctionVariantMark { name, variant } => {
             StmtKind::FunctionVariantMark { name, variant }
         }
-        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
-            label,
+        StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+            source_path,
             body: resolve_isolated(
                 body,
                 base_dir,
@@ -608,6 +608,7 @@ pub(super) fn resolve_stmt_exprs(
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }) => other,
     };
     Ok(Stmt::with_attributes(kind, span, attributes))

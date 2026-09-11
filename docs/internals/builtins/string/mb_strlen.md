@@ -2,7 +2,7 @@
 title: "mb_strlen() — internals"
 description: "Compiler internals for mb_strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 441
+  order: 443
 ---
 
 ## `mb_strlen()` — internals

@@ -555,6 +555,7 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. }
         | StmtKind::FunctionVariantGroup { .. } => Invalidation::none(),
+        StmtKind::ClassLikeActivate { .. } => Invalidation::All,
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
             let mut inv = expr_invalidation(value);
             inv.add(name);

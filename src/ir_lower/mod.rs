@@ -40,6 +40,8 @@ use crate::parser::ast::Program;
 use crate::types::CheckResult;
 
 /// Lowers `program` into an EIR module for `target`.
+/// Resolver-produced inclusion markers require `lower_program_with_source_catalog`;
+/// missing source metadata is rejected during validation rather than guessed.
 ///
 /// `web` is the CLI `--web` flag; it is stored on the returned module (see
 /// `crate::ir::Module::web`) so lowering can gate request-superglobal
@@ -51,7 +53,7 @@ pub fn lower_program(
     target: Target,
     web: bool,
 ) -> Result<Module, LoweringError> {
-    program::lower(program, check_result, target, None, web)
+    program::lower(program, check_result, target, None, web, None)
 }
 
 /// Lowers `program` into an EIR module and records the main PHP source path.
@@ -61,7 +63,7 @@ pub fn lower_program_with_source_path(
     target: Target,
     source_path: &Path,
 ) -> Result<Module, LoweringError> {
-    program::lower(program, check_result, target, Some(source_path), false)
+    program::lower(program, check_result, target, Some(source_path), false, None)
 }
 
 /// Lowers `program` into EIR while retaining both source-path and web-mode metadata.
@@ -72,7 +74,19 @@ pub fn lower_program_with_source_path_and_web(
     source_path: &Path,
     web: bool,
 ) -> Result<Module, LoweringError> {
-    program::lower(program, check_result, target, Some(source_path), web)
+    program::lower(program, check_result, target, Some(source_path), web, None)
+}
+
+/// Lowers with immutable source identities available to every emitted body.
+pub fn lower_program_with_source_catalog(
+    program: &Program,
+    check_result: &CheckResult,
+    target: Target,
+    source_path: &Path,
+    web: bool,
+    catalog: crate::ir::SourceCatalog,
+) -> Result<Module, LoweringError> {
+    program::lower(program, check_result, target, Some(source_path), web, Some(catalog))
 }
 
 /// Error produced while building or validating EIR.

@@ -10,33 +10,37 @@
 
 use super::*;
 
-/// One writable location whose current value has already been evaluated.
+/// One writable location, with an observation only when a read was requested.
 enum EvaluatedLocation {
+    GlobalVariable {
+        name: String,
+        current: Option<RuntimeCellHandle>,
+    },
     Variable {
         name: String,
-        current: RuntimeCellHandle,
+        current: Option<RuntimeCellHandle>,
         current_is_borrowed: bool,
         ownership: ScopeCellOwnership,
     },
     Property {
         object: RuntimeCellHandle,
         property: String,
-        current: RuntimeCellHandle,
+        current: Option<RuntimeCellHandle>,
     },
     StaticProperty {
         class_name: String,
         property: String,
-        current: RuntimeCellHandle,
+        current: Option<RuntimeCellHandle>,
     },
     ArrayElement {
         parent: Box<EvaluatedLocation>,
         index: RuntimeCellHandle,
-        current: RuntimeCellHandle,
+        current: Option<RuntimeCellHandle>,
     },
     ArrayAccessElement {
         object: RuntimeCellHandle,
         index: RuntimeCellHandle,
-        current: RuntimeCellHandle,
+        current: Option<RuntimeCellHandle>,
     },
 }
 
@@ -44,11 +48,14 @@ impl EvaluatedLocation {
     /// Returns the value observed while evaluating this writable location.
     const fn current(&self) -> RuntimeCellHandle {
         match self {
-            Self::Variable { current, .. }
+            Self::GlobalVariable { current, .. }
+            | Self::Variable { current, .. }
             | Self::Property { current, .. }
             | Self::StaticProperty { current, .. }
             | Self::ArrayElement { current, .. }
-            | Self::ArrayAccessElement { current, .. } => *current,
+            | Self::ArrayAccessElement { current, .. } => {
+                current.expect("a read location must carry an observed value")
+            }
         }
     }
 
@@ -78,7 +85,7 @@ pub(super) fn eval_null_coalesce_assign(
     context.push_quiet_property_fetch();
     let location = evaluate_location(target, context, scope, values);
     context.pop_quiet_property_fetch();
-    let location = location?;
+    let mut location = location?;
     let current = location.current();
     if !values.is_null(current)? {
         return if location.current_is_borrowed() {
@@ -89,6 +96,9 @@ pub(super) fn eval_null_coalesce_assign(
     }
     if !location.current_is_borrowed() {
         eval_release_value(context, values, current)?;
+        if let EvaluatedLocation::GlobalVariable { current, .. } = &mut location {
+            *current = None;
+        }
     }
     let assigned = eval_expr(default, context, scope, values)?;
     write_location(location, assigned, true, context, scope, values)?;
@@ -129,21 +139,37 @@ pub(super) fn eval_postfix_inc_dec(
 }
 
 /// Evaluates a plain assignment expression and returns the stored value.
-pub(super) fn eval_assign(
+pub(in crate::interpreter) fn eval_assign(
     target: &EvalExpr,
     value: &EvalExpr,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let location = evaluate_plain_assignment_location(target, context, scope, values)?;
-    let assigned = eval_expr(value, context, scope, values)?;
-    let assigned = if matches!(value, EvalExpr::LoadVar(_)) {
+    let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
+    let location = evaluate_plain_assignment_location(target, context, scope, values).map_err(|status| {
+        if trace {
+            eprintln!("[elephc-eval-trace] phase=assign_error stage=location target={target:?} status={status:?}");
+        }
+        status
+    })?;
+    let assigned = eval_expr(value, context, scope, values).map_err(|status| {
+        if trace {
+            eprintln!("[elephc-eval-trace] phase=assign_error stage=value value={value:?} status={status:?}");
+        }
+        status
+    })?;
+    let assigned = if eval_expr_result_aliases_storage(value) {
         values.copy_value(assigned)?
     } else {
         assigned
     };
-    write_location(location, assigned, true, context, scope, values)?;
+    write_location(location, assigned, true, context, scope, values).map_err(|status| {
+        if trace {
+            eprintln!("[elephc-eval-trace] phase=assign_error stage=write target={target:?} status={status:?}");
+        }
+        status
+    })?;
     Ok(assigned)
 }
 
@@ -160,7 +186,15 @@ pub(in crate::interpreter) fn eval_var_reference_bind(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let (source_target, source_value) = eval_reference_source(source, context, scope, values)?;
+    let (source_target, source_value) = eval_reference_source(source, context, scope, values)
+        .map_err(|status| {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=reference_bind_error target={name:?} source={source:?} status={status:?}"
+                );
+            }
+            status
+        })?;
     let replaced = scope.rebind_reference(
         name.to_string(),
         source_value,
@@ -208,7 +242,7 @@ pub(in crate::interpreter) fn eval_array_append_reference_bind(
     let location = EvaluatedLocation::ArrayElement {
         parent: Box::new(parent),
         index,
-        current: values.null()?,
+        current: None,
     };
     write_reference_location(location, source_target, source_value, context, scope, values)
 }
@@ -431,12 +465,27 @@ fn evaluate_plain_assignment_location(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedLocation, EvalStatus> {
     match target {
+        EvalExpr::ArrayGet { array, index } if is_globals_array(array) => {
+            Ok(EvaluatedLocation::GlobalVariable {
+                name: eval_global_name(index, context, scope, values)?,
+                current: None,
+            })
+        }
+        EvalExpr::LoadVar(name) => {
+            let entry = scope_entry(context, scope, name).filter(|entry| entry.flags().is_visible());
+            Ok(EvaluatedLocation::Variable {
+                name: name.clone(),
+                current: None,
+                current_is_borrowed: false,
+                ownership: entry.map_or(ScopeCellOwnership::Owned, |entry| entry.flags().ownership),
+            })
+        }
         EvalExpr::PropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             Ok(EvaluatedLocation::Property {
                 object,
                 property: property.clone(),
-                current: object,
+                current: None,
             })
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
@@ -445,7 +494,7 @@ fn evaluate_plain_assignment_location(
             Ok(EvaluatedLocation::Property {
                 object,
                 property,
-                current: object,
+                current: None,
             })
         }
         EvalExpr::StaticPropertyGet {
@@ -454,7 +503,7 @@ fn evaluate_plain_assignment_location(
         } => Ok(EvaluatedLocation::StaticProperty {
             class_name: class_name.clone(),
             property: property.clone(),
-            current: values.null()?,
+            current: None,
         }),
         EvalExpr::DynamicStaticPropertyGet {
             class_name,
@@ -465,7 +514,7 @@ fn evaluate_plain_assignment_location(
             Ok(EvaluatedLocation::StaticProperty {
                 class_name,
                 property: property.clone(),
-                current: values.null()?,
+                current: None,
             })
         }
         EvalExpr::DynamicStaticPropertyNameGet {
@@ -478,10 +527,10 @@ fn evaluate_plain_assignment_location(
             Ok(EvaluatedLocation::StaticProperty {
                 class_name,
                 property,
-                current: values.null()?,
+                current: None,
             })
         }
-        EvalExpr::LoadVar(_) | EvalExpr::ArrayGet { .. } => {
+        EvalExpr::ArrayGet { .. } => {
             evaluate_location(target, context, scope, values)
         }
         _ => Err(EvalStatus::UnsupportedConstruct),
@@ -522,6 +571,12 @@ fn evaluate_location_with_fetch(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedLocation, EvalStatus> {
     match target {
+        EvalExpr::ArrayGet { array, index } if is_globals_array(array) => {
+            let name = eval_global_name(index, context, scope, values)?;
+            let quiet = fetch == LocationFetch::ArrayParent || context.quiet_property_fetch();
+            let current = read_global_value(&name, quiet, context, scope, values)?;
+            Ok(EvaluatedLocation::GlobalVariable { name, current: Some(current) })
+        }
         EvalExpr::LoadVar(name) => {
             let entry = scope_entry(context, scope, name).filter(|entry| entry.flags().is_visible());
             let current_is_borrowed = entry.is_some();
@@ -532,7 +587,7 @@ fn evaluate_location_with_fetch(
             let current = entry.map_or_else(|| values.null(), |entry| Ok(entry.cell()))?;
             Ok(EvaluatedLocation::Variable {
                 name: name.clone(),
-                current,
+                current: Some(current),
                 current_is_borrowed,
                 ownership,
             })
@@ -543,7 +598,7 @@ fn evaluate_location_with_fetch(
             Ok(EvaluatedLocation::Property {
                 object,
                 property: property.clone(),
-                current,
+                current: Some(current),
             })
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
@@ -553,7 +608,7 @@ fn evaluate_location_with_fetch(
             Ok(EvaluatedLocation::Property {
                 object,
                 property,
-                current,
+                current: Some(current),
             })
         }
         EvalExpr::StaticPropertyGet {
@@ -564,7 +619,7 @@ fn evaluate_location_with_fetch(
             Ok(EvaluatedLocation::StaticProperty {
                 class_name: class_name.clone(),
                 property: property.clone(),
-                current,
+                current: Some(current),
             })
         }
         EvalExpr::DynamicStaticPropertyGet {
@@ -578,7 +633,7 @@ fn evaluate_location_with_fetch(
             Ok(EvaluatedLocation::StaticProperty {
                 class_name,
                 property: property.clone(),
-                current,
+                current: Some(current),
             })
         }
         EvalExpr::DynamicStaticPropertyNameGet {
@@ -593,7 +648,7 @@ fn evaluate_location_with_fetch(
             Ok(EvaluatedLocation::StaticProperty {
                 class_name,
                 property,
-                current,
+                current: Some(current),
             })
         }
         EvalExpr::ArrayGet { array, index } => {
@@ -609,13 +664,13 @@ fn evaluate_location_with_fetch(
                 return Ok(EvaluatedLocation::ArrayAccessElement {
                     object: container,
                     index,
-                    current,
+                    current: Some(current),
                 });
             }
             Ok(EvaluatedLocation::ArrayElement {
                 parent: Box::new(parent),
                 index,
-                current,
+                current: Some(current),
             })
         }
         _ => Err(EvalStatus::UnsupportedConstruct),
@@ -664,6 +719,14 @@ fn write_location(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match location {
+        EvaluatedLocation::GlobalVariable { name, current } => {
+            // A container update may transfer the observed copy itself to the slot.
+            if let Some(current) = current.filter(|current| *current != value) {
+                eval_release_value(context, values, current)?;
+            }
+            let stored = if preserve_value_for_result { values.retain(value)? } else { value };
+            store_global_value(name, stored, context, scope, values)
+        }
         EvaluatedLocation::Variable {
             name, ownership, ..
         } => {
