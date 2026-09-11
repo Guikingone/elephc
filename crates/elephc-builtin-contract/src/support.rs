@@ -249,7 +249,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "dechex",
     "decoct",
     "error_log",
-    "extract",
     "get_debug_type",
     "header_remove",
     "headers_sent",

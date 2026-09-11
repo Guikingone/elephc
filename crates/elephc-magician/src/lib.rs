@@ -16,6 +16,7 @@ pub mod context;
 pub mod errors;
 pub mod eval_ir;
 mod eval_php_profile;
+mod extract_policy;
 mod ffi;
 pub mod interpreter;
 mod json_validate;

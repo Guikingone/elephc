@@ -66,6 +66,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Crc32,
     /// Dispatches `ctype_*` predicates.
     Ctype,
+    /// Dispatches `extract(...)`.
+    Extract,
     /// Dispatches filesystem and path builtins.
     Filesystem,
     /// Dispatches `filter_var(...)`.
@@ -372,6 +374,7 @@ impl EvalDirectHook {
             },
             Self::Deg2rad => eval_builtin_deg2rad(args, context, scope, values),
             Self::Exp => eval_builtin_exp(args, context, scope, values),
+            Self::Extract => eval_builtin_extract(args, context, scope, values),
             Self::Filesystem => eval_builtin_filesystem_call(name, args, context, scope, values),
             Self::FilterVar => eval_builtin_filter_var(args, context, scope, values),
             Self::Gettype => eval_builtin_gettype(args, context, scope, values),

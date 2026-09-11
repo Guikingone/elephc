@@ -7,25 +7,19 @@
 //!
 //! Key details:
 //! - Extracted cells are transferred to the scope as owned values.
-//! - Collision and prefix modes follow PHP's `EXTR_*` constants.
+//! - `EXTR_*` mode values and the collision/prefix policy live in `crate::extract_policy`, shared
+//!   with the tree-walking interpreter's own `extract()`
+//!   (`crate::interpreter::builtins::array::extract`, which additionally supports `EXTR_REFS`) so
+//!   the two backends cannot silently diverge on a mode number or a collision rule.
 
 use crate::abi::ElephcEvalScope;
 use crate::errors::EvalStatus;
+use crate::extract_policy::{extract_key_name, extract_target_name, EXTR_IF_EXISTS, EXTR_REFS};
 use crate::interpreter::RuntimeValueOps;
 use crate::runtime_hooks::ElephcRuntimeOps;
 use crate::scope::ScopeCellOwnership;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 use std::slice;
-
-const EXTR_SKIP: i64 = 1;
-const EXTR_PREFIX_SAME: i64 = 2;
-const EXTR_PREFIX_ALL: i64 = 3;
-const EXTR_PREFIX_INVALID: i64 = 4;
-const EXTR_PREFIX_IF_EXISTS: i64 = 5;
-const EXTR_IF_EXISTS: i64 = 6;
-const EXTR_REFS: i64 = 256;
-const EVAL_TAG_INT: u64 = 0;
-const EVAL_TAG_STRING: u64 = 1;
 
 /// Extracts array entries into a materialized caller scope and returns the count.
 ///
@@ -116,63 +110,6 @@ unsafe fn extract_inner(
         extracted += 1;
     }
     extracted
-}
-
-/// Converts one foreach-visible array key into its PHP extraction name.
-fn extract_key_name(
-    values: &mut ElephcRuntimeOps,
-    key: RuntimeCellHandle,
-) -> Result<Option<String>, EvalStatus> {
-    match values.type_tag(key)? {
-        EVAL_TAG_STRING => String::from_utf8(values.string_bytes(key)?)
-            .map(Some)
-            .map_err(|_| EvalStatus::RuntimeFatal),
-        EVAL_TAG_INT => Ok(Some((values.raw_value_word(key)? as i64).to_string())),
-        _ => Ok(None),
-    }
-}
-
-/// Applies collision/prefix policy and returns the final variable name when extractable.
-fn extract_target_name(
-    scope: &ElephcEvalScope,
-    name: &str,
-    prefix: &str,
-    mode: i64,
-) -> Option<String> {
-    let valid = is_valid_php_variable_name(name);
-    let exists = scope.contains_visible(name);
-    let prefix_name = || format!("{prefix}_{name}");
-    let target = match mode {
-        0 if valid => name.to_string(),
-        EXTR_SKIP if valid && !exists => name.to_string(),
-        EXTR_PREFIX_SAME if valid && exists => prefix_name(),
-        EXTR_PREFIX_SAME if valid => name.to_string(),
-        EXTR_PREFIX_ALL if valid || is_prefixable_invalid_name(name) => prefix_name(),
-        EXTR_PREFIX_INVALID if valid => name.to_string(),
-        EXTR_PREFIX_INVALID if is_prefixable_invalid_name(name) => prefix_name(),
-        EXTR_PREFIX_IF_EXISTS if valid && exists => prefix_name(),
-        EXTR_IF_EXISTS if valid && exists => name.to_string(),
-        _ => return None,
-    };
-    is_valid_php_variable_name(&target).then_some(target)
-}
-
-/// Returns whether bytes encoded as UTF-8 form a PHP variable identifier.
-fn is_valid_php_variable_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first == '_' || first.is_ascii_alphabetic() || !first.is_ascii())
-        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric() || !ch.is_ascii())
-}
-
-/// Returns whether PHP can repair an invalid key by prefixing it.
-fn is_prefixable_invalid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric() || !ch.is_ascii())
 }
 
 /// Encodes one eval status as a negative ABI return value.

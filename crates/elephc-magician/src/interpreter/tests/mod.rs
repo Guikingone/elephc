@@ -58,6 +58,7 @@ mod builtins_strings_binary;
 mod builtins_strings_encoding;
 mod builtins_strings_openssl;
 mod builtins_strings_text;
+mod builtins_extract;
 mod builtins_symbols;
 mod builtins_system_network;
 mod cast_precedence;

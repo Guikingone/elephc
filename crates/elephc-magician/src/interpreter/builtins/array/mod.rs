@@ -14,6 +14,7 @@ mod array_combine;
 mod array_count_values;
 mod array_diff;
 mod array_diff_key;
+mod extract;
 mod array_fill;
 mod array_fill_keys;
 mod array_filter;
@@ -78,6 +79,7 @@ pub(in crate::interpreter) use array_push::{
 pub(in crate::interpreter) use array_splice::eval_array_splice_removed_and_replacement;
 pub(in crate::interpreter) use array_walk::eval_array_walk_ref_result;
 pub(in crate::interpreter) use direct_dispatch::eval_builtin_array_declared_call;
+pub(in crate::interpreter) use extract::*;
 pub(in crate::interpreter) use mutating_dispatch::eval_builtin_array_mutating_declared_call;
 pub(in crate::interpreter) use sort::eval_array_sort_replacement;
 pub(in crate::interpreter) use usort::eval_user_sort_replacement;
