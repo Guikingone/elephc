@@ -347,7 +347,17 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut web_isolation = WebIsolation::default();
     let mut web_isolation_explicit = false;
     let mut quiet = false;
-    let mut rt_ctx = false;
+    // The ctx-register runtime mode is opt-in through `--rt-ctx` today and is meant to
+    // become unconditional. Before the fallback can go, the WHOLE suite has to pass with it
+    // on, and a per-test flag cannot do that: `ELEPHC_RT_CTX=on` is what lets the harness
+    // compile every fixture in ctx mode, the same way ELEPHC_REGALLOC compares allocators.
+    // It is deliberately not a second user-facing switch — it selects nothing a program can
+    // observe, it only decides which arm the tests exercise.
+    let mut rt_ctx = match std::env::var("ELEPHC_RT_CTX").as_deref() {
+        Ok("on") => true,
+        Ok("off") => false,
+        _ => false,
+    };
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
