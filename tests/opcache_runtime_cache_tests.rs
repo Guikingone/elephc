@@ -269,3 +269,52 @@ echo 'num=', $s['opcache_statistics']['num_cached_scripts'], "\n";
     // The reset flushed the dynamic entry, leaving the compile-time manifest alone.
     assert_eq!(field(&output, "num"), "1");
 }
+
+/// Verifies `opcache_get_status()` answers the same thing natively and from inside `eval()`.
+///
+/// It did not. The eval interpreter carries its own handler for the name and dispatched it
+/// BEFORE consulting the program's own declarations, so the same call in the same binary
+/// answered an array natively and `false` from inside `eval()`. The interpreter now prefers
+/// the prelude's declaration when the binary carries one — which is the body that knows both
+/// the compile-time manifest and the live cache — and only falls back to its handler for a
+/// program that has no such declaration.
+///
+/// The assertion is EQUALITY between the two sides, not a fixed value: what matters is that
+/// one binary cannot hold two answers.
+#[test]
+fn the_status_array_is_the_same_written_natively_and_inside_eval() {
+    let dir = make_test_dir("opcache_rt_sides");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
+eval('include __DIR__ . "/lib.php";');
+$native = opcache_get_status();
+echo 'native_type=', (is_array($native) ? 'array' : 'false'), "\n";
+echo 'native_num=', $native['opcache_statistics']['num_cached_scripts'], "\n";
+echo 'native_misses=', $native['opcache_statistics']['misses'], "\n";
+echo 'native_scripts=', count($native['scripts']), "\n";
+echo 'native_keys=', implode(',', array_keys($native)), "\n";
+eval('
+$inside = opcache_get_status();
+echo "inside_type=", (is_array($inside) ? "array" : "false"), "\n";
+echo "inside_num=", $inside["opcache_statistics"]["num_cached_scripts"], "\n";
+echo "inside_misses=", $inside["opcache_statistics"]["misses"], "\n";
+echo "inside_scripts=", count($inside["scripts"]), "\n";
+echo "inside_keys=", implode(",", array_keys($inside)), "\n";
+');
+"#,
+    );
+
+    let output = run_binary(&compile(&dir, &["opcache.enable_cli=1"]));
+
+    for key in ["type", "num", "misses", "scripts", "keys"] {
+        assert_eq!(
+            field(&output, &format!("native_{key}")),
+            field(&output, &format!("inside_{key}")),
+            "`{key}` disagrees between the native and the eval-written call"
+        );
+    }
+    // And the shared answer is the live one, not the empty fallback.
+    assert_eq!(field(&output, "native_type"), "array");
+    assert_eq!(field(&output, "native_num"), "2");
+}

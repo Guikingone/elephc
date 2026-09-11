@@ -635,6 +635,14 @@ mtime (`0` once a forced invalidate discarded it), and `revalidate` is
 `last_used_timestamp + opcache.revalidate_freq` — present from an 8.3 target on,
 under the same per-version gate the manifest entries use.
 
+`opcache_get_status()` answers the same thing wherever it is **written**. The
+eval interpreter carries its own handler for the name, but it now prefers the
+program's own declaration when there is one — the prelude's body, which knows
+both the manifest and the live cache. It used to dispatch its handler first, so
+the same call in the same binary answered an array natively and `false` from
+inside `eval()`. Its handler remains the answer for a program with no such
+declaration, where the cache is genuinely absent.
+
 **Cost when there is no dynamic tier: none.** A program that never reaches the
 eval bridge cannot have a runtime cache, so the calls that would read it are
 folded to the empty-cache answer at lowering time and the interpreter archive is
