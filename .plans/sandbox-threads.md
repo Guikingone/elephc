@@ -151,11 +151,30 @@ baseline r14, kitchen-sink, alignement SysV) avant toute autre chose.
 - [ ] **Pool multi-contextes** : `_rt_ctx` en tableau + free-list au lieu d'une
       instance unique ; `__rt_ctx_init`/`__rt_ctx_destroy` exportés pour le
       bridge M1. (`--heap-size` par thread à documenter.)
-- [ ] **Familles d'état restantes sur globals** (inventaire puis migration
-      familles entières, même discipline que concat) : exceptions
-      (`_exc_handler_top`/`_exc_value`/...), fibers (`_fiber_current`,
-      `_stack_limit`, `_fiber_main_saved_*`), compteurs (`_gc_allocs/live/peak`
-      — décision sémantique : par contexte ou atomiques), buffers ob/print_r.
+- [ ] **Familles d'état restantes sur globals** — inventaire fait :
+      `emit_runtime_data_fixed` déclare **174 symboles `.comm`**, dont 7 seulement
+      (heap ×3, concat ×2, + le bloc `_rt_ctx`) sont migrés. Par famille, du plus
+      au moins bloquant pour M1 :
+      1. **exceptions** : `_exc_handler_top`, `_exc_value`, `_exc_call_frame_top`
+         — un thread qui lance pendant qu'un autre lance écrase la chaîne de
+         handlers. **Bloquant M1.**
+      2. **fibers/pile** : `_fiber_current`, `_stack_limit`,
+         `_fiber_main_saved_sp/_exc/_call_frame` — un générateur par thread est
+         le cas d'usage même du plan. **Bloquant M1.**
+      3. **compteurs GC** : `_gc_allocs/_gc_frees/_gc_live/_gc_peak/_gc_collecting`
+         — décision SÉMANTIQUE à prendre avant de coder : par contexte (chiffres
+         par thread) ou atomiques (chiffres process). `_gc_collecting` est un
+         verrou, pas un compteur : il doit être par contexte.
+      4. **tampons partagés** : `_cstr_buf`, `_cstr_buf2`, `_empty_str`, buffers
+         ob/print_r — `_empty_str` est en lecture seule (peut rester global), les
+         autres sont des scratch par contexte.
+      5. **registres de ressources** : `_dir_handles`, `_glob_handles`,
+         `_bzstream_handles`, `_buffer_registry_*` — par contexte si un thread
+         peut ouvrir des ressources, sinon frontière explicite.
+      6. **slots de pont** (`_elephc_tls_*_fn`, `_elephc_crypto_*_fn`, …) :
+         remplis une fois au démarrage, jamais réécrits ⇒ restent globaux.
+      Discipline identique à concat : **famille entière en un changement**, et le
+      tripwire (retirer le symbole legacy de la data section) sur chacune.
 - [ ] **Bench compute/spill-heavy** (pool 8→7) — exigé avant toute claim de
       neutralité perf et avant M1.
 - [ ] **Suite complète linux-x86_64** : `./scripts/test-linux-x86_64.sh` (Docker,
@@ -166,6 +185,15 @@ baseline r14, kitchen-sink, alignement SysV) avant toute autre chose.
 - [ ] Matrice chemins d'erreur des consommateurs concat × 2 modes × 2 arches ;
       parité staticlib ctx (le cdylib ctx est vert depuis le round 3, le
       staticlib reste à sonder).
+- [ ] **Emprunt de x6 (AArch64 legacy)** : le bras legacy de
+      `emit_concat_off_store` matérialise l'adresse dans **x6**, un registre
+      d'ARGUMENT, sur 122 sites d'appel. L'audit `legacy_aarch64_runtime_has_no_dangling_x6_stores`
+      couvre le texte du runtime, **pas le codegen utilisateur** (ex.
+      `runtime_callable_invoker.rs`). Un `debug_assert` attrape désormais le cas
+      direct (x6 passé comme VALEUR). À trancher : étendre l'audit au codegen
+      utilisateur, ou payer 2 instructions (`str`/`ldr` autour d'un scratch) sur
+      le chemin concat legacy. ⚠️ En mode ctx la question disparaît (pas de bras
+      legacy) — donc ne rien changer tant que legacy reste le mode livré.
 - [ ] **Rebase/merge sur `origin/main`** : la branche est à 361 commits de
       retard, `git merge-tree` annonce **2 fichiers en conflit**
       (`runtime/emitters.rs`, `system/json_encode_array_int.rs`). C'est le

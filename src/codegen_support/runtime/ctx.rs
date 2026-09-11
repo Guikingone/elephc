@@ -442,9 +442,20 @@ pub fn emit_concat_off_load(emitter: &mut Emitter, reg: &str) {
 /// call site around its publish) and the x86_64 path stores RIP-relative with
 /// no scratch at all. Call sites must not keep a live value in x6 across this
 /// helper on AArch64.
+///
+/// The x6 borrow is a contract in a comment, and the mechanical check behind it
+/// (`legacy_aarch64_runtime_has_no_dangling_x6_stores`) covers the runtime text
+/// only — user codegen that calls this helper is outside its reach. The one
+/// misuse it CAN catch here is a call site passing x6 as the value itself,
+/// which would silently store the address in place of the offset.
 // Consumed by the M0 concat-family migration (see emit_concat_off_load).
 #[allow(dead_code)]
 pub fn emit_concat_off_store(emitter: &mut Emitter, value: &str) {
+    debug_assert!(
+        emitter.ctx_register || emitter.target.arch != Arch::AArch64 || value != "x6",
+        "the AArch64 legacy arm materializes the _concat_off address in x6, so x6 \
+         cannot also carry the value being stored"
+    );
     if emitter.ctx_register {
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -1022,6 +1033,66 @@ mod tests {
         false
     }
 
+    /// What one emitted instruction does to `rbx`.
+    #[derive(PartialEq)]
+    enum RbxUse {
+        /// Stores rbx to the STACK — `push rbx`, or a spill to `[rbp …]`/`[rsp …]`.
+        Save,
+        /// Loads rbx back FROM the stack.
+        Restore,
+        /// Any other write to rbx.
+        Scratch,
+        /// Reads rbx, or does not mention it.
+        None,
+    }
+
+    /// Classifies one instruction's use of `rbx`.
+    ///
+    /// The distinction that matters is the STACK: only a store of rbx to the
+    /// frame counts as a save, and only a load from the frame counts as the
+    /// matching restore. An earlier version accepted any `…], rbx` as a save and
+    /// any `rbx, QWORD PTR [` as a restore, so a helper that merely stored rbx's
+    /// value into a data structure looked like it had saved it, and one that
+    /// loaded ordinary data INTO rbx looked like it had restored it — the two
+    /// shapes that hide a real clobber.
+    fn classify_rbx(instr: &str) -> RbxUse {
+        if !mentions_register(instr, "rbx") && !mentions_register(instr, "ebx") {
+            // bl/bh are byte views of the same register.
+            if !mentions_register(instr, "bl") && !mentions_register(instr, "bx") {
+                return RbxUse::None;
+            }
+        }
+        if instr == "push rbx" {
+            return RbxUse::Save;
+        }
+        if instr == "pop rbx" {
+            return RbxUse::Restore;
+        }
+        let stack_operand = instr.contains("[rbp") || instr.contains("[rsp");
+        // `mov QWORD PTR [rbp - 8], rbx` — a spill.
+        if stack_operand && instr.ends_with(", rbx") {
+            return RbxUse::Save;
+        }
+        // `mov rbx, QWORD PTR [rbp - 8]` — the matching reload.
+        if stack_operand && instr.starts_with("mov rbx, ") {
+            return RbxUse::Restore;
+        }
+        // Destination-first: anything else whose first operand is rbx writes it.
+        let writes = instr
+            .split_once(' ')
+            .map(|(mnemonic, rest)| {
+                let dest = rest.split(',').next().unwrap_or("").trim();
+                let reads_only = matches!(mnemonic, "cmp" | "test" | "push");
+                !reads_only && matches!(dest, "rbx" | "ebx" | "bx" | "bl" | "bh")
+            })
+            .unwrap_or(false);
+        if writes {
+            RbxUse::Scratch
+        } else {
+            RbxUse::None
+        }
+    }
+
     /// The rbx callee-saved contract (spike review round 2, NB1): rbx is the
     /// ONLY callee-saved register the x86_64 linear-scan allocator assigns to
     /// cross-call values, and the EIR prologue preserves the caller's rbx once
@@ -1046,6 +1117,20 @@ mod tests {
             Target::new(Platform::Linux, Arch::X86_64),
             RuntimeFeatures::all(),
         );
+        let offenders = rbx_preservation_offenders(&asm);
+        assert!(
+            offenders.is_empty(),
+            "x86_64 runtime helpers must preserve the allocator's rbx register:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// Per-`__rt_*` helper, reports the ones that write rbx without giving the
+    /// caller's value back on every return path.
+    ///
+    /// Shared with the negative control below: an audit whose control exercises
+    /// a private copy of the logic proves nothing about the audit that runs.
+    fn rbx_preservation_offenders(asm: &str) -> Vec<String> {
         let mut offenders: Vec<String> = Vec::new();
         let mut current: Option<String> = None;
         let mut scratches_rbx = false;
@@ -1087,18 +1172,11 @@ mod tests {
                 }
             }
             previous_was_globl = false;
-            if trimmed.contains("push rbx") || trimmed.contains("], rbx") {
-                push_depth += 1;
-            }
-            if trimmed.contains("pop rbx") || trimmed.contains("rbx, QWORD PTR [") {
-                pop_depth += 1;
-            }
-            if trimmed.contains("rbx")
-                && !trimmed.contains("], rbx")
-                && !trimmed.contains("rbx, QWORD PTR [")
-                && !trimmed.starts_with("//")
-            {
-                scratches_rbx = true;
+            match classify_rbx(trimmed) {
+                RbxUse::Save => push_depth += 1,
+                RbxUse::Restore => pop_depth += 1,
+                RbxUse::Scratch => scratches_rbx = true,
+                RbxUse::None => {}
             }
         }
         if let Some(name) = current.take() {
@@ -1108,70 +1186,65 @@ mod tests {
                 ));
             }
         }
-        assert!(
-            offenders.is_empty(),
-            "x86_64 runtime helpers must preserve the allocator's rbx register:\n{}",
-            offenders.join("\n")
-        );
+        offenders
     }
 
 
-    /// Negative control for the rbx audit: a synthetic runtime text with an
-    /// unprotected rbx-scratching helper MUST be flagged. Guards the audit
-    /// itself against always-green regressions.
+    /// Negative control for the rbx audit, running the SAME scanner the real
+    /// audit runs. Each case is a shape the audit has to get right, and the two
+    /// marked below are the ones the first version got wrong: it accepted any
+    /// store whose source was rbx as a save, and any load whose destination was
+    /// rbx as a restore, so a helper that merely passed rbx's value to a data
+    /// structure looked protected, and one that loaded ordinary data into rbx
+    /// looked like it had restored it.
     #[test]
-    fn rbx_audit_flags_unprotected_helper() {
-        let asm = ".globl __rt_probe_helper\n__rt_probe_helper:\n    mov rbx, 5\n    ret\n";
-        let mut offenders: Vec<String> = Vec::new();
-        let mut current: Option<String> = None;
-        let mut scratches_rbx = false;
-        let mut push_depth: i32 = 0;
-        let mut pop_depth: i32 = 0;
-        let mut previous_was_globl = false;
-        for line in asm.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with(".globl") {
-                previous_was_globl = true;
-                continue;
-            }
-            if trimmed.starts_with("__rt_") && previous_was_globl {
-                if let Some(name) = current.take() {
-                    if scratches_rbx && (push_depth == 0 || pop_depth < push_depth) {
-                        offenders.push(name);
-                    }
-                }
-                current = Some(trimmed.split(':').next().unwrap_or(trimmed).to_string());
-                scratches_rbx = false;
-                push_depth = 0;
-                pop_depth = 0;
-                continue;
-            }
-            previous_was_globl = false;
-            if trimmed.starts_with("ret") {
-                if let Some(name) = current.clone() {
-                    if scratches_rbx && (push_depth == 0 || pop_depth < push_depth) {
-                        offenders.push(name);
-                    }
-                    current = None;
-                    scratches_rbx = false;
-                    push_depth = 0;
-                    pop_depth = 0;
-                }
-            }
-            if trimmed.contains("push rbx") || trimmed.contains("], rbx") {
-                push_depth += 1;
-            }
-            if trimmed.contains("pop rbx") || trimmed.contains("rbx, QWORD PTR [") {
-                pop_depth += 1;
-            }
-            if trimmed.contains("rbx")
-                && !trimmed.contains("], rbx")
-                && !trimmed.contains("rbx, QWORD PTR [")
-            {
-                scratches_rbx = true;
-            }
-        }
-        assert!(!offenders.is_empty(), "the audit must flag the unprotected probe helper");
+    fn rbx_audit_flags_unprotected_helpers_and_accepts_protected_ones() {
+        let helper = |body: &str| {
+            format!(".globl __rt_probe\n__rt_probe:\n{body}    ret\n")
+        };
+
+        // Plain unprotected scratch.
+        assert!(
+            !rbx_preservation_offenders(&helper("    mov rbx, 5\n")).is_empty(),
+            "an unprotected rbx write must be flagged"
+        );
+        // Protected by push/pop.
+        assert!(
+            rbx_preservation_offenders(&helper("    push rbx\n    mov rbx, 5\n    pop rbx\n"))
+                .is_empty(),
+            "a push/pop pair protects the caller's rbx"
+        );
+        // Protected by a frame spill.
+        assert!(
+            rbx_preservation_offenders(&helper(
+                "    mov QWORD PTR [rbp - 8], rbx\n    mov rbx, 5\n    mov rbx, QWORD PTR [rbp - 8]\n"
+            ))
+            .is_empty(),
+            "a frame spill and its reload protect the caller's rbx"
+        );
+        // MISSED BY THE FIRST VERSION: storing rbx's value into a data
+        // structure is not a save, so the write that follows is unprotected.
+        assert!(
+            !rbx_preservation_offenders(&helper("    mov QWORD PTR [r10], rbx\n    mov rbx, 5\n"))
+                .is_empty(),
+            "a store THROUGH a pointer is not a save of rbx"
+        );
+        // MISSED BY THE FIRST VERSION: loading ordinary data into rbx is a
+        // clobber, not a restore.
+        assert!(
+            !rbx_preservation_offenders(&helper("    mov rbx, QWORD PTR [r10 + 8]\n")).is_empty(),
+            "loading data into rbx clobbers the caller's value"
+        );
+        // Reading rbx without writing it is not a clobber.
+        assert!(
+            rbx_preservation_offenders(&helper("    cmp rbx, 4\n    mov r10, rbx\n")).is_empty(),
+            "reading rbx leaves the caller's value intact"
+        );
+        // A sub-register write clobbers the whole register.
+        assert!(
+            !rbx_preservation_offenders(&helper("    xor ebx, ebx\n")).is_empty(),
+            "a 32-bit write to ebx zeroes the whole of rbx"
+        );
     }
 
     /// Dangling-x6 audit (spike review round 2, NB3): the legacy AArch64 arm of
