@@ -94,6 +94,33 @@ Leçon à garder : **un audit qui ne peut pas échouer n'est pas un audit**. Les
 deux audits mécaniques exigés par les rounds 1-2 avaient chacun attrapé un vrai
 bug ; celui-ci n'en avait attrapé aucun parce qu'il ne lisait rien.
 
+### Merge `origin/main` (361 commits) — ce que le merge a coûté
+
+2 conflits seulement, mais **4 défauts** que seuls les gates réparés ont vus :
+
+- `runtime/curl/warn_option.rs` (NOUVEAU de main) adresse `_concat_off` en
+  direct ⇒ en mode ctx le tripwire retire ce symbole ⇒ **échec de lien** de tout
+  build `--rt-ctx` avec curl. Routé sur les helpers ctx.
+- `__rt_pcntl_async_dispatch_preserving` (NOUVEAU) prenait **x28** comme base de
+  sa zone de spill, puis appelait `__rt_pcntl_dispatch_pending` : les handlers
+  de signaux PHP tournaient donc avec un pointeur de contexte = `sp+512`. Base
+  déplacée sur x30 (déjà sauvé, et le `bl` l'écrase de toute façon).
+- `__rt_getenv_all` x86_64 (NOUVEAU) gardait la longueur du nom dans **r14** à
+  travers `__rt_str_persist` et `__rt_hash_set` ⇒ r14 → r15. La baseline était
+  passée de 81 à 84 : **c'est exactement ce que le gate décroissant doit
+  attraper**.
+- `json_encode_array_int` : le conflit opposait le correctif d'alignement SysV
+  de main (`sub rsp, 40`→`48`) à la ligne ctx de la branche. Prendre « ours »
+  aurait annulé le correctif de main en silence.
+- Le nouveau gate de main `every_x86_64_runtime_call_site_is_sysv_aligned` a
+  attrapé **deux frames désalignées par la remédiation NB1 de la branche**
+  (`zval_pack_array_packed` 104, `zval_unpack_array` 88 : un slot rbx de 8 octets
+  ajouté à un frame déjà aligné). Ce gate n'existait pas sur la base de la
+  branche.
+
+Règle qui en sort : **après chaque merge, rejouer les gates ctx** (scratch x28,
+baseline r14, kitchen-sink, alignement SysV) avant toute autre chose.
+
 ## Reste à faire (M0 → M1)
 
 ### M0 restant
