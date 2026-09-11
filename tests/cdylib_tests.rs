@@ -2445,6 +2445,53 @@ int main(void) {
 }
 "#;
 
+/// THE STATICLIB ARM CARRIES THE SAME ABI CONTRACT, AND WAS NEVER PROBED.
+///
+/// The cdylib arm has been green since round 3, and `.plans/sandbox-threads.md` listed
+/// the staticlib as still unprobed — the two emit kinds build their export wrappers
+/// through different paths, so "the cdylib preserves the register" says nothing about
+/// the archive a host links directly.
+///
+/// Same sentinel as the cdylib test: a module-level assembly probe parks a known value
+/// in the ctx register, calls the export, and reports whether the value survived. It is
+/// module-level assembly rather than a C `register … asm("x28")` variable because clang
+/// spills and reloads such a variable around the call, which makes the C version pass
+/// against a library that clobbers the register.
+#[test]
+fn test_rt_ctx_staticlib_export_preserves_the_hosts_ctx_register() {
+    let dir = make_test_dir("elephc_staticlib_rt_ctx_abi");
+    fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--rt-ctx", "--emit", "staticlib", "auth.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "--rt-ctx staticlib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        dir.join("libauth.a").exists(),
+        "expected the archive the host links directly against"
+    );
+
+    let host = compile_linked_c_host(&dir, CTX_ABI_HOST_C, "ctx-abi-static-host", "auth");
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run the ctx ABI static host");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "PRESERVED",
+        "a --rt-ctx staticlib export clobbered the host's callee-saved ctx register \
+         (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// The ctx register (`x28` AArch64 / `r14` x86_64) is callee-saved, so a library
 /// export that publishes elephc's `_rt_ctx` pointer into it borrows a register
 /// the HOST owns. Every return path must hand the host's value back — the same
