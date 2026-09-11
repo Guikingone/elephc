@@ -50,6 +50,102 @@ fn test_runtime_dynamic_include_nested_by_reference_foreach_writes_through_outer
     assert_eq!(out, "X,Y/Z");
 }
 
+/// Verifies a `use (&$x)` closure capture binds the CELL `$x` names at closure-creation time,
+/// not the NAME, when the whole fragment executes through the eval bridge (a runtime-only-known
+/// include path forces the interpreter to run the included file, rather than the AOT compiler
+/// lowering it directly) -- a faithful replica of
+/// `Symfony\Component\EventDispatcher\EventDispatcher::optimizeListeners()`: a private method
+/// nests two by-reference `foreach` loops, binds a reference to an appended slot of an object
+/// property array, and stores a `static` closure that captures that reference (plus the loop's
+/// element alias) and replaces itself in that slot on first call.
+///
+/// `php -n` 8.5.6 prints `high:x|W(x)|` then `high:y|W(y)|W(y)` then `p4done`. Before the fix,
+/// the closure's by-reference captures resolved their caller-side write-back target by
+/// (raw-scope-pointer, NAME) instead of holding the cell captured at closure-creation time; here
+/// the named scope is `optimizeListeners()`'s own activation, which has already returned and
+/// been dropped by the time any stored closure is first invoked, so write-back dereferenced
+/// freed Rust stack memory. elephc SIGSEGV'd (exit 139) with no output at all.
+#[test]
+fn test_runtime_dynamic_include_self_replacing_closure_survives_dropped_defining_method_scope() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function load($path) { include $path; } load('piece.php');",
+            ),
+            (
+                "piece.php",
+                r#"<?php
+class Wrapped
+{
+    public function __invoke(string $tag): string
+    {
+        return "W(" . $tag . ")";
+    }
+}
+
+class Dispatcher
+{
+    private array $listeners = [];
+    private array $optimized = [];
+
+    public function add(string $event, int $priority, callable $listener): void
+    {
+        $this->listeners[$event][$priority][] = $listener;
+        unset($this->optimized[$event]);
+    }
+
+    private function optimizeListeners(string $eventName): array
+    {
+        krsort($this->listeners[$eventName]);
+        $this->optimized[$eventName] = [];
+
+        foreach ($this->listeners[$eventName] as &$listeners) {
+            foreach ($listeners as &$listener) {
+                $closure = &$this->optimized[$eventName][];
+                if (\is_array($listener) && isset($listener[0]) && $listener[0] instanceof \Closure && 2 >= \count($listener)) {
+                    $closure = static function (...$args) use (&$listener, &$closure) {
+                        if ($listener[0] instanceof \Closure) {
+                            $listener[0] = $listener[0]();
+                            $listener[1] ??= '__invoke';
+                        }
+                        ($closure = $listener(...))(...$args);
+                    };
+                } else {
+                    $closure = $listener instanceof Wrapped ? $listener : $listener(...);
+                }
+            }
+        }
+
+        return $this->optimized[$eventName];
+    }
+
+    public function call(string $eventName, string $tag): string
+    {
+        $out = [];
+        foreach ($this->optimized[$eventName] ?? $this->optimizeListeners($eventName) as $listener) {
+            $out[] = $listener($tag);
+        }
+        return implode("|", $out);
+    }
+}
+
+$d = new Dispatcher();
+$d->add("evt", 10, static fn (string $t): string => "high:" . $t);
+$d->add("evt", 5, new Wrapped());
+$d->add("evt", 1, [static fn (): object => new Wrapped(), "__invoke"]);
+
+echo $d->call("evt", "x"), "\n";
+echo $d->call("evt", "y"), "\n";
+echo "p4done\n";
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "high:x|W(x)|\nhigh:y|W(y)|W(y)\np4done\n");
+}
+
 /// Verifies `EXPR(...)` first-class-callable syntax produces a working `Closure` for every
 /// runtime value shape when the whole fragment executes through the eval bridge (a
 /// runtime-only-known include path forces the interpreter to run the included file, rather than

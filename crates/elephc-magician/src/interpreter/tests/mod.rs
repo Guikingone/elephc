@@ -61,6 +61,7 @@ mod builtins_system_network;
 mod cast_precedence;
 mod class_constants;
 mod classes;
+mod closure_by_ref_capture_cell_identity;
 mod closures;
 mod control_flow;
 mod core;

@@ -157,13 +157,28 @@ pub(in crate::interpreter) fn eval_call_arg_value(
         EvalExpr::LoadVar(name) => {
             let value = visible_scope_cell(context, caller_scope, name)
                 .map_or_else(|| values.null(), Ok)?;
-            Ok((
-                value,
-                Some(EvalReferenceTarget::Variable {
+            // `name` can ALREADY be a reference -- bound by `$name = &$expr;` or a by-reference
+            // `foreach` -- in which case a fresh `Variable { scope, name }` node here would be a
+            // SHALLOW alias of an alias: whatever captures this target (a closure's `use
+            // (&$name)`, or a by-reference `foreach` binding its own loop variable from this
+            // subject) would resolve it later by re-reading `name` out of `caller_scope`, not by
+            // holding the cell `name` pointed at when THIS capture happened. Two failures follow
+            // from that: a later rebind of `name` (a new loop iteration doing `$name = &$other[]`
+            // again) silently redirects an already-captured reference to the NEW target instead
+            // of the one it captured, and if `caller_scope` is a function or method activation
+            // that returns before the capture is ever used -- exactly `use (&$x)` escaping the
+            // defining call -- the raw pointer in `Variable` dereferences freed stack memory.
+            // `write_back_method_ref_target`'s `Variable` arm already resolves this chain lazily,
+            // at write-back time (`90c3d5a5ec`); resolving it eagerly here, while `caller_scope`
+            // is still known good, is this function's mirror of that fix on the read side.
+            let target = caller_scope
+                .reference_target(name)
+                .cloned()
+                .unwrap_or_else(|| EvalReferenceTarget::Variable {
                     scope: caller_scope as *mut ElephcEvalScope,
                     name: name.clone(),
-                }),
-            ))
+                });
+            Ok((value, Some(target)))
         }
         EvalExpr::ArrayGet { array, index } => {
             let EvalExpr::LoadVar(array_name) = array.as_ref() else {
