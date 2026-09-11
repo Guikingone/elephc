@@ -64,7 +64,7 @@ pub fn emit_user_wrapper_stream_cast(emitter: &mut Emitter) {
     // A `: int` return arrives as a raw fd; an untyped/`resource` return arrives
     // as a boxed Mixed cell (heap pointer) whose payload word holds the fd.
     emitter.instruction("cbz x0, __rt_uwcast_neg1");                            // null/false-ish → not selectable
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the return below the managed heap?
     emitter.instruction("b.lo __rt_uwcast_ret");                                // raw small int → it is already the fd
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap byte length (ctx-relative in ctx mode)
@@ -150,7 +150,7 @@ fn emit_user_wrapper_stream_cast_linux_x86_64(emitter: &mut Emitter) {
     // -- normalize the return to a raw int fd (see the AArch64 path for the rationale) --
     emitter.instruction("test rax, rax");                                       // null/false-ish return?
     emitter.instruction("jz __rt_uwcast_neg1_x86");                             // → not selectable
-    abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("cmp rax, r10");                                        // is the return below the managed heap?
     emitter.instruction("jb __rt_uwcast_ret_x86");                              // raw small int → already the fd
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)

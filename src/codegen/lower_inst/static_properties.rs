@@ -540,10 +540,14 @@ fn class_id_work_reg(emitter: &crate::codegen::emit::Emitter) -> &'static str {
 }
 
 /// Returns the scratch register used for class-id branch comparisons.
+///
+/// NOT r14 on x86_64: that is the reserved runtime-context register in
+/// `--rt-ctx` builds, and this is compiled user code, which reads per-context
+/// state through it.
 fn class_id_compare_reg(emitter: &crate::codegen::emit::Emitter) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => "x14",
-        Arch::X86_64 => "r14",
+        Arch::X86_64 => "r15",
     }
 }
 

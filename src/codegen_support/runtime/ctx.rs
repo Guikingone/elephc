@@ -47,13 +47,32 @@ pub(crate) const CTX_HEAP_FREE_LIST_OFFSET: usize = CTX_HEAP_OFF_OFFSET + 8;
 /// Byte offset of `_heap_small_bins` inside `_rt_ctx`.
 pub(crate) const CTX_HEAP_SMALL_BINS_OFFSET: usize = CTX_HEAP_FREE_LIST_OFFSET + 8;
 
+/// Byte offset of the heap ARENA BASE inside `_rt_ctx`.
+///
+/// The allocator computes `address = base + heap_off`. Keeping the offset
+/// per-context while the base stayed a single global symbol made the state
+/// per-context but the MEMORY shared: two contexts both starting at
+/// `heap_off = 0` hand out the same address. So the base travels in the context
+/// too, and a second context points at its own arena.
+///
+/// The main context's base is `_heap_buf`, the `.comm` arena sized by
+/// `--heap-size`; `__rt_ctx_init` installs it.
+pub(crate) const CTX_HEAP_BASE_OFFSET: usize =
+    CTX_HEAP_SMALL_BINS_OFFSET + CTX_HEAP_SMALL_BIN_COUNT * 8;
+
+/// Byte offset of the heap CAPACITY inside `_rt_ctx`.
+///
+/// Travels with the base for the same reason: arenas may differ in size, so the
+/// exhaustion check has to read the limit of the arena it is bumping.
+pub(crate) const CTX_HEAP_MAX_OFFSET: usize = CTX_HEAP_BASE_OFFSET + 8;
+
 /// Byte offset of `_concat_buf` inside `_rt_ctx`.
 ///
 /// The 64 KiB scratch buffer closes the layout: accesses derive its address
 /// once via `emit_ctx_address` (an `add xN, x28, #imm` also within imm12) and
 /// then index freely from there, so the large offset never reaches an
 /// immediate-offset load.
-pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_HEAP_SMALL_BINS_OFFSET + CTX_HEAP_SMALL_BIN_COUNT * 8;
+pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_HEAP_MAX_OFFSET + 8;
 
 /// Total byte size of one `_rt_ctx` instance (16-byte aligned).
 ///
@@ -214,6 +233,10 @@ pub fn emit_ctx_zero_fields(emitter: &mut Emitter) {
 /// - The data section's `.space` zero-fill covers the initial zeroing, but the
 ///   explicit zero stores keep `__rt_ctx_init` correct for a REUSED context
 ///   (the M1 thread-pool case where a fresh request reuses a pooled ctx).
+/// - It also installs the MAIN context's arena: base `_heap_buf`, capacity
+///   `_heap_max`. This is the one place in a ctx build allowed to name those
+///   symbols; every other heap site reads the pair out of the context, which is
+///   what lets a second context own different memory.
 pub fn emit_rt_ctx_init(emitter: &mut Emitter) {
     let ctx = ctx_reg(emitter);
     emitter.blank();
@@ -223,7 +246,42 @@ pub fn emit_rt_ctx_init(emitter: &mut Emitter) {
     // Zero the mutable fields so a REUSED context (thread pool, request reuse)
     // starts pristine even though the data section zero-fills only the first use.
     emit_ctx_zero_fields(emitter);
+    emit_ctx_install_default_arena(emitter);
     emitter.instruction("ret");
+}
+
+/// Points this context's arena at the process-wide `_heap_buf`/`_heap_max` pair.
+///
+/// Split out so every entry that builds the MAIN context — the executable's
+/// `__rt_ctx_init` and the library's `elephc_init` — installs the same arena
+/// without duplicating the sequence. A spawned context will instead receive a
+/// base and a capacity from its thread bridge.
+///
+/// Clobber set: the scratch the symbol materialization uses (`x9` on AArch64,
+/// none on x86_64) plus `x10`/`r10` to carry the capacity. No argument register,
+/// so the main prologue may still call this before argc/argv are spilled.
+pub fn emit_ctx_install_default_arena(emitter: &mut Emitter) {
+    let ctx = ctx_reg(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x10", "_heap_buf");
+            emitter.instruction(&format!("str x10, [{}, #{}]", ctx, CTX_HEAP_BASE_OFFSET)); // this context's arena base
+            abi::emit_load_symbol_to_reg(emitter, "x10", "_heap_max", 0);
+            emitter.instruction(&format!("str x10, [{}, #{}]", ctx, CTX_HEAP_MAX_OFFSET)); // this context's arena capacity
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+            emitter.instruction(&format!(
+                "mov QWORD PTR [{} + {}], r10",
+                ctx, CTX_HEAP_BASE_OFFSET
+            )); // this context's arena base
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_heap_max", 0);
+            emitter.instruction(&format!(
+                "mov QWORD PTR [{} + {}], r10",
+                ctx, CTX_HEAP_MAX_OFFSET
+            )); // this context's arena capacity
+        }
+    }
 }
 
 /// Loads a ctx field into `reg` through the reserved ctx register.
@@ -570,6 +628,78 @@ pub fn emit_small_bins_address(emitter: &mut Emitter, reg: &str) {
     abi::emit_symbol_address(emitter, reg, "_heap_small_bins");
 }
 
+/// Materializes the heap ARENA BASE into `reg` — the address the allocator adds
+/// `heap_off` to.
+///
+/// In ctx mode this is a LOAD from the context, not a symbol materialization:
+/// the base is what makes one context's memory its own. In legacy mode it stays
+/// the `_heap_buf` symbol address, which is what every caller expected before.
+///
+/// The only ctx-mode site that may still name `_heap_buf` is `__rt_ctx_init`,
+/// which installs the main context's base — pinned by
+/// `ctx_runtime_names_the_heap_arena_symbol_once`.
+pub fn emit_heap_base_address(emitter: &mut Emitter, reg: &str) {
+    if emitter.ctx_register {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!(
+                    "ldr {}, [x28, #{}]",
+                    reg, CTX_HEAP_BASE_OFFSET
+                )); // load this context's heap arena base
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov {}, QWORD PTR [r14 + {}]",
+                    reg, CTX_HEAP_BASE_OFFSET
+                )); // load this context's heap arena base
+            }
+        }
+        return;
+    }
+    abi::emit_symbol_address(emitter, reg, "_heap_buf");
+}
+
+/// Loads the heap CAPACITY in bytes into `reg`.
+///
+/// Legacy mode reads the `_heap_max` global; ctx mode reads the field, because
+/// two contexts may hold arenas of different sizes and the exhaustion check has
+/// to be about the arena actually being bumped.
+///
+/// Clobbers `reg` and NOTHING else. The AArch64 legacy arm resolves the symbol
+/// through the destination register rather than calling
+/// `abi::emit_load_symbol_to_reg`, which borrows x9: the call sites this
+/// replaced kept live values there, and going through x9 turned every
+/// allocation into "heap memory exhausted" — the limit check read a corrupted
+/// working register instead of the capacity.
+pub fn emit_heap_max_load(emitter: &mut Emitter, reg: &str) {
+    if emitter.ctx_register {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!(
+                    "ldr {}, [x28, #{}]",
+                    reg, CTX_HEAP_MAX_OFFSET
+                )); // load this context's heap capacity
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov {}, QWORD PTR [r14 + {}]",
+                    reg, CTX_HEAP_MAX_OFFSET
+                )); // load this context's heap capacity
+            }
+        }
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, reg, "_heap_max");
+            emitter.instruction(&format!("ldr {}, [{}]", reg, reg)); // read the capacity through the destination register — no borrowed scratch
+        }
+        // x86_64 loads it RIP-relative (or GOT-indirect through the destination
+        // register in PIC), so no scratch is borrowed either way.
+        Arch::X86_64 => abi::emit_load_symbol_to_reg(emitter, reg, "_heap_max", 0),
+    }
+}
+
 /// Loads the current heap bump offset into `reg`, ctx-relative in ctx-register
 /// mode and from the legacy global symbol otherwise.
 ///
@@ -630,14 +760,20 @@ mod tests {
         assert_eq!(CTX_HEAP_OFF_OFFSET, 8);
         assert_eq!(CTX_HEAP_FREE_LIST_OFFSET, 16);
         assert_eq!(CTX_HEAP_SMALL_BINS_OFFSET, 24);
+        // The arena the allocator bumps into travels with the state that indexes
+        // it, right after the bins.
+        assert_eq!(CTX_HEAP_BASE_OFFSET, 24 + CTX_HEAP_SMALL_BIN_COUNT * 8);
+        assert_eq!(CTX_HEAP_MAX_OFFSET, CTX_HEAP_BASE_OFFSET + 8);
         // The concat buffer closes the layout.
-        assert_eq!(CTX_CONCAT_BUF_OFFSET, 24 + CTX_HEAP_SMALL_BIN_COUNT * 8);
+        assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_HEAP_MAX_OFFSET + 8);
         // Every scalar offset must be encodable as ldr [x28, #imm] (imm12 ≤ 4095).
         for offset in [
             CTX_CONCAT_OFF_OFFSET,
             CTX_HEAP_OFF_OFFSET,
             CTX_HEAP_FREE_LIST_OFFSET,
             CTX_HEAP_SMALL_BINS_OFFSET,
+            CTX_HEAP_BASE_OFFSET,
+            CTX_HEAP_MAX_OFFSET,
         ] {
             assert!(offset + 8 <= 4096, "scalar ctx offset {offset} escapes the imm12 window");
         }
@@ -966,6 +1102,108 @@ mod tests {
         let asm = emitter.output();
         assert!(asm.contains("str xzr, [x28, #0]"), "{asm}");
         assert!(!asm.contains("x10"), "a zero reset must clobber nothing:\n{asm}");
+    }
+
+    /// The arena accessors touch the DESTINATION register and nothing else, in
+    /// either mode.
+    ///
+    /// They replaced call sites that materialized the symbol through the
+    /// destination itself, so a helper borrowing the usual x9 scratch instead
+    /// clobbers a working register the site still needs. That is not theory: the
+    /// first version routed the capacity load through `emit_load_symbol_to_reg`,
+    /// which borrows x9, and every allocation in the suite died with "heap
+    /// memory exhausted" — the limit check compared against a corrupted x9.
+    #[test]
+    fn heap_arena_accessors_clobber_only_their_destination() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            for ctx_register in [false, true] {
+                let mut emitter = Emitter::new(Target::new(platform, arch));
+                emitter.ctx_register = ctx_register;
+                let dest = if arch == Arch::AArch64 { "x13" } else { "r13" };
+                emit_heap_base_address(&mut emitter, dest);
+                emit_heap_max_load(&mut emitter, dest);
+                let asm = emitter.output();
+                for borrowed in ["x9", "x10", "r10", "r11", "rax"] {
+                    assert!(
+                        !mentions_register(&asm.replace('\n', " "), borrowed),
+                        "{arch:?} (ctx={ctx_register}) arena accessors borrowed {borrowed}; \
+                         the sites they replaced expect only {dest} to change:\n{asm}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// In a ctx build, exactly ONE site may name the heap arena symbols: the
+    /// init that installs the main context's arena. Everything else reads the
+    /// base and the capacity out of the context.
+    ///
+    /// This is the arena family's tripwire, and it has to be a COUNT rather than
+    /// the concat family's "omit the symbol from the data section" trick: the
+    /// main context's arena still IS `_heap_buf`, so the symbol cannot go away.
+    /// A helper that keeps materializing it would otherwise bump the right
+    /// per-context offset into the wrong context's memory — the state made
+    /// per-context while the memory stayed shared, which is precisely the bug
+    /// this field exists to remove.
+    #[test]
+    fn ctx_runtime_names_the_heap_arena_symbol_once() {
+        use crate::codegen_support::driver_support::generate_runtime_with_features;
+        // Count the MATERIALIZATION, not every mention: AArch64 spells one
+        // address as an `adrp`/`add` pair, so counting lines would report two
+        // for a single site.
+        for (platform, arch, pattern, materializer) in [
+            (Platform::MacOS, Arch::AArch64, "adrp x10, _heap_buf", "adrp "),
+            (
+                Platform::Linux,
+                Arch::X86_64,
+                "lea r10, [rip + _heap_buf]",
+                "lea ",
+            ),
+        ] {
+            let asm = generate_runtime_with_features(
+                8 * 1024 * 1024,
+                Target::new(platform, arch),
+                RuntimeFeatures {
+                    ctx_register: true,
+                    ..RuntimeFeatures::all()
+                },
+            );
+            let materializations = asm
+                .lines()
+                .map(str::trim)
+                .filter(|line| line.contains("_heap_buf") && line.starts_with(materializer))
+                .count();
+            assert_eq!(
+                materializations, 1,
+                "{arch:?} ctx runtime must name _heap_buf exactly once (in __rt_ctx_init), \
+                 found {materializations}; every other heap site reads the base from the \
+                 context, which is what gives a second context its own memory"
+            );
+            assert!(
+                asm.contains(pattern),
+                "{arch:?} ctx runtime must install the default arena in __rt_ctx_init"
+            );
+            // The legacy build keeps naming it everywhere, as it always did.
+            let legacy = generate_runtime_with_features(
+                8 * 1024 * 1024,
+                Target::new(platform, arch),
+                RuntimeFeatures::all(),
+            );
+            let legacy_sites = legacy
+                .lines()
+                .map(str::trim)
+                .filter(|line| line.contains("_heap_buf") && line.starts_with(materializer))
+                .count();
+            assert!(
+                legacy_sites > 1,
+                "{arch:?} legacy runtime must keep addressing _heap_buf directly \
+                 (found {legacy_sites}); if this ever drops to one, the two modes have \
+                 silently converged and this test no longer distinguishes them"
+            );
+        }
     }
 
     /// Scratch audit for the reserved ctx register on AArch64 (spike review,

@@ -104,7 +104,7 @@ fn emit_object_handle_acquire_arm64(emitter: &mut Emitter) {
     emitter.instruction("str x15, [sp, #48]");                                  // preserve the fresh-handle increment scratch
 
     emitter.instruction("cbz x0, __rt_object_handle_acquire_done");             // a null allocation carries no identity
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("subs x10, x0, x9");                                    // x10 = payload offset from the heap base
     emitter.instruction("b.lo __rt_object_handle_acquire_done");                // reject pointers that do not belong to the managed heap
     emitter.instruction("lsr x10, x10, #4");                                    // x10 = 16-byte granule index of this block
@@ -147,7 +147,7 @@ fn emit_object_handle_of_arm64(emitter: &mut Emitter) {
     emitter.label_global("__rt_object_handle_of");
 
     emitter.instruction("cbz x0, __rt_object_handle_of_zero");                  // null objects have no handle
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the pointer below the managed heap?
     emitter.instruction("b.lo __rt_object_handle_of_zero");                     // static and foreign pointers carry no handle
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap bump offset (ctx-relative in ctx mode)
@@ -181,7 +181,7 @@ fn emit_object_handle_release_arm64(emitter: &mut Emitter) {
     emitter.instruction("stp x13, x14, [sp, #32]");                             // preserve the table-address and handle scratch pair
 
     emitter.instruction("cbz x0, __rt_object_handle_release_done");             // null payloads never held a handle
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("subs x10, x0, x9");                                    // x10 = payload offset from the heap base
     emitter.instruction("b.lo __rt_object_handle_release_done");                // pointers below the heap never held a handle
     emitter.instruction("lsr x10, x10, #4");                                    // x10 = 16-byte granule index of this block
@@ -223,7 +223,7 @@ fn emit_object_handle_acquire_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // is this a null allocation?
     emitter.instruction("jz __rt_object_handle_acquire_done");                  // a null allocation carries no identity
-    abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r11");
     emitter.instruction("cmp rax, r11");                                        // is the pointer below the managed heap?
     emitter.instruction("jb __rt_object_handle_acquire_done");                  // reject pointers that do not belong to the managed heap
     emitter.instruction("mov rdx, rax");                                        // copy the payload pointer before deriving its granule
@@ -272,7 +272,7 @@ fn emit_object_handle_of_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // is the candidate pointer null?
     emitter.instruction("jz __rt_object_handle_of_zero");                       // null objects have no handle
-    abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("cmp rax, r10");                                        // is the pointer below the managed heap?
     emitter.instruction("jb __rt_object_handle_of_zero");                       // static and foreign pointers carry no handle
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)
@@ -309,7 +309,7 @@ fn emit_object_handle_release_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // is the released payload pointer null?
     emitter.instruction("jz __rt_object_handle_release_done");                  // null payloads never held a handle
-    abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r11");
     emitter.instruction("cmp rax, r11");                                        // is the pointer below the managed heap?
     emitter.instruction("jb __rt_object_handle_release_done");                  // pointers below the heap never held a handle
     emitter.instruction("mov rdx, rax");                                        // copy the payload pointer before deriving its granule

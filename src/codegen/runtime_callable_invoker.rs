@@ -452,9 +452,15 @@ fn emit_loaded_mixed_array_callback_call(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    // rbx rather than r14 on x86_64: r14 is the reserved runtime-context
+    // register, and this body CALLS the PHP callable, which reads per-context
+    // state through it. Holding a type tag there handed every closure-driven
+    // `usort`/`array_filter`/`array_reduce`/`array_walk` a tag where the context
+    // pointer belongs — five SIGSEGVs on linux-x86_64. rbx is already in this
+    // invoker's saved set, so the caller's value still comes back.
     let (mixed_reg, tag_reg, payload_reg) = match emitter.target.arch {
         Arch::AArch64 => ("x20", "x21", "x22"),
-        Arch::X86_64 => ("r13", "r14", "r15"),
+        Arch::X86_64 => ("r13", "rbx", "r15"),
     };
     let indexed_label = ctx.next_label("cufa_mixed_indexed");
     let assoc_label = ctx.next_label("cufa_mixed_assoc");

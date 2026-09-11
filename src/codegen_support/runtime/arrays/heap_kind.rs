@@ -41,7 +41,7 @@ pub fn emit_heap_kind(emitter: &mut Emitter) {
 
         emitter.instruction("test rax, rax");                                   // null pointers have no heap kind
         emitter.instruction("jz __rt_heap_kind_zero");                          // return heap kind 0 for null pointers
-        crate::codegen_support::abi::emit_symbol_address(emitter, "rcx", "_heap_buf");
+        crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "rcx");
         emitter.instruction("cmp rax, rcx");                                    // reject values below the managed x86_64 heap before probing metadata
         emitter.instruction("jb __rt_heap_kind_zero");                          // scalar integers and static data below the heap report kind 0
         crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "rdx"); // rdx = current heap offset (ctx-relative in ctx mode)
@@ -71,7 +71,7 @@ pub fn emit_heap_kind(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_heap_kind_zero");                         // null pointers have no heap kind
 
     // -- heap range check: x0 >= _heap_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the pointer below the heap base?
     emitter.instruction("b.lo __rt_heap_kind_zero");                            // non-heap pointers report kind 0
 

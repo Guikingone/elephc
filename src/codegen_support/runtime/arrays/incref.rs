@@ -37,7 +37,7 @@ pub fn emit_incref(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_incref_skip");                            // skip if null pointer
 
     // -- heap range check: x0 >= _heap_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is pointer below heap start?
     emitter.instruction("b.lo __rt_incref_skip");                               // yes — not a heap pointer, skip
 
@@ -72,7 +72,7 @@ fn emit_incref_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_incref");
     emitter.instruction("test rax, rax");                                       // ignore null pointers so borrowed non-values do not participate in refcount traffic
     emitter.instruction("jz __rt_incref_skip");                                 // null payloads do not own heap storage and therefore need no refcount update
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("cmp rax, r10");                                        // reject values below the managed x86_64 heap before reading a header word
     emitter.instruction("jb __rt_incref_skip");                                 // scalar integers and static data below the heap are not refcounted
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)

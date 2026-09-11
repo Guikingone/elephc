@@ -43,7 +43,7 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
 
     // -- null and heap-range check --
     emitter.instruction("cbz x0, __rt_hash_free_deep_done");                    // skip if null
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is table below heap start?
     emitter.instruction("b.lo __rt_hash_free_deep_done");                       // skip non-heap pointers
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)

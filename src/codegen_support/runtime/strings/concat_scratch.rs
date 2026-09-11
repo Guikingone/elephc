@@ -87,8 +87,7 @@ fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_concat_reserve");
 
     // -- reject requests the allocator could never satisfy, including wrapped sizes --
-    abi::emit_symbol_address(emitter, "x9", "_heap_max");
-    emitter.instruction("ldr x9, [x9]");                                        // load the configured heap capacity as the upper bound for any single result
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the requested byte count impossible to satisfy (unsigned, so wrapped sizes are huge)?
     emitter.instruction("b.hi __rt_concat_reserve_too_large");                  // report a PHP-style allocation overflow instead of writing past any buffer
 
@@ -161,8 +160,7 @@ fn emit_concat_grow_aarch64(emitter: &mut Emitter) {
 
     // -- allocate the larger owned block and stamp it as an elephc string --
     emitter.instruction("mov x0, x2");                                          // pass the requested new capacity to the reservation front end
-    abi::emit_symbol_address(emitter, "x9", "_heap_max");
-    emitter.instruction("ldr x9, [x9]");                                        // load the configured heap capacity as the upper bound for any single result
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the grown capacity impossible to satisfy?
     emitter.instruction("b.hi __rt_concat_grow_too_large");                     // report a PHP-style allocation overflow instead of writing past any buffer
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the larger owned accumulation buffer
@@ -225,8 +223,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_concat_reserve");
 
     // -- reject requests the allocator could never satisfy, including wrapped sizes --
-    abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity as the upper bound for any single result
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8");
     emitter.instruction("cmp rax, r8");                                         // is the requested byte count impossible to satisfy (unsigned, so wrapped sizes are huge)?
     emitter.instruction("ja __rt_concat_reserve_too_large_x86");                // report a PHP-style allocation overflow instead of writing past any buffer
 
@@ -281,8 +278,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
 
     // -- allocate the larger owned block and stamp it as an elephc string --
     emitter.instruction("mov rax, rsi");                                        // pass the requested new capacity to the allocator
-    abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity as the upper bound for any single result
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8");
     emitter.instruction("cmp rax, r8");                                         // is the grown capacity impossible to satisfy?
     emitter.instruction("ja __rt_concat_grow_too_large_x86");                   // report a PHP-style allocation overflow instead of writing past any buffer
     emitter.instruction("call __rt_heap_alloc");                                // allocate the larger owned accumulation buffer

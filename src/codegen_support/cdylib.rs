@@ -282,6 +282,7 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
             // like the exports below must never reach this reset).
             if emitter.ctx_register {
                 crate::codegen_support::runtime::ctx::emit_ctx_zero_fields(emitter);
+                crate::codegen_support::runtime::ctx::emit_ctx_install_default_arena(emitter);
             }
             crate::codegen::stack_guard::emit_stack_limit_init_call(emitter);
             if heap_debug {

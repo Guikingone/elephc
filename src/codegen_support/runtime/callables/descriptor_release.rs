@@ -32,7 +32,7 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_callable_descriptor_release_done");       // static null descriptors have nothing to release
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the descriptor below the managed heap?
     emitter.instruction("b.lo __rt_callable_descriptor_release_done");          // yes, it is static or foreign metadata
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap bump offset (ctx-relative in ctx mode)
@@ -134,7 +134,7 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // static null descriptors have nothing to release
     emitter.instruction("jz __rt_callable_descriptor_release_done");            // skip null descriptor pointers
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("cmp rax, r10");                                        // reject descriptors below the managed heap
     emitter.instruction("jb __rt_callable_descriptor_release_done");            // static descriptors live outside the heap and are ignored
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)

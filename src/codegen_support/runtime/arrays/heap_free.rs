@@ -43,7 +43,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_heap_free_done");                         // skip if null pointer
 
     // -- validate pointer range and payload size before mutating allocator state --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x16");
     emitter.instruction("add x17, x16, #16");                                   // compute the first valid heap payload address
     emitter.instruction("cmp x0, x17");                                         // is the candidate below the first heap payload?
     emitter.instruction("b.lo __rt_heap_free_done");                            // yes — ignore non-heap or interior pointers
@@ -109,7 +109,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("str x14, [x13]");                                      // store updated live bytes
     emitter.instruction("str wzr, [x9, #4]");                                   // mark the block header as not live while it is being freed
     emitter.instruction("str xzr, [x9, #8]");                                   // clear the heap kind while the block sits on the free list
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x15");
     if emitter.ctx_register {
         emitter.instruction(&format!(
             "ldr x14, [x28, #{}]",
@@ -269,7 +269,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
         crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
         emitter.instruction("ldr x14, [x13]");                                  // x14 = current heap offset
     }
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x15");
     emitter.instruction("add x14, x15, x14");                                   // x14 = current heap end
     if emitter.ctx_register {
         emitter.instruction(&format!(
@@ -336,7 +336,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_heap_free_safe_skip");                    // skip if null pointer
 
     // -- check lower bound: x0 >= _heap_buf + header_size --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("add x11, x9, #16");                                    // compute the first valid heap payload address
     emitter.instruction("cmp x0, x11");                                         // is pointer below the first payload address?
     emitter.instruction("b.lo __rt_heap_free_safe_skip");                       // yes — not a heap block payload pointer, skip
@@ -397,7 +397,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before mutating free-list state
     emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this free path?
     emitter.instruction("jz __rt_heap_free_debug_checked");                     // skip the validator and double-free guard when heap-debug mode is disabled
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("cmp rax, r10");                                        // does the candidate freed pointer begin below the heap base?
     emitter.instruction("jb __rt_heap_free_debug_checked");                     // pointers outside the heap cannot participate in heap-debug double-free checks
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current bump offset (ctx-relative in ctx mode)
@@ -455,7 +455,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r8], rcx");                             // store the updated live-byte count after freeing the block
     emitter.instruction("mov DWORD PTR [r9 + 4], 0");                           // clear the live refcount while this block sits on the free list or in a small bin
     emitter.instruction("mov QWORD PTR [r9 + 8], 0");                           // clear the heap kind so free blocks do not look like live typed payloads
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "rcx"); // rcx = current bump offset (ctx-relative in ctx mode)
     emitter.instruction("lea rcx, [r10 + rcx]");                                // compute the current heap end address from the heap base plus bump offset
     emitter.instruction("lea rdx, [rax + r11]");                                // compute the freed block end address from the user pointer plus payload size
@@ -571,7 +571,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     // -- repeatedly trim any ordered free block that now touches the bump tail --
     emitter.label("__rt_heap_free_trim_tail");
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "rcx"); // rcx = current bump offset (ctx-relative in ctx mode)
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("lea rcx, [r10 + rcx]");                                // compute the current heap end from the heap base plus bump offset
     crate::codegen_support::runtime::ctx::emit_free_list_address(emitter, "r11"); // r11 = free-list head slot address (ctx-relative in ctx mode)
     emitter.instruction("mov rdx, QWORD PTR [r11]");                            // start scanning at the ordered free-list head
@@ -616,12 +616,12 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_heap_free_safe");
     emitter.instruction("test rax, rax");                                       // skip null pointers before any heap-header reads
     emitter.instruction("jz __rt_heap_free_safe_skip");                         // null payloads do not own heap storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("lea r10, [r10 + 16]");                                 // first valid user payload begins after the initial heap header
     emitter.instruction("cmp rax, r10");                                        // is the candidate pointer below the first heap payload?
     emitter.instruction("jb __rt_heap_free_safe_skip");                         // yes, it is a static/foreign pointer and must be ignored
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap bump offset (ctx-relative in ctx mode)
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("add r11, r10");                                        // r11 = heap base + live heap offset
     emitter.instruction("cmp rax, r11");                                        // is the candidate pointer at or beyond the live heap end?
     emitter.instruction("jae __rt_heap_free_safe_skip");                        // yes, it is not a currently live heap payload

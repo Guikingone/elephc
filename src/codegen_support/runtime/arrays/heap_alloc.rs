@@ -90,7 +90,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x16]");                                      // x10 = current cached block header or null when this bin is exhausted
     emitter.instruction("cbz x10, __rt_heap_alloc_small_bin_next_class");       // try the next larger bin when this bin has no fitting block
     // -- reject cached entries that escaped the live heap window before dereferencing them --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x12");
     emitter.instruction("cmp x10, x12");                                        // does the cached block point below the heap buffer base?
     emitter.instruction("b.lo __rt_heap_alloc_small_bin_drop_tail");            // wild pointer: truncate the chain, its next link cannot be trusted
     if emitter.ctx_register {
@@ -161,7 +161,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     // -- walk the free list looking for first-fit block --
     emitter.label("__rt_heap_alloc_fl_loop");
     emitter.instruction("cbz x10, __rt_heap_alloc_bump");                       // no free block found, fall through to bump
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x12");
     emitter.instruction("cmp x10, x12");                                        // reject free-list pointers that point before the heap buffer
     emitter.instruction("b.lo __rt_heap_alloc_fl_drop_tail");                   // drop the rest of a chain once it leaves the heap buffer
     if emitter.ctx_register {
@@ -274,13 +274,12 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     // -- bounds check: offset + 16 + requested <= heap_max --
     emitter.instruction("add x12, x10, x0");                                    // x12 = offset + requested size
     emitter.instruction("add x12, x12, #16");                                   // x12 = offset + requested + header (16 bytes)
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_max");
-    emitter.instruction("ldr x13, [x13]");                                      // x13 = heap max size in bytes
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x13");
     emitter.instruction("cmp x12, x13");                                        // does the allocation fit (unsigned, so a wrapped size stays above the limit)?
     emitter.instruction("b.hi __rt_heap_exhausted");                            // no — fatal error
 
     // -- compute base address of heap buffer --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x11");
 
     // -- write header and bump offset --
     emitter.instruction("add x14, x11, x10");                                   // x14 = buf + offset (header location)
@@ -389,7 +388,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // did this bin scan run out of cached blocks?
     emitter.instruction("jz __rt_heap_alloc_small_bin_next_class");             // try the next larger bin when this bin has no fitting block
     // -- reject cached entries that escaped the live heap window before dereferencing them --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "rdx");
     emitter.instruction("cmp r10, rdx");                                        // does the cached block point below the heap buffer base?
     emitter.instruction("jb __rt_heap_alloc_small_bin_drop_tail");              // wild pointer: truncate the chain, its next link cannot be trusted
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "rsi"); // rsi = current heap bump offset (ctx-relative in ctx mode)
@@ -444,7 +443,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_heap_alloc_fl_loop");
     emitter.instruction("test r10, r10");                                       // did the free-list walk run out of blocks?
     emitter.instruction("jz __rt_heap_alloc_bump");                             // yes — fall back to bump allocation from the heap buffer
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r8");
     emitter.instruction("cmp r10, r8");                                         // reject free-list pointers that point before the heap buffer
     emitter.instruction("jb __rt_heap_alloc_fl_drop_tail");                     // drop the rest of a chain once it leaves the heap buffer
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "rcx"); // rcx = current heap bump offset (ctx-relative in ctx mode)
@@ -535,11 +534,10 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r10");                                        // preserve the current bump offset while computing the tentative allocation end
     emitter.instruction("add rcx, rax");                                        // add the requested payload size to the current bump offset
     emitter.instruction("add rcx, 16");                                         // include the uniform 16-byte header in the tentative allocation end
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity in bytes
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8");
     emitter.instruction("cmp rcx, r8");                                         // does the bump allocation still fit inside the configured heap capacity?
     emitter.instruction("ja __rt_heap_exhausted");                              // no — report heap exhaustion and terminate
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r11");
     emitter.instruction("lea r10, [r11 + r10]");                                // compute the new block header address inside the heap buffer
     emitter.instruction("mov DWORD PTR [r10], eax");                            // write the requested payload size into the new block header
     emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // initialize the new block refcount to one

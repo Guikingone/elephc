@@ -33,7 +33,7 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
         emitter.comment("--- runtime: heap_debug_validate_free_list ---");
         emitter.label_global("__rt_heap_debug_validate_free_list");
 
-        crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_buf");
+        crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r9");
         crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r10"); // r10 = current heap offset (ctx-relative in ctx mode)
         emitter.instruction("add r10, r9");                                     // compute the current heap end address from the base plus bump offset
         crate::codegen_support::runtime::ctx::emit_free_list_head_load(emitter, "r11"); // r11 = current free-list head (ctx-relative in ctx mode)
@@ -137,7 +137,7 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.label_global("__rt_heap_debug_validate_free_list");
 
     // -- load heap bounds and current free-list head --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end address
     crate::codegen_support::runtime::ctx::emit_free_list_head_load(emitter, "x11"); // x11 = current free block header (ctx-relative in ctx mode)

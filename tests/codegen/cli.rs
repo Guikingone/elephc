@@ -10,6 +10,132 @@
 
 use crate::support::*;
 
+/// A PHP program broad enough to drag most user-codegen emitters into the
+/// assembly: closures behind runtime callbacks, `call_user_func_array`, static
+/// properties on a late-bound receiver, generators, fibers, string building,
+/// and the array helpers that invoke a callable.
+const CTX_USER_CODEGEN_FIXTURE: &str = r#"<?php
+class Holder {
+    public static int $count = 0;
+    public static string $label = 'x';
+    public static function bump(int $by): int { static::$count += $by; return static::$count; }
+}
+class Child extends Holder { public static int $count = 100; }
+
+function apply(callable $f, array $xs): array { return array_map($f, $xs); }
+
+$nums = [5, 3, 9, 1];
+usort($nums, fn($a, $b) => $a <=> $b);
+$sum = array_reduce($nums, fn($c, $v) => $c + $v, 0);
+$even = array_filter($nums, fn($v) => $v % 2 === 0);
+array_walk($nums, function ($v) use (&$sum) { $sum += $v; });
+$doubled = apply(fn($v) => $v * 2, $nums);
+
+$args = [2];
+$viaCufa = call_user_func_array([Holder::class, 'bump'], $args);
+$viaChild = Child::bump(3);
+
+$gen = (function () { foreach ([1, 2, 3] as $v) { yield $v; } })();
+$fromGen = 0;
+foreach ($gen as $v) { $fromGen += $v; }
+
+$fiber = new Fiber(function (int $seed) { Fiber::suspend($seed + 1); return $seed + 2; });
+$suspended = $fiber->start(7);
+$fiber->resume();
+
+$text = sprintf('%s-%d', Holder::$label, $sum) . implode(',', $doubled);
+echo strlen($text), count($even), $viaCufa, $viaChild, $fromGen, $suspended, $fiber->getReturn();
+"#;
+
+/// The reserved ctx register is a WHOLE-PROGRAM contract, not a runtime-only one.
+///
+/// The runtime audit (`x86_64_ctx_runtime_never_scratches_the_ctx_register`) scans
+/// the generated runtime and nothing else, so USER codegen was free to borrow the
+/// register — and did. `runtime_callable_invoker` used r14 as its tag register and
+/// then called the PHP callable through it, so every `usort`/`array_filter`/
+/// `array_reduce`/`array_walk`/`array_any` with a closure ran its callback with a
+/// type tag where the context pointer belongs, and died on the first heap access.
+/// Five SIGSEGVs on linux-x86_64 that no local check saw: the host suite compiles
+/// for AArch64, and the runtime audit does not read user code.
+///
+/// This compiles a deliberately broad program for x86_64 and applies the same
+/// sanctioned-shape rule to what comes out.
+#[test]
+fn test_cli_rt_ctx_user_codegen_never_scratches_the_ctx_register() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_user_codegen");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, CTX_USER_CODEGEN_FIXTURE).expect("failed to write the fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--rt-ctx")
+        .args(["--target", "linux-x86_64"])
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the user-codegen fixture");
+    assert!(
+        output.status.success(),
+        "--rt-ctx --target linux-x86_64 --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read the emitted assembly");
+    let mut offenders: Vec<String> = Vec::new();
+    for raw in asm.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('.') || line.ends_with(':')
+        {
+            continue;
+        }
+        let line = line.split('#').next().unwrap_or(line).trim();
+        let mentions_r14 = line
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| matches!(token, "r14" | "r14d" | "r14w" | "r14b"));
+        if !mentions_r14 {
+            continue;
+        }
+        let sanctioned = line == "push r14"
+            || line == "pop r14"
+            || line.starts_with("lea r14, [rip + _rt_ctx]")
+            // whole-register save/restore through a frame slot
+            || line.starts_with("mov r14, QWORD PTR [")
+            || line.ends_with(", r14")
+            // ctx-relative access
+            || ((line.starts_with("mov ") || line.starts_with("lea "))
+                && line.contains("[r14 +"));
+        if !sanctioned {
+            offenders.push(line.to_string());
+        }
+    }
+    // A SHRINKING baseline, not a clean gate yet. What is left is one role:
+    // `len_reg` in the invoker's indexed-array path, which holds the argument
+    // count across `__rt_array_new` while the tail array is built. The allocator
+    // is itself a ctx helper, so a length parked in r14 corrupts the pointer it
+    // reads. Fixing it needs a fourth survivable register the invoker does not
+    // have (r12 carries the callable, r13/r15/rbx are taken), so the length has
+    // to move to a frame slot or be reloaded from the array header — a change
+    // that deserves reading the invoker's frame rather than a guess.
+    //
+    // Until then the count may only go DOWN: a new borrow fails here at once.
+    const BASELINE: usize = 7;
+    assert!(
+        offenders.len() <= BASELINE,
+        "--rt-ctx user codegen grew its r14 debt: {} offenders (baseline {BASELINE}). \
+         Compiled PHP reads per-context state through r14, so a callback invoked with \
+         a borrowed r14 faults on its first heap access:\n{}",
+        offenders.len(),
+        offenders.join("\n")
+    );
+    assert!(
+        offenders.len() >= BASELINE,
+        "--rt-ctx user codegen r14 debt shrank to {} — lower BASELINE to match, and \
+         switch to a zero-tolerance assertion once it reaches 0.",
+        offenders.len()
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// `--rt-ctx` selects the ctx-register runtime mode: the emitted main entry
 /// must install the per-context state pointer by calling `__rt_ctx_init`
 /// before any user statement runs.
