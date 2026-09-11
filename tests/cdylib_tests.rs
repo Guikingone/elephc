@@ -2378,6 +2378,16 @@ uint64_t probe_add_i64(int64_t a, int64_t b);
 
 #define SENTINEL 0x1234567890ABCDEFULL
 
+/* Mach-O prefixes C symbols with an underscore and ELF does not, so the name the
+   assembly calls differs by platform. Hardcoding the Mach-O spelling passed on macOS
+   and failed the linux-aarch64 shard with
+   `undefined reference to \`_add_i64\`` — a link error, so the sentinel never ran at all. */
+#if defined(__APPLE__)
+#define CSYM(name) "_" name
+#else
+#define CSYM(name) name
+#endif
+
 #if defined(__aarch64__)
 __asm__(
 "    .text\n"
@@ -2394,7 +2404,7 @@ __asm__(
 "    movk x28, #0x90AB, lsl #16\n"
 "    movk x28, #0x5678, lsl #32\n"
 "    movk x28, #0x1234, lsl #48\n"
-"    bl _add_i64\n"
+"    bl " CSYM("add_i64") "\n"
 "    mov x0, x28\n"
 "    ldr x28, [sp, #0]\n"
 "    ldp x29, x30, [sp, #16]\n"
@@ -2411,7 +2421,7 @@ __asm__(
 "    push %r14\n"
 "    push %r15\n"
 "    movabs $0x1234567890ABCDEF, %r14\n"
-"    call add_i64\n"
+"    call " CSYM("add_i64") "\n"
 "    mov %r14, %rax\n"
 "    pop %r15\n"
 "    pop %r14\n"
