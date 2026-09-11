@@ -108024,7 +108024,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -108547,7 +108547,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
