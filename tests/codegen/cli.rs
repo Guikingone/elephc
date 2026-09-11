@@ -60,6 +60,88 @@ echo strlen($text), count($even), $viaCufa, $viaChild, $fromGen, $suspended, $fi
 ///
 /// This compiles a deliberately broad program for x86_64 and applies the same
 /// sanctioned-shape rule to what comes out.
+/// Removes every `[...]` memory operand that addresses through `register`.
+///
+/// What remains is the instruction's register operands, which is where a reserved register
+/// can actually be lost. `cmp rsp, QWORD PTR [r14 + 128]` becomes `cmp rsp, QWORD PTR`,
+/// naming r14 nowhere — it only read through it. `mov r14, rax` is untouched and still
+/// names it, because that one overwrites the context pointer.
+fn strip_memory_operands_using(line: &str, register: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        let Some(close) = rest[open..].find(']') else {
+            break;
+        };
+        let operand = &rest[open..open + close + 1];
+        out.push_str(&rest[..open]);
+        // Keep an operand that does NOT use the register: it may still name it elsewhere.
+        if !operand
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| token == register)
+        {
+            out.push_str(operand);
+        }
+        rest = &rest[open + close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// THE ROLE RULE ACCEPTS EVERY CTX ACCESS AND STILL REFUSES EVERY BORROW.
+///
+/// The scan below judges whether `r14` survives once the memory operands that merely
+/// address through it are removed. That rule replaced an enumerated allowlist of
+/// mnemonics, which called `cmp rsp, QWORD PTR [r14 + N]` a violation seventeen times the
+/// moment the stack guard started reading this context's floor — a correct instruction the
+/// list had no entry for.
+///
+/// A looser rule is worthless, so this pins both directions on shapes that actually occur.
+/// Note the last refusal: `mov r14, QWORD PTR [rax]` installs whatever `rax` held as the
+/// context pointer, and the old allowlist SANCTIONED it, because it began with
+/// `mov r14, QWORD PTR [`. Widening the rule closed that hole rather than opening one.
+#[test]
+fn the_ctx_register_role_rule_separates_access_from_borrowing() {
+    let reads_through_it = [
+        "cmp rsp, QWORD PTR [r14 + 128]",
+        "mov rax, QWORD PTR [r14 + 72]",
+        "lea r8, [r14 + 4096]",
+        "mov QWORD PTR [r14 + 176], 0",
+        "add QWORD PTR [r14 + 144], 1",
+    ];
+    for line in reads_through_it {
+        let remainder = strip_memory_operands_using(line, "r14");
+        let still_named = remainder
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| matches!(token, "r14" | "r14d" | "r14w" | "r14b"));
+        assert!(
+            !still_named,
+            "`{line}` only reads per-context state through r14; the rule must accept it \
+             (left `{remainder}`)"
+        );
+    }
+
+    let borrows_it = [
+        "mov r14, rax",
+        "xor r14d, r14d",
+        "add r14, 8",
+        "movzx r14d, BYTE PTR [rsi]",
+        // The one the previous allowlist waved through.
+        "mov r14, QWORD PTR [rax]",
+    ];
+    for line in borrows_it {
+        let remainder = strip_memory_operands_using(line, "r14");
+        let still_named = remainder
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| matches!(token, "r14" | "r14d" | "r14w" | "r14b"));
+        assert!(
+            still_named,
+            "`{line}` overwrites the context pointer; the rule must still catch it \
+             (left `{remainder}`)"
+        );
+    }
+}
+
 #[test]
 fn test_cli_rt_ctx_user_codegen_never_scratches_the_ctx_register() {
     let dir = make_cli_test_dir("elephc_cli_rt_ctx_user_codegen");
@@ -94,15 +176,28 @@ fn test_cli_rt_ctx_user_codegen_never_scratches_the_ctx_register() {
         if !mentions_r14 {
             continue;
         }
-        let sanctioned = line == "push r14"
+        // THE RULE IS ABOUT THE REGISTER'S ROLE, NOT THE MNEMONIC. Reading per-context
+        // state THROUGH r14 is the whole point of ctx mode, and the set of instructions
+        // that do it grows: routing the stack guard added `cmp rsp, QWORD PTR [r14 + N]`,
+        // which an enumerated allowlist of `mov`/`lea` called a violation 17 times. What
+        // must never happen is r14 becoming a DESTINATION — that is what loses the
+        // context. So strip the memory operands that merely address through it, and judge
+        // what is left.
+        let without_ctx_addressing = strip_memory_operands_using(line, "r14");
+        let still_names_r14 = without_ctx_addressing
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| matches!(token, "r14" | "r14d" | "r14w" | "r14b"));
+        let sanctioned = !still_names_r14
+            // The publication itself, and the whole-register save/restore pair a foreign
+            // entry uses. A restore must come from the frame, not from an arbitrary
+            // pointer: `mov r14, QWORD PTR [rax]` would install whatever rax held.
+            || line == "push r14"
             || line == "pop r14"
             || line.starts_with("lea r14, [rip + _rt_ctx]")
-            // whole-register save/restore through a frame slot
-            || line.starts_with("mov r14, QWORD PTR [")
-            || line.ends_with(", r14")
-            // ctx-relative access
-            || ((line.starts_with("mov ") || line.starts_with("lea "))
-                && line.contains("[r14 +"));
+            || line.starts_with("mov r14, QWORD PTR [rbp")
+            || line.starts_with("mov r14, QWORD PTR [rsp")
+            // r14 as a SOURCE — saving it, or comparing against it — never loses it.
+            || line.ends_with(", r14");
         if !sanctioned {
             offenders.push(line.to_string());
         }
