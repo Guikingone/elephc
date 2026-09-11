@@ -142,6 +142,8 @@ pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
         "elephc_pcre2_v1_compile",
         "elephc_pcre2_v1_exec",
         "elephc_pcre2_v1_free",
+        "elephc_pcre2_v1_name_count",
+        "elephc_pcre2_v1_group_name",
     ]
     .into_iter()
     .enumerate()

@@ -11,7 +11,7 @@
 //! - Subject and pattern bytes are passed through the registered provider as C strings.
 //! - Match offsets are byte offsets into the original subject, matching PHP capture arrays.
 
-use std::ffi::{c_int, c_void, CString};
+use std::ffi::{c_char, c_int, c_void, CString};
 use std::marker::PhantomData;
 
 use super::super::super::EvalStatus;
@@ -85,6 +85,32 @@ impl Regex {
     /// Returns the number of capture slots including the full match at index 0.
     pub(in crate::interpreter) fn captures_len(&self) -> usize {
         self.capture_slots
+    }
+
+    /// Returns how many capture groups this compiled pattern named.
+    ///
+    /// Zero means `$matches` stays PHP's plain indexed array; PCRE2 owns the
+    /// name table, so this never re-derives names by parsing the pattern.
+    pub(in crate::interpreter) fn name_count(&self) -> usize {
+        let count = unsafe { (self.provider.name_count)(self.handle) };
+        usize::try_from(count).unwrap_or(0)
+    }
+
+    /// Returns the declared name for one capture-group index, if PCRE2's
+    /// name table has one, as raw bytes (PCRE2 group names are ASCII, but
+    /// bytes avoid an unnecessary UTF-8 validation panic).
+    pub(in crate::interpreter) fn group_name(&self, group: usize) -> Option<Vec<u8>> {
+        let group = u64::try_from(group).ok()?;
+        let mut name_ptr: *const c_char = std::ptr::null();
+        let mut name_len: u64 = 0;
+        let status =
+            unsafe { (self.provider.group_name)(self.handle, group, &mut name_ptr, &mut name_len) };
+        if status != 0 || name_ptr.is_null() {
+            return None;
+        }
+        let len = usize::try_from(name_len).ok()?;
+        let bytes = unsafe { std::slice::from_raw_parts(name_ptr.cast::<u8>(), len) };
+        Some(bytes.to_vec())
     }
 
     /// Returns the first capture set for this regex and subject.

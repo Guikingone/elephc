@@ -139,13 +139,20 @@ pub(in crate::interpreter) fn eval_preg_match_capture_result(
     let offset_capture = flags & EVAL_PREG_OFFSET_CAPTURE != 0;
     let unmatched_as_null = flags & EVAL_PREG_UNMATCHED_AS_NULL != 0;
     let Some(offset) = eval_preg_start_offset(offset, subject.len(), values)? else {
-        let matches =
-            eval_preg_capture_array(&subject, None, offset_capture, unmatched_as_null, values)?;
+        let matches = eval_preg_capture_array(
+            &subject,
+            &regex,
+            None,
+            offset_capture,
+            unmatched_as_null,
+            values,
+        )?;
         return Ok((values.bool_value(false)?, matches));
     };
     if let Some(captures) = regex.captures_at(&subject, offset) {
         let matches = eval_preg_capture_array(
             &subject,
+            &regex,
             Some(&captures),
             offset_capture,
             unmatched_as_null,
@@ -154,8 +161,14 @@ pub(in crate::interpreter) fn eval_preg_match_capture_result(
         let matched = values.int(1)?;
         return Ok((matched, matches));
     }
-    let matches =
-        eval_preg_capture_array(&subject, None, offset_capture, unmatched_as_null, values)?;
+    let matches = eval_preg_capture_array(
+        &subject,
+        &regex,
+        None,
+        offset_capture,
+        unmatched_as_null,
+        values,
+    )?;
     let matched = values.int(0)?;
     Ok((matched, matches))
 }

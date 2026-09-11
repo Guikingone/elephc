@@ -24,6 +24,11 @@ pub(crate) type RegexExecFn =
     unsafe extern "C" fn(*mut c_void, *const c_char, u64, *mut i64, u32) -> i32;
 /// Releases one opaque regex handle.
 pub(crate) type RegexFreeFn = unsafe extern "C" fn(*mut c_void);
+/// Returns how many capture groups a compiled regex named.
+pub(crate) type RegexNameCountFn = unsafe extern "C" fn(*mut c_void) -> u64;
+/// Resolves a compiled regex's declared name for one capture group, if any.
+pub(crate) type RegexGroupNameFn =
+    unsafe extern "C" fn(*mut c_void, u64, *mut *const c_char, *mut u64) -> i32;
 
 /// Registered callback table for the managed regex implementation.
 #[derive(Clone, Copy)]
@@ -31,6 +36,8 @@ pub(crate) struct RegexProvider {
     pub(crate) compile: RegexCompileFn,
     pub(crate) exec: RegexExecFn,
     pub(crate) free: RegexFreeFn,
+    pub(crate) name_count: RegexNameCountFn,
+    pub(crate) group_name: RegexGroupNameFn,
 }
 
 /// Process-wide provider selected before the first dynamic eval executes.
@@ -45,11 +52,15 @@ pub extern "C" fn __elephc_eval_register_regex_provider(
     compile: RegexCompileFn,
     exec: RegexExecFn,
     free: RegexFreeFn,
+    name_count: RegexNameCountFn,
+    group_name: RegexGroupNameFn,
 ) -> i32 {
     let _ = REGEX_PROVIDER.set(RegexProvider {
         compile,
         exec,
         free,
+        name_count,
+        group_name,
     });
     i32::from(regex_provider().is_some())
 }
@@ -94,6 +105,9 @@ mod test_provider {
     const REG_NOMATCH: i32 = 17;
     const REG_STARTEND: u32 = 0x0080;
     const ELEPHC_PCRE2_CFLAG_ANCHORED: u32 = 0x2000;
+    const PCRE2_INFO_NAMECOUNT: u32 = 17;
+    const PCRE2_INFO_NAMEENTRYSIZE: u32 = 18;
+    const PCRE2_INFO_NAMETABLE: u32 = 19;
 
     /// PCRE2 POSIX `regex_t` layout for the supported host wrapper ABI.
     #[repr(C)]
@@ -134,6 +148,9 @@ mod test_provider {
         ) -> c_int;
         /// Releases host PCRE2 resources.
         fn pcre2_regfree(regex: *mut Pcre2Regex);
+        /// Reads compile-time metadata (name table) off a compiled pattern.
+        #[link_name = "pcre2_pattern_info_8"]
+        fn pcre2_pattern_info(code: *const c_void, what: u32, where_: *mut c_void) -> c_int;
     }
 
     /// Returns the test-only provider callback table.
@@ -142,6 +159,8 @@ mod test_provider {
             compile,
             exec,
             free,
+            name_count,
+            group_name,
         }
     }
 
@@ -276,5 +295,84 @@ mod test_provider {
         }
         let mut handle = unsafe { Box::from_raw(opaque_handle.cast::<TestRegexHandle>()) };
         unsafe { pcre2_regfree(&mut handle.regex) };
+    }
+
+    /// Returns how many capture groups this test regex named, mirroring
+    /// `elephc_pcre2_v1_name_count` in the production shim.
+    unsafe extern "C" fn name_count(opaque_handle: *mut c_void) -> u64 {
+        if opaque_handle.is_null() {
+            return 0;
+        }
+        let handle = unsafe { &*opaque_handle.cast::<TestRegexHandle>() };
+        let code = handle.regex.re_pcre2_code;
+        if code.is_null() {
+            return 0;
+        }
+        let mut count: u32 = 0;
+        let status = unsafe { pcre2_pattern_info(code, PCRE2_INFO_NAMECOUNT, (&mut count as *mut u32).cast()) };
+        if status != 0 {
+            return 0;
+        }
+        u64::from(count)
+    }
+
+    /// Resolves the declared name for one capture group index, mirroring
+    /// `elephc_pcre2_v1_group_name` in the production shim byte for byte.
+    unsafe extern "C" fn group_name(
+        opaque_handle: *mut c_void,
+        group: u64,
+        name_out: *mut *const c_char,
+        name_len_out: *mut u64,
+    ) -> i32 {
+        if !name_out.is_null() {
+            unsafe { *name_out = std::ptr::null() };
+        }
+        if !name_len_out.is_null() {
+            unsafe { *name_len_out = 0 };
+        }
+        if opaque_handle.is_null() || name_out.is_null() || name_len_out.is_null() || group > 0xFFFF {
+            return 1;
+        }
+        let handle = unsafe { &*opaque_handle.cast::<TestRegexHandle>() };
+        let code = handle.regex.re_pcre2_code;
+        if code.is_null() {
+            return 1;
+        }
+        let mut count: u32 = 0;
+        let mut entry_size: u32 = 0;
+        let mut table: *const u8 = std::ptr::null();
+        unsafe {
+            if pcre2_pattern_info(code, PCRE2_INFO_NAMECOUNT, (&mut count as *mut u32).cast()) != 0 {
+                return 1;
+            }
+            if pcre2_pattern_info(code, PCRE2_INFO_NAMEENTRYSIZE, (&mut entry_size as *mut u32).cast()) != 0 {
+                return 1;
+            }
+            if pcre2_pattern_info(code, PCRE2_INFO_NAMETABLE, (&mut table as *mut *const u8).cast()) != 0 {
+                return 1;
+            }
+        }
+        if count == 0 || entry_size < 3 || table.is_null() {
+            return 1;
+        }
+        for index in 0..count {
+            let entry = unsafe { table.add(index as usize * entry_size as usize) };
+            let entry_group = (u32::from(unsafe { *entry }) << 8) | u32::from(unsafe { *entry.add(1) });
+            if entry_group != group as u32 {
+                continue;
+            }
+            let name_ptr = unsafe { entry.add(2) };
+            let limit = entry_size as usize - 2;
+            let mut length = 0usize;
+            while length < limit && unsafe { *name_ptr.add(length) } != 0 {
+                length += 1;
+            }
+            unsafe {
+                *name_out = name_ptr.cast::<c_char>();
+                *name_len_out = length as u64;
+            }
+            return 0;
+        }
+        1
     }
 }

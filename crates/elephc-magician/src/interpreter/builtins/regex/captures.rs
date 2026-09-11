@@ -28,9 +28,17 @@ pub(in crate::interpreter) fn eval_preg_start_offset(
     Ok((start <= subject_len).then_some(start))
 }
 
-/// Builds PHP's indexed `$matches` capture array for one regex result.
+/// Builds PHP's `$matches` capture array for one regex result.
+///
+/// When `regex` declared no named groups this stays PHP's plain indexed
+/// array (unchanged from before named-group support existed). When it did,
+/// PHP's `$matches` becomes an ordered hash: each named group's own key is
+/// written immediately before its numeric twin, in ascending capture-group
+/// order — PCRE2's own name table decides which indices are named, so this
+/// never re-derives names by parsing the pattern itself.
 pub(in crate::interpreter) fn eval_preg_capture_array(
     subject: &[u8],
+    regex: &Regex,
     captures: Option<&Captures<'_>>,
     offset_capture: bool,
     unmatched_as_null: bool,
@@ -39,10 +47,27 @@ pub(in crate::interpreter) fn eval_preg_capture_array(
     let len = captures.map_or(0, |captures| {
         eval_preg_visible_capture_len(captures, unmatched_as_null)
     });
-    let mut result = values.array_new(len)?;
+    if regex.name_count() == 0 {
+        let mut result = values.array_new(len)?;
+        if let Some(captures) = captures {
+            for index in 0..len {
+                let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+                let value = eval_preg_capture_value(
+                    subject,
+                    captures,
+                    index,
+                    offset_capture,
+                    unmatched_as_null,
+                    values,
+                )?;
+                result = values.array_set(result, key, value)?;
+            }
+        }
+        return Ok(result);
+    }
+    let mut result = values.assoc_new(len.saturating_mul(2))?;
     if let Some(captures) = captures {
         for index in 0..len {
-            let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
             let value = eval_preg_capture_value(
                 subject,
                 captures,
@@ -51,7 +76,12 @@ pub(in crate::interpreter) fn eval_preg_capture_array(
                 unmatched_as_null,
                 values,
             )?;
-            result = values.array_set(result, key, value)?;
+            if let Some(name) = regex.group_name(index) {
+                let name_key = values.string_bytes_value(&name)?;
+                result = values.array_set(result, name_key, value)?;
+            }
+            let index_key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            result = values.array_set(result, index_key, value)?;
         }
     }
     Ok(result)

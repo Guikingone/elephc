@@ -38,6 +38,7 @@ mod builtins_process_pipes;
 mod builtins_raw_memory;
 mod builtins_readline;
 mod builtins_reflection_functions;
+mod builtins_regex_named_groups;
 mod builtins_scalars;
 mod globals_array;
 mod builtins_spl_autoload;

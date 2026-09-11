@@ -178,7 +178,8 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_result_with_count_from_
             continue;
         };
         result.extend_from_slice(&subject[cursor..matched.start()]);
-        let matches = eval_preg_capture_array(&subject, Some(&captures), false, false, values)?;
+        let matches =
+            eval_preg_capture_array(&subject, &regex, Some(&captures), false, false, values)?;
         let callback_result =
             eval_evaluated_callable_with_values(&callback, vec![matches], context, values)?;
         let callback_result = values.cast_string(callback_result)?;
