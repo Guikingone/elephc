@@ -812,18 +812,28 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&comm_directive("_cstr_buf", 4096, target));
         out.push_str(&comm_directive("_cstr_buf2", 4096, target));
     }
-    out.push_str(&comm_directive("_eof_flags", 256, target));
-    out.push_str(&comm_directive("_popen_files", 2048, target));
-    out.push_str(&comm_directive("_dir_handles", 2048, target));
+    // Per-context in ctx-register mode. A spawned task runs arbitrary PHP and can call
+    // opendir(), so it can open resources — which by the plan's criterion makes these
+    // per-context. The consequence is deliberate: a descriptor opened in one context is
+    // not visible in another's tables, so a resource handle joins the values that cannot
+    // cross a context boundary. Sharing the tables instead would mean two contexts writing
+    // the same slot for the same fd number.
+    if !ctx_register {
+        out.push_str(&comm_directive("_eof_flags", 256, target));
+        out.push_str(&comm_directive("_popen_files", 2048, target));
+        out.push_str(&comm_directive("_dir_handles", 2048, target));
+    }
     // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
     // a heap-allocated glob_state struct (pathv ptr + pathc + index + the
     // libc glob_t whose lifetime globfree() needs at closedir time). The
     // readdir/closedir/rewinddir helpers probe this table first; a non-zero
     // entry routes them through the glob iterator instead of the libc DIR*.
-    out.push_str(&comm_directive("_glob_handles", 2048, target));
-    out.push_str(&comm_directive("_stream_read_filters", 256, target));
-    out.push_str(&comm_directive("_stream_write_filters", 256, target));
-    out.push_str(&comm_directive("_stream_filter_buf", 65536, target));
+    if !ctx_register {
+        out.push_str(&comm_directive("_glob_handles", 2048, target));
+        out.push_str(&comm_directive("_stream_read_filters", 256, target));
+        out.push_str(&comm_directive("_stream_write_filters", 256, target));
+        out.push_str(&comm_directive("_stream_filter_buf", 65536, target));
+    }
     // 64KB scratch used by length-growing stream filters (convert.base64-encode,
     // convert.quoted-printable-encode). The filter encodes into the scratch and
     // then memcpy()s back into the caller's buffer, capping input at 49152 bytes
@@ -839,7 +849,9 @@ pub(crate) fn emit_runtime_data_fixed(
     // bzip2.compress write-filter state: per-fd bz_stream pointer table
     // (_bzstream_handles, indexed by fd) plus the indirect fn-pointer slots the
     // shared runtime calls through so non-bzip2 programs never link -lbz2.
-    out.push_str(&comm_directive("_bzstream_handles", 2048, target));
+    if !ctx_register {
+        out.push_str(&comm_directive("_bzstream_handles", 2048, target));
+    }
     out.push_str(&comm_directive("_bz2_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_bz2_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_bz2_decompress_fn", 8, target));

@@ -156,6 +156,35 @@ pub(crate) const CTX_OB_CHUNK_SIZES_OFFSET: usize = CTX_OB_NAME_LENS_OFFSET + CT
 pub(crate) const CTX_OB_FLAGS_OFFSET: usize = CTX_OB_CHUNK_SIZES_OFFSET + CTX_OB_TABLE_SIZE;
 pub(crate) const CTX_OB_STARTED_OFFSET: usize = CTX_OB_FLAGS_OFFSET + CTX_OB_TABLE_SIZE;
 
+/// Per-descriptor resource tables, formerly `_eof_flags`, `_popen_files`,
+/// `_dir_handles`, `_glob_handles`, `_bzstream_handles` and the two stream-filter
+/// tables.
+///
+/// PER-CONTEXT, by the plan's own criterion: "per-context if a thread may open
+/// resources". A spawned task runs arbitrary PHP, so it can call `opendir()` — so it can.
+///
+/// The consequence is worth stating rather than discovering: a descriptor opened in one
+/// context is not visible in another's tables. That is the transfer contract, not a gap —
+/// a resource handle joins the values that cannot cross a context boundary, refused at
+/// compile time like the rest. Sharing the tables instead would mean two contexts writing
+/// the same slot for the same fd number, which is a data race, not a feature.
+pub(crate) const CTX_EOF_FLAGS_SIZE: usize = 256;
+pub(crate) const CTX_HANDLE_TABLE_SIZE: usize = 2048;
+pub(crate) const CTX_FILTER_TABLE_SIZE: usize = 256;
+
+pub(crate) const CTX_EOF_FLAGS_OFFSET: usize = CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE;
+pub(crate) const CTX_POPEN_FILES_OFFSET: usize = CTX_EOF_FLAGS_OFFSET + CTX_EOF_FLAGS_SIZE;
+pub(crate) const CTX_DIR_HANDLES_OFFSET: usize =
+    CTX_POPEN_FILES_OFFSET + CTX_HANDLE_TABLE_SIZE;
+pub(crate) const CTX_GLOB_HANDLES_OFFSET: usize =
+    CTX_DIR_HANDLES_OFFSET + CTX_HANDLE_TABLE_SIZE;
+pub(crate) const CTX_BZSTREAM_HANDLES_OFFSET: usize =
+    CTX_GLOB_HANDLES_OFFSET + CTX_HANDLE_TABLE_SIZE;
+pub(crate) const CTX_STREAM_READ_FILTERS_OFFSET: usize =
+    CTX_BZSTREAM_HANDLES_OFFSET + CTX_HANDLE_TABLE_SIZE;
+pub(crate) const CTX_STREAM_WRITE_FILTERS_OFFSET: usize =
+    CTX_STREAM_READ_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE;
+
 /// The C-string scratch pair, formerly `_cstr_buf` / `_cstr_buf2` (4 KiB each).
 ///
 /// `__rt_cstr` copies a PHP string into one of these to hand a NUL-terminated pointer to
@@ -170,7 +199,7 @@ pub(crate) const CTX_OB_STARTED_OFFSET: usize = CTX_OB_FLAGS_OFFSET + CTX_OB_TAB
 /// cost a second instruction on every use, or fail to assemble.
 pub(crate) const CTX_CSTR_BUF_SIZE: usize = 4096;
 pub(crate) const CTX_CSTR_BUF_OFFSET: usize =
-    (CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE + 4095) & !4095;
+    (CTX_STREAM_WRITE_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE + 4095) & !4095;
 pub(crate) const CTX_CSTR_BUF2_OFFSET: usize = CTX_CSTR_BUF_OFFSET + CTX_CSTR_BUF_SIZE;
 
 pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_CSTR_BUF2_OFFSET + CTX_CSTR_BUF_SIZE;
@@ -183,12 +212,18 @@ pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_CSTR_BUF2_OFFSET + CTX_CSTR_
 pub(crate) const CTX_PRINT_R_BUF_OFFSET: usize =
     CTX_CONCAT_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY;
 
+/// The length-growing stream filters' 64 KiB scratch, formerly `_stream_filter_buf`.
+/// Per-context for the same reason as the C-string pair: it is scratch a filter encodes
+/// into mid-call, and two contexts filtering at once would overwrite each other.
+pub(crate) const CTX_STREAM_FILTER_BUF_OFFSET: usize =
+    CTX_PRINT_R_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY;
+
 /// Total byte size of one `_rt_ctx` instance (16-byte aligned).
 ///
 /// Covers the leading scalar fields, the four small-bin heads, and the closing
 /// 64 KiB concat scratch buffer.
 pub(crate) const CTX_SIZE: usize =
-    (CTX_PRINT_R_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY + 15) & !15;
+    (CTX_STREAM_FILTER_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY + 15) & !15;
 
 /// Returns the reserved ctx-pointer register name for the target.
 ///
@@ -461,6 +496,14 @@ const PER_CONTEXT_SYMBOLS: &[(&str, usize)] = &[
     ("_ob_chunk_sizes", CTX_OB_CHUNK_SIZES_OFFSET),
     ("_ob_flags", CTX_OB_FLAGS_OFFSET),
     ("_ob_started", CTX_OB_STARTED_OFFSET),
+    ("_eof_flags", CTX_EOF_FLAGS_OFFSET),
+    ("_popen_files", CTX_POPEN_FILES_OFFSET),
+    ("_dir_handles", CTX_DIR_HANDLES_OFFSET),
+    ("_glob_handles", CTX_GLOB_HANDLES_OFFSET),
+    ("_bzstream_handles", CTX_BZSTREAM_HANDLES_OFFSET),
+    ("_stream_read_filters", CTX_STREAM_READ_FILTERS_OFFSET),
+    ("_stream_write_filters", CTX_STREAM_WRITE_FILTERS_OFFSET),
+    ("_stream_filter_buf", CTX_STREAM_FILTER_BUF_OFFSET),
 ];
 
 /// The ctx field offset serving `symbol`, when this build routes it.
@@ -1019,7 +1062,14 @@ mod tests {
         // Ten handle tables of 512 bytes do not fit under 4 KiB beside the scalars, and
         // that is fine: `emit_ctx_address` splits an offset above the imm12 window into two
         // encodable adds. What must hold is only that the buffers start after them.
-        assert!(CTX_CSTR_BUF_OFFSET >= CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE);
+        assert_eq!(CTX_EOF_FLAGS_OFFSET, CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE);
+        assert_eq!(
+            CTX_STREAM_WRITE_FILTERS_OFFSET,
+            CTX_STREAM_READ_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE
+        );
+        assert!(
+            CTX_CSTR_BUF_OFFSET >= CTX_STREAM_WRITE_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE
+        );
         // The buffers follow, each on a 4 KiB boundary so its address stays one `add`.
         assert_eq!(CTX_CSTR_BUF_OFFSET % 4096, 0);
         assert_eq!(CTX_CSTR_BUF2_OFFSET % 4096, 0);
@@ -1028,6 +1078,10 @@ mod tests {
         assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_CSTR_BUF2_OFFSET + CTX_CSTR_BUF_SIZE);
         assert_eq!(CTX_PRINT_R_BUF_OFFSET, CTX_CONCAT_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY);
         assert_eq!(CTX_PRINT_R_BUF_OFFSET % 4096, 0);
+        assert_eq!(
+            CTX_STREAM_FILTER_BUF_OFFSET,
+            CTX_PRINT_R_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY
+        );
         // Every scalar offset must be encodable as ldr [x28, #imm] (imm12 ≤ 4095).
         for offset in [
             CTX_CONCAT_OFF_OFFSET,
@@ -1055,6 +1109,11 @@ mod tests {
         }
         assert!(CTX_SIZE >= CTX_CONCAT_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY);
         assert_eq!(CTX_SIZE % 16, 0);
+        // The context's size is a per-THREAD cost once M1 pools them, so it is pinned
+        // rather than left to drift. Three 64 KiB scratch buffers (concat, print_r capture,
+        // stream-filter) dominate it; the scalars and every handle table together are under
+        // 15 KiB. Allocating the scratch lazily is the obvious lever if this ever matters.
+        assert_eq!(CTX_SIZE, 221_184, "the per-context footprint changed");
         // The concat scratch dominates the context, so a ctx instance is ~64 KiB.
         assert!(CTX_SIZE > CTX_CONCAT_BUF_CAPACITY);
     }
