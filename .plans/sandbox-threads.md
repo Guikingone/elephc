@@ -272,6 +272,49 @@ emulated-amd64 bisection for one entry that should never have been there.
       legacy concat path. ⚠️ In ctx mode the question disappears (no legacy arm),
       so change nothing while legacy is the shipped mode.
 
+### Exceptions family — route at the accessor, not at the 245 call sites
+
+Proposed 2026-09-11, from the inventory above. The concat and heap migrations each
+switched their call sites one by one to dedicated `ctx::emit_*` helpers, because
+those needed address-taking with a specific register discipline — which is where
+the x6 and x9 borrows came from. The exception symbols do not: they are 8-byte
+scalar loads and stores, and **every** access goes through
+`abi::{emit_load_symbol_to_reg, emit_store_reg_to_symbol, emit_store_zero_to_symbol,
+emit_symbol_address}` — the ABI boundary included (`abi/bootstrap.rs`,
+`cdylib.rs`, `cdylib/boundary.rs` all use the same four).
+
+So the family can be routed INSIDE those four, on the symbol name, and the 245
+call sites do not change at all. What makes that safe is the tripwire the branch
+already relies on: in ctx builds the legacy symbols are simply not declared in the
+data section, so any path that still reaches `_exc_value` by name is a **link
+error**, not a silent read of the wrong thread's state. 245 unreviewed edits are
+exactly how round 4's five SIGSEGVs happened; zero edits with a link-time tripwire
+is a strictly better trade.
+
+Three things must be settled before writing it, none of them guesses:
+
+1. **The three hand-rolled sites** (`math.rs:696`, `math/binary.rs:252`,
+   `json_throw_error.rs:88`) bypass the accessors and so bypass the routing. They
+   are the whole residue, and the link tripwire catches them only if the symbol
+   name disappears — `json_throw_error` materializes the address two instructions
+   earlier, so its `str x0, [x9]` would survive a rename. Fix those three first,
+   by hand, before the routing lands.
+2. **Is the ctx register valid at the cdylib boundary?** The host's register is
+   saved and restored (`emit_ctx_save_foreign` / `emit_ctx_restore_foreign`) and
+   the arena is installed (`emit_ctx_install_default_arena`), but the exception
+   accesses in `cdylib/boundary.rs` sit around that install, not inside it. Order
+   has to be read, not assumed — an exception access before the install reads a
+   register the host owns.
+3. **Bootstrap ordering**: `abi/bootstrap.rs` zeroes `_exc_value` twice during
+   startup. If either runs before the ctx register is established, the routed
+   store writes through whatever the process started with.
+
+Verification for the family, both targets × both modes: the link tripwire
+(compile fails if any path still names the symbol), plus a user-codegen scan like
+`test_cli_rt_ctx_user_codegen_never_scratches_the_ctx_register` — the split is 82
+runtime / 56 user codegen for `_exc_value` alone, and round 4 established that an
+audit covering only the generated runtime covers about half the problem.
+
 ## API — arbitrated 2026-09-11
 
 Replaces the original `parallel_spawn()`/`parallel_join()` sketch. Prior study:
