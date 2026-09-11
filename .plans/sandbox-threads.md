@@ -137,6 +137,39 @@ Method note worth keeping: localizing those five needed **one binary per helper*
 A buffered stdout loses whatever it still holds when the process dies, so the last
 PASS line printed is NOT the last check that ran.
 
+### Round 5 — the two remaining red tests, and the audit hole underneath them
+
+Both were the same shape: a helper that parks `rbx` to satisfy the cross-call
+register contract, and a frame adjustment beside it that nothing checked.
+
+- **`__rt_spl_dll_shift` returned the alignment pad instead of the removed cell.**
+  Its epilogue read `pop rax` / `pop rbx` / `ret`, and the pop was commented "drop
+  the alignment pad before restoring rbx" — which it does, by restoring rax as it
+  was ON ENTRY, one instruction before the return. `emit_iterator_delete_step_x86_64`
+  calls the helper and hands the result straight to `__rt_decref_mixed`, so the
+  decref released whatever the caller left in rax. Green on every AArch64 host:
+  `emit_shift_aarch64` is frameless, parks nothing, has no pad. Fixed in all four
+  DLL helpers that park rbx (three return void and were never broken — changed
+  anyway, because the safe shape is the one that gets copied). ⇒ new
+  `no_x86_64_runtime_helper_drops_an_alignment_pad_into_rax`, flat rule over the
+  whole generated runtime, with `ALLOWED_POP_RAX` for the one legitimate case its
+  first run found (`__rt_pcntl_async_dispatch_preserving`, a safe-point wrapper
+  that saves and restores all fifteen general registers).
+- **The alignment audit was refusing to look at `__rt_vsprintf` for a
+  disagreement that was not one.** The walk merged paths by EXACT rsp offset and
+  gave up when two reached one instruction at different depths; vsprintf reaches
+  its formatting tail at -72 or -88 depending on whether the record loop ran. Both
+  are 8 mod 16 — the paths never disagreed about alignment, which is the only
+  thing the module measures. Merging modulo 16 un-shelves the helper and names the
+  branch's own bug directly: `__rt_vsprintf calls __rt_sprintf_pack_mixed … with
+  rsp -80 bytes past its entry (0 mod 16, needs 8)`. Measured by setting the frame
+  back to 72, not predicted.
+
+Lesson to carry into the remaining families: **every entry on a "cannot analyze"
+allowlist is a place where the next change goes unchecked.** Shrinking that list
+was worth more than any test added beside it — this branch paid a day of
+emulated-amd64 bisection for one entry that should never have been there.
+
 ## Remaining work (M0 → M1)
 
 ### Done during the review sessions
@@ -169,13 +202,12 @@ PASS line printed is NOT the last check that ran.
       The first x86_64 execution this branch ever had.
 
 ### Remaining M0
-- [ ] **Green linux-x86_64 CI.** Still red at the time of writing:
-      `codegen::spl::classes::test_phase4_spl_doubly_linked_list_delete_iteration_modes`
-      and the sprintf/vsprintf formatting family. `__rt_sprintf` and
-      `__rt_vsprintf` are both in the alignment audit's
-      `NOT_STATICALLY_ANALYZABLE` list, so nothing checked the frames the
-      branch changed there — `__rt_vsprintf` went `sub rsp, 64` → `72`, which
-      flips the call alignment (fixed to 80).
+- [ ] **Green linux-x86_64 CI.** Both known defects are fixed (round 5 above):
+      the DLL epilogues no longer pop the pad into rax, and `__rt_vsprintf`'s
+      frame is 80 and now guarded — it left `NOT_STATICALLY_ANALYZABLE` when the
+      walk started merging modulo 16. `__rt_sprintf` is still on that list
+      (genuinely dynamic frame: `lea rsp, [rsp + rcx + 16]`) and remains the one
+      formatting helper no audit covers. Awaiting the CI verdict on #958.
 - [ ] **Drop the `--rt-ctx` CLI flag** and make the ctx runtime unconditional.
       Decided 2026-09-11: the flag gives the user nothing observable (same
       program, same output, cost in the noise, smaller binary) — unlike
@@ -193,6 +225,19 @@ PASS line printed is NOT the last check that ran.
       1. **exceptions**: `_exc_handler_top`, `_exc_value`, `_exc_call_frame_top`
          — a thread that throws walks the MAIN thread's handler chain. Not "may
          corrupt": structurally wrong. **Blocks M1.**
+         *Inventory 2026-09-11 — the family is far cheaper than its site count.*
+         301 references across ~45 files, but **245 of them go through four
+         accessors**: `abi::emit_store_reg_to_symbol` (117),
+         `abi::emit_load_symbol_to_reg` (96), `abi::emit_store_zero_to_symbol`
+         (19) and `abi::emit_symbol_address` (12). Route those on the family name
+         and the migration is one change plus a hand-audit of the residue. The
+         residue is **three** hand-rolled accesses, all already located:
+         `lower_inst/builtins/math.rs:696` and `math/binary.rs:252`
+         (`mov QWORD PTR [rip + _exc_value], rax`, x86 only) and
+         `runtime/system/json_throw_error.rs:88` (`str x0, [x9]`, AArch64, the
+         address materialized two instructions earlier). Split roughly 82 runtime
+         / 56 user-codegen for `_exc_value` alone — so the tripwire has to cover
+         BOTH, the lesson round 4 paid five SIGSEGVs for.
       2. **fibers/stack**: `_fiber_current`, `_stack_limit`,
          `_fiber_main_saved_sp/_exc/_call_frame` — the stack guard compares
          against main's bounds, so a thread on its own mmap'd stack either never
