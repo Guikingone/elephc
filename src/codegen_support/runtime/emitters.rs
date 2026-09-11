@@ -30,6 +30,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // ctx-relative state; gated on the ctx-register spike feature.
     if features.ctx_register {
         ctx::emit_rt_ctx_init(emitter);
+        // The pool the M1 bridge calls to give a spawned task its own context.
+        ctx::emit_rt_ctx_pool(emitter);
     }
 
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all

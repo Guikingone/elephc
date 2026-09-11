@@ -156,6 +156,14 @@ pub(crate) const CTX_OB_CHUNK_SIZES_OFFSET: usize = CTX_OB_NAME_LENS_OFFSET + CT
 pub(crate) const CTX_OB_FLAGS_OFFSET: usize = CTX_OB_CHUNK_SIZES_OFFSET + CTX_OB_TABLE_SIZE;
 pub(crate) const CTX_OB_STARTED_OFFSET: usize = CTX_OB_FLAGS_OFFSET + CTX_OB_TABLE_SIZE;
 
+/// The address of this context's slot-state word in `_rt_ctx_state`, or 0 for a context
+/// that did not come from the pool (the main one).
+///
+/// Written by `__rt_ctx_acquire`, which already holds the address, so `__rt_ctx_release`
+/// needs no arithmetic to find it. The alternative — dividing the pointer's distance from
+/// the pool base by `CTX_SIZE` — buys nothing and costs a `udiv`.
+pub(crate) const CTX_POOL_STATE_PTR_OFFSET: usize = CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE;
+
 /// Per-descriptor resource tables, formerly `_eof_flags`, `_popen_files`,
 /// `_dir_handles`, `_glob_handles`, `_bzstream_handles` and the two stream-filter
 /// tables.
@@ -172,7 +180,7 @@ pub(crate) const CTX_EOF_FLAGS_SIZE: usize = 256;
 pub(crate) const CTX_HANDLE_TABLE_SIZE: usize = 2048;
 pub(crate) const CTX_FILTER_TABLE_SIZE: usize = 256;
 
-pub(crate) const CTX_EOF_FLAGS_OFFSET: usize = CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE;
+pub(crate) const CTX_EOF_FLAGS_OFFSET: usize = CTX_POOL_STATE_PTR_OFFSET + 8;
 pub(crate) const CTX_POPEN_FILES_OFFSET: usize = CTX_EOF_FLAGS_OFFSET + CTX_EOF_FLAGS_SIZE;
 pub(crate) const CTX_DIR_HANDLES_OFFSET: usize =
     CTX_POPEN_FILES_OFFSET + CTX_HANDLE_TABLE_SIZE;
@@ -222,6 +230,17 @@ pub(crate) const CTX_STREAM_FILTER_BUF_OFFSET: usize =
 ///
 /// Covers the leading scalar fields, the four small-bin heads, and the closing
 /// 64 KiB concat scratch buffer.
+/// How many execution contexts a binary can hold at once.
+///
+/// Eight is a starting point, not a measurement: M1's `Parallel\TaskGroup` has no
+/// implementation to size against yet. The cost is `CTX_POOL_SLOTS * CTX_SIZE` of
+/// zero-filled BSS — about 1.7 MiB at eight — which never reaches the image, since the
+/// pool is a common symbol like every other runtime global.
+///
+/// Slot 0 is the MAIN context: `__rt_ctx_init` takes it unconditionally, so the process
+/// always has one even if nothing ever spawns.
+pub(crate) const CTX_POOL_SLOTS: usize = 8;
+
 pub(crate) const CTX_SIZE: usize =
     (CTX_STREAM_FILTER_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY + 15) & !15;
 
@@ -331,6 +350,14 @@ pub fn emit_ctx_restore_foreign(emitter: &mut Emitter, frame_offset: usize) {
 /// and must zero the same fields the helper does.
 pub fn emit_ctx_zero_fields(emitter: &mut Emitter) {
     let ctx = ctx_reg(emitter);
+    emit_ctx_zero_fields_at(emitter, ctx);
+}
+
+/// Zeroes the mutable ctx fields through an ARBITRARY base register.
+///
+/// `__rt_ctx_acquire` prepares a slot for a caller that has not published it yet, so it
+/// cannot go through the ctx register — that one still belongs to the acquiring context.
+pub fn emit_ctx_zero_fields_at(emitter: &mut Emitter, ctx: &str) {
     for offset in [
         CTX_CONCAT_OFF_OFFSET,
         CTX_HEAP_OFF_OFFSET,
@@ -414,6 +441,118 @@ pub fn emit_rt_ctx_init(emitter: &mut Emitter) {
     emit_ctx_zero_fields(emitter);
     emit_ctx_install_default_arena(emitter);
     emitter.instruction("ret");
+}
+
+/// Emits `__rt_ctx_acquire` and `__rt_ctx_release`: the pool the M1 bridge will call.
+///
+/// `__rt_ctx_acquire(base, size) -> ctx*` claims a free slot, zeroes its mutable fields,
+/// installs the caller-supplied arena and returns the slot pointer — or 0 when the pool is
+/// exhausted. `__rt_ctx_release(ctx*)` marks the slot free again.
+///
+/// THE CLAIM IS ATOMIC, deliberately, even though nothing spawns a thread yet. A plain
+/// load/store pair would pass every test that can be written today and would be a race the
+/// first time two threads acquire at once — cheap to prevent, expensive to find. AArch64
+/// uses an `ldaxr`/`stlxr` pair, x86_64 a `lock cmpxchg`; both give the acquire/release
+/// ordering a slot hand-off needs.
+///
+/// NEITHER TOUCHES THE CTX REGISTER. Acquire prepares a slot for a caller that has not
+/// published it — the acquiring thread still owns its own context, and stomping the
+/// register here would lose it. Publication is the caller's job, which is why
+/// `emit_ctx_zero_fields_at` takes a base register.
+///
+/// THE ARENA IS A PARAMETER rather than `_heap_buf`, because that is the entire point: a
+/// second context must own different memory, or two contexts bump-allocate into one arena
+/// and hand out the same addresses. `__rt_ctx_init` keeps naming `_heap_buf`, for slot 0.
+pub fn emit_rt_ctx_pool(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: ctx_acquire (claim a pooled execution context) ---");
+    emitter.label_global("__rt_ctx_acquire");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            // x0 = arena base, x1 = arena size in bytes.
+            abi::emit_symbol_address(emitter, "x9", "_rt_ctx_state");               // x9 = this slot's state word
+            abi::emit_symbol_address(emitter, "x10", "_rt_ctx_pool");               // x10 = this slot's base
+            emitter.instruction(&format!("mov x11, #{}", CTX_POOL_SLOTS));          // x11 = slots left to try
+            emitter.label("__rt_ctx_acquire_slot");
+            emitter.instruction("cbz x11, __rt_ctx_acquire_exhausted");             // every slot taken
+            emitter.label("__rt_ctx_acquire_try");
+            emitter.instruction("ldaxr x12, [x9]");                                 // read the state with acquire ordering
+            emitter.instruction("cbnz x12, __rt_ctx_acquire_next");                 // already claimed: move on, write nothing
+            emitter.instruction("mov x13, #1");                                     // the claimed marker
+            emitter.instruction("stlxr w14, x13, [x9]");                            // publish the claim with release ordering
+            emitter.instruction("cbnz w14, __rt_ctx_acquire_try");                  // lost the exclusive: retry this slot
+            emit_ctx_zero_fields_at(emitter, "x10");                                // hand back a pristine context
+            emitter.instruction(&format!("str x9, [x10, #{}]", CTX_POOL_STATE_PTR_OFFSET)); // remember the slot for release
+            emitter.instruction(&format!("str x0, [x10, #{}]", CTX_HEAP_BASE_OFFSET)); // this context's own arena base
+            emitter.instruction("add x12, x0, x1");                                 // arena ceiling = base + size
+            emitter.instruction(&format!("str x12, [x10, #{}]", CTX_HEAP_MAX_OFFSET)); // this context's own arena ceiling
+            emitter.instruction("mov x0, x10");                                     // return the slot pointer
+            emitter.instruction("ret");
+            emitter.label("__rt_ctx_acquire_next");
+            emitter.instruction("add x9, x9, #8");                                  // next slot's state word
+            emitter.instruction(&format!("add x10, x10, #{}", CTX_SIZE));           // next slot's base (stride is 4 KiB-aligned)
+            emitter.instruction("sub x11, x11, #1");
+            emitter.instruction("b __rt_ctx_acquire_slot");
+            emitter.label("__rt_ctx_acquire_exhausted");
+            emitter.instruction("mov x0, #0");                                      // the pool is full; the caller decides what that means
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            // rdi = arena base, rsi = arena size in bytes.
+            abi::emit_symbol_address(emitter, "r8", "_rt_ctx_state");                // r8 = this slot's state word
+            abi::emit_symbol_address(emitter, "r9", "_rt_ctx_pool");                 // r9 = this slot's base
+            emitter.instruction(&format!("mov r10, {}", CTX_POOL_SLOTS));            // r10 = slots left to try
+            emitter.label("__rt_ctx_acquire_slot");
+            emitter.instruction("test r10, r10");
+            emitter.instruction("jz __rt_ctx_acquire_exhausted");                    // every slot taken
+            emitter.instruction("xor eax, eax");                                     // expect the slot to be free
+            emitter.instruction("mov edx, 1");                                       // the claimed marker
+            emitter.instruction("lock cmpxchg QWORD PTR [r8], rdx");                 // claim it, or learn it was taken
+            emitter.instruction("jnz __rt_ctx_acquire_next");                        // someone else holds it
+            emit_ctx_zero_fields_at(emitter, "r9");                                  // hand back a pristine context
+            emitter.instruction(&format!("mov QWORD PTR [r9 + {}], r8", CTX_POOL_STATE_PTR_OFFSET)); // remember the slot for release
+            emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rdi", CTX_HEAP_BASE_OFFSET)); // this context's own arena base
+            emitter.instruction("lea rax, [rdi + rsi]");                             // arena ceiling = base + size
+            emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", CTX_HEAP_MAX_OFFSET)); // this context's own arena ceiling
+            emitter.instruction("mov rax, r9");                                      // return the slot pointer
+            emitter.instruction("ret");
+            emitter.label("__rt_ctx_acquire_next");
+            emitter.instruction("add r8, 8");                                        // next slot's state word
+            emitter.instruction(&format!("add r9, {}", CTX_SIZE));                   // next slot's base
+            emitter.instruction("sub r10, 1");
+            emitter.instruction("jmp __rt_ctx_acquire_slot");
+            emitter.label("__rt_ctx_acquire_exhausted");
+            emitter.instruction("xor eax, eax");                                     // the pool is full; the caller decides what that means
+            emitter.instruction("ret");
+        }
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: ctx_release (return a pooled execution context) ---");
+    emitter.label_global("__rt_ctx_release");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            // x0 = a pointer __rt_ctx_acquire returned. A context that never came from the
+            // pool carries a zero back-pointer and is silently ignored, so releasing the
+            // main context is a no-op rather than a corruption.
+            emitter.instruction(&format!("ldr x9, [x0, #{}]", CTX_POOL_STATE_PTR_OFFSET)); // the slot's state word
+            emitter.instruction("cbz x9, __rt_ctx_release_done");                   // not pooled: nothing to hand back
+            emitter.instruction(&format!("str xzr, [x0, #{}]", CTX_POOL_STATE_PTR_OFFSET)); // forget the slot before freeing it
+            emitter.instruction("stlr xzr, [x9]");                                  // publish the release with release ordering
+            emitter.label("__rt_ctx_release_done");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            // rdi = a pointer __rt_ctx_acquire returned; a zero back-pointer means unpooled.
+            emitter.instruction(&format!("mov r8, QWORD PTR [rdi + {}]", CTX_POOL_STATE_PTR_OFFSET)); // the slot's state word
+            emitter.instruction("test r8, r8");
+            emitter.instruction("jz __rt_ctx_release_done");                         // not pooled: nothing to hand back
+            emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", CTX_POOL_STATE_PTR_OFFSET)); // forget the slot before freeing it
+            emitter.instruction("mov QWORD PTR [r8], 0");                            // x86 stores already carry release ordering
+            emitter.label("__rt_ctx_release_done");
+            emitter.instruction("ret");
+        }
+    }
 }
 
 /// Points this context's arena at the process-wide `_heap_buf`/`_heap_max` pair.
@@ -1062,7 +1201,12 @@ mod tests {
         // Ten handle tables of 512 bytes do not fit under 4 KiB beside the scalars, and
         // that is fine: `emit_ctx_address` splits an offset above the imm12 window into two
         // encodable adds. What must hold is only that the buffers start after them.
-        assert_eq!(CTX_EOF_FLAGS_OFFSET, CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE);
+        assert_eq!(CTX_POOL_STATE_PTR_OFFSET, CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE);
+        assert_eq!(CTX_EOF_FLAGS_OFFSET, CTX_POOL_STATE_PTR_OFFSET + 8);
+        // `__rt_ctx_acquire` steps between slots with `add xN, xN, #CTX_SIZE`, which AArch64
+        // encodes in one instruction only for a multiple of 4096. Pinned here because the
+        // helper would otherwise fail to assemble the moment the layout drifts off that grid.
+        assert_eq!(CTX_SIZE % 4096, 0, "the slot stride must stay encodable as an add immediate");
         assert_eq!(
             CTX_STREAM_WRITE_FILTERS_OFFSET,
             CTX_STREAM_READ_FILTERS_OFFSET + CTX_FILTER_TABLE_SIZE

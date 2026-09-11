@@ -1563,6 +1563,21 @@ pub(crate) fn emit_runtime_data_fixed(
             crate::codegen_support::runtime::ctx::CTX_SIZE,
             target,
         ));
+        // The pool `__rt_ctx_acquire` hands out from, plus one state word per slot.
+        // Common symbols like the rest: about 1.7 MiB of zeroes that never reach the
+        // image. Slot 0 is not the main context — `_rt_ctx` stays its own block, so a
+        // binary that never spawns pays only the BSS reservation.
+        out.push_str(&comm_directive(
+            "_rt_ctx_pool",
+            crate::codegen_support::runtime::ctx::CTX_SIZE
+                * crate::codegen_support::runtime::ctx::CTX_POOL_SLOTS,
+            target,
+        ));
+        out.push_str(&comm_directive(
+            "_rt_ctx_state",
+            8 * crate::codegen_support::runtime::ctx::CTX_POOL_SLOTS,
+            target,
+        ));
     }
 
     out
