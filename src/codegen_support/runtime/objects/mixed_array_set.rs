@@ -89,6 +89,9 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("cmp x9, #0");                                          // reject negative indexes before touching storage
     emitter.instruction("b.lt __rt_mixed_array_set_promote");                   // negative integer keys require associative PHP-array storage
+    emitter.instruction("ldr x13, [x10]");                                      // load the indexed array's current logical length
+    emitter.instruction("cmp x9, x13");                                         // would this write leave a gap in packed storage?
+    emitter.instruction("b.hi __rt_mixed_array_set_promote");                   // a key past the next append slot promotes to a hash like PHP (never pads)
     emitter.instruction("ldr x12, [x10, #-8]");                                 // load the packed indexed-array metadata
     emitter.instruction("ubfx x1, x12, #8, #7");                                // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov x0, x10");                                         // pass the indexed array to the Mixed conversion helper
@@ -338,6 +341,8 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
     emitter.instruction("cmp r9, 0");                                           // reject negative indexes before touching storage
     emitter.instruction("jl __rt_mixed_array_set_promote");                     // negative integer keys require associative PHP-array storage
+    emitter.instruction("cmp r9, QWORD PTR [r10]");                             // would this write leave a gap in packed storage?
+    emitter.instruction("ja __rt_mixed_array_set_promote");                     // a key past the next append slot promotes to a hash like PHP (never pads)
     emitter.instruction("mov r8, QWORD PTR [r10 - 8]");                         // load the packed indexed-array metadata
     emitter.instruction("shr r8, 8");                                           // move the value_type tag into the low byte
     emitter.instruction("and r8, 0x7f");                                        // isolate the runtime value_type tag

@@ -53,3 +53,5 @@ mod shape_transforms;
 mod sorting;
 #[path = "indexed/oob_reads.rs"]
 mod oob_reads;
+#[path = "indexed/sparse_int_key_promotion.rs"]
+mod sparse_int_key_promotion;

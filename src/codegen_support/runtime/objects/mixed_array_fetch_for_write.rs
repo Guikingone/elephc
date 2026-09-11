@@ -223,6 +223,9 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("cmp x9, #0");                                          // negative indexes are not representable in dense storage
     emitter.instruction("b.lt __rt_mixed_array_gfw_promote");                   // negative integer keys require associative PHP-array storage
+    emitter.instruction("ldr x14, [x10]");                                      // load the indexed array's current logical length
+    emitter.instruction("cmp x9, x14");                                         // would autovivifying this key leave a gap in packed storage?
+    emitter.instruction("b.hi __rt_mixed_array_gfw_promote");                   // a key past the next append slot promotes to a hash like PHP (never pads)
     emitter.instruction("ldr x12, [x10, #-8]");                                 // load the packed indexed-array metadata
     emitter.instruction("ubfx x1, x12, #8, #7");                                // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov x0, x10");                                         // pass the indexed array to the Mixed conversion helper
@@ -549,6 +552,8 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
     emitter.instruction("cmp r9, 0");                                           // negative indexes are not representable in dense storage
     emitter.instruction("jl __rt_mixed_array_gfw_promote");                     // negative integer keys require associative PHP-array storage
+    emitter.instruction("cmp r9, QWORD PTR [r10]");                             // would autovivifying this key leave a gap in packed storage?
+    emitter.instruction("ja __rt_mixed_array_gfw_promote");                     // a key past the next append slot promotes to a hash like PHP (never pads)
     emitter.instruction("mov r8, QWORD PTR [r10 - 8]");                         // load the packed indexed-array metadata
     emitter.instruction("shr r8, 8");                                           // shift the runtime element value_type tag into the low bits
     emitter.instruction("and r8, 0x7f");                                        // remove the persistent COW flag from the extracted tag

@@ -58,6 +58,13 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_push_str ---");
     emitter.label_global("__rt_array_push_str");
 
+    // -- a destination already promoted to hash storage (an earlier sparse/negative keyed
+    //    write converted it) appends at PHP's next integer key, not the packed length --
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed heap-kind/value_type word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low byte holding the storage kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = an earlier write already promoted this destination to a hash
+    emitter.instruction("b.eq __rt_array_push_str_already_hash");               // delegate to __rt_hash_append instead of walking packed storage
+
     // -- set up stack frame (needed for str_persist and potential growth) --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
@@ -116,6 +123,20 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_grow");                                  // double array capacity → x0 = new array
     emitter.instruction("str x0, [sp, #0]");                                    // update saved array pointer
     emitter.instruction("b __rt_array_push_str_push");                          // go push into the grown array
+
+    // -- destination already promoted to hash: append at PHP's next integer key --
+    emitter.label("__rt_array_push_str_already_hash");
+    emitter.instruction("sub sp, sp, #48");                                     // reserve a frame across the persist and hash_append calls
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a frame pointer for the nested helper calls
+    emitter.instruction("str x0, [sp, #0]");                                    // save the hash pointer across string persistence
+    emitter.instruction("bl __rt_str_persist");                                 // duplicate the appended string into owned heap storage
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer as the hash_append target
+    emitter.instruction("mov x3, #1");                                          // runtime value tag 1 = string payload
+    emitter.instruction("bl __rt_hash_append");                                 // insert at max(int keys) + 1, matching PHP's append rule
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return with x0 holding the current hash pointer
 }
 
 /// Emits the x86_64 Linux variant of the array push string runtime helper.
@@ -127,6 +148,13 @@ fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_push_str ---");
     emitter.label_global("__rt_array_push_str");
+
+    // -- a destination already promoted to hash storage (an earlier sparse/negative keyed
+    //    write converted it) appends at PHP's next integer key, not the packed length --
+    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the packed heap-kind/value_type word
+    emitter.instruction("and r10, 0xff");                                       // isolate the low byte holding the storage kind
+    emitter.instruction("cmp r10, 3");                                          // kind 3 = an earlier write already promoted this destination to a hash
+    emitter.instruction("je __rt_array_push_str_already_hash");                 // delegate to __rt_hash_append instead of walking packed storage
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving string-append spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved array pointer and string payload
@@ -177,4 +205,20 @@ fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_grow");                                // allocate a larger indexed-array backing store so the string append can proceed
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the grown indexed-array pointer before storing the owned string slot
     emitter.instruction("jmp __rt_array_push_str_store");                       // append the owned string payload into the grown indexed-array storage
+
+    // -- destination already promoted to hash: append at PHP's next integer key --
+    emitter.label("__rt_array_push_str_already_hash");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base across the persist and hash_append calls
+    emitter.instruction("sub rsp, 16");                                         // reserve one aligned slot for the hash pointer
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash pointer across string persistence
+    emitter.instruction("mov rax, rsi");                                        // move the incoming string pointer into the persist helper argument register
+    emitter.instruction("call __rt_str_persist");                               // duplicate the appended string into owned heap storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer as the hash_append target
+    emitter.instruction("mov rsi, rax");                                        // pass the persisted string pointer as the hash value low word
+    emitter.instruction("mov rcx, 1");                                          // runtime value tag 1 = string payload
+    emitter.instruction("call __rt_hash_append");                               // insert at max(int keys) + 1, matching PHP's append rule
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return with rax holding the current hash pointer
 }
