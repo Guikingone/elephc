@@ -264,7 +264,9 @@ emulated-amd64 bisection for one entry that should never have been there.
          three greps that produced that number all matched a SPELLING rather than
          the symbol: twelve sites took the two-step form
          (`emit_symbol_address(…, "x9", "_exc_value")` then a bare `str x0, [x9]`,
-         which puts the symbol on the line BEFORE the access), and a thirteenth
+         which puts the symbol on the line BEFORE the access — harmless once
+         `emit_symbol_address` is itself routed, as the GC family later
+         demonstrated, but invisible to a line-based grep), and a thirteenth
          hand-rolled store hid behind a line break separating `ctx.emitter` from
          `.instruction(`.
          **All fifteen are now routed** (`refactor(exceptions)`), with no change to

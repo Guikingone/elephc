@@ -480,7 +480,11 @@ pub(crate) fn emit_runtime_data_fixed(
         crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8,
         target,
     ));
-    out.push_str(&comm_directive("_gc_collecting", 8, target));
+    // Per-context in ctx-register mode: this is a re-entrancy LOCK, not a counter, and a
+    // shared flag would let one context's collection suppress another's.
+    if !ctx_register {
+        out.push_str(&comm_directive("_gc_collecting", 8, target));
+    }
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
     out.push_str(&comm_directive("_json_last_error", 8, target));
     out.push_str(&comm_directive("_json_active_flags", 8, target));
@@ -777,10 +781,19 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
     out.push_str(".globl _fiber_msg_switch_signal\n_fiber_msg_switch_signal:\n    .ascii \"Cannot switch fibers in current execution context\"\n");
     out.push_str(&emit_builtin_callable_data(target));
-    out.push_str(&comm_directive("_gc_allocs", 8, target));
-    out.push_str(&comm_directive("_gc_frees", 8, target));
-    out.push_str(&comm_directive("_gc_live", 8, target));
-    out.push_str(&comm_directive("_gc_peak", 8, target));
+    // Per-context in ctx-register mode. Each context owns its own arena, so a per-context
+    // count is the only number describing something real; a process-wide total would
+    // describe no single arena and would cost an atomic on the allocator's hottest path.
+    // `elephc_probe_allocs_ptr` still works: it publishes the ADDRESS of the counter, and
+    // `emit_symbol_address` hands it this context's field. The main prologue installs the
+    // ctx register (`__rt_ctx_init`) before `emit_probe_init` runs, so the address it
+    // publishes is established, not whatever the register held at process entry.
+    if !ctx_register {
+        out.push_str(&comm_directive("_gc_allocs", 8, target));
+        out.push_str(&comm_directive("_gc_frees", 8, target));
+        out.push_str(&comm_directive("_gc_live", 8, target));
+        out.push_str(&comm_directive("_gc_peak", 8, target));
+    }
     out.push_str(&comm_directive("_cstr_buf", 4096, target));
     out.push_str(&comm_directive("_cstr_buf2", 4096, target));
     out.push_str(&comm_directive("_eof_flags", 256, target));

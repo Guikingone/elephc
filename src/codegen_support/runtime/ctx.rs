@@ -109,7 +109,27 @@ pub(crate) const CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET: usize =
 pub(crate) const CTX_STACK_LIMIT_OFFSET: usize = CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET + 8;
 pub(crate) const CTX_STACK_LIMIT_MAIN_OFFSET: usize = CTX_STACK_LIMIT_OFFSET + 8;
 
-pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_STACK_LIMIT_MAIN_OFFSET + 8;
+/// Allocator bookkeeping, formerly `_gc_allocs` / `_gc_frees` / `_gc_live` / `_gc_peak`.
+///
+/// PER-CONTEXT, decided rather than inherited. Each context owns its own arena — no
+/// pointer crosses an arena boundary, which is the sandbox-threads rule the whole design
+/// rests on — so a per-context count is the only number that describes something real. A
+/// process-wide total would describe no single arena, and making it one would put an
+/// atomic on the allocator's hottest path to produce it. With one context the two answers
+/// are identical, so nothing observable changes today.
+pub(crate) const CTX_GC_ALLOCS_OFFSET: usize = CTX_STACK_LIMIT_MAIN_OFFSET + 8;
+pub(crate) const CTX_GC_FREES_OFFSET: usize = CTX_GC_ALLOCS_OFFSET + 8;
+pub(crate) const CTX_GC_LIVE_OFFSET: usize = CTX_GC_FREES_OFFSET + 8;
+pub(crate) const CTX_GC_PEAK_OFFSET: usize = CTX_GC_LIVE_OFFSET + 8;
+
+/// The cycle collector's re-entrancy flag, formerly `_gc_collecting`.
+///
+/// This one is a LOCK, not a counter, and it has no per-context/process choice to make:
+/// a shared flag would let one context's collection suppress another's, or let one clear
+/// a flag the other is relying on.
+pub(crate) const CTX_GC_COLLECTING_OFFSET: usize = CTX_GC_PEAK_OFFSET + 8;
+
+pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_GC_COLLECTING_OFFSET + 8;
 
 /// Total byte size of one `_rt_ctx` instance (16-byte aligned).
 ///
@@ -238,6 +258,11 @@ pub fn emit_ctx_zero_fields(emitter: &mut Emitter) {
         CTX_FIBER_MAIN_SAVED_SP_OFFSET,
         CTX_FIBER_MAIN_SAVED_EXC_OFFSET,
         CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET,
+        CTX_GC_ALLOCS_OFFSET,
+        CTX_GC_FREES_OFFSET,
+        CTX_GC_LIVE_OFFSET,
+        CTX_GC_PEAK_OFFSET,
+        CTX_GC_COLLECTING_OFFSET,
         // `_stack_limit` / `_stack_limit_main` are NOT in this list on purpose. They are
         // published by `__rt_stack_limit_init` from the real stack bounds, and a zeroed
         // floor would make every prologue's `cmp sp, floor` succeed at any depth — the
@@ -357,6 +382,11 @@ const PER_CONTEXT_SYMBOLS: &[(&str, usize)] = &[
     ("_fiber_main_saved_call_frame", CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET),
     ("_stack_limit", CTX_STACK_LIMIT_OFFSET),
     ("_stack_limit_main", CTX_STACK_LIMIT_MAIN_OFFSET),
+    ("_gc_allocs", CTX_GC_ALLOCS_OFFSET),
+    ("_gc_frees", CTX_GC_FREES_OFFSET),
+    ("_gc_live", CTX_GC_LIVE_OFFSET),
+    ("_gc_peak", CTX_GC_PEAK_OFFSET),
+    ("_gc_collecting", CTX_GC_COLLECTING_OFFSET),
 ];
 
 /// The ctx field offset serving `symbol`, when this build routes it.
@@ -883,8 +913,14 @@ mod tests {
         );
         assert_eq!(CTX_STACK_LIMIT_OFFSET, CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET + 8);
         assert_eq!(CTX_STACK_LIMIT_MAIN_OFFSET, CTX_STACK_LIMIT_OFFSET + 8);
+        // Allocator bookkeeping, then the collector's re-entrancy lock.
+        assert_eq!(CTX_GC_ALLOCS_OFFSET, CTX_STACK_LIMIT_MAIN_OFFSET + 8);
+        assert_eq!(CTX_GC_FREES_OFFSET, CTX_GC_ALLOCS_OFFSET + 8);
+        assert_eq!(CTX_GC_LIVE_OFFSET, CTX_GC_FREES_OFFSET + 8);
+        assert_eq!(CTX_GC_PEAK_OFFSET, CTX_GC_LIVE_OFFSET + 8);
+        assert_eq!(CTX_GC_COLLECTING_OFFSET, CTX_GC_PEAK_OFFSET + 8);
         // The concat buffer closes the layout.
-        assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_STACK_LIMIT_MAIN_OFFSET + 8);
+        assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_GC_COLLECTING_OFFSET + 8);
         // Every scalar offset must be encodable as ldr [x28, #imm] (imm12 ≤ 4095).
         for offset in [
             CTX_CONCAT_OFF_OFFSET,
@@ -902,6 +938,11 @@ mod tests {
             CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET,
             CTX_STACK_LIMIT_OFFSET,
             CTX_STACK_LIMIT_MAIN_OFFSET,
+            CTX_GC_ALLOCS_OFFSET,
+            CTX_GC_FREES_OFFSET,
+            CTX_GC_LIVE_OFFSET,
+            CTX_GC_PEAK_OFFSET,
+            CTX_GC_COLLECTING_OFFSET,
         ] {
             assert!(offset + 8 <= 4096, "scalar ctx offset {offset} escapes the imm12 window");
         }

@@ -14,10 +14,18 @@
 //!   the symbol name and no call site changes, with the linker as the tripwire (a ctx build
 //!   does not declare the legacy symbols, so a missed path fails to link instead of reading
 //!   another thread's state).
-//! - WHAT A HAND-ROLLED ACCESS COSTS. It is invisible to that tripwire when it materializes
-//!   the address separately: `emit_symbol_address(…, "x9", "_exc_value")` followed by a bare
-//!   `str x0, [x9]` still names the symbol, but the store does not, so re-pointing the
-//!   accessors would leave that store writing the process-global cell with nothing to say so.
+//! - WHAT A HAND-ROLLED ACCESS COSTS — and a correction to what this file first claimed.
+//!   A store that names the symbol itself (`mov QWORD PTR [rip + _exc_value], rax`) is the
+//!   real hazard: routing cannot see it, and the link tripwire cannot either once the
+//!   symbol stops being declared, because the store resolves against nothing. Those are
+//!   the three sites that had to be rewritten.
+//!   The TWO-STEP form is a different case. `emit_symbol_address(…, "x9", "_exc_value")`
+//!   followed by `str x0, [x9]` was described here as equally dangerous; it is not.
+//!   `emit_symbol_address` is itself routed, so it hands back the CTX field's address and
+//!   the bare store follows it correctly — measured on the GC family, whose 25 two-step
+//!   sites were routed by adding table rows and nothing else. Converting the twelve
+//!   exception sites was still worth doing (one door, one shape, auditable), but it was
+//!   not the correctness requirement the first version of this comment asserted.
 //! - HOW THE INVENTORY WAS WRONG THREE TIMES. Grepping for the symbol beside an
 //!   `emitter.instruction` found three sites and reported them as the whole residue. There
 //!   were fifteen: twelve took the two-step form, which puts the symbol on the line BEFORE
@@ -84,10 +92,11 @@ fn for_each_rust_file(dir: &Path, visit: &mut impl FnMut(&Path, &str)) {
 /// STATEMENT, not the line: accessor calls wrap, leaving the symbol alone on an argument line,
 /// and judging line by line called five such calls violations on the first run.
 ///
-/// The one thing this cannot see is an access through an address materialized elsewhere,
-/// because the instruction that performs it never names the symbol. That is why
-/// `emit_symbol_address` is not an allowed accessor: the shape is forbidden rather than
-/// tolerated, which is the only way a name-based check can cover it.
+/// `emit_symbol_address` is not on the allowed list, but as a STYLE rule rather than a
+/// safety one: it routes correctly (see the correction in this module's header), so the
+/// two-step form is sound. Keeping it out means every access to this family reads as one
+/// call that says what it does, which is worth the strictness while the list can be that
+/// strict — all twelve former two-step sites are converted.
 #[test]
 fn exception_state_is_only_reached_through_the_abi_accessors() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
