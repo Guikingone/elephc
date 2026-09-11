@@ -72,7 +72,21 @@ pub(crate) const CTX_HEAP_MAX_OFFSET: usize = CTX_HEAP_BASE_OFFSET + 8;
 /// once via `emit_ctx_address` (an `add xN, x28, #imm` also within imm12) and
 /// then index freely from there, so the large offset never reaches an
 /// immediate-offset load.
-pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_HEAP_MAX_OFFSET + 8;
+/// The active Throwable a context is unwinding, formerly the `_exc_value` global.
+///
+/// This is the first field of the family that BLOCKS M1: a thread that throws must not
+/// publish into, or walk, the main thread's exception state. Sharing it is not a
+/// corruption risk to be measured, it is structurally wrong — two contexts unwinding at
+/// once would see one another's Throwable.
+pub(crate) const CTX_EXC_VALUE_OFFSET: usize = CTX_HEAP_MAX_OFFSET + 8;
+
+/// Top of this context's catch-handler chain, formerly `_exc_handler_top`.
+pub(crate) const CTX_EXC_HANDLER_TOP_OFFSET: usize = CTX_EXC_VALUE_OFFSET + 8;
+
+/// Top of this context's call-frame chain for unwinding, formerly `_exc_call_frame_top`.
+pub(crate) const CTX_EXC_CALL_FRAME_TOP_OFFSET: usize = CTX_EXC_HANDLER_TOP_OFFSET + 8;
+
+pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_EXC_CALL_FRAME_TOP_OFFSET + 8;
 
 /// Total byte size of one `_rt_ctx` instance (16-byte aligned).
 ///
@@ -191,6 +205,12 @@ pub fn emit_ctx_zero_fields(emitter: &mut Emitter) {
         CTX_CONCAT_OFF_OFFSET,
         CTX_HEAP_OFF_OFFSET,
         CTX_HEAP_FREE_LIST_OFFSET,
+        // A pooled context that starts a new request must not inherit the previous
+        // one's Throwable or handler chain — that is the M1 reuse case this loop exists
+        // for, and an exception cell is exactly the kind of state that would survive.
+        CTX_EXC_VALUE_OFFSET,
+        CTX_EXC_HANDLER_TOP_OFFSET,
+        CTX_EXC_CALL_FRAME_TOP_OFFSET,
     ] {
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -284,11 +304,41 @@ pub fn emit_ctx_install_default_arena(emitter: &mut Emitter) {
     }
 }
 
+/// The legacy global symbols a ctx build serves out of `_rt_ctx` instead.
+///
+/// This is the routing table the `abi::` symbol accessors consult: in a ctx build an
+/// access to one of these names becomes a ctx-relative access at the paired offset, and
+/// `data/fixed.rs` stops declaring the symbol — so a path that somehow still names it
+/// fails the LINK rather than reading another context's state. Same tripwire the concat
+/// and heap families already use.
+///
+/// It maps NAMES because that is what the accessors receive. Every access must go
+/// through them for the table to be complete, which
+/// `exception_state_is_only_reached_through_the_abi_accessors` enforces at the source
+/// level — fifteen sites had to be converted before this table could be trusted.
+const PER_CONTEXT_SYMBOLS: &[(&str, usize)] = &[
+    ("_exc_value", CTX_EXC_VALUE_OFFSET),
+    ("_exc_handler_top", CTX_EXC_HANDLER_TOP_OFFSET),
+    ("_exc_call_frame_top", CTX_EXC_CALL_FRAME_TOP_OFFSET),
+];
+
+/// The ctx field offset serving `symbol`, when this build routes it.
+///
+/// Returns `None` in a legacy build and for every symbol that is still process-global,
+/// so a caller can fall through to its ordinary symbol addressing unchanged.
+pub fn per_context_symbol_offset(emitter: &Emitter, symbol: &str) -> Option<usize> {
+    if !emitter.ctx_register {
+        return None;
+    }
+    PER_CONTEXT_SYMBOLS
+        .iter()
+        .find(|(name, _)| *name == symbol)
+        .map(|(_, offset)| *offset)
+}
+
 /// Loads a ctx field into `reg` through the reserved ctx register.
 ///
 /// `field_offset` must be one of the `CTX_*_OFFSET` constants from this module.
-// Consumed by the ctx-gated heap/concat helper routing (next spike iteration).
-#[allow(dead_code)]
 pub fn emit_ctx_load(emitter: &mut Emitter, reg: &str, field_offset: usize) {
     let ctx = ctx_reg(emitter);
     match emitter.target.arch {
@@ -302,8 +352,6 @@ pub fn emit_ctx_load(emitter: &mut Emitter, reg: &str, field_offset: usize) {
 }
 
 /// Stores `reg` into a ctx field through the reserved ctx register.
-// Consumed by the ctx-gated heap/concat helper routing (next spike iteration).
-#[allow(dead_code)]
 pub fn emit_ctx_store(emitter: &mut Emitter, reg: &str, field_offset: usize) {
     let ctx = ctx_reg(emitter);
     match emitter.target.arch {
@@ -316,9 +364,25 @@ pub fn emit_ctx_store(emitter: &mut Emitter, reg: &str, field_offset: usize) {
     }
 }
 
+/// Stores a literal zero into a ctx field, the ctx-relative form of
+/// `abi::emit_store_zero_to_symbol`.
+///
+/// Separate from `emit_ctx_store` because neither target needs a register to write a
+/// zero: AArch64 has `xzr` and x86_64 takes an immediate, and borrowing a scratch here
+/// would be a clobber the caller did not ask for.
+pub fn emit_ctx_store_zero(emitter: &mut Emitter, field_offset: usize) {
+    let ctx = ctx_reg(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("str xzr, [{}, #{}]", ctx, field_offset));
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [{} + {}], 0", ctx, field_offset));
+        }
+    }
+}
+
 /// Computes the address of a ctx field into `dest` through the ctx register.
-// Consumed by the ctx-gated heap/concat helper routing (next spike iteration).
-#[allow(dead_code)]
 pub fn emit_ctx_address(emitter: &mut Emitter, dest: &str, field_offset: usize) {
     let ctx = ctx_reg(emitter);
     match emitter.target.arch {
@@ -764,8 +828,14 @@ mod tests {
         // it, right after the bins.
         assert_eq!(CTX_HEAP_BASE_OFFSET, 24 + CTX_HEAP_SMALL_BIN_COUNT * 8);
         assert_eq!(CTX_HEAP_MAX_OFFSET, CTX_HEAP_BASE_OFFSET + 8);
+        // The exception family follows the heap state: three scalars, and the reason they
+        // are here at all is that a thread which throws must not walk the main thread's
+        // handler chain.
+        assert_eq!(CTX_EXC_VALUE_OFFSET, CTX_HEAP_MAX_OFFSET + 8);
+        assert_eq!(CTX_EXC_HANDLER_TOP_OFFSET, CTX_EXC_VALUE_OFFSET + 8);
+        assert_eq!(CTX_EXC_CALL_FRAME_TOP_OFFSET, CTX_EXC_HANDLER_TOP_OFFSET + 8);
         // The concat buffer closes the layout.
-        assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_HEAP_MAX_OFFSET + 8);
+        assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_EXC_CALL_FRAME_TOP_OFFSET + 8);
         // Every scalar offset must be encodable as ldr [x28, #imm] (imm12 ≤ 4095).
         for offset in [
             CTX_CONCAT_OFF_OFFSET,
@@ -774,6 +844,9 @@ mod tests {
             CTX_HEAP_SMALL_BINS_OFFSET,
             CTX_HEAP_BASE_OFFSET,
             CTX_HEAP_MAX_OFFSET,
+            CTX_EXC_VALUE_OFFSET,
+            CTX_EXC_HANDLER_TOP_OFFSET,
+            CTX_EXC_CALL_FRAME_TOP_OFFSET,
         ] {
             assert!(offset + 8 <= 4096, "scalar ctx offset {offset} escapes the imm12 window");
         }

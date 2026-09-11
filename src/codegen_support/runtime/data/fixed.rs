@@ -281,9 +281,16 @@ pub(crate) fn emit_runtime_data_fixed(
     }
     out.push_str(&comm_directive("_global_argc", 8, target));
     out.push_str(&comm_directive("_global_argv", 8, target));
-    out.push_str(&comm_directive("_exc_handler_top", 8, target));
-    out.push_str(&comm_directive("_exc_call_frame_top", 8, target));
-    out.push_str(&comm_directive("_exc_value", 8, target));
+    // The exception family lives in `_rt_ctx` in ctx-register mode: a thread that throws
+    // must not publish into, or unwind through, the main thread's state. Omitting the
+    // legacy words here is the family's routing tripwire, the same one concat and heap
+    // use — any path that still names `_exc_value` fails the LINK on the first build
+    // rather than silently sharing one Throwable cell between two contexts.
+    if !ctx_register {
+        out.push_str(&comm_directive("_exc_handler_top", 8, target));
+        out.push_str(&comm_directive("_exc_call_frame_top", 8, target));
+        out.push_str(&comm_directive("_exc_value", 8, target));
+    }
     out.push_str(&comm_directive("_fiber_current", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));

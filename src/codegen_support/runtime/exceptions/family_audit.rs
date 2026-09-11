@@ -51,9 +51,12 @@ const ALLOWED_ACCESSORS: &[&str] = &[
 
 /// Files that may name the symbols outside an accessor call, each with the reason.
 ///
-/// `data/fixed.rs` DECLARES the storage — it has to write the names. `family_audit.rs` is
-/// this file. Nothing else belongs here: an entry is a hole in the M1 migration.
-const ALLOWED_FILES: &[&str] = &["data/fixed.rs", "exceptions/family_audit.rs"];
+/// `data/fixed.rs` DECLARES the storage in a legacy build — it has to write the names.
+/// `runtime/ctx.rs` holds the routing table that maps those names onto ctx offsets, which
+/// is the other end of the same decision. `family_audit.rs` is this file. Nothing else
+/// belongs here: an entry is a hole in the M1 migration.
+const ALLOWED_FILES: &[&str] =
+    &["data/fixed.rs", "runtime/ctx.rs", "exceptions/family_audit.rs"];
 
 /// How many lines back to look for the start of a multi-line accessor call. Five covers
 /// `emit_load_symbol_to_reg(` plus four arguments on their own lines, which is the widest
