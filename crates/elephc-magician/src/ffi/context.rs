@@ -62,6 +62,37 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
     crate::eval_php_profile::set_eval_php_version_id(version_id);
 }
 
+/// Installs this binary's OPcache configuration, which governs the runtime script
+/// cache for dynamically included files.
+///
+/// Generated code emits this call while initializing the eval context, carrying the
+/// `--ini`-effective directive values the compiler resolved — the runtime cannot
+/// derive them, because `--ini` is a compile-time flag with no runtime counterpart.
+/// `enabled` is the master gate and mirrors `opcache_cache_enabled`, so a default CLI
+/// binary (where `opcache.enable_cli` is off) installs a disabled cache and every
+/// include keeps re-reading and re-parsing its file exactly as before.
+///
+/// The bridge defaults to DISABLED, so any consumer linking this archive without
+/// elephc's codegen observes the pre-cache behaviour unchanged.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_configure_opcache(
+    enabled: u8,
+    validate_timestamps: u8,
+    revalidate_freq: u64,
+    max_file_size: u64,
+    memory_consumption: u64,
+    max_accelerated_files: u64,
+) {
+    crate::script_cache::set_config(crate::script_cache::ScriptCacheConfig {
+        enabled: enabled != 0,
+        validate_timestamps: validate_timestamps != 0,
+        revalidate_freq,
+        max_file_size,
+        memory_consumption: usize::try_from(memory_consumption).unwrap_or(usize::MAX),
+        max_accelerated_files: usize::try_from(max_accelerated_files).unwrap_or(usize::MAX),
+    });
+}
+
 /// Frees a process-level eval context handle allocated by the eval bridge.
 ///
 /// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP

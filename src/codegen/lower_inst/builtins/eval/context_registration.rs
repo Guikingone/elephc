@@ -18,6 +18,7 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
     register_eval_regex_provider(ctx);
+    configure_eval_opcache(ctx);
     let symbol = ctx
         .emitter
         .target
@@ -31,6 +32,38 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
     Ok(())
+}
+
+/// Installs this binary's OPcache configuration in the eval bridge, which governs the
+/// runtime script cache for dynamically included files.
+///
+/// The runtime cannot derive these values: `--ini` is a compile-time flag, so the
+/// effective directive set exists only in the compiler. The bridge defaults to a
+/// DISABLED cache, so a binary that never reaches this call — and every consumer
+/// linking the archive without elephc's codegen — keeps the uncached behaviour.
+fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
+    let config = crate::opcache::runtime_cache::runtime_cache_config(
+        crate::codegen::compile_php_version().version_id(),
+        crate::codegen_support::compile_is_web_sapi(),
+        &crate::codegen_support::ini_overrides(),
+    );
+    let arguments = [
+        i64::from(config.enabled),
+        i64::from(config.validate_timestamps),
+        config.revalidate_freq as i64,
+        config.max_file_size as i64,
+        config.memory_consumption as i64,
+        config.max_accelerated_files as i64,
+    ];
+    for (index, value) in arguments.into_iter().enumerate() {
+        let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
+        abi::emit_load_int_immediate(ctx.emitter, arg_reg, value);
+    }
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_configure_opcache");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.
