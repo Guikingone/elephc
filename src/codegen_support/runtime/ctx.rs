@@ -86,7 +86,30 @@ pub(crate) const CTX_EXC_HANDLER_TOP_OFFSET: usize = CTX_EXC_VALUE_OFFSET + 8;
 /// Top of this context's call-frame chain for unwinding, formerly `_exc_call_frame_top`.
 pub(crate) const CTX_EXC_CALL_FRAME_TOP_OFFSET: usize = CTX_EXC_HANDLER_TOP_OFFSET + 8;
 
-pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_EXC_CALL_FRAME_TOP_OFFSET + 8;
+/// This context's current Fiber, formerly `_fiber_current`.
+///
+/// Fibers are cooperative WITHIN a context: two OS threads each running their own fiber
+/// must not share the "which fiber is current" cell, or a switch on one thread would
+/// restore the other thread's registers.
+pub(crate) const CTX_FIBER_CURRENT_OFFSET: usize = CTX_EXC_CALL_FRAME_TOP_OFFSET + 8;
+
+/// Main-stack state parked while a Fiber of this context runs (`_fiber_main_saved_*`).
+pub(crate) const CTX_FIBER_MAIN_SAVED_SP_OFFSET: usize = CTX_FIBER_CURRENT_OFFSET + 8;
+pub(crate) const CTX_FIBER_MAIN_SAVED_EXC_OFFSET: usize = CTX_FIBER_MAIN_SAVED_SP_OFFSET + 8;
+pub(crate) const CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET: usize =
+    CTX_FIBER_MAIN_SAVED_EXC_OFFSET + 8;
+
+/// The call-stack floor every function prologue compares `sp` against (`_stack_limit`),
+/// and the OS-thread floor measured at process start (`_stack_limit_main`).
+///
+/// A thread on its own mmap'd stack compared against the MAIN thread's floor either never
+/// trips the guard or trips it immediately, depending on which way the stacks happen to
+/// lie in the address space. There is no value of a shared floor that is correct for two
+/// stacks, which is why this pair blocks M1 rather than merely risking corruption.
+pub(crate) const CTX_STACK_LIMIT_OFFSET: usize = CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET + 8;
+pub(crate) const CTX_STACK_LIMIT_MAIN_OFFSET: usize = CTX_STACK_LIMIT_OFFSET + 8;
+
+pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_STACK_LIMIT_MAIN_OFFSET + 8;
 
 /// Total byte size of one `_rt_ctx` instance (16-byte aligned).
 ///
@@ -211,6 +234,14 @@ pub fn emit_ctx_zero_fields(emitter: &mut Emitter) {
         CTX_EXC_VALUE_OFFSET,
         CTX_EXC_HANDLER_TOP_OFFSET,
         CTX_EXC_CALL_FRAME_TOP_OFFSET,
+        CTX_FIBER_CURRENT_OFFSET,
+        CTX_FIBER_MAIN_SAVED_SP_OFFSET,
+        CTX_FIBER_MAIN_SAVED_EXC_OFFSET,
+        CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET,
+        // `_stack_limit` / `_stack_limit_main` are NOT in this list on purpose. They are
+        // published by `__rt_stack_limit_init` from the real stack bounds, and a zeroed
+        // floor would make every prologue's `cmp sp, floor` succeed at any depth — the
+        // guard would be silently off rather than conservatively on.
     ] {
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -320,6 +351,12 @@ const PER_CONTEXT_SYMBOLS: &[(&str, usize)] = &[
     ("_exc_value", CTX_EXC_VALUE_OFFSET),
     ("_exc_handler_top", CTX_EXC_HANDLER_TOP_OFFSET),
     ("_exc_call_frame_top", CTX_EXC_CALL_FRAME_TOP_OFFSET),
+    ("_fiber_current", CTX_FIBER_CURRENT_OFFSET),
+    ("_fiber_main_saved_sp", CTX_FIBER_MAIN_SAVED_SP_OFFSET),
+    ("_fiber_main_saved_exc", CTX_FIBER_MAIN_SAVED_EXC_OFFSET),
+    ("_fiber_main_saved_call_frame", CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET),
+    ("_stack_limit", CTX_STACK_LIMIT_OFFSET),
+    ("_stack_limit_main", CTX_STACK_LIMIT_MAIN_OFFSET),
 ];
 
 /// The ctx field offset serving `symbol`, when this build routes it.
@@ -834,8 +871,20 @@ mod tests {
         assert_eq!(CTX_EXC_VALUE_OFFSET, CTX_HEAP_MAX_OFFSET + 8);
         assert_eq!(CTX_EXC_HANDLER_TOP_OFFSET, CTX_EXC_VALUE_OFFSET + 8);
         assert_eq!(CTX_EXC_CALL_FRAME_TOP_OFFSET, CTX_EXC_HANDLER_TOP_OFFSET + 8);
+        // The fiber/stack family follows: fiber state, then the two call-stack floors.
+        // Both block M1 for the same reason exceptions do — a second context cannot share
+        // "which fiber is current", and no single floor value is correct for two stacks.
+        assert_eq!(CTX_FIBER_CURRENT_OFFSET, CTX_EXC_CALL_FRAME_TOP_OFFSET + 8);
+        assert_eq!(CTX_FIBER_MAIN_SAVED_SP_OFFSET, CTX_FIBER_CURRENT_OFFSET + 8);
+        assert_eq!(CTX_FIBER_MAIN_SAVED_EXC_OFFSET, CTX_FIBER_MAIN_SAVED_SP_OFFSET + 8);
+        assert_eq!(
+            CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET,
+            CTX_FIBER_MAIN_SAVED_EXC_OFFSET + 8
+        );
+        assert_eq!(CTX_STACK_LIMIT_OFFSET, CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET + 8);
+        assert_eq!(CTX_STACK_LIMIT_MAIN_OFFSET, CTX_STACK_LIMIT_OFFSET + 8);
         // The concat buffer closes the layout.
-        assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_EXC_CALL_FRAME_TOP_OFFSET + 8);
+        assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_STACK_LIMIT_MAIN_OFFSET + 8);
         // Every scalar offset must be encodable as ldr [x28, #imm] (imm12 ≤ 4095).
         for offset in [
             CTX_CONCAT_OFF_OFFSET,
@@ -847,6 +896,12 @@ mod tests {
             CTX_EXC_VALUE_OFFSET,
             CTX_EXC_HANDLER_TOP_OFFSET,
             CTX_EXC_CALL_FRAME_TOP_OFFSET,
+            CTX_FIBER_CURRENT_OFFSET,
+            CTX_FIBER_MAIN_SAVED_SP_OFFSET,
+            CTX_FIBER_MAIN_SAVED_EXC_OFFSET,
+            CTX_FIBER_MAIN_SAVED_CALL_FRAME_OFFSET,
+            CTX_STACK_LIMIT_OFFSET,
+            CTX_STACK_LIMIT_MAIN_OFFSET,
         ] {
             assert!(offset + 8 <= 4096, "scalar ctx offset {offset} escapes the imm12 window");
         }

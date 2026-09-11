@@ -416,6 +416,15 @@ pub fn emit_store_imm_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset
 /// On AArch64 the symbol payload is loaded through x9 (clobbered) and compared
 /// register-to-register.
 pub fn emit_cmp_reg_to_symbol(emitter: &mut Emitter, reg: &str, symbol: &str) {
+    // PER-CONTEXT ROUTING, x86_64 only: the AArch64 arm already reaches the value through
+    // `emit_load_symbol_to_reg`, which routes itself.
+    if let Some(field) = ctx::per_context_symbol_offset(emitter, symbol) {
+        if emitter.target.arch == Arch::X86_64 {
+            let ctx_reg = ctx::ctx_reg(emitter);
+            emitter.instruction(&format!("cmp {}, QWORD PTR [{} + {}]", reg, ctx_reg, field)); // compare against this context's value
+            return;
+        }
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_load_symbol_to_reg(emitter, "x9", symbol, 0); // load the symbol payload into the x9 scratch register

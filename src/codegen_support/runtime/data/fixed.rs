@@ -291,10 +291,15 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&comm_directive("_exc_call_frame_top", 8, target));
         out.push_str(&comm_directive("_exc_value", 8, target));
     }
-    out.push_str(&comm_directive("_fiber_current", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_call_frame", 8, target));
+    // Fiber state is per-context in ctx-register mode: two OS threads each running a
+    // Fiber must not share "which fiber is current", or a switch on one would restore the
+    // other's registers. Omitting the legacy words is this family's link tripwire.
+    if !ctx_register {
+        out.push_str(&comm_directive("_fiber_current", 8, target));
+        out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
+        out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));
+        out.push_str(&comm_directive("_fiber_main_saved_call_frame", 8, target));
+    }
     // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
     // execution context that is running right now: every compiled function prologue does an
     // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow
@@ -302,8 +307,14 @@ pub(crate) fn emit_runtime_data_fixed(
     // runs __rt_stack_limit_init keeps the pre-guard behavior. _stack_limit_main remembers
     // the OS-thread floor so __rt_fiber_switch can restore it when control leaves a fiber
     // stack; while a fiber runs, _stack_limit holds that fiber's own floor instead.
-    out.push_str(&comm_directive("_stack_limit", 8, target));
-    out.push_str(&comm_directive("_stack_limit_main", 8, target));
+    // Per-context in ctx-register mode. There is no value of a SHARED floor that is
+    // correct for two stacks: a thread on its own mmap'd stack compared against the main
+    // thread's floor either never trips the guard or trips it at once, depending on which
+    // way the two stacks happen to lie in the address space.
+    if !ctx_register {
+        out.push_str(&comm_directive("_stack_limit", 8, target));
+        out.push_str(&comm_directive("_stack_limit_main", 8, target));
+    }
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
     // elephc_probe_route_fn: a function-pointer slot the sampling probe fills at init
     // (with elephc_probe_set_route) and the --web bridge reads to tag samples by route.
