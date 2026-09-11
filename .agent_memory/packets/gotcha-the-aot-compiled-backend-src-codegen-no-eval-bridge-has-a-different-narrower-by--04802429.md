@@ -2,7 +2,7 @@
 type: "Gotcha"
 title: "The AOT-compiled backend (src/codegen, no eval bridge) has a DIFFERENT, narrower by-refere"
 description: "The AOT compiled backend src/codegen, no eval bridge has a DIFFERENT, narrower by reference closure capture defect than the interpreter's: compiling scratchpad/r200/q3.php directly single use &$closure capture of an appe"
-resource: "scratchpad/r200/q5.php"
+resource: "src/codegen/lower_inst/core_closures.rs"
 tags: ["session-learning", "codegen", "closures", "by-reference", "use-capture", "unfixed", "aot"]
 timestamp: "2026-09-11T11:25:35.630Z"
 x-kage-id: "repo:lazy-petting-popcorn:gotcha:the-aot-compiled-backend-src-codegen-no-eval-bridge-has-a-different-narrower-by-"
@@ -12,7 +12,7 @@ x-kage-scope: "repo"
 x-kage-visibility: "team"
 x-kage-confidence: 0.7
 x-kage-verified: "verified"
-x-kage-paths: ["scratchpad/r200/q5.php"]
+x-kage-paths: ["src/codegen/lower_inst/core_closures.rs", "src/ir_lower/function.rs"]
 ---
 
 # The AOT-compiled backend (src/codegen, no eval bridge) has a DIFFERENT, narrower by-refere
