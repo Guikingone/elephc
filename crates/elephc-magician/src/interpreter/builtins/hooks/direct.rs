@@ -58,6 +58,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     SubstrCount,
     /// Dispatches `get_debug_type(...)`.
     GetDebugType,
+    /// Dispatches `parse_str(...)`.
+    ParseStr,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
@@ -365,6 +367,7 @@ impl EvalDirectHook {
             Self::ChunkSplit => eval_builtin_chunk_split(args, context, scope, values),
             Self::SubstrCount => eval_builtin_substr_count(args, context, scope, values),
             Self::GetDebugType => eval_builtin_get_debug_type(args, context, scope, values),
+            Self::ParseStr => eval_builtin_parse_str_direct(args, context, scope, values),
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
             Self::Core => eval_builtin_core_call(name, args, context, scope, values),
             Self::Cos => eval_builtin_cos(args, context, scope, values),

@@ -37,6 +37,14 @@ macro_rules! param {
             by_ref: true,
         }
     };
+    (ref $name:literal, $ty:ident) => {
+        ParamSpec {
+            name: $name,
+            ty: TypeSpec::$ty,
+            default: None,
+            by_ref: true,
+        }
+    };
 }
 
 macro_rules! contract {
@@ -137,6 +145,15 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         Bool,
         "Reports whether output has already committed response headers.",
         "function.headers-sent"
+    ),
+    contract!(
+        "parse_str",
+        String,
+        [param!("string", Str), param!(ref "result", Mixed)],
+        None,
+        Void,
+        "Parses a query string into an array of variables.",
+        "function.parse-str"
     ),
     contract!(
         "preg_grep",

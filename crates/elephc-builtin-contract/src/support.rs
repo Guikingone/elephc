@@ -214,8 +214,14 @@ fn is_aot_implementation_pending(id: BuiltinId) -> bool {
 /// walks statements and can do it; the compiled backend emits no per-statement hook, so these two
 /// have nowhere to bind. Listed rather than silently registered, because a registry binding that
 /// did nothing would report a handler installed and never call it.
+///
+/// `parse_str` joins them for a different reason: its `$result` parameter is by-reference with NO
+/// compiled-side counterpart at all (no `RuntimeFnId`, no lowering, no prelude declaration --
+/// confirmed by grep across `crates/` and `src/` before this contract was added). It already had
+/// an interpreter implementation, dispatched from `eval_call`'s own hard-coded ladder rather than
+/// the registry, before this contract made it visible to `function_exists()`/`is_callable()`.
 const AOT_IMPLEMENTATION_PENDING: &[&str] =
-    &["register_tick_function", "unregister_tick_function"];
+    &["parse_str", "register_tick_function", "unregister_tick_function"];
 
 fn is_eval_only_reflection(id: BuiltinId) -> bool {
     [
@@ -310,19 +316,22 @@ mod tests {
 
         // Recomputed against THIS tree, not typed in from a stale plan: the pinned numbers this
         // assertion inherited (`eval_registry: 491`, `eval_pending: 40`) were ALREADY WRONG on
-        // this branch before this commit -- reverting every file this commit touches and
-        // re-running this test measures 493 / 38, not 491 / 40, so a prior commit on this branch
-        // drifted the catalog without updating this census. The AOT-side numbers
-        // (`aot_registry: 555`, `aot_external: 10`, `aot_unsupported: 5`) were still correct.
-        // 493 + substr_count and get_debug_type leaving EVAL_IMPLEMENTATION_PENDING.
-        assert_eq!(eval_registry, 495);
+        // this branch before the substr_count/get_debug_type commit touched anything --
+        // reverting every file that commit touched and re-running this test measured 493 / 38,
+        // not 491 / 40, so a prior commit on this branch drifted the catalog without updating
+        // this census. The AOT-side numbers (`aot_registry: 555`, `aot_external: 10`,
+        // `aot_unsupported: 5`) were still correct.
+        // 495 (substr_count + get_debug_type already landed) + parse_str, a brand-new contract
+        // that is NOT eval-pending.
+        assert_eq!(eval_registry, 496);
         assert_eq!(eval_internal, 39);
-        // 38 - substr_count - get_debug_type.
         assert_eq!(eval_pending, 36);
-        // Unchanged: neither contract's AOT route moves.
+        // Unchanged: `parse_str` raises `aot_unsupported` (it joined
+        // `AOT_IMPLEMENTATION_PENDING`), not `aot_registry`.
         assert_eq!(aot_registry, 555);
         assert_eq!(aot_external, 10);
-        assert_eq!(aot_unsupported, 5);
+        // 5 + `parse_str`.
+        assert_eq!(aot_unsupported, 6);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -367,15 +376,12 @@ mod tests {
         }
 
         // Recomputed against THIS tree; the pinned `interpreter_adapter: 470` / `unsupported: 79`
-        // this assertion inherited were likewise already stale (see the census above) -- a clean
-        // revert of this commit measures 472 / 77, not 470 / 79.
+        // this assertion inherited were likewise already stale (see the census above).
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        // 472 + substr_count and get_debug_type (now eval-registry, neither has a
-        // `RuntimeBuiltinId`): both interpreter adapters.
-        assert_eq!(interpreter_adapter, 474);
-        // 77 - substr_count - get_debug_type, which moved from `unsupported` to
-        // `interpreter_adapter` above.
+        // 474 + parse_str (brand new, by-reference reason, no `RuntimeBuiltinId`).
+        assert_eq!(interpreter_adapter, 475);
+        // eval_internal (39) + eval_pending (36) above.
         assert_eq!(unsupported, 75);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
