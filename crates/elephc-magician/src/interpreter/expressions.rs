@@ -50,7 +50,23 @@ pub(in crate::interpreter) fn eval_expr_result_aliases_storage(expr: &EvalExpr) 
         | EvalExpr::ReferenceBind { .. }
         | EvalExpr::ArrayAppendAssign { .. }
         | EvalExpr::CompoundAssign { .. }
-        | EvalExpr::NullCoalesceAssign { .. } => true,
+        | EvalExpr::NullCoalesceAssign { .. }
+        // A class-like constant cell is cached under the declaring class and handed out by
+        // handle, exactly like a scope variable read: `eval_class_like_constant_cell` and
+        // `context.enum_case()` return the SAME cell on every fetch. A static property fetch
+        // is the same shape one level up (`context.static_property()`). Treating these as
+        // fresh, independently-owned temporaries let a plain assignment (`$state =
+        // self::STATE_B;`) bind a local directly to the shared cell; the local's NEXT
+        // reassignment then released that shared cell as though the local had owned it,
+        // corrupting the constant/property for every later read -- the state machine in
+        // `switch ($state) { case self::STATE_A: ...; $state = self::STATE_B; break; ... }`
+        // got stuck because the second transition freed the very cell the first one reused.
+        | EvalExpr::ClassConstantFetch { .. }
+        | EvalExpr::DynamicClassConstantFetch { .. }
+        | EvalExpr::DynamicClassConstantNameFetch { .. }
+        | EvalExpr::StaticPropertyGet { .. }
+        | EvalExpr::DynamicStaticPropertyGet { .. }
+        | EvalExpr::DynamicStaticPropertyNameGet { .. } => true,
         EvalExpr::Ternary {
             condition,
             then_branch,

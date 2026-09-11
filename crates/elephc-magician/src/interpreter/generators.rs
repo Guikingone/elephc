@@ -443,7 +443,11 @@ fn eval_generator_kept_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let value = eval_expr(expr, context, &mut frame.scope, values)?;
-    if matches!(expr, EvalExpr::LoadVar(_)) {
+    // Mirrors `eval_assign`'s copy rule: any expression whose result aliases persistent
+    // storage -- a variable read, but also a class constant or static property fetch -- needs
+    // an independent copy before the frame keeps it, or a later step releases storage this
+    // yield never owned.
+    if eval_expr_result_aliases_storage(expr) {
         return values.copy_value(value);
     }
     Ok(value)

@@ -311,7 +311,13 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::StoreVar { name, value } => {
             let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
-            let copies_borrowed_variable = matches!(value, EvalExpr::LoadVar(_));
+            // Mirrors `eval_assign`'s copy rule for the expression form of the same assignment:
+            // any RHS that aliases persistent storage -- a variable read, but also a class
+            // constant or static property fetch -- needs an independent copy before the scope
+            // takes ownership of it, or a later reassignment releases storage this statement
+            // never owned. This used to check `LoadVar` alone, which is what let `$state =
+            // self::STATE_B;` bind straight to the class constant's shared cell.
+            let copies_borrowed_variable = eval_expr_result_aliases_storage(value);
             let value = eval_expr(value, context, scope, values).map_err(|status| {
                 if trace {
                     eprintln!("[elephc-eval-trace] phase=store_var_error stage=value name={name:?} status={status:?}");

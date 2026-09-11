@@ -106,5 +106,6 @@ mod static_members;
 mod strict_types;
 mod strict_types_scope;
 mod support;
+mod switch_class_constant_state;
 mod trait_adaptations;
 mod undefined_variable_warning;
