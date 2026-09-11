@@ -20,6 +20,8 @@ pub mod codegen;
 pub mod codegen_support;
 /// Conditional compilation directives.
 pub mod conditional;
+/// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
+pub mod curl_prelude;
 /// Error and warning reporting.
 pub mod errors;
 mod eval_aot;
@@ -57,6 +59,8 @@ pub mod native_deps;
 pub mod name_resolver;
 /// Name resolution and mangling.
 pub mod names;
+/// Compile-time implementation of PHP's numeric-string grammar.
+pub(crate) mod numeric_string;
 /// Compile-time OPcache introspection data (directive matrix).
 pub mod opcache;
 /// `opcache_get_configuration()` standard-library prelude injection.
@@ -95,6 +99,7 @@ pub mod termination;
 pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;
+pub mod xml_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
 /// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,

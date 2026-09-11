@@ -287,6 +287,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         elephc::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
+    let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
@@ -438,7 +439,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
-    let resolved = elephc::optimize::fold_constants(resolved);
+    let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =

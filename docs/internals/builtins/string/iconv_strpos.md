@@ -2,7 +2,7 @@
 title: "iconv_strpos() — internals"
 description: "Compiler internals for iconv_strpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 423
+  order: 787
 ---
 
 ## `iconv_strpos()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/iconv_strpos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/iconv_strpos.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function iconv_strpos(string $haystack, string $needle, int $offset = 0, string $encoding = null): mixed
+function iconv_strpos(string $haystack, string $needle, int $offset = 0, ?string $encoding = null): mixed
 ```
 
 ## What the type checker enforces

@@ -193,7 +193,15 @@ pub(crate) fn lower_getdate(
 
 /// Boxes the raw associative-array hash pointer in the integer result register into a `Mixed` cell
 /// (runtime tag 5), the representation `getdate`/`localtime` results use — mirroring `stat`.
+///
+/// `__rt_mixed_from_value` increfs a tag-5 payload so the box can share a hash the
+/// caller still holds. These helpers return a freshly allocated hash and then drop
+/// the raw pointer, so the caller's ref has to be released after boxing or the
+/// hash, its keys, and its values stay live after the Mixed cell is freed.
 fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
+    let result = abi::int_result_reg(ctx.emitter);
+    emit_scratch_reserve(ctx, 16);
+    emit_store_result_to_scratch(ctx, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // Mixed payload low word = hash pointer
@@ -208,6 +216,17 @@ fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
     }
+    emit_store_result_to_scratch(ctx, 8);
+    emit_load_scratch_to_reg(ctx, result, 0);
+    abi::emit_decref_if_refcounted(
+        ctx.emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Str),
+        },
+    );
+    emit_load_scratch_to_reg(ctx, result, 8);
+    emit_scratch_release(ctx, 16);
 }
 
 /// Lowers `localtime([$timestamp[, $associative]])` through the shared decomposition runtime helper.
@@ -705,15 +724,80 @@ pub(crate) fn lower_getenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "getenv", 1)?;
+    ensure_arg_count_between(inst, "getenv", 0, 2)?;
+    // No name — including an omitted default, a null literal, and
+    // `getenv(local_only: true)` which materializes that default — means "the
+    // whole environment": a different runtime answer, and a different type.
+    if inst.operands.is_empty() {
+        return emit_getenv_all_result(ctx, inst);
+    }
+    // `local_only` is accepted and evaluated, then ignored. Measured against
+    // `php -n` in the CLI SAPI: `getenv($n)` and `getenv($n, true)` agree for a
+    // shell variable, a `putenv` one and `PATH`, and `getenv() == getenv(null,
+    // true)`. There is no environment here separate from the process's, so the
+    // flag selects between two identical sources. It is still evaluated, because
+    // an argument PHP would evaluate must not be skipped for its side effects.
+    if let Some(local_only) = inst.operands.get(1).copied() {
+        ctx.load_value_to_result(local_only)?;
+    }
     let name = expect_operand(inst, 0)?;
-    require_string(ctx.load_value_to_result(name)?.codegen_repr(), "getenv name")?;
+    let name_ty = ctx.value_php_type(name)?;
+    if matches!(name_ty.codegen_repr(), PhpType::Void) {
+        return emit_getenv_all_result(ctx, inst);
+    }
+    if matches!(name_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar) {
+        let all = ctx.next_label("getenv_all");
+        let done = ctx.next_label("getenv_done");
+        super::super::predicates::emit_is_null_result(ctx, name)?;
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &all);
+        emit_getenv_named_result(ctx, inst)?;
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&all);
+        emit_getenv_all_result(ctx, inst)?;
+        ctx.emitter.label(&done);
+        return Ok(());
+    }
+    emit_getenv_named_result(ctx, inst)
+}
+
+/// Converts a non-null name, releases any conversion result, and boxes the owned lookup result.
+fn emit_getenv_named_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let name = expect_operand(inst, 0)?;
+    let converted = matches!(ctx.value_php_type(name)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    if converted {
+        super::super::conversions::emit_mixed_string_context_result(ctx, name)?;
+        // String casts can allocate or invoke __toString; keep the returned storage until lookup ends.
+        abi::emit_push_reg(ctx.emitter, ptr);
+    } else {
+        super::strings::load_string_arg_to_regs(ctx, inst, 0, "getenv", ptr, len)?;
+    }
     abi::emit_call_label(ctx.emitter, "__rt_getenv");
     super::io::box_owned_string_or_false_result(ctx, "getenv");
+    if converted {
+        let result = abi::int_result_reg(ctx.emitter);
+        emit_store_result_to_scratch(ctx, 8);
+        emit_load_scratch_to_reg(ctx, result, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        emit_load_scratch_to_reg(ctx, result, 8);
+        emit_scratch_release(ctx, 16);
+    }
     store_if_result(ctx, inst)
 }
 
-/// Lowers `putenv(assignment)` by copying the environment string into persistent heap storage.
+/// Emits `__rt_getenv_all` and boxes the returned hash as a Mixed associative array.
+fn emit_getenv_all_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_getenv_all");
+    // A raw hash pointer is not yet a PHP value: it has to be boxed as a
+    // Mixed cell, exactly as `getdate` and `stat` do with theirs.
+    emit_box_hash_pointer_as_assoc_mixed(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `putenv(assignment)`, dispatching bare names to `unsetenv` and assignments to `putenv`.
 pub(crate) fn lower_putenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -848,10 +932,49 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Emits the AArch64 persistent-copy path for `putenv()`.
+/// Unsets a bare environment name using an allocated C string, frees the copy,
+/// and preserves libc's status across cleanup on every supported target.
+fn lower_putenv_unset(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let argument_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+
+    // -- keep the full null-terminated name alive until unsetenv returns --
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_cstr");
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_reg_move(ctx.emitter, argument_reg, result_reg);
+    ctx.emitter.bl_c("unsetenv");
+
+    // -- release the temporary copy on both success and failure --
+    abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
+/// Emits AArch64 `putenv()`, using `unsetenv()` when the argument has no equals sign.
 fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
+    let scan_loop = ctx.next_label("putenv_scan");
+    let set_variable = ctx.next_label("putenv_set");
+    let unset_variable = ctx.next_label("putenv_unset");
+    let done = ctx.next_label("putenv_done");
     let copy_loop = ctx.next_label("putenv_copy");
     let copy_done = ctx.next_label("putenv_copy_done");
+    ctx.emitter.instruction("mov x3, #0");                                      // start scanning the argument for PHP's assignment separator
+    ctx.emitter.label(&scan_loop);
+    ctx.emitter.instruction("cmp x3, x2");                                      // a bare name unsets the environment variable
+    ctx.emitter.instruction(&format!("b.ge {}", unset_variable));               // no separator was found, so follow PHP's unset form
+    ctx.emitter.instruction("ldrb w4, [x1, x3]");                               // inspect one argument byte without changing the string result registers
+    ctx.emitter.instruction("cmp w4, #61");                                     // ASCII '=' selects libc putenv()
+    ctx.emitter.instruction(&format!("b.eq {}", set_variable));                 // preserve the assignment string for libc putenv()
+    ctx.emitter.instruction("add x3, x3, #1");                                  // advance to the next argument byte
+    ctx.emitter.instruction(&format!("b {}", scan_loop));                       // continue scanning for the assignment separator
+    ctx.emitter.label(&unset_variable);
+    lower_putenv_unset(ctx);
+    ctx.emitter.instruction("cmp w0, #0");                                      // test the libc int status after releasing the name buffer
+    ctx.emitter.instruction("cset x0, eq");                                     // widen libc's zero status into PHP true
+    ctx.emitter.instruction(&format!("b {}", done));                            // join the assignment and unset result paths
+    ctx.emitter.label(&set_variable);
     ctx.emitter.instruction("add x0, x2, #1");                                  // allocate space for the environment string plus trailing null
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string pointer and length across heap allocation
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
@@ -871,12 +994,33 @@ fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.bl_c("putenv");
     ctx.emitter.instruction("cmp x0, #0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("cset x0, eq");                                     // return true when putenv() accepted the assignment
+    ctx.emitter.label(&done);
 }
 
-/// Emits the x86_64 persistent-copy path for `putenv()`.
+/// Emits x86_64 `putenv()`, using `unsetenv()` when the argument has no equals sign.
 fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
+    let scan_loop = ctx.next_label("putenv_scan");
+    let set_variable = ctx.next_label("putenv_set");
+    let unset_variable = ctx.next_label("putenv_unset");
+    let done = ctx.next_label("putenv_done");
     let copy_loop = ctx.next_label("putenv_copy");
     let copy_done = ctx.next_label("putenv_copy_done");
+    ctx.emitter.instruction("mov rcx, 0");                                      // start scanning the argument for PHP's assignment separator
+    ctx.emitter.label(&scan_loop);
+    ctx.emitter.instruction("cmp rcx, rdx");                                    // a bare name unsets the environment variable
+    ctx.emitter.instruction(&format!("jae {}", unset_variable));                // no separator was found, so follow PHP's unset form
+    ctx.emitter.instruction("mov r8b, BYTE PTR [rax + rcx]");                   // inspect one argument byte without changing the string result registers
+    ctx.emitter.instruction("cmp r8b, 61");                                     // ASCII '=' selects libc putenv()
+    ctx.emitter.instruction(&format!("je {}", set_variable));                   // preserve the assignment string for libc putenv()
+    ctx.emitter.instruction("add rcx, 1");                                      // advance to the next argument byte
+    ctx.emitter.instruction(&format!("jmp {}", scan_loop));                     // continue scanning for the assignment separator
+    ctx.emitter.label(&unset_variable);
+    lower_putenv_unset(ctx);
+    ctx.emitter.instruction("cmp eax, 0");                                      // test the libc int status after releasing the name buffer
+    ctx.emitter.instruction("sete al");                                         // encode libc's zero status as a boolean byte
+    ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // join the assignment and unset result paths
+    ctx.emitter.label(&set_variable);
     ctx.emitter.instruction("sub rsp, 16");                                     // reserve aligned spill space for the source string across heap allocation
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the source environment string pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                    // save the source environment string length
@@ -902,6 +1046,7 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("cmp rax, 0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("sete al");                                         // return true when putenv() accepted the assignment
     ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
+    ctx.emitter.label(&done);
 }
 
 /// Lowers a one-argument blocking libc call that receives an integer duration.

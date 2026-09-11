@@ -17,6 +17,7 @@ mod function;
 pub(crate) mod function_variants;
 mod instr;
 mod module;
+mod pcntl_runtime;
 mod print;
 mod runtime_call;
 mod types;
@@ -38,13 +39,14 @@ pub use function::{
     LocalSlotId,
 };
 pub use instr::{
-    BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp, Op, PhpTypePredicate,
-    RuntimeId, PassOrigin,
+    BuiltinId, CheckedNumericChainImmediate, CmpPredicate, Immediate, InstId, Instruction,
+    MixedNumericOp, Op, PassOrigin, PhpTypePredicate, RuntimeId,
 };
 pub use module::{
     ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
     Module, PackedLayoutTable, TraitMethodInfo,
 };
+pub use pcntl_runtime::{PcntlRuntime, PcntlTargetSupport};
 pub use print::{print_function, print_module};
 pub use runtime_call::{
     ArrayKeySort, RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime,

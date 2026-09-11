@@ -158,13 +158,30 @@ fn test_error_type_mismatch_reassign() {
     expect_error_strict("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
 }
 
-/// Verifies that arithmetic on a string operand produces an error.
-/// Input: `$x = "hi"; echo $x + 1;` — string is not numeric.
+/// Verifies that arithmetic on a *fully non-numeric* string literal is rejected at compile
+/// time, matching PHP 8's `TypeError: Unsupported operand types` for `"hi" + 1`.
+///
+/// PHP 8 accepts numeric and leading-numeric strings in arithmetic (see the
+/// `codegen::operators` numeric-string tests, issue #362) but raises a `TypeError` for a
+/// string with no numeric prefix. elephc reproduces that as a compile error for the constant
+/// case; a string operand whose value is only known at runtime is coerced by the runtime
+/// numeric-string rules instead, so this uses a literal to pin the constant-form contract.
 #[test]
 fn test_error_arithmetic_on_string() {
     expect_error(
-        "<?php $x = \"hi\"; echo $x + 1;",
+        "<?php echo \"hi\" + 1;",
         "Arithmetic operators require numeric operands",
+    );
+}
+
+/// Verifies a leading-numeric string literal in arithmetic compiles with PHP's
+/// `A non-numeric value encountered` warning instead of being rejected.
+/// Input: `echo "12abc" + 3;` — PHP coerces the `12` prefix and warns.
+#[test]
+fn test_warning_leading_numeric_string_arithmetic() {
+    expect_warning(
+        "<?php echo \"12abc\" + 3;",
+        "A non-numeric value encountered",
     );
 }
 
@@ -2065,9 +2082,16 @@ fn test_a_surviving_retype_still_warns() {
 /// Superglobals are seeded into every environment with no binding depth: they are not bindings
 /// the body created, so `unset` must not kill them — EIR lowering would otherwise abandon (and
 /// re-mint as a frame slot) storage that lives in an `_eir_global_*` symbol.
+///
+/// Read through `$_GET` rather than `$_SERVER`, which used to be the subject. The
+/// observable here is a RETYPE being refused, which needs the name to still carry
+/// an array type; `$_SERVER` is now seeded from `getenv()` and so is `Mixed`, and
+/// assigning an int to it is accepted — as PHP accepts it too, `$_SERVER = 5;`
+/// being legal there. The guard is about storage surviving `unset`, not about
+/// that diagnostic, so it moves to a name where the diagnostic can still see it.
 #[test]
 fn test_seeded_superglobal_not_killable() {
-    expect_error("<?php unset($_SERVER); $_SERVER = 5;", "cannot reassign");
+    expect_error("<?php unset($_GET); $_GET = 5;", "cannot reassign");
 }
 
 /// Same rule for the top-level-seeded `$argv`/`$argc`. Measured before the fix: the kill was

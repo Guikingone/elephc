@@ -37,6 +37,8 @@ fn type_spec_str(ty: &TypeSpec) -> String {
         // raw address their check hook returns. Rendering it as `mixed` would document a lie.
         TypeSpec::Ptr => "pointer".to_string(),
         TypeSpec::Callable => "callable".to_string(),
+        TypeSpec::Array => "array".to_string(),
+        TypeSpec::Nullable(inner) => format!("?{}", type_spec_str(inner)),
     }
 }
 
@@ -52,6 +54,15 @@ fn area_str(area: Area) -> &'static str {
         Area::Callables => "callables",
         Area::Spl => "spl",
         Area::Pointers => "pointers",
+        Area::Curl => "curl",
+        Area::Date => "date",
+        Area::Calendar => "calendar",
+        Area::Mysqli => "mysqli",
+        Area::Pdo => "pdo",
+        Area::Web => "web",
+        Area::Image => "image",
+        Area::Opcache => "opcache",
+        Area::Xml => "xml",
     }
 }
 
@@ -65,6 +76,13 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
         DefaultSpec::Str(v) => json!(v),
         DefaultSpec::IntMax => json!("PHP_INT_MAX"),
         DefaultSpec::EmptyArray => json!([]),
+        DefaultSpec::Constant(name) => json!({ "constant": name }),
+        DefaultSpec::Expr(source) => json!({ "expr": source }),
+        DefaultSpec::ClassConstant { class, name } => json!({
+            "kind": "class_constant",
+            "class": class,
+            "name": name,
+        }),
     }
 }
 
@@ -151,6 +169,12 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
                 vec!["macos-aarch64", "linux-aarch64", "linux-x86_64"],
             )
         }
+        crate::builtins::semantics::BuiltinTargetSupport::Linux => {
+            ("linux", vec!["linux-aarch64", "linux-x86_64"])
+        }
+        crate::builtins::semantics::BuiltinTargetSupport::MacOs => {
+            ("macos", vec!["macos-aarch64"])
+        }
     };
     let runtime_functions = match semantics.runtime_functions {
         BuiltinRuntimeFunctions::None => Vec::new(),
@@ -161,12 +185,15 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",
         BuiltinArgumentLowering::JsonDecode => "json_decode",
+        BuiltinArgumentLowering::Getenv => "getenv",
+        BuiltinArgumentLowering::PcntlPreserveOmitted => "pcntl_preserve_omitted",
         BuiltinArgumentLowering::PregReplaceCallback => "preg_replace_callback",
         BuiltinArgumentLowering::PositionalRegex => "positional_regex",
         BuiltinArgumentLowering::UserValueSort => "user_value_sort",
         BuiltinArgumentLowering::ReverseKeySort => "reverse_key_sort",
         BuiltinArgumentLowering::OpensslEncrypt => "openssl_encrypt",
         BuiltinArgumentLowering::ArraySplice => "array_splice",
+        BuiltinArgumentLowering::XmlHandlerSetter => "xml_handler_setter",
         BuiltinArgumentLowering::ArrayInternalPointer(_) => "array_internal_pointer",
     };
     let callable = match semantics.callable {
@@ -250,6 +277,8 @@ fn build_json(include_internal: bool) -> Value {
         out.push(json!({
             "name": spec.name,
             "area": area_str(spec.area),
+            "module": spec.module.php_name(),
+            "since": spec.since.map(|version| version.as_str()),
             "internal": spec.internal,
             "extension": spec.extension,
             "params": params,
@@ -293,8 +322,7 @@ mod tests {
         assert_eq!(strlen["internal"], false);
     }
 
-    /// Verifies all-target metadata names both iOS targets while process-spawning
-    /// builtins retain the three-host surface enforced by their checker diagnostics.
+    /// Verifies all-target metadata includes iOS while process and PCNTL exports stay host-gated.
     #[test]
     fn export_distinguishes_all_targets_from_host_only_process_builtins() {
         let exported = super::export_builtins_json();
@@ -338,6 +366,82 @@ mod tests {
                 "{name} must remain host-only",
             );
         }
+        let pcntl_records = records.iter().filter(|record| {
+            record["semantics"]["requirements"]["values"]
+                .as_array()
+                .is_some_and(|requirements| {
+                    requirements.iter().any(|requirement| {
+                        requirement["kind"] == "bridge"
+                            && requirement["name"] == "elephc_pcntl"
+                    })
+                })
+        });
+        let mut pcntl_names = std::collections::BTreeSet::new();
+        for process_builtin in pcntl_records {
+            let name = process_builtin["name"]
+                .as_str()
+                .expect("PCNTL builtin name");
+            pcntl_names.insert(name);
+            let support_kind = process_builtin["semantics"]["target_support_kind"]
+                .as_str()
+                .expect("PCNTL target support kind");
+            let expected = match support_kind {
+                "host_only" => {
+                    serde_json::json!(["macos-aarch64", "linux-aarch64", "linux-x86_64"])
+                }
+                "linux" => serde_json::json!(["linux-aarch64", "linux-x86_64"]),
+                "macos" => serde_json::json!(["macos-aarch64"]),
+                other => panic!("{name} must not use {other} target support"),
+            };
+            assert_eq!(
+                process_builtin["semantics"]["target_support"],
+                expected,
+                "{name} must not advertise iOS availability",
+            );
+        }
+        let expected_pcntl_names = [
+            "pcntl_alarm",
+            "pcntl_async_signals",
+            "pcntl_daemon",
+            "pcntl_errno",
+            "pcntl_exec",
+            "pcntl_fork",
+            "pcntl_get_last_error",
+            "pcntl_getcpu",
+            "pcntl_getcpuaffinity",
+            "pcntl_getpriority",
+            "pcntl_getqos_class",
+            "pcntl_setcpuaffinity",
+            "pcntl_setns",
+            "pcntl_setpriority",
+            "pcntl_setqos_class",
+            "pcntl_signal",
+            "pcntl_signal_dispatch",
+            "pcntl_signal_get_handler",
+            "pcntl_sigprocmask",
+            "pcntl_sigtimedwait",
+            "pcntl_sigwaitinfo",
+            "pcntl_strerror",
+            "pcntl_unshare",
+            "pcntl_wait",
+            "pcntl_waitid",
+            "pcntl_waitpid",
+            "pcntl_wexitstatus",
+            "pcntl_wifcontinued",
+            "pcntl_wifexited",
+            "pcntl_wifsignaled",
+            "pcntl_wifstopped",
+            "pcntl_wstopsig",
+            "pcntl_wtermsig",
+            "posix_setpgid",
+            "posix_setsid",
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            pcntl_names, expected_pcntl_names,
+            "every exported PCNTL bridge builtin must remain in the pinned host-only inventory",
+        );
     }
 
     /// Verifies the include-internal export is a strict superset of the PHP-visible one and

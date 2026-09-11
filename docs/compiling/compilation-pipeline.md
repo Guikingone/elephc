@@ -31,6 +31,7 @@ Physical source (.php or .lfc)
   -> opcache-prelude     inject OPcache declarations and a placeholder script manifest when used
   -> image-prelude      inject the image (GD/Exif/Imagick) prelude when used
   -> hash-prelude       inject the incremental HashContext/hash_* prelude when used
+  -> curl-prelude       inject the curl prelude when used
   -> web-prelude        inject the web runtime prelude with --web
   -> version-prelude    inject requested PHP version/SAPI surface functions
   -> name-resolve       apply namespace/use rules, canonicalize names
@@ -74,8 +75,9 @@ Physical source (.php or .lfc)
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   mysqli, timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
-  OPcache, image processing, incremental hash contexts, and the PHP version/SAPI
-  surface are injected only when referenced. The web runtime prelude is injected
+  OPcache, image processing, incremental hash contexts, curl, and the PHP
+  version/SAPI surface are injected only when referenced. The web runtime
+  prelude is injected
   with `--web`, and namespace/`use` rules rewrite references to fully-qualified
   names. Autoloading is wired in around these steps.
 - **func-args** — rewrites `func_num_args()`, `func_get_args()`, and

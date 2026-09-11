@@ -37,7 +37,7 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     if request.target != Target::detect_host() {
         // See the pcre2 recipe: CHOST reaches config.sub the same way --host
         // does, so it takes the normalized `abi` rather than the clang triple.
-        command.env("CHOST", &request.toolchain.abi);
+        command.env("CHOST", request.toolchain.autoconf_host());
     }
     run_checked(&mut command, "configure trusted zlib recipe")?;
 

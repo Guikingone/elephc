@@ -406,6 +406,13 @@ enum), implement it under `src/codegen/lower_inst/runtime_functions/` or
 `runtime_calls.rs`, and keep every supported ABI in the same path. If it needs a
 runtime routine, add it under `src/codegen_support/runtime/<category>/`.
 
+Every bridge-backed `RuntimeFnId` must also return a reviewed
+`MonitoringPolicy` from `RuntimeFnId::monitoring_policy()`. Operations marked
+with `BLOCKING_IO` or `NETWORK_IO` effects must use an evented I/O policy. The
+registry test rejects an unspecified decision, so a new runtime boundary cannot
+land until its generic timing, typed events, wait measurement and trace-context
+behavior have been reviewed explicitly.
+
 For a builtin that is naturally expressed as reusable EIR operations, use
 `BuiltinLowering::Eir(lower)`. The hook receives only `BuiltinLoweringContext` and a
 `NormalizedBuiltinCall`; it may emit typed EIR values/runtime calls, but must not
@@ -480,6 +487,21 @@ into `builtin!`. `buffer_new` is similar (its call form is dedicated syntax lowe
 `ExprKind::BufferNew`; only its name lives in the catalog), while `buffer_len` and
 `buffer_free` are ordinary registry builtins under `src/builtins/pointers/`.
 
+Functions an injected prelude declares (`mysqli_*`, `session_*`, `imagecreate*`,
+`opcache_*`, `pdo_drivers`, ...) and functions the name resolver rewrites onto a builtin
+class (`date_create`, `cal_days_in_month`, ...) are catalogued too, as
+`BuiltinKind::PreludeProvided` and `BuiltinKind::NameResolverRewrite` contracts with no
+`builtin!` binding. The prelude parity tests in `src/builtins/parity_tests.rs` read every
+prelude's built declarations and fail when a PHP-visible function lacks a contract or
+when a contract's parameters, defaults, by-reference markers, or variadic shape drift from
+the declaration. To draft the contracts for a new prelude, dump its declarations with
+`ELEPHC_CONTRACT_SEED_OUT=/tmp/seed.json cargo test --lib dump_prelude_contract_seed_on_request`
+and transcribe them into `catalog_data.rs`; the catalog is authoritative from then on.
+
+Every contract also names the PHP module that owns the symbol (`module: PhpModule::...`,
+`Elephc` for elephc-only surfaces) and the first PHP minor that ships it (`since`);
+`scripts/docs/gen_php_comparison.py` cross-checks both against the vendored PHP baseline.
+
 Builtins that are elephc extensions with no PHP equivalent must declare
 `extension: true` on their shared `BuiltinContract` so `--strict-php` hides them from
 both AOT and eval.
@@ -489,6 +511,43 @@ the `preludes_never_call_php_visible_extension_builtins` gate enforces this.
 
 Magician reads that same flag after joining its binding by `BuiltinId`; there is no
 second extension-name list.
+
+## Adding a builtin class or a global constant
+
+Classes, interfaces, enums, and global constants elephc provides are catalogued in the
+same crate as the functions, and the catalogs are mandatory: the compiler and Magician
+derive their class-name lists and constant tables from them, and join tests fail when
+either side drifts.
+
+**Classes.** Add a `class!(...)` entry to
+`crates/elephc-builtin-contract/src/catalog_classes.rs` with the PHP spelling, its
+canonical lowercase key, kind (`Class` / `Interface` / `Enum` / `Trait`), owning
+`PhpModule`, and the route the compiler provides it through: `CheckerInjected` for a
+synthetic declaration the checker registers (SPL, throwables, date/time, Reflection,
+builtin enums), `Prelude` for a class an injected prelude declares in PHP, or
+`LanguageIntrinsic` for an engine-level type. Add `since: Php8x` when PHP introduced it
+after 8.0, `internal: true` for `__Elephc*` helpers. Then implement it on the route you
+declared. `types::builtin_classes::tests::checker_injects_exactly_the_catalogued_checker_classes`
+proves the checker injects exactly the catalogued checker-provided set, the prelude
+parity tests prove prelude classes are declared, and
+`tests/codegen/symbol_catalog.rs` probes every class natively and inside `eval()`.
+
+**Constants.** Add a `constant!(...)` entry to
+`crates/elephc-builtin-contract/src/catalog_constants.rs` with the name, owning module,
+and value (`ConstValue::Int(...)`, `Float`, `Str`, `Bool`, `StreamResource(fd)`, or
+`TargetDependent(ConstType::...)` for a value the backend computes per target or PHP
+profile). `route: Prelude` marks a constant an injected prelude declares (`MYSQLI_*`,
+`IMG_*`); everything else is registered unconditionally by the checker, prescan and name
+resolver from the catalog, and resolved in eval from the same value. A target-dependent
+constant needs its arm in `codegen_support::prescan::collect_constants` and in Magician's
+`constant_eval::eval_target_dependent_constant`; the tests
+`every_target_dependent_constant_is_computed` and
+`every_catalogued_constant_has_its_declared_eval_route` fail until both exist. `ext/curl`
+constants are generated into `catalog_constants_curl.rs` from `scripts/docs/curl_surface.json`.
+
+In both cases regenerate the docs (see `scripts/docs/README.md`): the compatibility page
+counts classes and constants per PHP module and fails when a catalogued symbol's module,
+existence, or value disagrees with the PHP baseline.
 
 ## Adding functionality via a Rust crate (bridge crates)
 
@@ -548,12 +607,28 @@ null; never unwind into generated code). Keep the surface small and explicit —
 pass pointers + lengths for strings/buffers, return primitive status values. Name
 exports `elephc_<name>_*` so they are easy to find and namespace-clean.
 
+**Returned buffers must never live in process-global cells.** A bridge function
+that hands back `*const c_char` (or pointer+length) data must keep those bytes
+valid until the caller has read them — and a `static` `Mutex<CString>` /
+`Mutex<Vec<u8>>` cannot: the next call, from *any* thread, assigns the cell,
+which drops the previous contents and frees the exact bytes a previously
+handed-out pointer still references. The mutex serializes the write; it does
+nothing for the lifetime of the read. This exact shape shipped as an
+intermittent use-after-free in the PDO bridge (garbage SQLSTATE whenever two
+tests hammered `elephc_pdo_sqlstate` concurrently) and was then swept out of
+the tz/image/phar bridges too. Use a `thread_local!` cell — a thread can only
+invalidate pointers it was itself handed — or make the caller own the
+allocation. Id-keyed handle registries that hand out *owned values* (no
+interior pointers escape) may stay process-global. The rule is enforced by
+`tests/ffi_buffer_hygiene.rs`; a genuinely justified exception goes on that
+test's named allowlist with its reason, not silently past it.
+
 Every supported target must build and link the crate: `macos-aarch64`,
 `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, and `linux-x86_64`. The iOS
 artifacts are libraries cross-compiled from macOS. A bridge that only works on
 one target is not acceptable (see the supported-target policy in `CLAUDE.md`).
 
-### 3. Register the bridge in `BRIDGES` (`src/linker.rs`)
+### 3. Register the bridge in `BRIDGES` (`src/linker/bridges.rs`)
 
 Add one `BridgeStaticlib` entry. This is the only linker change required —
 discovery, on-demand build, search paths, whole-archiving, and macOS frameworks
@@ -568,8 +643,28 @@ BridgeStaticlib {
     whole_archive: false,               // true if link-time side effects / owns entry
     macos_frameworks: &[],              // transitive native deps' frameworks
     needs_libdl: true,                  // Rust runtime/unwinder needs -ldl on Linux
+    php_extension: None,                // canonical PHP extension, when distinct
+    monitoring: MonitoringPolicy::GenericTiming,
 },
 ```
+
+The `monitoring` field is mandatory. Use `GenericTiming` when function timing
+fully describes the bridge, `Io { ... }` when it must publish a distinct I/O
+operation or wait dimension, and `Infrastructure { reason }` only for monitor or
+runtime plumbing that is not a PHP-visible work boundary. The bridge-catalog
+test rejects `Unspecified` and empty infrastructure reasons.
+
+I/O bridges should depend on `elephc-monitoring-contract` and call its
+`EventHooks` helper through category-specific runtime slots. Keep database and
+network slots separate so query budgets, N+1 analysis and network budgets
+cannot contaminate each other. The event consumer owns its capture-window gate,
+and must publish an active-window callback when that state is not represented
+by the exact-capture word. Bridge-side timing must avoid clock reads outside
+either active window, while trace propagation stays scoped to an exact trace
+context. Count only actual external operations, not maintenance calls such as
+connection upkeep. Measured wait must exclude time spent in user callbacks so
+network-bound diagnostics describe the driver boundary rather than PHP work.
+Steady-state dormant paths must not allocate per operation.
 
 Set `whole_archive: true` only when the staticlib has link-time side effects that
 must survive (e.g. a provider registration) or owns the program entry point (like
@@ -651,6 +746,40 @@ cannot see it.
   and its auto-link trigger.
 - The relevant `docs/php/` or `docs/beyond-php/` page — document the PHP surface.
 - Update `CLAUDE.md` only if you changed the bridge/flag mechanism itself.
+
+### 8. Packed bridge + managed native package
+
+A bridge crate's `libelephc_<name>.a` is packed next to the compiler in the
+release and nightly tarballs. `scripts/verify-release-artifact.sh` unpacks that
+tarball into an empty directory (no checkout) and compile-probes every
+capability that names a packed archive, using the packaged binary's
+`--print-capabilities` list. That is how a missing, truncated, or wrong-arch
+archive is caught — the hole that left `libelephc_magician.a` out of every
+tarball from 0.26.3 to 0.26.5.
+
+`--with-regex` is not this case. It is a runtime capability; PCRE2 is only a
+managed package; there is no packed regex archive; the probe skips it
+(`needs no archive from this tarball`). Do not copy that skip for a packed
+bridge.
+
+If the new bridge's `.a` also needs a catalog package at PHP-program link time
+(curl is the precedent: `NativeRequirement::package("curl")` when `elephc_curl`
+is planned; `elephc native add curl` in the user project), then:
+
+1. Wire the native requirement in `src/pipeline/backend.rs` the same way curl
+   does.
+2. Pack `-p elephc-<name>` in nightly and release, like curl.
+3. Teach `scripts/verify-release-artifact.sh` to run
+   `$ELEPHC native add <package>` in the empty probe WORKDIR **before**
+   `--with-<name>`. Never fail-then-retry by grepping the compiler recovery
+   text. Never skip the compile probe.
+4. Cache `~/.cache/elephc/native` on the nightly and release `verify-artifact`
+   jobs (keyed like `curl-codegen-tests`) and give the job a long enough
+   timeout for a cold source build of the C library.
+
+System libraries — phar's zlib/bz2, `libdl`, Apple frameworks — are not
+managed native packages. They do not go through `elephc native add` and are
+not this rule.
 
 ## Contributor Certification
 

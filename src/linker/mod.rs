@@ -58,6 +58,11 @@ pub(crate) fn crate_flag_names() -> Vec<&'static str> {
     bridges::crate_flag_names()
 }
 
+/// Maps a `--with-<flag>` suffix to the archive filename it resolves to.
+pub(crate) fn archive_filename_for_flag(flag: &str) -> Option<String> {
+    bridges::archive_filename_for_flag(flag)
+}
+
 /// Returns bridge library/flag pairs present in one planned named-library set.
 pub(crate) fn bridges_in(
     link_libraries: &[String],
@@ -65,9 +70,9 @@ pub(crate) fn bridges_in(
     bridges::bridges_in(link_libraries)
 }
 
-/// Maps one bridge library name to its canonical PHP extension, when distinct.
-pub(crate) fn php_extension_for_lib(lib_name: &str) -> Option<&'static str> {
-    bridges::php_extension_for_lib(lib_name)
+/// Maps one bridge library name to the PHP extensions identified by linking that bridge.
+pub(crate) fn php_extensions_for_lib(lib_name: &str) -> &'static [&'static str] {
+    bridges::php_extensions_for_lib(lib_name)
 }
 
 /// Returns native libraries required by the selected optional PDO bridge profile.
@@ -215,7 +220,7 @@ pub(crate) fn link_with_plan(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<(), LinkError> {
-    let resolved = bridges::resolve(plan, forced_whole_archive)?;
+    let resolved = bridges::resolve(plan, forced_whole_archive, target.platform)?;
     let prepared = (target.platform == Platform::MacOS)
         .then(|| archive_dedup::prepare(&resolved.plan));
     let render_plan = prepared

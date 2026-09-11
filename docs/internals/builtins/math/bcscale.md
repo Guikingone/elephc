@@ -2,7 +2,7 @@
 title: "bcscale() — internals"
 description: "Compiler internals for bcscale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 278
+  order: 562
 ---
 
 ## `bcscale()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bcscale.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bcscale.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcscale(int $scale = null): int
+function bcscale(?int $scale = null): int
 ```
 
 ## What the type checker enforces

@@ -311,7 +311,7 @@ fn append_link_inputs(args: &mut Vec<OsString>, plan: &LinkPlan, platform: Platf
     }
 }
 
-/// Appends macOS framework pairs in their typed plan order.
+/// Appends Apple framework pairs in their typed plan order.
 fn append_frameworks(args: &mut Vec<OsString>, plan: &LinkPlan) {
     for item in plan.items() {
         if let LinkItem::Framework(framework) = item {

@@ -13,7 +13,8 @@
 //! - This module is intentionally private (`mod convert;` without `pub`).
 
 use crate::builtins::spec::{DefaultSpec, TypeSpec};
-use crate::parser::ast::{Expr, ExprKind};
+use crate::names::{Name, NameKind};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 use crate::types::PhpType;
 
@@ -31,6 +32,10 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Void => PhpType::Void,
         TypeSpec::Ptr => PhpType::Pointer(None),
         TypeSpec::Callable => PhpType::Callable,
+        TypeSpec::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+        // The checker's type model carries nullability through flow narrowing rather than a
+        // type constructor, so a nullable declaration converts to its inner type.
+        TypeSpec::Nullable(inner) => type_spec_to_php(inner),
     }
 }
 
@@ -50,6 +55,26 @@ pub fn default_spec_to_expr(d: &DefaultSpec) -> Expr {
         DefaultSpec::Str(s) => Expr::new(ExprKind::StringLiteral(s.to_string()), Span::dummy()),
         DefaultSpec::IntMax => Expr::new(ExprKind::IntLiteral(i64::MAX), Span::dummy()),
         DefaultSpec::EmptyArray => Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
+        DefaultSpec::Constant(name) => Expr::new(
+            ExprKind::ConstRef(crate::names::Name::from(*name)),
+            Span::dummy(),
+        ),
+        // Only prelude-provided contracts declare a non-literal default, and those have no
+        // AOT registry binding: the prelude's own PHP declaration carries the expression.
+        DefaultSpec::Expr(source) => panic!(
+            "DefaultSpec::Expr({source:?}) reached an AOT registry binding; only \
+             prelude-provided contracts may declare a non-literal default"
+        ),
+        DefaultSpec::ClassConstant { class, name } => Expr::new(
+            ExprKind::ScopedConstantAccess {
+                receiver: StaticReceiver::Named(Name::from_parts(
+                    NameKind::FullyQualified,
+                    class.split('\\').map(str::to_string).collect(),
+                )),
+                name: (*name).to_string(),
+            },
+            Span::dummy(),
+        ),
     }
 }
 

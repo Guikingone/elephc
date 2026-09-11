@@ -70,6 +70,9 @@ pub(crate) fn prune_if_chain(
                 return stmts;
             }
 
+            let (condition, then_body, canonical_else_body) =
+                canonicalize_negated_branches(condition, then_body, canonical_else_body);
+
             vec![build_if_stmt(
                 condition,
                 then_body,
@@ -78,6 +81,27 @@ pub(crate) fn prune_if_chain(
                 span,
             )]
         }
+    }
+}
+
+/// Rewrites `if (!c) { A } else { B }` into `if (c) { B } else { A }` so two-way branches test
+/// the positive condition. The swap is skipped when the `else` body is a lone `if`, because that
+/// is the canonical nested form of an `elseif` chain and the chain merges in `build_if_stmt`
+/// key on it. Both bodies are already normalized, so no re-pruning is needed.
+fn canonicalize_negated_branches(
+    condition: Expr,
+    then_body: Vec<Stmt>,
+    else_body: Option<Vec<Stmt>>,
+) -> (Expr, Vec<Stmt>, Option<Vec<Stmt>>) {
+    let Some(else_body) = else_body else {
+        return (condition, then_body, None);
+    };
+    let else_is_chain = matches!(else_body.as_slice(), [Stmt { kind: StmtKind::If { .. }, .. }]);
+    match condition.kind {
+        ExprKind::Not(inner) if !else_is_chain && !then_body.is_empty() => {
+            (*inner, else_body, Some(then_body))
+        }
+        kind => (Expr::new(kind, condition.span), then_body, Some(else_body)),
     }
 }
 

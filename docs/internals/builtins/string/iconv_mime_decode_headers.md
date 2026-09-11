@@ -2,7 +2,7 @@
 title: "iconv_mime_decode_headers() — internals"
 description: "Compiler internals for iconv_mime_decode_headers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 419
+  order: 783
 ---
 
 ## `iconv_mime_decode_headers()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/iconv_mime_decode_headers.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/iconv_mime_decode_headers.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function iconv_mime_decode_headers(string $headers, int $mode = 0, string $encoding = null): mixed
+function iconv_mime_decode_headers(string $headers, int $mode = 0, ?string $encoding = null): mixed
 ```
 
 ## What the type checker enforces

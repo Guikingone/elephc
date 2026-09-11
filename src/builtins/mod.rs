@@ -20,6 +20,7 @@ mod convert;
 mod requirements;
 mod array;
 mod callables;
+mod curl;
 mod io;
 mod string;
 mod math;
@@ -27,5 +28,6 @@ mod spl;
 mod pointers;
 mod system;
 mod types;
+pub(crate) mod xml;
 #[cfg(test)]
 mod parity_tests;

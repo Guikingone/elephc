@@ -133,6 +133,17 @@ pub(super) fn eval_new_object_result(
     if let Some(class) = context.class(class_name).cloned() {
         return eval_dynamic_class_new_object(&class, args, context, scope, values);
     }
+    // `CURLFile`/`CURLStringFile` DELIBERATELY FALL THROUGH to the native-class fallback
+    // below, and that is the whole point rather than an oversight. They used to be
+    // intercepted here alongside the curl multi/share interfaces, on a "TWO DISTINCT OBJECT
+    // SPACES" argument that does not apply to them: unlike every other curl class, they are
+    // PURE PHP DATA CLASSES wrapping no native handle at all
+    // (`crate::curl_prelude`'s own comment above their declarations), so the real AOT class
+    // an `elephc_curl`-linked program already carries works correctly inside `eval()` — its
+    // properties read, its getters and setters dispatch, and
+    // `crate::interpreter::builtins::curl::multipart` consumes exactly such an object when
+    // it walks a `CURLOPT_POSTFIELDS` array. The interception existed only because that
+    // walk did not, which made a constructible `CURLFile` a value nothing could use.
     let object = values.new_object(class_name)?;
     if let Err(err) =
         eval_native_constructor_with_evaluated_args(class_name, object, args, context, values)
@@ -221,16 +232,23 @@ pub(super) fn eval_instanceof_expr(
     let value = eval_expr(value, context, scope, values)?;
     let result = match target {
         EvalInstanceOfTarget::ClassName(class_name) => {
-            if values.type_tag(value)? != EVAL_TAG_OBJECT {
-                return values.bool_value(false);
-            }
             let target_class = eval_instanceof_static_target_name(class_name, context)?;
-            eval_instanceof_object_result(value, &target_class, context, values)?
+            let tag = values.type_tag(value)?;
+            if tag == EVAL_TAG_CALLABLE && target_class.eq_ignore_ascii_case("Closure") {
+                true
+            } else if tag == EVAL_TAG_OBJECT {
+                eval_instanceof_object_result(value, &target_class, context, values)?
+            } else {
+                false
+            }
         }
         EvalInstanceOfTarget::Expr(target) => {
             let target = eval_expr(target, context, scope, values)?;
             let target_class = eval_instanceof_dynamic_target_name(target, context, values)?;
-            if values.type_tag(value)? == EVAL_TAG_OBJECT {
+            let tag = values.type_tag(value)?;
+            if tag == EVAL_TAG_CALLABLE && target_class.eq_ignore_ascii_case("Closure") {
+                true
+            } else if tag == EVAL_TAG_OBJECT {
                 eval_instanceof_object_result(value, &target_class, context, values)?
             } else {
                 false

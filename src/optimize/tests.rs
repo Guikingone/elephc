@@ -21,6 +21,7 @@ mod dce;
 mod control;
 mod normalize;
 mod performance;
+mod target_guards;
 
 /// Runs DCE over a hand-built AST that no checker ever saw.
 ///

@@ -161,9 +161,20 @@ by EIR lowering and `src/codegen/`.
 Optional, heavyweight functionality that is naturally expressed with Rust
 libraries lives in a workspace crate under `crates/elephc-<name>/`, compiled as a
 `staticlib` and linked into the user program on demand. Every such bridge is
-described by one entry in the `BRIDGES` table in `src/linker.rs`; `link()` and the
+described by one entry in the `BRIDGES` table in `src/linker/bridges.rs`; `link()` and the
 discovery/auto-build helpers are fully table-driven, so adding a bridge is a
 single table entry rather than new linker logic.
+
+Every bridge entry must declare a reviewed `MonitoringPolicy`. Use generic
+timing when ordinary function timing is sufficient, typed I/O policy when the
+bridge performs database or network work, and an infrastructure policy with a
+nonempty reason only for monitor/runtime plumbing. The bridge-catalog gate
+rejects an unspecified policy. Bridge-backed `RuntimeFnId` values must also
+declare their operation policy, and any runtime operation carrying
+`BLOCKING_IO` or `NETWORK_IO` effects must use evented monitoring. I/O bridges
+share the dependency-neutral `elephc-monitoring-contract` helper and distinct
+database/network runtime slots, which must remain dormant outside an active
+capture.
 
 A bridge is linked when its `lib_name` appears in `extra_link_libs`. That set is
 populated automatically by feature detection: the type checker records a needed
@@ -174,11 +185,11 @@ bridge.
 
 `--with-<crate>` force-enables a bridge regardless of detection. It force-links
 the staticlib (whole-archived so it is not dead-stripped) and, for crates whose
-PHP surface comes from a prelude (`pdo`, `tz`, `image`), force-injects that
+PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`), force-injects that
 prelude so the API is declared even when usage was not detected. The flag name is
 the bridge's `flag_name` (`crate_name` minus the `elephc-` prefix): `--with-pdo`,
 `--with-tls`, `--with-crypto`, `--with-iconv`, `--with-phar`, `--with-tz`,
-`--with-image`.
+`--with-image`, `--with-curl`, `--with-xml`.
 `--with-web` is an alias for `--web` (the full server mode, which owns the program
 entry point). An unknown `--with-<name>` is a hard CLI error listing the valid
 crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
@@ -191,6 +202,31 @@ crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
 use still auto-detects the same feature. Merely declaring `pcre2` does not link
 it, and dynamic eval without the capability leaves regex builtins unavailable
 at runtime.
+
+`curl` is the first ordinary bridge crate that ALSO needs a managed native
+package: `--with-curl` (or ordinary detection
+of a `curl_*` call, via `src/curl_prelude/detect.rs`) force-links `elephc_curl`, and `src/pipeline/backend.rs`
+mirrors that into `NativeRequirement::package("curl")` so the final link also
+resolves the managed `curl` package's `libcurl.a`, plus the `openssl`/`zlib`
+archives it declares as dependencies, in the fixed order
+`libcurl.a -> libssl.a -> libcrypto.a -> libz.a`. There is no system fallback:
+a missing `curl` package fails closed with the same `elephc native add curl`
+recovery style as PCRE2, never a `-lcurl`.
+
+`xml` is the second such bridge: `--with-xml` (or ordinary detection of an
+`xml_*` / `xmlwriter_*` call or of the `XMLParser` / `XMLWriter` classes, via
+`src/xml_prelude/detect.rs`) force-links `elephc_xml`, and `src/pipeline/backend.rs`
+mirrors that into `NativeRequirement::package("libxml2")` so the final link also
+resolves the managed `libxml2` package's two archives in the fixed order
+`libelephc_libxml2_shim.a -> libxml2.a`. The bridge reaches libxml2 only through
+the recipe-compiled shim `src/native_deps/recipes/libxml2_shim.c` (which owns
+every access to libxml2's struct internals) plus libxml2's opaque public API,
+both declared in `crates/elephc-xml/src/ffi.rs` without linking — no bindgen,
+no `-sys` crate, no headers at cargo build time. Apple targets add `-liconv`
+for libxml2's encoding handlers through the entry's
+`BridgeStaticlib.apple_libraries`; glibc provides iconv from libc. `libxml2`
+has no catalog dependencies, and a missing package fails closed with the
+`elephc native add libxml2` recovery, never a `-lxml2`.
 
 ### Codegen layout
 
@@ -552,18 +588,23 @@ sidebar:
 
 ## Roadmap management
 
-`ROADMAP.md` is the planning document, organized by version. It stays as it is:
+`ROADMAP.md` tracks planned and delivered work, organized by version:
 
-- **Do not add entries to record implemented work.** The roadmap only gains new items when work is being *planned*, under the appropriate future version.
-- When an implementation completes an item **already present** in the roadmap, mark it `[x]` in place. If no matching item exists, the roadmap is left untouched.
-- **Never remove completed items** from a version section. Mark them as `[x]` and leave them under the version they belong to. This preserves the history of what was delivered in each release.
-- When all items in a version are completed, the version is considered done — do not move items elsewhere.
+- Add planned work as `[ ]` under the version where it is expected to ship.
+- When an implementation lands, mark its existing item `[x]`. If it was not planned in the roadmap, add a concise `[x]` item under the version that delivers it.
+- During release preparation, reconcile the current version section with the audited release range and add any missing notable delivered work as `[x]`.
+- **Never remove completed items** from a version section. Leave them under the version that delivered them so the roadmap preserves that version's scope.
+- When all items in a version are completed, the version is considered done; do not move items elsewhere.
 
 ## Changelog management
 
-`CHANGELOG.md` records every released version, newest first, in *Keep a Changelog* style.
+`CHANGELOG.md` is a release artifact, not a development log. It records every released version, newest first, in *Keep a Changelog* style.
 
-Before cutting a release, run the `prepare-release-changelog` skill. It must reconcile every merged Pull Request and direct commit since the latest published release against the exact candidate `main` SHA, then prepare the approved user-facing bullets under `[Unreleased]`. An incomplete source ledger or unresolved commit is a release blocker.
+- **Do not edit `CHANGELOG.md` during ordinary development.** Feature, fix, refactor, documentation, dependency, and maintenance Pull Requests must not add entries under `[Unreleased]` or a numbered release.
+- Keep `[Unreleased]` empty between releases. Do not accumulate one changelog bullet per Pull Request.
+- Only an explicit release-preparation task may add, move, rewrite, or remove changelog bullets.
+- Before cutting a release, run the `prepare-release-changelog` skill. It must reconcile every merged Pull Request and direct commit since the latest published release against the exact candidate SHA, then write the approved user-facing bullets directly under the numbered candidate release section. An incomplete source ledger or unresolved commit is a release blocker.
+- If the target version is not known, stop and ask for it before editing the changelog. Do not use `[Unreleased]` as a staging section for a known release.
 
 When cutting a release:
 
@@ -592,6 +633,7 @@ When cutting a release:
 - Run the focused pre-commit verification above before committing code changes. Do not knowingly commit with relevant focused tests failing; the full suite must pass in CI.
 - Zero compiler warnings policy (`cargo build` must be clean)
 - Never run `cargo fmt` in this repo. Use targeted manual edits only; global formatting creates noisy churn here.
+- Bridge C-ABI return buffers are never process-global: a `static Mutex<CString>` handing out `as_ptr()` is a cross-thread use-after-free (the next call frees what an earlier caller is still reading). Use `thread_local!` cells or caller-owned allocations. Enforced by `tests/ffi_buffer_hygiene.rs`; rationale in CONTRIBUTING.md § "Expose a stable C ABI".
 
 ## Cursor Cloud specific instructions
 

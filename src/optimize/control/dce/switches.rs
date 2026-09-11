@@ -389,6 +389,9 @@ pub(super) fn dce_switch_stmt(
     span: crate::span::Span,
     guards: &GuardState,
 ) -> Vec<Stmt> {
+    if switch_default_is_middle(&cases, &default) {
+        return dce_switch_bodies_only(subject, cases, default, span, guards);
+    }
     let subject = prune_expr(subject);
     let has_default = default.is_some();
     let (cases, default) = prune_switch_patterns_with_guards(
@@ -437,9 +440,49 @@ pub(super) fn dce_switch_stmt(
     )]
 }
 
+/// Returns whether the switch has a `default` written between cases, which falls through into
+/// the case after it. Every switch rewrite in this pass models `default` as the body that runs
+/// last, so such a switch must not be reshaped.
+fn switch_default_is_middle(cases: &[(Vec<Expr>, Vec<Stmt>)], default: &Option<Vec<Stmt>>) -> bool {
+    default
+        .as_ref()
+        .is_some_and(|body| !switch_default_runs_last(cases, body))
+}
+
+/// Applies DCE to each body of a switch whose `default` sits between cases, under the outer
+/// guards only, and keeps the switch shape untouched so EIR lowering can place the bodies at
+/// their source positions. No case pruning, tail sinking, or guard fact is derived from it.
+fn dce_switch_bodies_only(
+    subject: Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+    guards: &GuardState,
+) -> Vec<Stmt> {
+    let cases = cases
+        .into_iter()
+        .map(|(patterns, body)| {
+            (
+                patterns.into_iter().map(prune_expr).collect(),
+                dce_block_with_guards(body, guards.clone()),
+            )
+        })
+        .collect();
+    let default = default.map(|body| dce_block_with_guards(body, guards.clone()));
+    vec![Stmt::new(
+        StmtKind::Switch {
+            subject: prune_expr(subject),
+            cases,
+            default,
+        },
+        span,
+    )]
+}
+
 /// Applies DCE to a switch statement with a tail of statements to execute after the switch.
 ///
-/// The tail is first processed with DCE. If the switch has level-sensitive loop exits,
+/// The tail is first processed with DCE. If the switch has level-sensitive loop exits, has no
+/// `default` (the no-match path would need a copy of its own), or the tail carries a loop exit,
 /// the tail is appended after the full switch statement. If the switch has unknown
 /// reachability paths, the tail is appended to the switch result without further
 /// optimization. Otherwise, the tail is sunk into case and default bodies that
@@ -453,6 +496,11 @@ pub(super) fn dce_switch_stmt_with_tail(
     span: crate::span::Span,
     guards: &GuardState,
 ) -> Vec<Stmt> {
+    if switch_default_is_middle(&cases, &default) {
+        let mut stmts = dce_switch_bodies_only(subject, cases, default, span, guards);
+        stmts.extend(dce_block_with_guards(tail, guards.clone()));
+        return stmts;
+    }
     let subject = prune_expr(subject);
     let tail = dce_block_with_guards(tail, guards.clone());
     let has_default = default.is_some();
@@ -478,6 +526,20 @@ pub(super) fn dce_switch_stmt_with_tail(
 
     if tail.is_empty() {
         return dce_switch_stmt(subject, cases, default, span, guards);
+    }
+
+    // Without a `default`, the tail is reached by every `break` path, by the last case falling
+    // off the switch, AND by a subject that matches nothing. Sinking would clone it once per
+    // `break` plus once into a synthesized `default` for the last two paths — a default that is
+    // dead when the cases are exhaustive — so the tail simply stays after the switch.
+    //
+    // A `break` / `continue` in the tail targets a loop around the switch; inside a case or
+    // default body the same statement would target the switch itself, so such a tail stays
+    // after the switch as well.
+    if default.is_none() || block_contains_loop_exit(&tail) {
+        let mut stmts = dce_switch_stmt(subject, cases, default, span, guards);
+        stmts.extend(tail);
+        return stmts;
     }
 
     let reachability = analyze_switch_tail_paths(&cases, &default);
@@ -515,29 +577,13 @@ pub(super) fn dce_switch_stmt_with_tail(
         }
     }
 
-    let no_default = default.is_none();
-    let case_count = cases.len();
-    for (index, (_, body)) in cases.iter_mut().enumerate() {
-        match block_terminal_effect(body) {
-            TerminalEffect::Breaks => {
-                *body = sink_tail_into_terminal_path(
-                    std::mem::take(body),
-                    tail.clone(),
-                    TailSinkTarget::Breaks,
-                );
-            }
-            TerminalEffect::FallsThrough
-                if no_default
-                    && index + 1 == case_count
-                    && matches!(reachability.case_tail_paths[index], TailPathKind::FallsThrough) =>
-            {
-                *body = sink_tail_into_terminal_path(
-                    std::mem::take(body),
-                    tail.clone(),
-                    TailSinkTarget::FallsThrough,
-                );
-            }
-            _ => {}
+    for (_, body) in cases.iter_mut() {
+        if matches!(block_terminal_effect(body), TerminalEffect::Breaks) {
+            *body = sink_tail_into_terminal_path(
+                std::mem::take(body),
+                tail.clone(),
+                TailSinkTarget::Breaks,
+            );
         }
     }
 

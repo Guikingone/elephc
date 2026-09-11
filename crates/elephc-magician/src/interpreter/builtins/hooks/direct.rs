@@ -68,6 +68,11 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Ctype,
     /// Dispatches filesystem and path builtins.
     Filesystem,
+    /// Dispatches the whole `ext/curl` easy-interface family (behind the `curl` Cargo
+    /// feature; see `crate::interpreter::builtins::curl`'s module doc). One shared
+    /// variant with internal name dispatch, mirroring `HashContext`/`Openssl` above.
+    #[cfg(feature = "curl")]
+    Curl,
     /// Dispatches `acos(...)`.
     Acos,
     /// Dispatches `asin(...)`.
@@ -172,6 +177,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Min,
     /// Dispatches network, host, environment, and process builtins.
     NetworkEnv,
+    /// Dispatches PCNTL process-control builtins.
+    Pcntl,
+    /// Dispatches the `xml_*` / `xmlwriter_*` family by forwarding to the compiled xml prelude.
+    Xml,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -363,6 +372,8 @@ impl EvalDirectHook {
             Self::Deg2rad => eval_builtin_deg2rad(args, context, scope, values),
             Self::Exp => eval_builtin_exp(args, context, scope, values),
             Self::Filesystem => eval_builtin_filesystem_call(name, args, context, scope, values),
+            #[cfg(feature = "curl")]
+            Self::Curl => eval_builtin_curl_declared_call(name, args, context, scope, values),
             Self::Gettype => eval_builtin_gettype(args, context, scope, values),
             Self::Hypot => eval_builtin_hypot(args, context, scope, values),
             Self::Intval => eval_builtin_intval(args, context, scope, values),
@@ -429,6 +440,8 @@ impl EvalDirectHook {
             Self::Min => eval_builtin_min(args, context, scope, values),
             Self::MtRand => eval_builtin_mt_rand(args, context, scope, values),
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
+            Self::Pcntl => eval_builtin_pcntl_expr_call(name, args, context, scope, values),
+            Self::Xml => eval_builtin_xml_expr_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
             Self::Openssl => {
                 eval_builtin_openssl_declared_call(name, args, context, scope, values)

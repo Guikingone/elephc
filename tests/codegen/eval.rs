@@ -6626,17 +6626,18 @@ echo function_exists("rand"); echo function_exists("mt_rand"); echo function_exi
     );
 }
 
-/// Verifies eval `spl_classes()` exposes the same static SPL class list as native code.
+/// Verifies eval `spl_classes()` exposes the same `ext/spl` class list as native code (the
+/// shared catalog's SPL module: `Exception` is SPL's `LogicException` parent but is Core).
 #[test]
 fn test_eval_dispatches_spl_classes_builtin_calls() {
     let out = compile_and_run(
         r#"<?php
 eval('$names = spl_classes();
-echo count($names) . ":" . $names[0] . ":" . $names[55] . ":";
-echo (in_array("Exception", $names) ? "exception" : "bad") . ":";
+echo count($names) . ":" . $names[0] . ":" . $names[53] . ":";
+echo (in_array("LogicException", $names) ? "exception" : "bad") . ":";
 echo (in_array("SplDoublyLinkedList", $names) ? "list" : "bad") . ":";
 $call = call_user_func("spl_classes");
-echo (in_array("Throwable", $call) ? "call" : "bad") . ":";
+echo (in_array("SplStack", $call) ? "call" : "bad") . ":";
 $spread = call_user_func_array("spl_classes", []);
 echo (count($spread) === count($names) ? "spread" : "bad") . ":";
 echo function_exists("spl_classes"); echo is_callable("spl_classes");');
@@ -6644,7 +6645,7 @@ echo function_exists("spl_classes"); echo is_callable("spl_classes");');
     );
     assert_eq!(
         out,
-        "61:AppendIterator:Throwable:exception:list:call:spread:11"
+        "54:AppendIterator:UnexpectedValueException:exception:list:call:spread:11"
     );
 }
 
@@ -7556,12 +7557,52 @@ echo call_user_func("getenv", "ELEPHC_EVAL_ENV_TEST") . ":";
 echo call_user_func_array("putenv", ["assignment" => "ELEPHC_EVAL_ENV_TEST=spread"]) ? "set" : "bad";
 echo ":" . getenv("ELEPHC_EVAL_ENV_TEST") . ":";
 putenv("ELEPHC_EVAL_ENV_TEST");
-echo getenv("ELEPHC_EVAL_ENV_TEST") === "" ? "empty" : "bad";
+echo getenv("ELEPHC_EVAL_ENV_TEST") === false ? "missing" : "bad";
 echo ":"; echo function_exists("getenv");
 echo function_exists("putenv");');
 "#,
     );
-    assert_eq!(out, "direct:named:named:set:spread:empty:11");
+    assert_eq!(out, "direct:named:named:set:spread:missing:11");
+}
+
+/// Verifies eval `getenv()` with zero arguments and a null name answers the environment.
+#[test]
+fn test_eval_getenv_whole_environment() {
+    let out = compile_and_run(
+        r#"<?php
+eval('putenv("ELEPHC_EVAL_ENV_ALL=present");
+echo is_array(getenv()) ? "a" : "x";
+echo is_array(getenv(null, true)) ? "nt" : "x";
+echo getenv("ELEPHC_EVAL_ENV_ALL", true);
+echo is_array(call_user_func("getenv")) ? "c" : "x";');
+"#,
+    );
+    assert_eq!(out, "antpresentc");
+}
+
+/// Verifies eval preserves environment bytes and distinguishes absent names from empty values.
+#[test]
+fn test_eval_getenv_preserves_non_utf8_environment() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let out = compile_and_run_with_env(
+        r#"<?php
+putenv("ELEPHC_EVAL_RAW_KEY_" . chr(255) . "=raw");
+eval('$key = "ELEPHC_EVAL_RAW_ENV";
+$all = getenv();
+echo bin2hex($all[$key]), ":", bin2hex(getenv($key, true));
+echo ":", bin2hex(call_user_func("getenv", $key));
+echo ":", bin2hex(getenv()["ELEPHC_EVAL_RAW_KEY_" . chr(255)]);
+echo ":", bin2hex(getenv("ELEPHC_EVAL_RAW_KEY_" . chr(255)));
+putenv("ELEPHC_EVAL_RAW_ENV_EMPTY=");
+echo ":", getenv("ELEPHC_EVAL_RAW_ENV_EMPTY") === "" ? "empty" : "bad";
+putenv("ELEPHC_EVAL_RAW_ENV_MISSING");
+echo ":", getenv("ELEPHC_EVAL_RAW_ENV_MISSING", true) === false ? "missing" : "bad";
+echo ":", call_user_func("getenv", "ELEPHC_EVAL_RAW_ENV_MISSING") === false ? "missing" : "bad";');
+"#,
+        &[("ELEPHC_EVAL_RAW_ENV", std::ffi::OsStr::from_bytes(b"a\xff=b"))],
+    );
+    assert_eq!(out, "61ff3d62:61ff3d62:61ff3d62:726177:726177:empty:missing:missing");
 }
 
 /// Verifies eval sleep builtins dispatch through direct, named, and callable paths.
@@ -14330,6 +14371,10 @@ echo $pure->hasMethod("from") ? "bad" : "nofrom";');
 }
 
 /// Verifies eval enums support user interfaces derived from PHP enum marker interfaces.
+///
+/// The two rejection cases live in their own tests: every `compile_and_run` here links the
+/// eval bridge, and three of them in one test ran past nextest's 60s per-test limit on the
+/// macOS runners.
 #[test]
 fn test_eval_declared_enum_marker_interface_inheritance() {
     let out = compile_and_run(
@@ -14357,7 +14402,12 @@ echo EvalDynMarkedBacked::Ready->value;');
         out,
         "UB2:EvalDynUnitMarker:UnitEnum:3:EvalDynBackedMarker:UnitEnum:BackedEnum:ready"
     );
+}
 
+/// Verifies an eval enum cannot implement `UnitEnum` explicitly: the marker is applied by the
+/// engine, and naming it fails at eval runtime.
+#[test]
+fn test_eval_declared_enum_rejects_explicit_unit_enum_interface() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('enum EvalDynExplicitUnitEnum implements UnitEnum {
@@ -14369,7 +14419,11 @@ eval('enum EvalDynExplicitUnitEnum implements UnitEnum {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Verifies a pure eval enum cannot implement a user interface derived from `BackedEnum`.
+#[test]
+fn test_eval_declared_pure_enum_rejects_backed_marker_interface() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('interface EvalDynBackedMarkerBad extends BackedEnum {}
@@ -16982,8 +17036,12 @@ echo $box->value;');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "Ada");
+}
 
-    for source in [
+/// Verifies eval rejects an explicit untyped set-hook parameter.
+#[test]
+fn test_eval_declared_property_set_hook_rejects_untyped_explicit_parameter() {
+    let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalUntypedExplicitSetHookParam {
     public string $value {
@@ -16991,6 +17049,17 @@ eval('class EvalUntypedExplicitSetHookParam {
     }
 }');
 "#,
+    );
+    assert!(
+        err.contains("Fatal error: eval()"),
+        "stderr did not contain eval fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval rejects a set-hook parameter narrower than its property type.
+#[test]
+fn test_eval_declared_property_set_hook_rejects_narrow_parameter() {
+    let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalNarrowSetHookParam {
     public mixed $value {
@@ -16998,13 +17067,11 @@ eval('class EvalNarrowSetHookParam {
     }
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval()"),
-            "stderr did not contain eval fatal diagnostic: {err}"
-        );
-    }
+    );
+    assert!(
+        err.contains("Fatal error: eval()"),
+        "stderr did not contain eval fatal diagnostic: {err}"
+    );
 }
 
 /// Verifies eval-declared nullsafe and mixed-case property hook reads stay routed.
@@ -29342,4 +29409,26 @@ echo ":"; echo intval("42");');
 "#,
     );
     assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
+}
+
+/// Decodes NUL escapes and warns only for observable undefined-variable reads in eval.
+#[test]
+fn test_eval_nul_escapes_and_undefined_variable_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo eval('echo strlen("\0") . ":" . strlen("\x00") . ":";
+echo $missing;
+return ":" . ($quiet ?? "fallback");');
+"#,
+    );
+    assert_eq!(out.stdout, "1:1::fallback");
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Undefined variable $missing")
+            .count(),
+        1,
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains("$quiet"), "{}", out.stderr);
 }

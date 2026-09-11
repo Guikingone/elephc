@@ -17,6 +17,42 @@ sidebar:
 | `**` | `$a ** $b` | Exponentiation (right-associative). Int-preserving like PHP: two `int` operands with a non-negative exponent give an `int` while the result fits (`2 ** 3` is `int(8)`), and promote to `double` at the multiplication that overflows (`2 ** 63`). A negative exponent or a `float` operand always gives a `float`. |
 | `-$x` | `-$x` | Unary negation |
 
+### Numeric strings in arithmetic
+
+The arithmetic operators (`+ - * / % **`) accept numeric and leading-numeric strings and coerce
+them at runtime, matching PHP 8:
+
+- A pure integer-form string coerces to `int` (`"123" + 3` is `int(126)`).
+- A float-form string — one containing a `.` or an exponent — coerces to `float` (`"1.5" + 3` is
+  `float(4.5)`, `"1e3" + 1` is `float(1001)`). The runtime routes a float-form string operand
+  through the floating-point path, so it is never truncated to an integer first.
+- An integer-form string that does not fit a 64-bit integer is a `float` too, exactly as in PHP
+  (`"99999999999999999999" + 1` is `float(1.0E+20)`), so the magnitude is preserved instead of
+  saturating at `PHP_INT_MAX`. The boundary itself stays an `int`
+  (`"9223372036854775807" + 0` is `int(9223372036854775807)`).
+- A leading-numeric string uses its numeric prefix and PHP emits `Warning: A non-numeric value
+  encountered` (`"  +12foo" + 3` is `int(15)`). For a string **literal** operand elephc reports
+  this warning at compile time.
+- The classification follows PHP's numeric-string grammar (via the same scan used by
+  `is_numeric()`), so hexadecimal (`"0x1A"`), `INF`/`NAN` spellings, and `_` digit separators are
+  not recognized as numbers.
+
+Because a string operand's runtime type is not known until it is coerced, the result type of
+`+ - * ** %` with a string operand is dynamic (`int` or `float`); `/` stays `float` and `%` stays
+`int`, as elsewhere.
+
+A **fully non-numeric** string with no numeric prefix (`"hi"`) is not a valid arithmetic operand:
+PHP raises `TypeError: Unsupported operand types`. elephc rejects that at compile time when the
+operand is a constant string (`"hi" + 1` is a compile error). See
+[Known incompatibilities with PHP](types.md#known-incompatibilities-with-php) for the
+runtime-value case.
+
+This coercion is scoped to the arithmetic operators above. Unary negation (`-"5"`) and the
+bitwise operators (`"6" << 1`, `&`, `|`, `^`) still require a numeric or integer operand and
+reject `string` at compile time, and relational comparison (`< > <= >= <=>`) does **not** widen
+to string operands either — see
+[Known incompatibilities with PHP](types.md#known-incompatibilities-with-php).
+
 ## Comparison
 
 | Operator | Example | Notes |

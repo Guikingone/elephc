@@ -192,7 +192,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // during instruction lowering.
     let mut linked_extensions: Vec<String> = Vec::new();
     for lib in &planned_link_libraries {
-        if let Some(ext) = linker::php_extension_for_lib(lib) {
+        for ext in linker::php_extensions_for_lib(lib) {
             if !linked_extensions.iter().any(|existing| existing == ext) {
                 linked_extensions.push(ext.to_string());
             }
@@ -294,7 +294,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     timings.record_since("runtime-cache", phase_started);
     timings.note(format!("Runtime cache: {}", runtime_object.status.as_str()));
 
-    let native_requirements: Vec<NativeRequirement> = runtime_link_requirements
+    let mut native_requirements: Vec<NativeRequirement> = runtime_link_requirements
         .iter()
         .filter_map(|requirement| match requirement {
             LinkRequirement::NativePackage(package) => {
@@ -303,6 +303,41 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             LinkRequirement::Bridge(_) | LinkRequirement::SystemLibrary(_) => None,
         })
         .collect();
+    // The curl bridge is a Rust `staticlib` (`elephc_curl`, planned above like any
+    // other bridge) that itself links against the managed native `curl` package
+    // (which pulls in `openssl`/`zlib` transitively through the catalog). Unlike
+    // `regex`, curl has no `RuntimeFeatures` bit: `elephc_curl` reaches
+    // `planned_link_libraries` either because the program actually uses curl (every
+    // curl `RuntimeFnId` declares `BuiltinRequirement::Bridge("elephc_curl")`, and the
+    // curl prelude is injected only when `src/curl_prelude/detect.rs` finds a `curl_*`
+    // reference) or because `--with-curl` forces it explicitly with no such reference;
+    // this mirrors that into the native requirement so the
+    // final link resolves `libcurl.a`/`libssl.a`/`libcrypto.a`/`libz.a` instead of
+    // failing on `elephc_curl`'s undefined libcurl symbols.
+    if planned_link_libraries
+        .iter()
+        .any(|library| library == "elephc_curl")
+    {
+        native_requirements.push(NativeRequirement::package("curl"));
+    }
+    // The xml bridge is the same shape as curl: `elephc_xml` is a Rust `staticlib`
+    // whose parser is libxml2 itself, reached through the Elephc-owned C shim the
+    // managed `libxml2` package builds and archives next to `libxml2.a`. It has no
+    // `RuntimeFeatures` bit either: `elephc_xml` reaches `planned_link_libraries`
+    // because the program names part of the surface (the xml prelude is injected
+    // only when `src/xml_prelude` detects an `xml_*`/`xmlwriter_*` call or an
+    // `XMLParser`/`XMLWriter` reference, and its `extern "elephc_xml"` block is what
+    // requires the bridge) or because `--with-xml` forces it. Mirroring that into
+    // the native requirement makes the final link resolve
+    // `libelephc_libxml2_shim.a` + `libxml2.a` from the project's catalog package
+    // instead of failing on the bridge's undefined `elephc_libxml2_v1_*`/`xml*`
+    // symbols — and, exactly like curl, there is no system `-lxml2` fallback.
+    if planned_link_libraries
+        .iter()
+        .any(|library| library == "elephc_xml")
+    {
+        native_requirements.push(NativeRequirement::package("libxml2"));
+    }
     let resolved_native = match crate::native_deps::resolve_for_compilation(
         Path::new(filename),
         target,

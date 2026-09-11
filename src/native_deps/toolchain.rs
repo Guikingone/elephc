@@ -50,6 +50,17 @@ impl ToolchainProvider for SystemToolchains {
 }
 
 impl NativeToolchain {
+    /// Returns the canonical `config.sub` host identity for Autoconf recipes.
+    ///
+    /// Apple clang reports SDK-qualified triples such as
+    /// `arm64-apple-ios13.0-simulator`; those are valid compiler targets but invalid
+    /// `config.sub` inputs. The normalized ABI deliberately removes the deployment
+    /// version and simulator suffix, while the selected compiler wrapper still controls
+    /// which Apple platform the emitted objects target.
+    pub(crate) fn autoconf_host(&self) -> &str {
+        &self.abi
+    }
+
     /// Returns the minimal deterministic environment used by configure, Make, and C compilation.
     pub fn build_environment(&self) -> BTreeMap<OsString, OsString> {
         let mut environment = BTreeMap::new();
@@ -356,6 +367,35 @@ mod tests {
             validate_tuple(simulator, "arm64-apple-ios13.0", false).is_err(),
             "a device compiler must not build for the simulator"
         );
+    }
+
+    /// Verifies Autoconf receives the normalized Apple ABI instead of clang's
+    /// SDK-qualified simulator triple, which `config.sub` rejects.
+    #[test]
+    fn autoconf_host_normalizes_ios_simulator_compiler_triples() {
+        let toolchain = NativeToolchain {
+            cc: "cc".into(),
+            ar: "ar".into(),
+            ranlib: "ranlib".into(),
+            target_tuple: "arm64-apple-ios13.0-simulator".into(),
+            abi: "aarch64-apple-ios".into(),
+            fingerprint: "fp".into(),
+            compiler: ToolIdentity {
+                command: "cc".into(),
+                version: "v".into(),
+            },
+            archiver: ToolIdentity {
+                command: "ar".into(),
+                version: "v".into(),
+            },
+            ranlib_identity: ToolIdentity {
+                command: "ranlib".into(),
+                version: "v".into(),
+            },
+        };
+
+        assert_eq!(toolchain.autoconf_host(), "aarch64-apple-ios");
+        assert_ne!(toolchain.autoconf_host(), toolchain.target_tuple);
     }
 
     /// Verifies recipe environment excludes inherited compiler and linker flags.

@@ -10,12 +10,29 @@ as **curated native packages**: the project declares an exact version, the lock
 records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
-The catalog contains PCRE2 10.47 and zlib 1.3.2. Programs using `preg_*`,
-`mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator` require PCRE2 at
-final link time. zlib is the second pure-C recipe and proves the manager is not
-PCRE2-specific; declaring it makes its verified static artifact available for
-future runtime/builtin integrations but does not by itself add `libz.a` to every
-program.
+The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
+libssh2 1.11.1, curl 8.21.0, and libxml2 2.15.3.
+Programs using `preg_*`, `mb_ereg_match()`, `RegexIterator`, or
+`RecursiveRegexIterator` require PCRE2 at final link time. zlib is the second
+pure-C recipe and proves the manager is not PCRE2-specific; declaring it makes
+its verified static artifact available for future runtime/builtin integrations
+but does not by itself add `libz.a` to every program. curl has the largest
+dependency closure in the catalog: `elephc native add curl` also declares
+libssh2 (SCP/SFTP), nghttp2 (HTTP/2), OpenSSL (curl's TLS backend, and
+libssh2's crypto backend) and zlib, and `--with-curl` or ordinary detected
+`curl_*` usage requires all six archives at final link time.
+Dependency declaration order is link order: the resolver walks it depth-first
+and splices each package's own dependencies in behind it, so `libssh2.a`
+precedes the OpenSSL and zlib archives that satisfy it. See
+[Linking and conditional compilation](linking-and-conditional-compilation.md)
+for the `--with-curl` flag itself.
+libxml2 is the parser behind the `xml` bridge: `--with-xml`, or any program
+whose link plan pulls in `elephc_xml`, requires the Elephc-owned
+`libelephc_libxml2_shim.a` followed by `libxml2.a` at final link time. It is
+built with the platform's iconv (built into glibc; `-liconv` on Apple targets)
+and without zlib, ICU, Python, readline, or dynamic modules, so it has no
+catalog dependencies of its own. Its complete public header set is retained
+so later XML extensions can compile against the same artifact.
 
 ## Quick start
 
@@ -123,10 +140,11 @@ SHA-256, exact source size, recipe revision, provides set, dependencies, and
 ordered link outputs for all supported targets. It contains no absolute cache
 or compiler paths and is safe to commit. Do not edit it by hand.
 
-The installer currently materializes manifest declarations. If a future catalog
-package has native dependencies, every dependency must also be declared in the
-manifest; lock generation fails closed with `elephc native add <dependency>`
-instead of silently producing an incomplete transitive installation.
+`native add` and `native update` declare a package's catalogued transitive
+dependencies directly in the manifest before locking and materializing them.
+Lock generation still fails closed with `elephc native add <dependency>` when a
+hand-edited manifest omits a required dependency, instead of producing an
+incomplete installation.
 
 ## Multi-target locks and caches
 
@@ -237,7 +255,10 @@ installation, so it does not race publication of the same cache key; the
 currently selected fingerprint is retained. Source archives remain
 content-addressed and reusable.
 
-Downloads use HTTPS and are bounded and hashed before publication. Extraction
+Downloads use HTTPS and are bounded and hashed before publication. Sources are
+gzip- or xz-compressed tarballs; the container format is fixed by the catalog
+URL, and xz sources (libxml2) are inflated by a pure-Rust decoder under the
+same expanded-size bound before their tar entries are checked. Extraction
 rejects path escapes, links, device entries, and oversized archives. Builds and
 receipts are staged, verified, and atomically published under advisory locks, so
 an interrupted or concurrent install cannot become a usable partial artifact.

@@ -2,7 +2,7 @@
 title: "mb_ereg_match() — internals"
 description: "Compiler internals for mb_ereg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 365
+  order: 729
 ---
 
 ## `mb_ereg_match()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_ereg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_ereg_match.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -41,7 +41,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function mb_ereg_match(string $pattern, string $subject, string $options = null): bool
+function mb_ereg_match(string $pattern, string $subject, ?string $options = null): bool
 ```
 
 ## What the type checker enforces

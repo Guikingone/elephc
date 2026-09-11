@@ -10,6 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
+use crate::numeric_string::scan_numeric_prefix;
 use crate::parser::ast::{
     BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver, Stmt, TypeExpr,
 };
@@ -37,19 +38,25 @@ impl Checker {
         let rt = self.infer_type(right, env)?;
         match op {
             BinOp::Pow => {
-                let lt_ok = is_numeric_operand_type(self, &lt);
-                let rt_ok = is_numeric_operand_type(self, &rt);
+                let lt_ok = is_arithmetic_operand_type(self, &lt);
+                let rt_ok = is_arithmetic_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
                     return Err(CompileError::new(
                         expr.span,
                         "Exponentiation requires numeric operands",
                     ));
                 }
+                self.check_arithmetic_string_operands(left, &lt, right, &rt, expr)?;
                 // PHP's `**` is int-preserving: `2 ** 3` is `int(8)`, not `float(8)`.
                 // It only becomes a float when an operand is already a float, when the
                 // exponent is negative, or when the integer result overflows `i64` — so
-                // an int/int power is `Mixed` for the same reason `+`/`-`/`*` are.
-                if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                // an int/int power is `Mixed` for the same reason `+`/`-`/`*` are. A
+                // numeric-string operand is coerced at runtime, so it is `Mixed` too.
+                if uses_mixed_numeric_dispatch(&lt)
+                    || uses_mixed_numeric_dispatch(&rt)
+                    || lt == PhpType::Str
+                    || rt == PhpType::Str
+                {
                     Ok(PhpType::Mixed)
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
@@ -65,15 +72,20 @@ impl Checker {
                 if is_array_like_type(&lt) || is_array_like_type(&rt) {
                     return self.infer_array_union_type(&lt, &rt, left, right, expr);
                 }
-                let lt_ok = is_numeric_operand_type(self, &lt);
-                let rt_ok = is_numeric_operand_type(self, &rt);
+                let lt_ok = is_arithmetic_operand_type(self, &lt);
+                let rt_ok = is_arithmetic_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
                     return Err(CompileError::new(
                         expr.span,
                         "Arithmetic operators require numeric operands",
                     ));
                 }
-                if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                self.check_arithmetic_string_operands(left, &lt, right, &rt, expr)?;
+                if uses_mixed_numeric_dispatch(&lt)
+                    || uses_mixed_numeric_dispatch(&rt)
+                    || lt == PhpType::Str
+                    || rt == PhpType::Str
+                {
                     Ok(PhpType::Mixed)
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
@@ -88,19 +100,25 @@ impl Checker {
                 }
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                let lt_ok = is_numeric_operand_type(self, &lt);
-                let rt_ok = is_numeric_operand_type(self, &rt);
+                let lt_ok = is_arithmetic_operand_type(self, &lt);
+                let rt_ok = is_arithmetic_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
                     return Err(CompileError::new(
                         expr.span,
                         "Arithmetic operators require numeric operands",
                     ));
                 }
-                // Division always returns float (PHP compat: 10/3 → 3.333...)
+                self.check_arithmetic_string_operands(left, &lt, right, &rt, expr)?;
+                // Division always returns float (PHP compat: 10/3 → 3.333...); keep that
+                // policy even when an operand is a numeric string.
                 if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
-                    if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                    if uses_mixed_numeric_dispatch(&lt)
+                        || uses_mixed_numeric_dispatch(&rt)
+                        || lt == PhpType::Str
+                        || rt == PhpType::Str
+                    {
                         Ok(PhpType::Mixed)
                     } else if let Some(literal_ty) =
                         checked_literal_int_arithmetic_type(op, left, right)
@@ -177,6 +195,65 @@ impl Checker {
                     Ok(lt)
                 }
             }
+        }
+    }
+
+    /// Validates string operands used with arithmetic operators (`+ - * / % **`).
+    ///
+    /// PHP 8 accepts numeric and leading-numeric strings as arithmetic operands, coercing
+    /// them at runtime, but raises a `TypeError` for a fully non-numeric string. For a
+    /// compile-time-known string literal this reproduces that behavior at compile time: a
+    /// fully non-numeric literal is rejected with the same "requires numeric operands"
+    /// diagnostic, and a leading-numeric literal is accepted with the
+    /// `A non-numeric value encountered` warning PHP emits. A string operand whose value is
+    /// only known at runtime is left for the runtime numeric-string coercion.
+    fn check_arithmetic_string_operands(
+        &mut self,
+        left: &Expr,
+        lt: &PhpType,
+        right: &Expr,
+        rt: &PhpType,
+        expr: &Expr,
+    ) -> Result<(), CompileError> {
+        self.check_arithmetic_string_operand(left, lt, expr)?;
+        self.check_arithmetic_string_operand(right, rt, expr)
+    }
+
+    /// Classifies one arithmetic string-literal operand (see `check_arithmetic_string_operands`).
+    fn check_arithmetic_string_operand(
+        &mut self,
+        operand: &Expr,
+        ty: &PhpType,
+        expr: &Expr,
+    ) -> Result<(), CompileError> {
+        if *ty != PhpType::Str {
+            return Ok(());
+        }
+        let ExprKind::StringLiteral(value) = &operand.kind else {
+            return Ok(());
+        };
+        match classify_numeric_string_literal(value) {
+            NumericStringClass::Numeric => Ok(()),
+            NumericStringClass::LeadingNumeric => {
+                self.push_arithmetic_warning(operand.span, "A non-numeric value encountered");
+                Ok(())
+            }
+            NumericStringClass::NonNumeric => Err(CompileError::new(
+                expr.span,
+                "Arithmetic operators require numeric operands",
+            )),
+        }
+    }
+
+    /// Records a de-duplicated arithmetic warning at `span`.
+    fn push_arithmetic_warning(&mut self, span: Span, message: &str) {
+        if !self
+            .warnings
+            .iter()
+            .any(|warning| warning.span == span && warning.message == message)
+        {
+            self.warnings
+                .push(crate::errors::CompileWarning::new(span, message));
         }
     }
 
@@ -1329,6 +1406,48 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
             | PhpType::Void
             | PhpType::Mixed
     ) || checker.is_union_with_mixed_numeric_dispatch(ty)
+}
+
+/// Returns `true` if `ty` is a valid operand type for arithmetic operators (`+ - * / % **`).
+///
+/// This is the numeric-operand set plus `PhpType::Str`: PHP 8 coerces numeric and
+/// leading-numeric strings in arithmetic. Relational comparison and the spaceship operator
+/// deliberately keep the stricter `is_numeric_operand_type`, so `"a" < 1` and `"a" <=> "b"`
+/// remain type errors. A fully non-numeric string *literal* is still rejected in
+/// `Checker::check_arithmetic_string_operands`.
+fn is_arithmetic_operand_type(checker: &Checker, ty: &PhpType) -> bool {
+    is_numeric_operand_type(checker, ty) || matches!(ty, PhpType::Str)
+}
+
+/// PHP's `is_numeric_string` classification of a string literal used in arithmetic.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NumericStringClass {
+    /// A fully numeric string (`"123"`, `"1.5"`, `" 42 "`); PHP coerces it silently.
+    Numeric,
+    /// A leading-numeric string (`"12abc"`, `"  +12foo"`); PHP coerces the numeric prefix
+    /// and emits `Warning: A non-numeric value encountered`.
+    LeadingNumeric,
+    /// A string with no numeric prefix (`"hi"`, `""`); PHP raises a `TypeError`.
+    NonNumeric,
+}
+
+/// Classifies a string operand against PHP's numeric-string grammar.
+///
+/// The grammar itself lives in [`crate::numeric_string`], the single compile-time twin of the
+/// runtime `__rt_php_num_scan` helper, so a string literal and the same value seen only at
+/// runtime cannot disagree. Only the arithmetic-specific verdict is decided here: no numeric
+/// prefix at all is PHP's `TypeError`, a partial run is PHP's warning, a complete run is
+/// silent. `"0x1A"` therefore classifies as leading-numeric (its run is `0`) and `"INF"` as
+/// non-numeric.
+fn classify_numeric_string_literal(value: &str) -> NumericStringClass {
+    let Some(scan) = scan_numeric_prefix(value) else {
+        return NumericStringClass::NonNumeric;
+    };
+    if scan.is_fully_numeric() {
+        NumericStringClass::Numeric
+    } else {
+        NumericStringClass::LeadingNumeric
+    }
 }
 
 /// Returns `true` if `ty` is a concrete `DateTime`/`DateTimeImmutable` object, the family PHP orders

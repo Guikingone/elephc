@@ -15,6 +15,16 @@ pub(super) fn lower_named_args_with_signature(
     sig: &FunctionSig,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
+    lower_named_args_with_signature_options(ctx, sig, args, false)
+}
+
+/// Lowers named arguments with caller-selected trailing-default preservation.
+pub(super) fn lower_named_args_with_signature_options(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+    trim_trailing_defaults: bool,
+) -> Vec<crate::ir::ValueId> {
     let call_span = args
         .first()
         .map(|arg| arg.span)
@@ -26,14 +36,19 @@ pub(super) fn lower_named_args_with_signature(
         args,
         call_span,
         regular_param_count,
-        false,
+        trim_trailing_defaults,
         true,
         &assoc_spread_sources,
     ) else {
         return lower_args(ctx, args);
     };
     if plan.has_spread_args() {
-        if let Some(operands) = lower_named_args_with_spread_plan(ctx, sig, &plan, &assoc_spread_sources) {
+        if let Some(operands) = lower_named_args_with_spread_plan(
+            ctx,
+            sig,
+            &plan,
+            &assoc_spread_sources,
+        ) {
             return operands;
         }
         if let Some(operands) = lower_dynamic_named_spread_variadic_args(ctx, sig, &plan) {
@@ -230,6 +245,21 @@ pub(super) fn lower_named_args_with_spread_plan(
     plan: &crate::types::call_args::CallArgPlan,
     assoc_spread_sources: &[bool],
 ) -> Option<Vec<crate::ir::ValueId>> {
+    lower_named_args_with_spread_plan_hinted(ctx, sig, plan, assoc_spread_sources, &mut |_, _, _| None)
+}
+
+/// `lower_named_args_with_spread_plan` with a per-source override: `hinted` sees each
+/// named source's parameter index and value expression before the default lowering and
+/// may lower it itself (the xml handler setters type a closure literal from its slot's
+/// SAX event this way). Sources still lower once each, in source order, after the
+/// positional prefix (spreads included) was evaluated once into a temp.
+pub(super) fn lower_named_args_with_spread_plan_hinted(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    assoc_spread_sources: &[bool],
+    hinted: &mut dyn FnMut(&mut LoweringContext<'_, '_>, usize, &Expr) -> Option<crate::ir::ValueId>,
+) -> Option<Vec<crate::ir::ValueId>> {
     if assoc_spread_sources.iter().any(|is_assoc| *is_assoc) {
         return None;
     }
@@ -256,7 +286,18 @@ pub(super) fn lower_named_args_with_spread_plan(
         if matches!(source_arg.kind, ExprKind::Spread(_)) {
             return None;
         }
-        source_values[source_index] = Some(lower_call_source_arg(ctx, source_arg));
+        // `Regular.expr` is the named argument's value, already unwrapped by the planner.
+        let planned = plan
+            .source_values
+            .iter()
+            .find(|source| source.source_index() == source_index)
+            .and_then(|source| Some((source.param_idx()?, source.expr())));
+        let value = match planned {
+            Some((param_idx, expr)) => hinted(ctx, param_idx, expr)
+                .unwrap_or_else(|| lower_call_source_arg(ctx, source_arg)),
+            None => lower_call_source_arg(ctx, source_arg),
+        };
+        source_values[source_index] = Some(value);
     }
     if single_prefix_spread {
         if let [check] = plan.spread_bounds_checks.as_slice() {
@@ -345,4 +386,3 @@ pub(super) fn lower_named_args_with_spread_plan(
     }
     Some(operands)
 }
-

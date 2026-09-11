@@ -2,7 +2,7 @@
 title: "stream_socket_client() — internals"
 description: "Compiler internals for stream_socket_client(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 243
+  order: 385
 ---
 
 ## `stream_socket_client()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_client.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_client.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

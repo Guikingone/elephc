@@ -27,6 +27,12 @@ pub(in crate::interpreter) enum EvalArea {
     Array,
     /// Core callable, constant, process-control, and debug-output builtins.
     Core,
+    /// `ext/curl` builtins (behind the `curl` Cargo feature; see
+    /// `crate::interpreter::builtins::curl`'s module doc). Gated the same as that module:
+    /// no home file constructs this variant without the feature, so an unconditional
+    /// variant would be permanently dead code in the default build.
+    #[cfg(feature = "curl")]
+    Curl,
     /// Filesystem, path, and stream builtins.
     Filesystem,
     /// Formatting and display-oriented numeric builtins.
@@ -37,6 +43,8 @@ pub(in crate::interpreter) enum EvalArea {
     Math,
     /// Network, host, environment, and process builtins.
     NetworkEnv,
+    /// Process control, child waiting, and POSIX signal builtins.
+    Pcntl,
     /// PCRE-style regex builtins.
     Regex,
     /// Raw pointer and buffer extension builtins.
@@ -49,6 +57,8 @@ pub(in crate::interpreter) enum EvalArea {
     Time,
     /// Scalar conversion and type-related builtins.
     Types,
+    /// `ext/xml` and `ext/xmlwriter` builtins, forwarded to the compiled xml prelude.
+    Xml,
 }
 
 impl EvalArea {
@@ -57,17 +67,21 @@ impl EvalArea {
         match self {
             EvalArea::Array => "array",
             EvalArea::Core => "core",
+            #[cfg(feature = "curl")]
+            EvalArea::Curl => "curl",
             EvalArea::Filesystem => "filesystem",
             EvalArea::Formatting => "formatting",
             EvalArea::Json => "json",
             EvalArea::Math => "math",
             EvalArea::NetworkEnv => "network_env",
+            EvalArea::Pcntl => "pcntl",
             EvalArea::Regex => "regex",
             EvalArea::RawMemory => "raw_memory",
             EvalArea::String => "string",
             EvalArea::Symbols => "symbols",
             EvalArea::Time => "time",
             EvalArea::Types => "types",
+            EvalArea::Xml => "xml",
         }
     }
 }
@@ -243,6 +257,19 @@ fn eval_default_value(default: DefaultSpec) -> EvalBuiltinDefaultValue {
         DefaultSpec::Str(value) => EvalBuiltinDefaultValue::String(value),
         DefaultSpec::IntMax => EvalBuiltinDefaultValue::Int(i64::MAX),
         DefaultSpec::EmptyArray => EvalBuiltinDefaultValue::EmptyArray,
+        // Only prelude-provided contracts declare these, and none of them has an eval
+        // registry binding (see `elephc_builtin_contract::eval_support`).
+        DefaultSpec::Constant(name) => panic!(
+            "DefaultSpec::Constant({name:?}) reached an eval registry binding; only \
+             prelude-provided contracts may declare a constant default"
+        ),
+        DefaultSpec::Expr(source) => panic!(
+            "DefaultSpec::Expr({source:?}) reached an eval registry binding; only \
+             prelude-provided contracts may declare a non-literal default"
+        ),
+        DefaultSpec::ClassConstant { class, name } => {
+            EvalBuiltinDefaultValue::ClassConstant { class, name }
+        }
     }
 }
 

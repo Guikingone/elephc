@@ -471,6 +471,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     // the eval context are still alive. The exit-path flush in abi::emit_exit
     // stays as the guard for exit()/die() and fatal terminations.
     abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+    if ctx.uses_pcntl_signal_handlers() {
+        abi::emit_call_label(ctx.emitter, "__rt_pcntl_release_handlers");
+    }
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
@@ -1442,6 +1445,16 @@ fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
         0,
     );
     if !ctx.shared.instrument.is_on() {
+        // Let bridges ask whether the probe's shared event window is active.
+        // Unlike the exact-capture word, this observes remote asks in workers.
+        let event_active = target.extern_symbol("elephc_probe_event_active");
+        abi::emit_symbol_address(ctx.emitter, scratch, &event_active);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            scratch,
+            &target.extern_symbol("elephc_monitor_event_active_fn"),
+            0,
+        );
         let note_io = target.extern_symbol("elephc_probe_note_io");
         abi::emit_symbol_address(ctx.emitter, scratch, &note_io);
         abi::emit_store_reg_to_symbol(
@@ -1456,6 +1469,22 @@ fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
             ctx.emitter,
             scratch,
             &target.extern_symbol("elephc_instr_wait_fn"),
+            0,
+        );
+        let note_network = target.extern_symbol("elephc_probe_note_network");
+        abi::emit_symbol_address(ctx.emitter, scratch, &note_network);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            scratch,
+            &target.extern_symbol("elephc_instr_network_fn"),
+            0,
+        );
+        let note_network_wait = target.extern_symbol("elephc_probe_note_network_wait");
+        abi::emit_symbol_address(ctx.emitter, scratch, &note_network_wait);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            scratch,
+            &target.extern_symbol("elephc_instr_network_wait_fn"),
             0,
         );
     }
@@ -1518,6 +1547,23 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
     let wait_fn = target.extern_symbol("elephc_instr_wait");
     abi::emit_symbol_address(ctx.emitter, scratch, &wait_fn);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_wait_fn"), 0);
+    // Network slots remain separate so HTTP requests never inflate DB query or wait metrics.
+    let network_fn = target.extern_symbol("elephc_instr_network");
+    abi::emit_symbol_address(ctx.emitter, scratch, &network_fn);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_network_fn"),
+        0,
+    );
+    let network_wait_fn = target.extern_symbol("elephc_instr_network_wait");
+    abi::emit_symbol_address(ctx.emitter, scratch, &network_wait_fn);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_network_wait_fn"),
+        0,
+    );
     // Fourth slot: elephc_instr_trace_begin, so the web bridge can open each
     // request's W3C trace context (distributed profiling).
     let trace_fn = target.extern_symbol("elephc_instr_trace_begin");
@@ -1792,13 +1838,13 @@ fn emit_call_counter_increment(ctx: &mut FunctionContext<'_>, entry_label: &str)
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", &slot);
-            ctx.emitter.instruction("ldr x10, [x9]");
-            ctx.emitter.instruction("add x10, x10, #1");
-            ctx.emitter.instruction("str x10, [x9]");
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the current function call count
+            ctx.emitter.instruction("add x10, x10, #1");                        // increment the function call count
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the updated function call count
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "r10", &slot);
-            ctx.emitter.instruction("inc qword ptr [r10]");
+            ctx.emitter.instruction("inc qword ptr [r10]");                     // increment the function call count in place
         }
     }
 }

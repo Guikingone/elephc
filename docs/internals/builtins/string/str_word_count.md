@@ -2,7 +2,7 @@
 title: "str_word_count() — internals"
 description: "Compiler internals for str_word_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 461
+  order: 825
 ---
 
 ## `str_word_count()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_word_count.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_word_count.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function str_word_count(string $string, int $format = 0, string $characters = null): array|int
+function str_word_count(string $string, int $format = 0, ?string $characters = null): array|int
 ```
 
 ## What the type checker enforces
