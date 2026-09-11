@@ -165,6 +165,38 @@ register contract, and a frame adjustment beside it that nothing checked.
   rsp -80 bytes past its entry (0 mod 16, needs 8)`. Measured by setting the frame
   back to 72, not predicted.
 
+- **A third x86_64 defect, from the same migration but a different mechanism.**
+  `__rt_str_looks_like_int_for_coercion` kept its integer-significand flag in `r14`;
+  the migration moved it to `[rsp + 840]`, which the exponent saturation threshold
+  already owned. The two destroyed each other on any value carrying an exponent, so
+  `1e-2` stopped parsing as numeric and `ksort(["0.1"=>…, "1e-2"=>…])` fell back to
+  byte ordering — `krsort` returned the exact mirror, which is the signature of a
+  lexical fallback rather than a wrong number. Moved to `[rsp + 880]`, the slot the
+  deleted `r14` spill used to occupy.
+
+  **This is the migration lesson, and it is not the one round 4 taught.** Renaming a
+  register is safe by construction: the assembler refuses a name that does not
+  exist, and a register is visibly free or visibly taken within a few lines. A stack
+  slot has neither property — nothing rejects an occupied offset, and the other
+  owner can be four hundred lines away. The remaining families (exceptions, fibers,
+  GC counters) are all register-or-global → per-context moves of the same kind, so
+  every one of them needs the slot checked, not just the name.
+
+  Swept the whole branch for siblings by diffing every stack slot it introduced
+  against the slots `main` already used in the same file: `[rsp + 840]` was the only
+  one. The sweep reports it on `HEAD` and nothing on the fixed tree.
+
+- **Twice, the sentinel was the defect.** The `runtime::assembles` gate called
+  `clang` on the strength of a comment ("the compiler already requires clang to
+  link") that was never checked — `linker::assembler_command` reaches for clang only
+  on non-macOS Apple targets, and the linux CI images carry none. Two shards red.
+  Then its replacement passed `-masm=intel`, an x86-only flag clang ignores and gcc
+  REJECTS, so the aarch64 shard stayed red one round longer. Both comments asserted
+  a property of the toolchain that nobody had run. The gate now resolves a driver
+  (`ELEPHC_TEST_ASSEMBLER` → `clang` → `cc` → `gcc`), passes no arch-specific flag,
+  and asserts that the runtime carries its own `.intel_syntax noprefix` rather than
+  assuming it a third time.
+
 Lesson to carry into the remaining families: **every entry on a "cannot analyze"
 allowlist is a place where the next change goes unchecked.** Shrinking that list
 was worth more than any test added beside it — this branch paid a day of
