@@ -794,8 +794,13 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&comm_directive("_gc_live", 8, target));
         out.push_str(&comm_directive("_gc_peak", 8, target));
     }
-    out.push_str(&comm_directive("_cstr_buf", 4096, target));
-    out.push_str(&comm_directive("_cstr_buf2", 4096, target));
+    // Per-context scratch in ctx-register mode: `__rt_cstr` copies a PHP string here to
+    // hand libc a NUL-terminated pointer, and two contexts calling any C-string builtin at
+    // once would overwrite each other's copy mid-call.
+    if !ctx_register {
+        out.push_str(&comm_directive("_cstr_buf", 4096, target));
+        out.push_str(&comm_directive("_cstr_buf2", 4096, target));
+    }
     out.push_str(&comm_directive("_eof_flags", 256, target));
     out.push_str(&comm_directive("_popen_files", 2048, target));
     out.push_str(&comm_directive("_dir_handles", 2048, target));

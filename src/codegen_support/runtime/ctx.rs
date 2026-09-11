@@ -129,7 +129,23 @@ pub(crate) const CTX_GC_PEAK_OFFSET: usize = CTX_GC_LIVE_OFFSET + 8;
 /// a flag the other is relying on.
 pub(crate) const CTX_GC_COLLECTING_OFFSET: usize = CTX_GC_PEAK_OFFSET + 8;
 
-pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_GC_COLLECTING_OFFSET + 8;
+/// The C-string scratch pair, formerly `_cstr_buf` / `_cstr_buf2` (4 KiB each).
+///
+/// `__rt_cstr` copies a PHP string into one of these to hand a NUL-terminated pointer to
+/// libc. Two contexts calling any C-string builtin at the same time would overwrite each
+/// other's scratch mid-call, so the pair is per-context — the same reason the concat
+/// arena is.
+///
+/// ALIGNED TO 4096 ON PURPOSE. AArch64 `add xN, x28, #imm` takes a 12-bit immediate, or a
+/// 12-bit one shifted left by 12 — so an offset is encodable in ONE instruction when it is
+/// below 4096 or an exact multiple of it. Every scalar above stays in the first window;
+/// each buffer starts on a 4 KiB boundary. Placing a buffer at, say, 4280 would silently
+/// cost a second instruction on every use, or fail to assemble.
+pub(crate) const CTX_CSTR_BUF_SIZE: usize = 4096;
+pub(crate) const CTX_CSTR_BUF_OFFSET: usize = 4096;
+pub(crate) const CTX_CSTR_BUF2_OFFSET: usize = CTX_CSTR_BUF_OFFSET + CTX_CSTR_BUF_SIZE;
+
+pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_CSTR_BUF2_OFFSET + CTX_CSTR_BUF_SIZE;
 
 /// Total byte size of one `_rt_ctx` instance (16-byte aligned).
 ///
@@ -387,6 +403,11 @@ const PER_CONTEXT_SYMBOLS: &[(&str, usize)] = &[
     ("_gc_live", CTX_GC_LIVE_OFFSET),
     ("_gc_peak", CTX_GC_PEAK_OFFSET),
     ("_gc_collecting", CTX_GC_COLLECTING_OFFSET),
+    // Buffers, not scalars. They route the same way because every consumer asks for the
+    // ADDRESS through `emit_symbol_address`, which consults this table — no dedicated
+    // helper needed, the lesson the GC family taught.
+    ("_cstr_buf", CTX_CSTR_BUF_OFFSET),
+    ("_cstr_buf2", CTX_CSTR_BUF2_OFFSET),
 ];
 
 /// The ctx field offset serving `symbol`, when this build routes it.
@@ -919,8 +940,18 @@ mod tests {
         assert_eq!(CTX_GC_LIVE_OFFSET, CTX_GC_FREES_OFFSET + 8);
         assert_eq!(CTX_GC_PEAK_OFFSET, CTX_GC_LIVE_OFFSET + 8);
         assert_eq!(CTX_GC_COLLECTING_OFFSET, CTX_GC_PEAK_OFFSET + 8);
-        // The concat buffer closes the layout.
-        assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_GC_COLLECTING_OFFSET + 8);
+        // Every scalar stays inside the first 4 KiB window, which is what keeps
+        // `add xN, x28, #off` and `ldr xN, [x28, #off]` single instructions.
+        assert!(
+            CTX_GC_COLLECTING_OFFSET + 8 <= CTX_CSTR_BUF_OFFSET,
+            "the scalar block has grown into the buffer region"
+        );
+        // The buffers follow, each on a 4 KiB boundary so its address stays one `add`.
+        assert_eq!(CTX_CSTR_BUF_OFFSET % 4096, 0);
+        assert_eq!(CTX_CSTR_BUF2_OFFSET % 4096, 0);
+        assert_eq!(CTX_CONCAT_BUF_OFFSET % 4096, 0);
+        assert_eq!(CTX_CSTR_BUF2_OFFSET, CTX_CSTR_BUF_OFFSET + CTX_CSTR_BUF_SIZE);
+        assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_CSTR_BUF2_OFFSET + CTX_CSTR_BUF_SIZE);
         // Every scalar offset must be encodable as ldr [x28, #imm] (imm12 ≤ 4095).
         for offset in [
             CTX_CONCAT_OFF_OFFSET,
