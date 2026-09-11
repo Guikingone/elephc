@@ -29,9 +29,13 @@
 //!   module claimed otherwise and turned two shards red on the assumption.
 //!   So the driver is resolved: `ELEPHC_TEST_ASSEMBLER`, then `clang`, then `cc`, then
 //!   `gcc`. A driver that does not understand `-target` cannot cross-assemble, so with one
-//!   of those the gate covers the HOST target only and names the targets it skipped. That
-//!   degradation is deliberate and visible — a gate that silently covers nothing is how the
-//!   bug above reached CI in the first place.
+//!   of those the gate covers the HOST target only and names the targets it skipped.
+//!   COVERAGE IS THEN A PROPERTY OF THE MATRIX, NOT OF ONE RUN: the linux-x86_64 shard
+//!   checks the x86_64 runtime, the linux-aarch64 shard checks the AArch64 one, and a
+//!   developer machine with clang checks all three at once. The skip note goes to the test's
+//!   captured stdout, so it shows with `--nocapture` or when something else in the test
+//!   fails — it is a developer aid, not a CI warning, because a passing test has no way to
+//!   raise one.
 
 use std::io::Write;
 use std::process::Command;
@@ -117,8 +121,12 @@ fn assemble(target: Target, asm: &str) -> Result<(), String> {
         command.args(["-target", clang_triple(target)]);
     }
     let output = command
-        // Intel syntax is what the x86_64 emitters write; the flag is ignored elsewhere.
-        .arg("-masm=intel")
+        // No `-masm=intel`: every source fed here carries its own `.intel_syntax noprefix`
+        // (`emit_text_prelude` for the runtime, written out by hand in the probe below), so
+        // the flag bought nothing — and it is an x86-only option that gcc REJECTS outright,
+        // which turned the linux-aarch64 shard red with
+        // `cc: error: unrecognized command-line option '-masm=intel'`. The comment that used
+        // to sit here said the flag was "ignored elsewhere"; that is true of clang only.
         .arg("-o")
         .arg(dir.join("runtime.o"))
         .arg(&source)
@@ -171,6 +179,14 @@ fn the_generated_runtime_assembles_for_every_target() {
                 ..RuntimeFeatures::all()
             };
             let asm = generate_runtime_with_features(8 * 1024 * 1024, target, features);
+            if target.arch == Arch::X86_64 {
+                // Dropping `-masm=intel` is only safe while the source says it itself.
+                assert!(
+                    asm.starts_with(".intel_syntax noprefix"),
+                    "the x86_64 runtime must carry its own syntax directive: no assembler \
+                     flag supplies it any more"
+                );
+            }
             if let Err(diagnostics) = assemble(target, &asm) {
                 failures.push(format!("[ctx_register={ctx_register}] {diagnostics}"));
             }
@@ -182,8 +198,10 @@ fn the_generated_runtime_assembles_for_every_target() {
         failures.join("\n\n")
     );
     if !skipped.is_empty() {
-        // Printed, not asserted: a machine with only `cc` still gets the host target checked,
-        // and CI covers the rest across its shards. Silence here is what must not happen.
+        // Printed, not asserted: a machine with only `cc` still gets its host target checked,
+        // and the CI matrix covers the others on their own shards. Captured stdout means this
+        // is only read with `--nocapture` or beside another failure — enough for a developer
+        // wondering what ran, not a substitute for the matrix.
         println!(
             "assembler driver `{driver}` does not take -target, so these were not assembled \
              on this host: {}",
