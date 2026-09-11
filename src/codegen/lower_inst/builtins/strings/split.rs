@@ -591,6 +591,10 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
         // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
         PhpType::Bool => Ok("__rt_implode_bool"),
         PhpType::Int => Ok("__rt_implode_int"),
+        // PHP spells a float at `precision = 14` with `zend_gcvt` fixups, which is what
+        // `__rt_ftoa` does and what `__rt_implode_float` calls per element. Without this arm
+        // `implode(",", [1.5])` was an outright backend refusal.
+        PhpType::Float => Ok("__rt_implode_float"),
         // An empty array literal carries an uninhabited element type (`Never`, or
         // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
         // dereference an element, so the generic string helper is the safe choice and
