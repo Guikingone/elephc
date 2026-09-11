@@ -272,6 +272,32 @@ emulated-amd64 bisection for one entry that should never have been there.
          resources, otherwise an explicit boundary; that question is still open.
       6. **bridge slots** (`_elephc_tls_*_fn`, …) — nothing to do: written once at
          startup, never rewritten, so they stay global by design.
+      7. **object and buffer handle tables — A GAP THE INVENTORY MISSED, found while
+         routing family 5.** `_obj_handle_index` is DIRECT-MAPPED: one `u32` per
+         16-byte granule, and the granule index is computed as
+         `(ptr - this context's arena base) >> 4` — see
+         `objects/handles.rs`, which already reads the base through
+         `ctx::emit_heap_base_address`. So the index is arena-relative and correct
+         per context, while the TABLE is one process-wide block. Two contexts each
+         allocating at their own granule 0 write the same slot. Same shape for
+         `_obj_handle_free` / `_obj_handle_free_top`, and for the Buffer registry
+         (`_buffer_registry`, `_buffer_registry_free`, `_buffer_registry_next`).
+
+         This is NOT a mechanical move like the six families above, which is why it
+         is recorded rather than done:
+         - **Size.** At the 8 MiB default heap, `_obj_handle_index` is 2 MiB and
+           `_obj_handle_free` about 1.4 MiB. Per-context, times eight pool slots,
+           that is ~28 MiB of BSS on top of the 1.7 MiB the contexts already take.
+         - **Or partition the handle space instead**: make a handle carry its
+           context (`(slot << 28) | local`) and keep one table. Cheaper in memory,
+           but it changes what a handle IS, and php-src's `zend_object.handle` is a
+           plain small integer that user code sees through `spl_object_id()`.
+         - `_buffer_registry_next` is initialized to `1`, not zero, so it cannot
+           simply join `emit_ctx_zero_fields` — a pooled context would start handing
+           out handle 0, the reserved invalid one.
+
+         Pick one before M1 spawns anything: today's single context makes both
+         answers indistinguishable, which is exactly why it would be found late.
 
       **What the routing actually cost, and the two things it taught.**
       The first family needed fifteen sites rewritten and an audit to find them.
