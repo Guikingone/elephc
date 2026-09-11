@@ -72,7 +72,7 @@ const PCRE2_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 2_792_969,
         body_limit: 32 * 1024 * 1024,
     },
-    recipe_revision: 4,
+    recipe_revision: 5,
     dependencies: &[],
     supported_targets: TARGETS,
     ordered_link_outputs: PCRE2_ARCHIVES,
