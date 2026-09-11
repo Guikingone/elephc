@@ -1422,8 +1422,8 @@ fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, 1");                                          // compute new storage length
     emitter.instruction("mov QWORD PTR [r9], r10");                             // persist shortened length
     emitter.instruction("mov QWORD PTR [r11 + r10 * 8], 0");                    // clear stale tail slot
-    emitter.instruction("pop rax");                                          // drop the alignment pad before restoring rbx
-    emitter.instruction("pop rbx");                                          // restore the caller's callee-saved rbx value before returning
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad WITHOUT touching rax: this helper returns the removed cell there
+    emitter.instruction("pop rbx");                                             // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return removed Mixed cell
     emitter.label("__rt_spl_dll_shift_empty");
     emit_throw_exception_x86_64(
@@ -1509,8 +1509,8 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9], r10");                             // persist new storage length
     emitter.instruction("add rsp, 48");                                         // release insertion state
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("pop rax");                                          // drop the alignment pad before restoring rbx
-    emitter.instruction("pop rbx");                                          // restore the caller's callee-saved rbx value before returning
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad; never `pop rax` here (audited by sysv_call_alignment)
+    emitter.instruction("pop rbx");                                             // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_insert_range_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected Mixed value before throwing
@@ -2420,8 +2420,8 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_set_done");
     emitter.instruction("add rsp, 64");                                         // release offsetSet frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("pop rax");                                          // drop the alignment pad before restoring rbx
-    emitter.instruction("pop rbx");                                          // restore the caller's callee-saved rbx value before returning
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad; never `pop rax` here (audited by sysv_call_alignment)
+    emitter.instruction("pop rbx");                                             // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -2465,8 +2465,8 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_unset_done");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("pop rax");                                          // drop the alignment pad before restoring rbx
-    emitter.instruction("pop rbx");                                          // restore the caller's callee-saved rbx value before returning
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad; never `pop rax` here (audited by sysv_call_alignment)
+    emitter.instruction("pop rbx");                                             // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_offset_unset_type_throw");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame before throwing
