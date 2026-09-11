@@ -250,61 +250,52 @@ emulated-amd64 bisection for one entry that should never have been there.
 - [ ] **Multi-context pool**: `_rt_ctx` as an array + free list instead of a
       single instance; `__rt_ctx_init`/`__rt_ctx_destroy` exported for the M1
       bridge. (`--heap-size` per thread to document.)
-- [ ] **State families still on globals** — inventory done:
-      `emit_runtime_data_fixed` declares **174 `.comm` symbols**, of which only 9
-      (heap ×3, concat ×2, heap_base/heap_max, plus the `_rt_ctx` block) are
-      migrated. By family, most to least blocking for M1:
-      1. **exceptions**: `_exc_handler_top`, `_exc_value`, `_exc_call_frame_top`
-         — a thread that throws walks the MAIN thread's handler chain. Not "may
-         corrupt": structurally wrong. **Blocks M1.**
-         *Inventory 2026-09-11, corrected — and the correction is the point.*
-         301 references across ~45 files, of which 245 already went through four
-         accessors. The first inventory then said the residue was **three**
-         hand-rolled accesses "all already located". It was **fifteen**, and the
-         three greps that produced that number all matched a SPELLING rather than
-         the symbol: twelve sites took the two-step form
-         (`emit_symbol_address(…, "x9", "_exc_value")` then a bare `str x0, [x9]`,
-         which puts the symbol on the line BEFORE the access — harmless once
-         `emit_symbol_address` is itself routed, as the GC family later
-         demonstrated, but invisible to a line-based grep), and a thirteenth
-         hand-rolled store hid behind a line break separating `ctx.emitter` from
-         `.instruction(`.
-         **All fifteen are now routed** (`refactor(exceptions)`), with no change to
-         a single emitted byte — the accessor emits exactly the hand-rolled pair
-         for a value in x0, in the plain and PIC paths alike, measured by diffing
-         `--emit-asm` output. `exception_state_is_only_reached_through_the_abi_accessors`
-         keeps the door single, and forbids the two-step shape outright rather than
-         tolerating it, since a raw address's use names no symbol and is invisible
-         to both that audit and the linker tripwire.
-         So the remaining work for this family is the routing itself: point the
-         four accessors at the ctx struct when `RuntimeFeatures::ctx_register` is
-         on. Split roughly 82 runtime / 56 user codegen for `_exc_value` alone, so
-         the tripwire has to cover BOTH — the lesson round 4 paid five SIGSEGVs for.
-      2. **fibers/stack**: `_fiber_current`, `_stack_limit`,
-         `_fiber_main_saved_sp/_exc/_call_frame` — the stack guard compares
-         against main's bounds, so a thread on its own mmap'd stack either never
-         trips it or trips it at once. **Blocks M1.**
-      3. **GC counters**: `_gc_allocs/_gc_frees/_gc_live/_gc_peak/_gc_collecting`
-         — a SEMANTIC decision to take before coding: per-context (per-thread
-         numbers) or atomic (process numbers). `_gc_collecting` is a lock, not a
-         counter: per-context either way.
-      4. **shared buffers**: `_cstr_buf`, `_cstr_buf2`, `_empty_str`, the
-         ob/print_r buffers — `_empty_str` is read-only and can stay global, the
-         rest are per-context scratch.
-      5. **resource registries**: `_dir_handles`, `_glob_handles`,
-         `_bzstream_handles`, `_buffer_registry_*` — per-context if a thread may
-         open resources, otherwise an explicit boundary.
-      6. **bridge slots** (`_elephc_tls_*_fn`, `_elephc_crypto_*_fn`, …): written
-         once at startup, never rewritten ⇒ stay global.
-      Same discipline as concat: **a whole family per change**, each with its
-      tripwire.
+- [x] **State families: five of six done.** `emit_runtime_data_fixed` declared 174
+      `.comm` symbols; **38 are now per-context**, and the routing for all of them
+      is four `abi::` accessors consulting one name→offset table in `ctx.rs`. Not
+      one of the ~500 call sites changed.
+      1. **exceptions** ✅ `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top`.
+      2. **fibers + stack guard** ✅ `_fiber_current`, the three
+         `_fiber_main_saved_*`, `_stack_limit`, `_stack_limit_main`. The floors are
+         the sharpest case in the whole list: there is no value of a SHARED floor
+         that is correct for two stacks.
+      3. **GC counters** ✅ — the semantic question is answered **per-context**.
+         Each context owns its arena, so a per-context count is the only number
+         describing something real; a process total would describe no arena and
+         would cost an atomic on the allocator's hottest path. `_gc_collecting` is
+         a lock and had no choice to make.
+      4. **shared buffers** ✅ `_cstr_buf`, `_cstr_buf2`, and the fourteen
+         output-buffering / print_r symbols. `_empty_str` stays global as planned:
+         one read-only byte.
+      5. **resource registries** — REMAINING: `_dir_handles`, `_glob_handles`,
+         `_bzstream_handles`, `_buffer_registry_*`. Per-context if a thread may open
+         resources, otherwise an explicit boundary; that question is still open.
+      6. **bridge slots** (`_elephc_tls_*_fn`, …) — nothing to do: written once at
+         startup, never rewritten, so they stay global by design.
+
+      **What the routing actually cost, and the two things it taught.**
+      The first family needed fifteen sites rewritten and an audit to find them.
+      The four after it needed *table rows and nothing else* — because
+      `emit_symbol_address` is itself routed, so the two-step form
+      (address into a scratch, then a manual load/store) follows the ctx field
+      correctly. The exception commit claimed otherwise; that claim is corrected in
+      `family_audit.rs` and in this file. The only shape that genuinely cannot be
+      routed is a store that names the symbol ITSELF, and there were three.
+      The second lesson is an encoding one: AArch64 `add xN, xM, #imm` covers an
+      offset under 4096 or an exact multiple of it, and nothing else. The context
+      outgrew that window at family 4. `emit_ctx_address` now splits a wide offset
+      into two encodable adds, so the layout is free to be whatever the fields need
+      rather than padded to suit the instruction encoding.
+
 - [ ] **Full linux-x86_64 suite**: `./scripts/test-linux-x86_64.sh` (Docker,
       emulated and slow) or a CI shard. Recipe for re-running the targeted probes
       without starting over: the persistent docker volume `elephc-x86-ctx` plus
       `scratchpad/x86run.sh` (incremental build).
-- [ ] Error-path matrix for the concat consumers × 2 modes × 2 targets; ctx
-      staticlib parity (the ctx cdylib is green since round 3, the staticlib is
-      still unprobed).
+- [ ] Error-path matrix for the concat consumers × 2 modes × 2 targets.
+      ctx staticlib parity is DONE:
+      `test_rt_ctx_staticlib_export_preserves_the_hosts_ctx_register` links the
+      archive directly into a C host and checks the sentinel, the path the cdylib
+      test does not cover.
 - [ ] **The x6 borrow (AArch64 legacy)**: the legacy arm of
       `emit_concat_off_store` materializes the address in **x6**, an ARGUMENT
       register, across 122 call sites. `legacy_aarch64_runtime_has_no_dangling_x6_stores`
