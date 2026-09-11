@@ -150,9 +150,11 @@ pub(super) fn renders_parsable_php85_status_web() {
         let body = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &[], false, None));
         // Web SAPI bakes the enabled gate as `true === false` (never returns false).
         assert!(body.contains("if (true === false)"));
-        // memory_usage invariant: 134217728 - 6291456 = 127926272.
-        assert!(body.contains("'used_memory' => 6291456"));
-        assert!(body.contains("'free_memory' => 127926272"));
+        // memory_usage invariant: 134217728 - 6291456 = 127926272. Both figures now carry the
+        // runtime script cache's bytes as a TERM rather than being closed constants, because
+        // the dynamic tier's entries are charged against the same budget.
+        assert!(body.contains("'used_memory' => 6291456 + $__elephc_rt_used"));
+        assert!(body.contains("'free_memory' => 127926272 - $__elephc_rt_used"));
         assert!(body.contains("'wasted_memory' => 0"));
         // interned_strings_usage invariant: 8388608 - 1048576 = 7340032.
         assert!(body.contains("'buffer_size' => 8388608"));
@@ -170,8 +172,17 @@ pub(super) fn renders_parsable_php85_status_web() {
             !body.contains("'start_time' => time()"),
             "the per-call time() read is the bug this replaced"
         );
-        // Rates are floats, so `0.0` (not `0`) must be emitted.
-        assert!(body.contains("'opcache_hit_rate' => 0.0"));
+        // The live figures are read ONCE into locals before the array is built, so a call
+        // inside the literal cannot make two keys disagree.
+        assert!(body.contains("$__elephc_rt_hits = __elephc_opcache_rt_stat(0);"));
+        assert!(body.contains("$__elephc_rt_misses = __elephc_opcache_rt_stat(1);"));
+        assert!(body.contains("'hits' => $__elephc_rt_hits"));
+        assert!(body.contains("'misses' => $__elephc_rt_misses"));
+        assert!(body.contains("'opcache_hit_rate' => $__elephc_rt_rate"));
+        // Rates are floats, so the seed is `0.0` (not `0`) and the computed arm is CAST, which
+        // is what keeps the local from being retyped divergently between the two branches.
+        assert!(body.contains("$__elephc_rt_rate = 0.0;"));
+        assert!(body.contains("$__elephc_rt_rate = (float)"));
         // Default JIT (disable) sub-array is entirely zero/false.
         assert!(body.contains("'enabled' => false"));
         assert!(body.contains("'buffer_size' => 0"));

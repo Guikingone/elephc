@@ -127,6 +127,11 @@ pub(super) fn get_status_declaration(
         )),
         preload_statistics: preload.map(preload_statistics_expr),
         scripts_map: scripts_map_expr(manifest, revalidate_freq, version_id),
+        // The runtime cache's entries carry `revalidate` under the SAME per-version gate the
+        // manifest entries do: php-src added the key in 8.3, and a `--php-version 8.2` build
+        // must not report a key its target runtime never has.
+        revalidate_freq: (version_id >= super::scripts_configuration::SCRIPTS_REVALIDATE_MIN_VERSION_ID)
+            .then_some(revalidate_freq),
         jit: build::JitFacts {
             enabled: jit.enabled,
             on: jit.on,

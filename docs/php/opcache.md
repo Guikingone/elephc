@@ -157,9 +157,10 @@ synthetic but internally coherent: `free_memory = memory_consumption -
 used_memory - wasted_memory` with `wasted_memory = 0`, and
 `free_memory = buffer_size - used_memory` (with `used_memory` strictly below
 `buffer_size`, so `free_memory` is never zero or negative) for the
-interned-strings block. Counters (`hits`, `misses`, `opcache_hit_rate`,
-`blacklist_misses`) are always zero — a native binary has no cache lookups to
-count.
+interned-strings block. `hits`, `misses` and `opcache_hit_rate` are LIVE, counted by the
+[runtime script cache](#the-runtime-script-cache); they stay at zero in a binary
+that has no dynamic tier, which genuinely performs no cache lookups.
+`blacklist_misses` is always zero.
 
 `interned_strings_usage` is **absent** — not empty, not zeroed — when
 `opcache.interned_strings_buffer=0`, leaving eight top-level keys instead of
@@ -277,8 +278,13 @@ var_dump(opcache_get_status()['restart_pending']);          // true
 var_dump(opcache_reset());                                  // false
 ```
 
-There is still nothing to evict: the binary's code cannot be recompiled at run
-time, so the latch is the whole of the effect.
+The binary's own code cannot be recompiled at run time, so for the compile-time
+manifest the latch is still the whole of the effect. With the
+[runtime script cache](#the-runtime-script-cache) enabled there IS something to
+evict, and `opcache_reset()` flushes it — see that section for the one deliberate
+divergence this introduces (php-src defers the flush to the next request; elephc
+performs it immediately, because the request boundary that would carry a deferred
+flush lives in a crate that does not depend on the interpreter).
 
 ### `opcache_is_script_cached()`
 
@@ -482,6 +488,173 @@ var_dump(opcache_is_script_cached('./lib.php'));            // true (realpath'd)
 ```
 
 Pinned by `tests/opcache_manifest_tests.rs`.
+
+## The runtime script cache
+
+The manifest above is the compile-time tier and it cannot grow. There is a second
+tier: a PHP file included at run time through a path the resolver could not fold
+to a constant. Such a file is not in the binary, so it is read from disk and run
+through the eval bridge interpreter. At AOT top level a runtime-dynamic include
+is a **compile error**, so this tier is reached only from inside `eval()` — which
+is where a template or a generated container ends up in a `--web` application.
+
+That tier is the one place in an elephc binary where an opcode-cache-shaped
+saving still exists, and it is where OPcache's caching directives actually act.
+
+### What it caches
+
+The unit is the **file**, not the eval fragment: one entry per canonical path
+holding the file already split into its alternating literal-output and parsed-code
+segments. A warm include therefore skips the file read, the `<?php` / `?>` byte
+scan, and the parse — everything except executing the statements.
+
+Measured on macOS arm64, including the same file in a loop: identical interpreted
+work in every row, with only the file's size varying (the padding is a PHP comment,
+so it grows the read, the scan and the parse without adding a statement).
+
+| Included file | Uncached | Cached | |
+|---|---|---|---|
+| 52 B | 263 µs | 47 µs | ≈6× |
+| 64 KB | 1 580 µs | 43 µs | **≈40×** |
+| 128 KB | 10 979 µs | 67 µs | **≈160×** |
+
+What transfers between machines is the SHAPE, not the absolute microseconds. The
+warm cost is **flat in file size** and was stable to within 2 µs across repeated
+runs and machine loads; the uncached cost is CPU-bound and moved by up to 40%
+with load. The step between 64 KB and 128 KB is the old byte-keyed fragment
+cache's 64 KiB ceiling, above which every include re-parsed the whole file.
+`opcache.max_file_size` replaces that ceiling with the directive reference PHP
+uses for the same decision.
+
+### When it is on
+
+The script cache follows the cache-enabled state exactly — the same predicate
+[`opcache_get_status()`](#opcache_get_status) reports:
+
+| Build | Cache | Script cache |
+|---|---|---|
+| CLI (default) | disabled | **off** |
+| CLI `--ini opcache.enable_cli=1` | enabled | on |
+| `--web` / `--with-web` | enabled | on |
+
+A default CLI binary caches nothing, and its includes behave exactly as they did
+before this tier existed. `opcache.enable` and `opcache.enable_cli` are therefore
+no longer reporting-only directives: they decide whether the cache runs.
+
+### Freshness
+
+Freshness follows php-src rather than "always re-read". On a fill the entry
+records `revalidate_at = now + opcache.revalidate_freq`; it is re-`stat`ed only
+once that instant has passed, and the entry is refilled when the file's mtime or
+size has moved.
+
+```bash
+# Pick up a changed include immediately, at the cost of a stat per include.
+elephc --ini opcache.enable_cli=1 --ini opcache.revalidate_freq=0 app.php
+
+# Never stat again: the entry is authoritative until opcache_reset().
+elephc --ini opcache.enable_cli=1 --ini opcache.validate_timestamps=0 app.php
+```
+
+**This is a behaviour change with the cache on**: at the default
+`opcache.revalidate_freq = 2`, a file edited between two includes can serve its
+previous contents for up to two seconds. Reference PHP behaves the same way and
+for the same reason, and a default CLI binary is unaffected because its cache is
+off.
+
+### What the API answers about it
+
+Inside `eval()` — the only place the dynamic tier is reachable — the OPcache file
+functions stop being terminal `false`s and answer about the real cache:
+
+```php
+<?php
+eval('
+$f = getenv("TEMPLATES") . "/page.php";
+
+var_dump(opcache_is_script_cached($f));   // false — never loaded
+include $f;
+var_dump(opcache_is_script_cached($f));   // true  — cached by the include
+
+var_dump(opcache_invalidate($f, true));   // true  — and discards the entry
+var_dump(opcache_is_script_cached($f));   // false
+
+var_dump(opcache_compile_file($f));       // true  — reads, parses and caches it
+var_dump(opcache_is_script_cached($f));   // true  — without ever running it
+
+var_dump(opcache_reset());                // true  — flushes, once
+var_dump(opcache_reset());                // false
+');
+```
+
+`opcache_compile_file()` is the one that changes most: it used to answer `false`
+for every file outside the compile-time manifest, including files the binary can
+actually run. It now compiles and stores one, which is what reference PHP does.
+
+`opcache_invalidate()` reports whether the **path resolves**, not whether it was
+cached — php-src's `zend_accel_invalidate()` returns "cached **or** resolvable",
+and a cached path was canonicalized when it was stored, so the disjunction
+reduces to the right-hand side. `$force` is what discards the entry.
+
+A dynamic callable reaches the same answers: `call_user_func('opcache_invalidate',
+$f, true)` and `opcache_invalidate($f, true)` go through one shared core.
+
+Two functions are deliberately unchanged.
+`opcache_is_script_cached_in_file_cache()` stays `false` — php-src returns early
+on an unset `opcache.file_cache`, and elephc has no on-disk opcode cache to point
+the directive at. `opcache_jit_blacklist()` stays a no-op returning `null`.
+
+### What `opcache_get_status()` reports
+
+`opcache_get_status()` reports **both tiers**, from natively compiled code as well
+as from inside `eval()`:
+
+```php
+<?php
+eval('include __DIR__ . "/lib.php"; include __DIR__ . "/lib.php";');
+
+$s = opcache_get_status();
+$s['opcache_statistics']['num_cached_scripts'];  // manifest + runtime entries
+$s['opcache_statistics']['hits'];                // 1 — the second include
+$s['opcache_statistics']['misses'];              // 1 — the first
+$s['opcache_statistics']['opcache_hit_rate'];    // 50.0
+$s['scripts'][__DIR__ . '/lib.php'];             // the dynamic entry, 7-key shape
+```
+
+Every figure the runtime cache owns is live: `hits`, `misses`,
+`opcache_hit_rate` (php-src's percentage of lookups, `0.0` when there have been
+none), `num_cached_scripts` / `num_cached_keys`, `cache_full`,
+`manual_restarts`, `last_restart_time`, and `memory_usage.used_memory` /
+`free_memory`. `restart_pending` is the **union** of the two latches, so a
+restart scheduled by an `opcache_reset()` inside `eval()` is visible natively.
+
+A runtime entry's `scripts` row carries its own real numbers rather than the
+manifest's shared request clock: its `hits` is that file's hit count,
+`last_used_timestamp` is when it was last served, `timestamp` is its source
+mtime (`0` once a forced invalidate discarded it), and `revalidate` is
+`last_used_timestamp + opcache.revalidate_freq` — present from an 8.3 target on,
+under the same per-version gate the manifest entries use.
+
+**Cost when there is no dynamic tier: none.** A program that never reaches the
+eval bridge cannot have a runtime cache, so the calls that would read it are
+folded to the empty-cache answer at lowering time and the interpreter archive is
+never referenced. Such a binary reports exactly its manifest, with zero counters
+— byte-identical to what it reported before this tier existed.
+
+### Directives that now act
+
+| Directive | Effect on the dynamic tier |
+|---|---|
+| `opcache.validate_timestamps` | `1`: revalidate by mtime and size. `0`: never re-stat |
+| `opcache.revalidate_freq` | Seconds between two revalidations of one entry |
+| `opcache.max_file_size` | Refuses to *cache* a larger file; the file still runs. `0` means no limit |
+| `opcache.memory_consumption` | A real byte budget for the cached segments |
+| `opcache.max_accelerated_files` | A real entry-count ceiling |
+
+The cache **never evicts**. Like php-src, it refuses new entries once the budget
+or the entry ceiling is reached and latches `cache_full`; a refused file is still
+read and executed, it is simply not stored. `opcache_reset()` is what releases
+both.
 
 ## Directives and configuration
 
@@ -799,18 +972,19 @@ on macOS arm64.
 
 | Behavior | Reference PHP | elephc | Why |
 |---|---|---|---|
-| Cache population | Grows at run time as scripts are compiled/included | Fixed at compile time; membership never *grows* (a forced `opcache_invalidate()` can discard an entry, and `opcache_compile_file()` restore it) | The binary is the cache; there is no runtime compiler to add an entry |
-| `opcache_compile_file()` on a file outside the manifest | Compiles it, returns `true`, and the file becomes cached | Returns `false` | A file not baked into the binary cannot be compiled at run time |
-| `opcache_is_script_cached()` on a file outside the manifest | `false` until something compiles it, then `true` | `false`, permanently | Same reason |
+| Cache population | Grows at run time as scripts are compiled/included | The compile-time manifest never *grows*; the [runtime script cache](#the-runtime-script-cache) does, for dynamically included files | The binary is the cache for everything compiled into it; only the dynamic tier can gain an entry at run time |
+| `opcache_compile_file()` on a file outside the manifest | Compiles it, returns `true`, and the file becomes cached | Inside `eval()`: compiles and caches it, returns `true`. In natively compiled code: still `false` | A dynamic include is a compile error at AOT top level, so a natively compiled `opcache_compile_file()` names a file that program could never run |
+| `opcache_is_script_cached()` on a file outside the manifest | `false` until something compiles it, then `true` | Inside `eval()`: `true` once it is cached. In natively compiled code: `false` | Same reason. `opcache_get_status()['scripts']` DOES report it from native code |
 | `ini_set('opcache.*', …)` | Succeeds for the 18 `PHP_INI_ALL` directives (e.g. `opcache.enable`, `opcache.jit_debug`), returning the previous value | Always returns `false` | Values are baked into the binary; a successful `ini_set()` would report a value nothing else honors. Exact for the `PHP_INI_SYSTEM` majority |
-| `hits`, `misses`, `opcache_hit_rate`, `blacklist_misses` | Live counters | Always `0` | There are no cache lookups to count |
-| `memory_usage` / `interned_strings_usage` *absolute figures* | Real shared-memory accounting | Synthetic baselines, plus Σ of the manifest's source-file sizes | No shared-memory segment exists. The *invariants* are exact: `free = total − used − wasted`, `free = buffer_size − used`, `0 < used < buffer_size`, and the whole `interned_strings_usage` key is omitted for a zero buffer. `max_cached_keys` is the exact php-src prime rounding |
-| `num_cached_scripts` / `num_cached_keys` | Live cache entry count | The manifest size | Same reason |
+| `blacklist_misses`, `blacklist_miss_ratio`, `oom_restarts`, `hash_restarts` | Live counters | Always `0` | `opcache.blacklist_filename` is reported but not applied, and the runtime cache refuses rather than restarting when it fills. `hits`, `misses` and `opcache_hit_rate` are NOT in this row any more: they are live for the [runtime script cache](#the-runtime-script-cache) |
+| `opcache_reset()` with the [runtime script cache](#the-runtime-script-cache) on | Schedules a restart; the cache keeps answering for the rest of the request, and is flushed at the next one | Flushes immediately, so `opcache_is_script_cached()` reports `false` straight after | VERIFIED on PHP 8.5.6, which still answers `true` there. The request boundary that would carry a deferred flush lives in `elephc-web`, which does not depend on the interpreter crate, so deferring would mean never flushing at all |
+| `memory_usage` / `interned_strings_usage` *absolute figures* | Real shared-memory accounting | Synthetic baselines, plus Σ of the manifest's source-file sizes, plus the runtime cache's real accounted bytes | No shared-memory segment exists. The *invariants* are exact: `free = total − used − wasted`, `free = buffer_size − used`, `0 < used < buffer_size`, and the whole `interned_strings_usage` key is omitted for a zero buffer. `max_cached_keys` is the exact php-src prime rounding |
+| `num_cached_scripts` / `num_cached_keys` | Live cache entry count | The manifest size PLUS the runtime cache's entries | The manifest half cannot grow; the runtime half does |
 | `jit.enabled`, `jit.on`, `jit.buffer_size`, `jit.buffer_free` | Reflect the running JIT | Clamped to `false`/`false`/`0`/`0` | Reference emits this same shape when the JIT is configured but unavailable, which is an AOT binary's permanent state. `kind`/`opt_level`/`opt_flags` *are* the real directive-derived values |
 | `preload_statistics.functions` / `.classes` | The symbols the preload file added | The whole binary's user-declared symbols | An AOT binary cannot separate "preloaded" from "compiled in". A superset, never a fabrication — every name reported is genuinely declared |
 | `scripts` under preloading | Carries a synthetic `$PRELOAD$` pseudo-entry and `num_cached_scripts` is bumped by one | No such entry | It stands for a shared-memory block an elephc binary never allocates |
 | `opcache_get_configuration()['blacklist']` | Lists the resolved patterns from `opcache.blacklist_filename` | Always `[]` | The directive is reported but not applied |
-| Directives that change engine behavior (`validate_timestamps`, `max_file_size`, `file_cache*`, `huge_code_pages`, `protect_memory`, `blacklist_filename`, …) | Change what the cache does | Reported faithfully, inert | There is no cache for them to act on. `revalidate_freq` is the exception: it feeds the `scripts` map's `revalidate` field |
+| Directives that change engine behavior (`file_cache*`, `huge_code_pages`, `protect_memory`, `blacklist_filename`, …) | Change what the cache does | Reported faithfully, inert | There is no compile-time cache for them to act on. `validate_timestamps`, `revalidate_freq`, `max_file_size`, `memory_consumption` and `max_accelerated_files` are NOT in this row: they govern the [runtime script cache](#the-runtime-script-cache) |
 | `version.version` | The running patch release (`8.5.6`) | The targeted language version (`8.5.0`) | elephc targets a PHP minor, not a patch. Understating is the safe direction — a caller gating on `>= 8.5.6` applies a redundant workaround rather than skipping a fix elephc may not have. See [System and I/O](system-and-io.md) for the full rationale and its cost |
 | Diagnostics | `Warning: … in <file> on line <n>` | Same text, no ` in <file> on line <n>` suffix | elephc does not synthesize the call-site suffix |
 | `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` out of range | Refuses the store and logs through `zend_accel_error`, which is silent below `opcache.log_verbosity_level = 2` | Refuses the store, silently | The refusal is exact; the verbosity-gated timestamped log channel has no elephc counterpart, so the diagnostic is not reproduced — matching what reference PHP prints at its default verbosity |

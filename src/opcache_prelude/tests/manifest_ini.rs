@@ -98,16 +98,24 @@ pub(super) fn get_status_bakes_manifest_counts_and_scripts() {
         let _ = parse(&format!("<?php {body}"));
     }
 
-    /// An empty manifest still renders a valid `opcache_get_status` body: zero counts, an
-    /// empty scripts map, and the untouched baseline memory figures.
+    /// An empty manifest still renders a valid `opcache_get_status` body: zero MANIFEST
+    /// counts, an empty manifest map for the runtime tier to append to, and the untouched
+    /// baseline memory figures.
+    ///
+    /// The counts and the map are no longer closed constants: each is the manifest's
+    /// contribution plus the runtime script cache's, which is `0` / empty in a binary with no
+    /// dynamic tier. This asserts the manifest HALF, which is what an empty manifest decides.
     #[test]
 pub(super) fn get_status_empty_manifest_is_valid() {
         let body = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &[], false, None));
-        assert!(body.contains("'num_cached_scripts' => 0"));
-        assert!(body.contains("'num_cached_keys' => 0"));
-        assert!(body.contains("$status['scripts'] = [];"));
-        // Baseline used_memory unchanged when no scripts contribute memory.
-        assert!(body.contains("'used_memory' => 6291456"));
+        assert!(body.contains("'num_cached_scripts' => 0 + $__elephc_rt_count"));
+        assert!(body.contains("'num_cached_keys' => 0 + $__elephc_rt_count"));
+        // The manifest map seeds the local the runtime entries are appended to, and the
+        // finished local is what lands on the status array.
+        assert!(body.contains("$__elephc_scripts = [];"));
+        assert!(body.contains("$status['scripts'] = $__elephc_scripts;"));
+        // Baseline used_memory unchanged when no manifest script contributes memory.
+        assert!(body.contains("'used_memory' => 6291456 + $__elephc_rt_used"));
         let _ = parse(&format!("<?php {body}"));
     }
 

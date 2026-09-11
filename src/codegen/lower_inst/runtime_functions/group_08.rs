@@ -40,6 +40,19 @@ pub(super) fn lower(
         RuntimeFnId::ElephcObjectPropValue => Some({
             crate::codegen::lower_inst::builtins::object_props::lower_object_prop_value(ctx, inst)
         }),
+        RuntimeFnId::ElephcOpcacheRtScriptField => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_script_field(
+                ctx, inst,
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtScriptPath => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_script_path(
+                ctx, inst,
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtStat => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_stat(ctx, inst)
+        }),
         RuntimeFnId::ElephcPtrIsNull => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_is_null(ctx, inst)
         }),

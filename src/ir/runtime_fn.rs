@@ -402,6 +402,9 @@ pub enum RuntimeFnId {
     ElephcObjectPropCount,
     ElephcObjectPropName,
     ElephcObjectPropValue,
+    ElephcOpcacheRtScriptField,
+    ElephcOpcacheRtScriptPath,
+    ElephcOpcacheRtStat,
     ElephcPtrIsNull,
     ElephcPtrReadString,
     ElephcPtrWriteString,
@@ -1154,6 +1157,15 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            // The runtime script cache is process state: these read it and nothing else,
+            // so they must NOT be folded across an include that can move the counters.
+            RuntimeFnId::ElephcOpcacheRtScriptField | RuntimeFnId::ElephcOpcacheRtStat => {
+                crate::ir::Effects::READS_GLOBAL
+            }
+            // Same read, plus the owned PHP string copied out of the bridge's buffer.
+            RuntimeFnId::ElephcOpcacheRtScriptPath => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
             // Re-boxing a property slot allocates the Mixed cell it hands back.
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
@@ -2337,6 +2349,9 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",
             RuntimeFnId::ElephcObjectPropValue => "__elephc_object_prop_value",
+            RuntimeFnId::ElephcOpcacheRtScriptField => "__elephc_opcache_rt_script_field",
+            RuntimeFnId::ElephcOpcacheRtScriptPath => "__elephc_opcache_rt_script_path",
+            RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",

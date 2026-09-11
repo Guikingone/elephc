@@ -208,6 +208,9 @@ pub(crate) struct StatusFacts {
     pub preload_statistics: Option<Expr>,
     /// The `scripts` map keyed by canonical path.
     pub scripts_map: Expr,
+    /// `opcache.revalidate_freq`, added to a dynamic entry's `last_used_timestamp` to make
+    /// its `revalidate` field — or `None` on a profile that has no such key (pre-8.3).
+    pub revalidate_freq: Option<i64>,
     /// The `jit` sub-array's seven fields, already clamped.
     pub jit: JitFacts,
 }
@@ -244,17 +247,35 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
 
     let mut status_entries = vec![
         (e_str("opcache_enabled"), e_bool(true)),
-        (e_str("cache_full"), e_bool(false)),
+        // The budget latch belongs to the runtime script cache; a binary without one reports
+        // `0` here and the comparison renders the same `false` this key always carried.
+        (
+            e_str("cache_full"),
+            e_binop(e_var("__elephc_rt_full"), BinOp::StrictNotEq, e_int(0)),
+        ),
+        // EITHER latch counts: the native one is set by this binary's own `opcache_reset()`,
+        // the runtime one by a reset issued from inside `eval()`. Reporting only the native
+        // one would deny a restart the cache has actually scheduled.
         (
             e_str("restart_pending"),
-            e_call("__elephc_opcache_restart_pending", vec![e_bool(false)]),
+            e_binop(
+                e_call("__elephc_opcache_restart_pending", vec![e_bool(false)]),
+                BinOp::Or,
+                e_binop(e_var("__elephc_rt_pending"), BinOp::StrictNotEq, e_int(0)),
+            ),
         ),
         (e_str("restart_in_progress"), e_bool(false)),
         (
             e_str("memory_usage"),
             e_array_assoc(vec![
-                (e_str("used_memory"), php_int(facts.memory_used)),
-                (e_str("free_memory"), php_int(facts.memory_free)),
+                (
+                    e_str("used_memory"),
+                    e_binop(php_int(facts.memory_used), BinOp::Add, e_var("__elephc_rt_used")),
+                ),
+                (
+                    e_str("free_memory"),
+                    e_binop(php_int(facts.memory_free), BinOp::Sub, e_var("__elephc_rt_used")),
+                ),
                 (e_str("wasted_memory"), e_int(0)),
                 (e_str("current_wasted_percentage"), e_float(0.0)),
             ]),
@@ -266,25 +287,38 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
     status_entries.push((
         e_str("opcache_statistics"),
         e_array_assoc(vec![
+            // The compile-time manifest is fixed; the runtime cache's entries are added to it,
+            // so the count grows as dynamically included files are cached.
             (
                 e_str("num_cached_scripts"),
-                php_int(facts.num_cached_scripts),
+                e_binop(
+                    php_int(facts.num_cached_scripts),
+                    BinOp::Add,
+                    e_var("__elephc_rt_count"),
+                ),
             ),
-            (e_str("num_cached_keys"), php_int(facts.num_cached_keys)),
+            (
+                e_str("num_cached_keys"),
+                e_binop(
+                    php_int(facts.num_cached_keys),
+                    BinOp::Add,
+                    e_var("__elephc_rt_count"),
+                ),
+            ),
             (e_str("max_cached_keys"), php_int(facts.max_cached_keys)),
-            (e_str("hits"), e_int(0)),
+            (e_str("hits"), e_var("__elephc_rt_hits")),
             (
                 e_str("start_time"),
                 e_var("__elephc_opcache_start_time"),
             ),
-            (e_str("last_restart_time"), e_int(0)),
+            (e_str("last_restart_time"), e_var("__elephc_rt_restart_time")),
             (e_str("oom_restarts"), e_int(0)),
             (e_str("hash_restarts"), e_int(0)),
-            (e_str("manual_restarts"), e_int(0)),
-            (e_str("misses"), e_int(0)),
+            (e_str("manual_restarts"), e_var("__elephc_rt_manual")),
+            (e_str("misses"), e_var("__elephc_rt_misses")),
             (e_str("blacklist_misses"), e_int(0)),
             (e_str("blacklist_miss_ratio"), e_float(0.0)),
-            (e_str("opcache_hit_rate"), e_float(0.0)),
+            (e_str("opcache_hit_rate"), e_var("__elephc_rt_rate")),
         ]),
     ));
 
@@ -311,8 +345,11 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
             vec![],
             None,
         ),
-        s_assign("status", e_array_assoc(status_entries)),
     ];
+    // AFTER the disabled gate, so a binary whose cache is off never calls the bridge, and
+    // BEFORE the status array, which names the locals this leaves behind.
+    body.extend(runtime_cache_prologue());
+    body.push(s_assign("status", e_array_assoc(status_entries)));
     if let Some(preload) = facts.preload_statistics {
         body.push(s_array_assign(
             "status",
@@ -320,16 +357,14 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
             preload,
         ));
     }
-    body.push(s_if(
-        e_var("include_scripts"),
-        vec![s_array_assign(
-            "status",
-            e_str("scripts"),
-            facts.scripts_map,
-        )],
-        vec![],
-        None,
+    let mut scripts_body = vec![s_assign("__elephc_scripts", facts.scripts_map)];
+    scripts_body.extend(runtime_cache_scripts_loop(facts.revalidate_freq));
+    scripts_body.push(s_array_assign(
+        "status",
+        e_str("scripts"),
+        e_var("__elephc_scripts"),
     ));
+    body.push(s_if(e_var("include_scripts"), scripts_body, vec![], None));
     body.push(s_array_assign(
         "status",
         e_str("jit"),
@@ -349,6 +384,134 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
         .param_untyped_default("include_scripts", e_bool(true))
         .body(body)
         .build()
+}
+
+
+/// Reads every runtime script-cache figure once, into locals the status array then names.
+///
+/// One call per figure, hoisted out of the array literal: the array is built in one
+/// expression and a call inside it would be evaluated in key order, which is not the order
+/// the figures have to be consistent in. Reading them up front also means `hits` and
+/// `misses` cannot straddle an include that moves one of them.
+///
+/// Every call folds to `0` at lowering time in a binary with no eval bridge, so this whole
+/// prologue costs a handful of constant assignments there.
+fn runtime_cache_prologue() -> Vec<Stmt> {
+    use crate::opcache::rt_status_keys as keys;
+
+    let stat = |key: i64| e_call("__elephc_opcache_rt_stat", vec![e_int(key)]);
+    vec![
+        s_assign("__elephc_rt_hits", stat(keys::RT_STAT_HITS)),
+        s_assign("__elephc_rt_misses", stat(keys::RT_STAT_MISSES)),
+        s_assign("__elephc_rt_count", stat(keys::RT_STAT_SCRIPT_COUNT)),
+        s_assign("__elephc_rt_used", stat(keys::RT_STAT_USED_MEMORY)),
+        s_assign("__elephc_rt_full", stat(keys::RT_STAT_CACHE_FULL)),
+        s_assign("__elephc_rt_manual", stat(keys::RT_STAT_MANUAL_RESTARTS)),
+        s_assign("__elephc_rt_restart_time", stat(keys::RT_STAT_LAST_RESTART_TIME)),
+        s_assign("__elephc_rt_pending", stat(keys::RT_STAT_RESTART_PENDING)),
+        // php-src reports the hit rate as a PERCENTAGE of lookups, and `0.0` when there have
+        // been none — not a division by zero and not `NAN`.
+        s_assign(
+            "__elephc_rt_lookups",
+            e_binop(e_var("__elephc_rt_hits"), BinOp::Add, e_var("__elephc_rt_misses")),
+        ),
+        s_assign("__elephc_rt_rate", e_float(0.0)),
+        s_if(
+            e_binop(e_var("__elephc_rt_lookups"), BinOp::Gt, e_int(0)),
+            // The CAST is load-bearing, not decoration: PHP's `/` on two ints is `int|float`,
+            // and assigning a union into a local that starts out `float` is a branch-divergent
+            // retype — the shape that miscompiles order-dependently. Casting pins one type on
+            // both arms, and `opcache_hit_rate` is a float in reference PHP anyway.
+            vec![s_assign(
+                "__elephc_rt_rate",
+                e_cast(
+                    CastType::Float,
+                    e_binop(
+                        e_binop(
+                            e_var("__elephc_rt_hits"),
+                            BinOp::Div,
+                            e_var("__elephc_rt_lookups"),
+                        ),
+                        BinOp::Mul,
+                        e_float(100.0),
+                    ),
+                ),
+            )],
+            vec![],
+            None,
+        ),
+    ]
+}
+
+/// Appends the runtime cache's scripts to the manifest map, one index at a time.
+///
+/// Walks by INDEX rather than taking an array across the bridge: every figure crosses as a
+/// scalar, which keeps the bridge free of an array ABI and of the ownership question that
+/// comes with one.
+///
+/// An empty path is the loop's safety net. A real cached path is never empty, so an empty
+/// one means the index went out of range between the count and the read — possible because
+/// nothing holds the cache locked across the walk — and skipping it is the honest answer.
+fn runtime_cache_scripts_loop(revalidate_freq: Option<i64>) -> Vec<Stmt> {
+    use crate::opcache::rt_status_keys as keys;
+
+    let field = |key: i64| {
+        e_call(
+            "__elephc_opcache_rt_script_field",
+            vec![e_var("__elephc_rt_i"), e_int(key)],
+        )
+    };
+    let mut entry = vec![
+        (e_str("full_path"), e_var("__elephc_rt_path")),
+        (e_str("hits"), field(keys::RT_SCRIPT_HITS)),
+        (e_str("memory_consumption"), field(keys::RT_SCRIPT_MEMORY)),
+        (
+            e_str("last_used"),
+            e_call(
+                "__elephc_opcache_asctime",
+                vec![e_var("__elephc_rt_last_used")],
+            ),
+        ),
+        (e_str("last_used_timestamp"), e_var("__elephc_rt_last_used")),
+        (e_str("timestamp"), field(keys::RT_SCRIPT_TIMESTAMP)),
+    ];
+    if let Some(freq) = revalidate_freq {
+        entry.push((
+            e_str("revalidate"),
+            e_binop(e_var("__elephc_rt_last_used"), BinOp::Add, php_int(freq)),
+        ));
+    }
+
+    vec![
+        s_assign("__elephc_rt_i", e_int(0)),
+        s_while(
+            e_binop(e_var("__elephc_rt_i"), BinOp::Lt, e_var("__elephc_rt_count")),
+            vec![
+                s_assign(
+                    "__elephc_rt_path",
+                    e_call(
+                        "__elephc_opcache_rt_script_path",
+                        vec![e_var("__elephc_rt_i")],
+                    ),
+                ),
+                s_assign("__elephc_rt_last_used", field(keys::RT_SCRIPT_LAST_USED)),
+                s_if(
+                    e_binop(e_var("__elephc_rt_path"), BinOp::StrictNotEq, e_str("")),
+                    vec![s_array_assign(
+                        "__elephc_scripts",
+                        e_var("__elephc_rt_path"),
+                        e_array_assoc(entry),
+                    )],
+                    vec![],
+                    None,
+                ),
+                s_assign(
+                    "__elephc_rt_i",
+                    e_binop(e_var("__elephc_rt_i"), BinOp::Add, e_int(1)),
+                ),
+            ],
+        ),
+    ]
 }
 
 /// `opcache_is_script_cached($filename)`: `realpath`-normalized membership in the baked
