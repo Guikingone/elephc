@@ -369,12 +369,27 @@ pub struct ClassInfo {
     pub final_methods: HashSet<String>,
     pub method_declaring_classes: crate::fast_hash::FastMap<String, String>,
     pub method_impl_classes: crate::fast_hash::FastMap<String, String>,
+    /// Methods genuinely declared `abstract` in PHP (or left unimplemented by an abstract class
+    /// satisfying an interface contract), keyed by PHP's case-insensitive method key.
+    ///
+    /// Unlike `method_impl_classes`, this set is never trimmed by codegen reachability: codegen's
+    /// `runtime_class_infos()` drops a `method_impl_classes` entry when a method's EIR body was
+    /// dead-code-eliminated (nothing in the AOT-compiled program calls it -- only eval-owned code
+    /// does, which is exactly the shape of a native class's methods when only interpreted code
+    /// touches them). That trimming is correct for vtable emission, which must not reference an
+    /// unemitted symbol, but it must not double as "this method is abstract" for the eval
+    /// reflection bridge: a concrete-but-unreachable method is still concrete in PHP. This field is
+    /// the untrimmed source of truth `eval_reflection_instance_method_flags`/
+    /// `eval_reflection_static_method_flags` read for the `ReflectionMethod::isAbstract()` bit.
+    pub abstract_methods: HashSet<String>,
     pub vtable_methods: Vec<String>,
     pub vtable_slots: HashMap<String, usize>,
     pub static_method_visibilities: crate::fast_hash::FastMap<String, Visibility>,
     pub final_static_methods: HashSet<String>,
     pub static_method_declaring_classes: crate::fast_hash::FastMap<String, String>,
     pub static_method_impl_classes: crate::fast_hash::FastMap<String, String>,
+    /// Static counterpart of `abstract_methods`; see its doc comment.
+    pub abstract_static_methods: HashSet<String>,
     pub static_vtable_methods: Vec<String>,
     pub static_vtable_slots: HashMap<String, usize>,
     pub interfaces: Vec<String>,

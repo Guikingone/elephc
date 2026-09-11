@@ -1679,6 +1679,15 @@ fn eval_reflection_interface_static_method_declaring_interface<'a>(
 }
 
 /// Returns eval ReflectionMethod bitflags for one instance method entry.
+///
+/// The ABSTRACT bit reads `abstract_methods`, not whether `method_impl_classes` still names an
+/// emitted symbol: codegen's `runtime_class_infos()` trims `method_impl_classes` down to methods
+/// with a live EIR/intrinsic-wrapper symbol so vtable emission never references a dead-code-
+/// eliminated label, and a native class's method is routinely unreachable from AOT-compiled code
+/// when only eval-owned code calls it (that is exactly how a native exception's `getMessage()`
+/// looks to a program whose only compiled entry point is a bootstrap file). `abstract_methods` is
+/// never trimmed, so it stays a faithful "declared abstract in PHP" signal independent of this
+/// build's reachability.
 fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &str) -> u64 {
     let visibility = class_info
         .method_visibilities
@@ -1688,13 +1697,16 @@ fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &s
     if class_info.final_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_FINAL;
     }
-    if !class_info.method_impl_classes.contains_key(method_name) {
+    if class_info.abstract_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     }
     flags
 }
 
 /// Returns eval ReflectionMethod bitflags for one static method entry.
+///
+/// See `eval_reflection_instance_method_flags` for why the ABSTRACT bit reads
+/// `abstract_static_methods` rather than `static_method_impl_classes`.
 fn eval_reflection_static_method_flags(class_info: &ClassInfo, method_name: &str) -> u64 {
     let visibility = class_info
         .static_method_visibilities
@@ -1705,7 +1717,7 @@ fn eval_reflection_static_method_flags(class_info: &ClassInfo, method_name: &str
     if class_info.final_static_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_FINAL;
     }
-    if !class_info.static_method_impl_classes.contains_key(method_name) {
+    if class_info.abstract_static_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     }
     flags
@@ -3467,12 +3479,14 @@ mod tests {
             final_methods: HashSet::new(),
             method_declaring_classes: crate::fast_hash::FastMap::default(),
             method_impl_classes,
+            abstract_methods: HashSet::new(),
             vtable_methods: vec![method_name.to_string()],
             vtable_slots,
             static_method_visibilities: crate::fast_hash::FastMap::default(),
             final_static_methods: HashSet::new(),
             static_method_declaring_classes: crate::fast_hash::FastMap::default(),
             static_method_impl_classes: crate::fast_hash::FastMap::default(),
+            abstract_static_methods: HashSet::new(),
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
             interfaces: Vec::new(),

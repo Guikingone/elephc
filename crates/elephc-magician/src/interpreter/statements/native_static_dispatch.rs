@@ -10,6 +10,18 @@
 use super::*;
 
 /// Dispatches one generated/AOT method reached through PHP static-call syntax.
+///
+/// `__construct` needs its own branch here: a native class's constructor has no entry in
+/// `eval_aot_method_dispatch_metadata_in_hierarchy` (that index is built from
+/// `collect_eval_native_instance_methods`, which deliberately skips `__construct` -- it has its
+/// own registration table keyed for allocation-time dispatch, `new X()`, not for `parent::`
+/// static-call syntax). `parent::__construct(...)` called from an eval-declared class whose
+/// resolved parent is native (e.g. `class Sub extends \LogicException { function __construct() {
+/// parent::__construct(...); } }`) therefore fell through every branch below and reached the
+/// "undefined method" fallback. PHP runs the parent's constructor against the SAME object
+/// (`$this`), not a freshly allocated one, which is exactly what `construct_object_for_class`
+/// (via `eval_native_constructor_with_evaluated_args`) already does for `new X()` when `X` has no
+/// own constructor and resolution walks up to a native ancestor -- reuse it here bound to `$this`.
 pub(super) fn eval_native_static_syntax_method_result(
     class_name: &str,
     called_class_scope: Option<&str>,
@@ -19,6 +31,20 @@ pub(super) fn eval_native_static_syntax_method_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if method_name.eq_ignore_ascii_case("__construct") {
+        if let Some(object) =
+            eval_static_syntax_instance_receiver(class_name, lexical_scope, context, values)?
+        {
+            eval_native_constructor_with_evaluated_args(
+                class_name,
+                object,
+                evaluated_args,
+                context,
+                values,
+            )?;
+            return values.null().map(Some);
+        }
+    }
     let Some((declaring_class, visibility, is_static, is_abstract)) =
         eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?
     else {

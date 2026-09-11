@@ -98,7 +98,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     trace_class_decl_result(
         class,
         "validate_throwable_interfaces",
-        validate_eval_class_does_not_implement_throwable_interfaces(class, context),
+        validate_eval_class_does_not_implement_throwable_interfaces(class, context, values),
     )?;
     trace_class_decl_result(
         class,

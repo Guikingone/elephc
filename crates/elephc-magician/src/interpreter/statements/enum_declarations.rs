@@ -159,7 +159,7 @@ pub(super) fn validate_eval_enum_interfaces(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
-    validate_eval_class_does_not_implement_throwable_interfaces(enum_class, context)?;
+    validate_eval_class_does_not_implement_throwable_interfaces(enum_class, context, values)?;
     if enum_decl.backing_type().is_none()
         && pending_class_interface_names(enum_class, context)
             .iter()

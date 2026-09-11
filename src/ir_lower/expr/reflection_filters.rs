@@ -254,7 +254,7 @@ pub(super) fn reflection_method_filter_modifiers(
             visibility,
             false,
             class_info.final_methods.contains(&method_key),
-            !class_info.method_impl_classes.contains_key(&method_key),
+            class_info.abstract_methods.contains(&method_key),
         ));
     }
     if class_info.static_methods.contains_key(&method_key) {
@@ -266,9 +266,7 @@ pub(super) fn reflection_method_filter_modifiers(
             visibility,
             true,
             class_info.final_static_methods.contains(&method_key),
-            !class_info
-                .static_method_impl_classes
-                .contains_key(&method_key),
+            class_info.abstract_static_methods.contains(&method_key),
         ));
     }
     None

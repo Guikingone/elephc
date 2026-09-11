@@ -796,19 +796,57 @@ pub(super) fn validate_eval_class_does_not_implement_enum_interfaces(
     }
 }
 
-/// Rejects eval classes and enums that directly implement PHP's Throwable contract.
+/// Rejects eval classes and enums that implement PHP's Throwable contract without already
+/// inheriting it from their parent.
+///
+/// PHP's rule ("Class X cannot implement interface Throwable, extend Exception or Error
+/// instead", `php -n` 8.5.6) fires only when the class's ancestry does not already implement
+/// Throwable. A subclass of a Throwable-implementing native or eval class may freely implement
+/// an interface that itself extends Throwable -- Symfony's exception hierarchy relies on exactly
+/// this: `final class FormatException extends \LogicException implements ExceptionInterface`
+/// where `ExceptionInterface extends \Throwable`. Rejecting it unconditionally blocked every
+/// Symfony-shaped exception subclass at declaration.
 pub(super) fn validate_eval_class_does_not_implement_throwable_interfaces(
     class: &EvalClass,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if pending_class_interface_names(class, context)
+    if !pending_class_interface_names(class, context)
         .iter()
         .any(|interface| eval_builtin_throwable_interface_name(interface))
     {
-        Err(EvalStatus::RuntimeFatal)
-    } else {
-        Ok(())
+        return Ok(());
     }
+    if let Some(parent) = class.parent() {
+        if eval_class_or_native_parent_is_throwable(parent, context, values)? {
+            return Ok(());
+        }
+    }
+    Err(EvalStatus::RuntimeFatal)
+}
+
+/// Returns whether a class name -- eval-declared or native -- already implements Throwable.
+///
+/// Checks the eval class table first (`context.class_is_a`), then falls back to the runtime's
+/// own AOT instanceof machinery for a native name never itself eval-declared (e.g. `LogicException`
+/// as a bare `extends` target, which has no `native_class_parent` entry of its own since nothing
+/// eval-declared has registered it as an ancestor yet). This mirrors exactly what `is_a($name,
+/// 'Throwable', true)` does for a native class-name string.
+fn eval_class_or_native_parent_is_throwable(
+    parent: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let parent = context
+        .resolve_class_name(parent)
+        .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+    if context.class_is_a(&parent, "Throwable", false) || native_class_is_a(&parent, "Throwable", context) {
+        return Ok(true);
+    }
+    let name_cell = values.string(&parent)?;
+    let result = values.object_is_a(name_cell, "Throwable", false);
+    values.release(name_cell)?;
+    result
 }
 
 /// Validates abstract/final modifiers on an eval-declared class and its methods.

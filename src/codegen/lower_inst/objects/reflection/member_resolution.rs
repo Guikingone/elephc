@@ -196,7 +196,7 @@ pub(super) fn reflection_method_member_flags(
             false,
             visibility,
             info.final_methods.contains(method_key),
-            !info.method_impl_classes.contains_key(method_key),
+            info.abstract_methods.contains(method_key),
             false,
             false,
         ));
@@ -210,7 +210,7 @@ pub(super) fn reflection_method_member_flags(
             true,
             visibility,
             info.final_static_methods.contains(method_key),
-            !info.static_method_impl_classes.contains_key(method_key),
+            info.abstract_static_methods.contains(method_key),
             false,
             false,
         ));
