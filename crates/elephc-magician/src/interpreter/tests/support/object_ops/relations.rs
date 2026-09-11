@@ -21,6 +21,7 @@ pub(super) fn fake_runtime_exception_like_class(class_name: &str) -> bool {
         "DivisionByZeroError",
         "ValueError",
         "TypeError",
+        "ArgumentCountError",
         "UnhandledMatchError",
     ]
     .iter()
@@ -79,8 +80,15 @@ pub(super) fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exc
             "DivisionByZeroError",
             "ValueError",
             "TypeError",
+            "ArgumentCountError",
             "UnhandledMatchError",
         ]
+            .iter()
+            .any(|known| class_name.eq_ignore_ascii_case(known));
+    }
+    if target_class.eq_ignore_ascii_case("TypeError") {
+        // `ArgumentCountError extends TypeError` in real PHP.
+        return ["TypeError", "ArgumentCountError"]
             .iter()
             .any(|known| class_name.eq_ignore_ascii_case(known));
     }

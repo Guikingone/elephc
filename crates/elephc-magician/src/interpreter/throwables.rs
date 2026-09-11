@@ -71,6 +71,20 @@ pub(in crate::interpreter) fn eval_throw_builtin_value_error<T>(
     Err(EvalStatus::UncaughtThrowable)
 }
 
+/// Creates and schedules an `ArgumentCountError` through eval's normal Throwable channel.
+pub(in crate::interpreter) fn eval_throw_argument_count_error<T>(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object("ArgumentCountError")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
 /// Creates and schedules a `DivisionByZeroError` through eval's normal Throwable channel.
 pub(in crate::interpreter) fn eval_throw_builtin_division_by_zero_error<T>(
     message: &str,

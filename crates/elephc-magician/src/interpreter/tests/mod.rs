@@ -60,6 +60,8 @@ mod builtins_strings_encoding;
 mod builtins_strings_openssl;
 mod builtins_strings_text;
 mod builtins_extract;
+mod builtins_substr_count;
+mod builtins_get_debug_type;
 mod builtins_symbols;
 mod builtins_system_network;
 mod cast_precedence;

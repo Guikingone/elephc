@@ -54,6 +54,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Chr,
     /// Dispatches `chunk_split(...)`.
     ChunkSplit,
+    /// Dispatches `substr_count(...)`.
+    SubstrCount,
+    /// Dispatches `get_debug_type(...)`.
+    GetDebugType,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
@@ -359,6 +363,8 @@ impl EvalDirectHook {
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
             Self::Chr => eval_builtin_chr(args, context, scope, values),
             Self::ChunkSplit => eval_builtin_chunk_split(args, context, scope, values),
+            Self::SubstrCount => eval_builtin_substr_count(args, context, scope, values),
+            Self::GetDebugType => eval_builtin_get_debug_type(args, context, scope, values),
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
             Self::Core => eval_builtin_core_call(name, args, context, scope, values),
             Self::Cos => eval_builtin_cos(args, context, scope, values),

@@ -249,7 +249,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "dechex",
     "decoct",
     "error_log",
-    "get_debug_type",
     "header_remove",
     "headers_sent",
     "hexdec",
@@ -260,7 +259,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "setlocale",
     "strncasecmp",
     "strncmp",
-    "substr_count",
     "unpack",
     "unserialize",
     "zval_free",
@@ -310,18 +308,20 @@ mod tests {
             }
         }
 
-        // Recomputed for the merged catalog: main's BCMath and iconv contracts join this
-        // branch's promotions, so every one of these six is a merge result, not either side's
-        // number.
-        // 489 + the two tick-function contracts, both eval-registry surfaces.
-        assert_eq!(eval_registry, 491);
+        // Recomputed against THIS tree, not typed in from a stale plan: the pinned numbers this
+        // assertion inherited (`eval_registry: 491`, `eval_pending: 40`) were ALREADY WRONG on
+        // this branch before this commit -- reverting every file this commit touches and
+        // re-running this test measures 493 / 38, not 491 / 40, so a prior commit on this branch
+        // drifted the catalog without updating this census. The AOT-side numbers
+        // (`aot_registry: 555`, `aot_external: 10`, `aot_unsupported: 5`) were still correct.
+        // 493 + substr_count and get_debug_type leaving EVAL_IMPLEMENTATION_PENDING.
+        assert_eq!(eval_registry, 495);
         assert_eq!(eval_internal, 39);
-        assert_eq!(eval_pending, 40);
-        // Unchanged: the two tick-function contracts are eval-only, so they raise
-        // `aot_unsupported` rather than `aot_registry`.
+        // 38 - substr_count - get_debug_type.
+        assert_eq!(eval_pending, 36);
+        // Unchanged: neither contract's AOT route moves.
         assert_eq!(aot_registry, 555);
         assert_eq!(aot_external, 10);
-        // 3 reflection contracts + the two tick functions.
         assert_eq!(aot_unsupported, 5);
     }
 
@@ -366,11 +366,17 @@ mod tests {
             }
         }
 
+        // Recomputed against THIS tree; the pinned `interpreter_adapter: 470` / `unsupported: 79`
+        // this assertion inherited were likewise already stale (see the census above) -- a clean
+        // revert of this commit measures 472 / 77, not 470 / 79.
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        // 468 + the two tick-function contracts, both interpreter adapters.
-        assert_eq!(interpreter_adapter, 470);
-        assert_eq!(unsupported, 79);
+        // 472 + substr_count and get_debug_type (now eval-registry, neither has a
+        // `RuntimeBuiltinId`): both interpreter adapters.
+        assert_eq!(interpreter_adapter, 474);
+        // 77 - substr_count - get_debug_type, which moved from `unsupported` to
+        // `interpreter_adapter` above.
+        assert_eq!(unsupported, 75);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

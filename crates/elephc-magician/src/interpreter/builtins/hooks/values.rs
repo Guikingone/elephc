@@ -57,6 +57,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Chr,
     /// Dispatches `chunk_split(...)`.
     ChunkSplit,
+    /// Dispatches `substr_count(...)`.
+    SubstrCount,
+    /// Dispatches `get_debug_type(...)`.
+    GetDebugType,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
@@ -380,6 +384,8 @@ impl EvalValuesHook {
                 }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::SubstrCount => eval_substr_count_values(evaluated_args, context, values),
+            Self::GetDebugType => eval_get_debug_type_values(evaluated_args, context, values),
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
             Self::Core => eval_core_values_result(name, evaluated_args, context, values),
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
