@@ -331,23 +331,29 @@ error**, not a silent read of the wrong thread's state. 245 unreviewed edits are
 exactly how round 4's five SIGSEGVs happened; zero edits with a link-time tripwire
 is a strictly better trade.
 
-Three things must be settled before writing it, none of them guesses:
+Three things had to be settled before writing it. All three are settled, and two of
+the three questions were wrong as posed — which is why they were read rather than
+assumed:
 
-1. **The three hand-rolled sites** (`math.rs:696`, `math/binary.rs:252`,
-   `json_throw_error.rs:88`) bypass the accessors and so bypass the routing. They
-   are the whole residue, and the link tripwire catches them only if the symbol
-   name disappears — `json_throw_error` materializes the address two instructions
-   earlier, so its `str x0, [x9]` would survive a rename. Fix those three first,
-   by hand, before the routing lands.
-2. **Is the ctx register valid at the cdylib boundary?** The host's register is
-   saved and restored (`emit_ctx_save_foreign` / `emit_ctx_restore_foreign`) and
-   the arena is installed (`emit_ctx_install_default_arena`), but the exception
-   accesses in `cdylib/boundary.rs` sit around that install, not inside it. Order
-   has to be read, not assumed — an exception access before the install reads a
-   register the host owns.
-3. **Bootstrap ordering**: `abi/bootstrap.rs` zeroes `_exc_value` twice during
-   startup. If either runs before the ctx register is established, the routed
-   store writes through whatever the process started with.
+1. **The hand-rolled sites — DONE, and there were fifteen, not three.** See the
+   corrected inventory above. All of them now go through the accessors, and
+   `exception_state_is_only_reached_through_the_abi_accessors` forbids both the
+   hand-rolled and the two-step shape from coming back.
+2. **Is the ctx register valid at the cdylib boundary? YES, on every path.**
+   `emit_scalar_export_*` opens with `emit_ctx_save_foreign` + `emit_ctx_publish`,
+   and `emit_scalar_native_return` — the single return helper, used by the OK, the
+   error, the allocation-failure and the escaping-Throwable paths alike — restores
+   the host's value before the frame restore. Every `_exc_value` access in
+   `cdylib/boundary.rs` sits between those two, so the routed access reads elephc's
+   context and never the host's register. `emit_enter_boundary` and
+   `emit_leave_boundary` already rely on the same thing: both call
+   `ctx::emit_concat_off_store`, which is ctx-relative.
+3. **Bootstrap ordering — the question had a false premise.** `abi/bootstrap.rs`
+   does not zero `_exc_value` at startup. Both sites are on the runtime-FATAL path:
+   when a host boundary is active, they set `BOUNDARY_STATUS` to the failure code,
+   clear the exception cell and jump to `__rt_throw_current` to unwind into the
+   host. That code runs inside compiled PHP, well after the register is
+   established, so there is no ordering hazard to design around.
 
 Verification for the family, both targets × both modes: the link tripwire
 (compile fails if any path still names the symbol), plus a user-codegen scan like
