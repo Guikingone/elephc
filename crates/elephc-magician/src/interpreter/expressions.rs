@@ -643,7 +643,29 @@ fn eval_method_receiver_is_temporary(expr: &EvalExpr) -> bool {
     )
 }
 
-/// Releases a temporary receiver once its method call either returns or fails.
+/// Releases a temporary receiver once its method call either returns or fails, and retains a
+/// result that aliases the receiver so it survives as an independently owned value.
+///
+/// A method that hands back `$this` -- whether the declared return type spells that `self`,
+/// `static`, or the receiver's own class name -- returns the EXACT SAME cell the receiver already
+/// aliases, never a fresh temporary. Every consumer of `eval_expr`'s result (a discard statement,
+/// an assignment, the next link of a chained call) follows the opposite convention: a `MethodCall`
+/// is not on `eval_expr_result_aliases_storage`'s exemption list, so the consumer treats the
+/// result as freshly owned and releases it once done. Without a retain here, that release is one
+/// too many whenever the callee happened to alias its receiver -- and because the receiver here
+/// (`$o` in `$o->add("a");`, or `$this` in a nested call) is an ordinary variable rather than a
+/// disposable temporary, nothing else ever compensates. `$o->add("a");` discarded then released a
+/// reference `$o` still needed: the counted test fixture destructed the object a call early and
+/// again on the very next discarded call, then failed outright on the second release ("released a
+/// fake cell nobody owned"); the compiled runtime surfaced the same corruption as a bare
+/// `unsupported MethodCall expression`, because whatever next touched the freed object refused
+/// with nothing to say about why.
+///
+/// The retain is unconditional on the alias check, not on `receiver_is_temporary`: a temporary
+/// receiver (`(new Foo())->add("x");`) already retained-then-released to hand the SAME alias
+/// safely through its own cleanup below, and moving the check out of that gate changes nothing for
+/// it -- it only ALSO covers the far more common case of a plain-variable receiver, which never had
+/// any compensating retain at all.
 fn eval_method_call_with_temporary_receiver_cleanup(
     receiver: RuntimeCellHandle,
     receiver_is_temporary: bool,
@@ -651,9 +673,6 @@ fn eval_method_call_with_temporary_receiver_cleanup(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !receiver_is_temporary {
-        return result;
-    }
     let result = result.and_then(|result| {
         if result == receiver {
             values.retain(result)
@@ -661,6 +680,9 @@ fn eval_method_call_with_temporary_receiver_cleanup(
             Ok(result)
         }
     });
+    if !receiver_is_temporary {
+        return result;
+    }
     let cleanup = eval_release_value(context, values, receiver);
     match (result, cleanup) {
         (Err(status), _) => Err(status),
