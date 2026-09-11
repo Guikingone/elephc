@@ -145,9 +145,7 @@ fn emit_aarch64_extern_callback_trampoline(
     abi::emit_frame_prologue(emitter, frame_size);
     emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_descriptor_offset)); // preserve descriptor trampoline registers across invoker dispatch
     emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); // preserve runtime-loop registers across descriptor invocation
-    if emitter.ctx_register {
-        emitter.instruction(&format!("str x28, [sp, #{}]", saved_ctx_offset)); // preserve the foreign caller's x28 before the ctx publish overwrites it
-    }
+    emitter.instruction(&format!("str x28, [sp, #{}]", saved_ctx_offset)); // preserve the foreign caller's x28 before the ctx publish overwrites it
 
     abi::emit_load_symbol_to_reg(emitter, "x19", &trampoline.descriptor_slot_label, 0);
     // Foreign-entry publish (spike review, B2): an FFI callback is invoked by
@@ -156,18 +154,14 @@ fn emit_aarch64_extern_callback_trampoline(
     // The publish overwrites x28, so the foreign caller's value was spilled
     // above and is restored below (spike review round 2, NB2: a callee-saved
     // register must return to the foreign caller untouched).
-    if emitter.ctx_register {
-        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
-    }
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(emitter, "x19");
     emit_cast_descriptor_mixed_result_for_callback(emitter, &trampoline.return_type);
 
-    if emitter.ctx_register {
-        emitter.instruction(&format!("ldr x28, [sp, #{}]", saved_ctx_offset)); // restore the foreign caller's x28 before returning across the FFI boundary
-    }
+    emitter.instruction(&format!("ldr x28, [sp, #{}]", saved_ctx_offset)); // restore the foreign caller's x28 before returning across the FFI boundary
     emitter.instruction(&format!("ldp x21, x22, [sp, #{}]", saved_runtime_offset)); // restore runtime-loop registers after descriptor invocation
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_descriptor_offset)); // restore descriptor trampoline registers
     abi::emit_frame_restore(emitter, frame_size);
@@ -206,9 +200,7 @@ fn emit_x86_64_extern_callback_trampoline(
     // not elephc's ctx pointer and this trampoline's own scratch use of r14
     // above would clobber it anyway — re-publish before the descriptor invoker
     // can reach compiled PHP code.
-    if emitter.ctx_register {
-        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
-    }
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);

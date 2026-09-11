@@ -267,9 +267,7 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
         // concat reset below is already a ctx-relative store. Publishing after
         // it wrote `str xzr, [x28]` through the host's register — a wild store
         // that faulted at address 0 on the very first `elephc_init`.
-        if emitter.ctx_register {
-            crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
-        }
+        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
         emit_clear_error_inline(emitter);
         emit_reset_concat_inline(emitter);
         emit_store_immediate_to_symbol(emitter, BOUNDARY_ACTIVE, 0);
@@ -280,10 +278,8 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
             // the ctx-register mode — the pointer is already published above,
             // so this only zeroes the allocator fields (publish-only entries
             // like the exports below must never reach this reset).
-            if emitter.ctx_register {
-                crate::codegen_support::runtime::ctx::emit_ctx_zero_fields(emitter);
-                crate::codegen_support::runtime::ctx::emit_ctx_install_default_arena(emitter);
-            }
+            crate::codegen_support::runtime::ctx::emit_ctx_zero_fields(emitter);
+            crate::codegen_support::runtime::ctx::emit_ctx_install_default_arena(emitter);
             crate::codegen::stack_guard::emit_stack_limit_init_call(emitter);
             if heap_debug {
                 abi::emit_enable_heap_debug_flag(emitter);

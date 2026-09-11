@@ -257,11 +257,9 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     // The ctx-register mode installs the per-context state pointer (x28/r14)
     // before any state read or write runs: concat base capture, heap helpers,
     // and the runtime's ctx-gated emitters all address state relative to it.
-    if ctx.emitter.ctx_register {
-        ctx.emitter
-            .comment("install the per-context runtime state pointer");
-        abi::emit_call_label(ctx.emitter, "__rt_ctx_init");
-    }
+    ctx.emitter
+        .comment("install the per-context runtime state pointer");
+    abi::emit_call_label(ctx.emitter, "__rt_ctx_init");
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     ctx.emitter.comment("save argc/argv to globals");

@@ -290,25 +290,16 @@ pub fn emit_heap_arena_reset_state(emitter: &mut Emitter) {
         CTX_HEAP_SMALL_BINS_OFFSET + 16,
         CTX_HEAP_SMALL_BINS_OFFSET + 24,
     ];
-    if emitter.ctx_register {
-        for offset in fields {
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    emitter.instruction(&format!("str xzr, [x28, #{}]", offset)); // zero one per-context heap allocator field
-                }
-                Arch::X86_64 => {
-                    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], 0", offset)); // zero one per-context heap allocator field
-                }
+    for offset in fields {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("str xzr, [x28, #{}]", offset)); // zero one per-context heap allocator field
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov QWORD PTR [r14 + {}], 0", offset)); // zero one per-context heap allocator field
             }
         }
-        return;
     }
-    abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 8);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 16);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 24);
 }
 
 /// Publishes the `_rt_ctx` base into the reserved ctx register without a call.
@@ -740,66 +731,41 @@ pub fn emit_ctx_address(emitter: &mut Emitter, dest: &str, field_offset: usize) 
 /// Mirrors `emit_heap_off_load` for `_heap_free_list` so every helper that
 /// consumes the free-list head shares one addressing-mode switch.
 pub fn emit_free_list_head_load(emitter: &mut Emitter, reg: &str) {
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!(
-                    "ldr {}, [x28, #{}]",
-                    reg, CTX_HEAP_FREE_LIST_OFFSET
-                )); // load the per-context free-list head
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "mov {}, QWORD PTR [r14 + {}]",
-                    reg, CTX_HEAP_FREE_LIST_OFFSET
-                )); // load the per-context free-list head
-            }
-        }
-        return;
-    }
-    abi::emit_symbol_address(emitter, reg, "_heap_free_list");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr {}, [{}]", reg, reg)); // load the legacy global free-list head
+            emitter.instruction(&format!(
+                "ldr {}, [x28, #{}]",
+                reg, CTX_HEAP_FREE_LIST_OFFSET
+            )); // load the per-context free-list head
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [{}]", reg, reg)); // load the legacy global free-list head
+            emitter.instruction(&format!(
+                "mov {}, QWORD PTR [r14 + {}]",
+                reg, CTX_HEAP_FREE_LIST_OFFSET
+            )); // load the per-context free-list head
         }
     }
 }
 
-/// Stores the heap bump offset value in `reg` back into per-context state,
-/// ctx-relative in ctx-register mode and to the legacy global symbol otherwise.
+/// Stores the heap bump offset `value` back into per-context state.
 ///
-/// Companion to `emit_heap_off_load` for the bump-shrink paths (tail trimming,
-/// bump resets) that write the allocator cursor back. In legacy mode the value
-/// is stored straight through the given scratch register: the caller must not
-/// rely on it surviving.
-pub fn emit_heap_off_store(emitter: &mut Emitter, reg: &str, value: &str) {
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!(
-                    "str {}, [x28, #{}]",
-                    value, CTX_HEAP_OFF_OFFSET
-                )); // store the per-context heap bump offset
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "mov QWORD PTR [r14 + {}], {}",
-                    CTX_HEAP_OFF_OFFSET, value
-                )); // store the per-context heap bump offset
-            }
-        }
-        return;
-    }
-    abi::emit_symbol_address(emitter, reg, "_heap_off");
+/// Companion to `emit_heap_off_load` for the bump-shrink paths (tail trimming, bump
+/// resets) that write the allocator cursor back. It took a scratch register until the
+/// legacy arm went: addressing a global needed one, addressing a ctx field does not, and
+/// leaving the parameter would have callers reserving a register for nothing.
+pub fn emit_heap_off_store(emitter: &mut Emitter, value: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("str {}, [{}]", value, reg)); // store the legacy global heap offset
+            emitter.instruction(&format!(
+                "str {}, [x28, #{}]",
+                value, CTX_HEAP_OFF_OFFSET
+            )); // store the per-context heap bump offset
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [{}], {}", reg, value)); // store the legacy global heap offset
+            emitter.instruction(&format!(
+                "mov QWORD PTR [r14 + {}], {}",
+                CTX_HEAP_OFF_OFFSET, value
+            )); // store the per-context heap bump offset
         }
     }
 }
@@ -818,33 +784,29 @@ pub fn emit_heap_off_store(emitter: &mut Emitter, reg: &str, value: &str) {
 // Consumed by the M0 concat-family migration (see emit_concat_off_load).
 #[allow(dead_code)]
 pub fn emit_concat_off_store_imm(emitter: &mut Emitter, value: i64) {
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                // `str #imm, [...]` does not exist: anything but zero must be
-                // materialized first, or the assembler rejects the helper (the
-                // cdylib boundary parks the cursor at CONCAT_SCRATCH_CAPACITY).
-                let source = if value == 0 {
-                    "xzr"
-                } else {
-                    abi::emit_load_int_immediate(emitter, "x10", value);
-                    "x10"
-                };
-                emitter.instruction(&format!(
-                    "str {}, [x28, #{}]",
-                    source, CTX_CONCAT_OFF_OFFSET
-                )); // store the immediate per-context concat offset
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "mov QWORD PTR [r14 + {}], {}",
-                    CTX_CONCAT_OFF_OFFSET, value
-                )); // store the immediate per-context concat offset
-            }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            // `str #imm, [...]` does not exist: anything but zero must be
+            // materialized first, or the assembler rejects the helper (the
+            // cdylib boundary parks the cursor at CONCAT_SCRATCH_CAPACITY).
+            let source = if value == 0 {
+                "xzr"
+            } else {
+                abi::emit_load_int_immediate(emitter, "x10", value);
+                "x10"
+            };
+            emitter.instruction(&format!(
+                "str {}, [x28, #{}]",
+                source, CTX_CONCAT_OFF_OFFSET
+            )); // store the immediate per-context concat offset
         }
-        return;
+        Arch::X86_64 => {
+            emitter.instruction(&format!(
+                "mov QWORD PTR [r14 + {}], {}",
+                CTX_CONCAT_OFF_OFFSET, value
+            )); // store the immediate per-context concat offset
+        }
     }
-    abi::emit_store_imm_to_symbol(emitter, "_concat_off", 0, value);
 }
 
 /// Loads the concat scratch write offset into `reg`, ctx-relative in
@@ -858,37 +820,18 @@ pub fn emit_concat_off_store_imm(emitter: &mut Emitter, value: i64) {
 // Consumed by the M0 concat-family migration (see emit_concat_off_load).
 #[allow(dead_code)]
 pub fn emit_concat_off_load(emitter: &mut Emitter, reg: &str) {
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!(
-                    "ldr {}, [x28, #{}]",
-                    reg, CTX_CONCAT_OFF_OFFSET
-                )); // load the per-context concat scratch write offset
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "mov {}, QWORD PTR [r14 + {}]",
-                    reg, CTX_CONCAT_OFF_OFFSET
-                )); // load the per-context concat scratch write offset
-            }
-        }
-        return;
-    }
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, reg, "_concat_off");
-            emitter.instruction(&format!("ldr {}, [{}]", reg, reg)); // load the legacy global concat offset through the destination register
-        }
-        // A library build resolves data through the GOT: the plain RIP-relative
-        // form would bind to this object's copy (or fail the link) instead of
-        // the process-wide one. The ABI helper's PIC path loads through the
-        // DESTINATION register, so it stays scratch-neutral like the arm below.
-        Arch::X86_64 if emitter.pic_data_refs => {
-            abi::emit_load_symbol_to_reg(emitter, reg, "_concat_off", 0);
+            emitter.instruction(&format!(
+                "ldr {}, [x28, #{}]",
+                reg, CTX_CONCAT_OFF_OFFSET
+            )); // load the per-context concat scratch write offset
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [rip + _concat_off]", reg)); // load the legacy global concat offset RIP-relative (no scratch)
+            emitter.instruction(&format!(
+                "mov {}, QWORD PTR [r14 + {}]",
+                reg, CTX_CONCAT_OFF_OFFSET
+            )); // load the per-context concat scratch write offset
         }
     }
 }
@@ -917,36 +860,18 @@ pub fn emit_concat_off_store(emitter: &mut Emitter, value: &str) {
         "the AArch64 legacy arm materializes the _concat_off address in x6, so x6 \
          cannot also carry the value being stored"
     );
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!(
-                    "str {}, [x28, #{}]",
-                    value, CTX_CONCAT_OFF_OFFSET
-                )); // store the per-context concat scratch write offset
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "mov QWORD PTR [r14 + {}], {}",
-                    CTX_CONCAT_OFF_OFFSET, value
-                )); // store the per-context concat scratch write offset
-            }
-        }
-        return;
-    }
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x6", "_concat_off");
-            emitter.instruction(&format!("str {}, [x6]", value));                 // store the legacy global concat offset (x6 is the documented scratch)
-        }
-        // A library build resolves data through the GOT (see the load above).
-        // The ABI helper's PIC path borrows r11/r10 around a push/pop pair, so
-        // it keeps this helper's no-clobber contract.
-        Arch::X86_64 if emitter.pic_data_refs => {
-            abi::emit_store_reg_to_symbol(emitter, value, "_concat_off", 0);
+            emitter.instruction(&format!(
+                "str {}, [x28, #{}]",
+                value, CTX_CONCAT_OFF_OFFSET
+            )); // store the per-context concat scratch write offset
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [rip + _concat_off], {}", value)); // store the legacy global concat offset RIP-relative (no scratch)
+            emitter.instruction(&format!(
+                "mov QWORD PTR [r14 + {}], {}",
+                CTX_CONCAT_OFF_OFFSET, value
+            )); // store the per-context concat scratch write offset
         }
     }
 }
@@ -961,24 +886,20 @@ pub fn emit_concat_off_store(emitter: &mut Emitter, value: &str) {
 // Consumed by the M0 concat-family migration (see emit_concat_off_load).
 #[allow(dead_code)]
 pub fn emit_concat_buf_address(emitter: &mut Emitter, reg: &str) {
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!(
-                    "add {}, x28, #{}",
-                    reg, CTX_CONCAT_BUF_OFFSET
-                )); // base of the per-context concat scratch buffer
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "lea {}, [r14 + {}]",
-                    reg, CTX_CONCAT_BUF_OFFSET
-                )); // base of the per-context concat scratch buffer
-            }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!(
+                "add {}, x28, #{}",
+                reg, CTX_CONCAT_BUF_OFFSET
+            )); // base of the per-context concat scratch buffer
         }
-        return;
+        Arch::X86_64 => {
+            emitter.instruction(&format!(
+                "lea {}, [r14 + {}]",
+                reg, CTX_CONCAT_BUF_OFFSET
+            )); // base of the per-context concat scratch buffer
+        }
     }
-    abi::emit_symbol_address(emitter, reg, "_concat_buf");
 }
 
 /// Materializes the free-list head SLOT address into `reg`, ctx-relative in
@@ -988,47 +909,39 @@ pub fn emit_concat_buf_address(emitter: &mut Emitter, reg: &str) {
 /// ordered-insertion and merge paths keep a mutable pointer to the previous
 /// next-slot, so they need the slot's address rather than its contents.
 pub fn emit_free_list_address(emitter: &mut Emitter, reg: &str) {
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!(
-                    "add {}, x28, #{}",
-                    reg, CTX_HEAP_FREE_LIST_OFFSET
-                )); // address of the per-context free-list head slot
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "lea {}, [r14 + {}]",
-                    reg, CTX_HEAP_FREE_LIST_OFFSET
-                )); // address of the per-context free-list head slot
-            }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!(
+                "add {}, x28, #{}",
+                reg, CTX_HEAP_FREE_LIST_OFFSET
+            )); // address of the per-context free-list head slot
         }
-        return;
+        Arch::X86_64 => {
+            emitter.instruction(&format!(
+                "lea {}, [r14 + {}]",
+                reg, CTX_HEAP_FREE_LIST_OFFSET
+            )); // address of the per-context free-list head slot
+        }
     }
-    abi::emit_symbol_address(emitter, reg, "_heap_free_list");
 }
 
 /// Materializes the small-bin head array address into `reg`, ctx-relative in
 /// ctx-register mode and from the legacy global symbol otherwise.
 pub fn emit_small_bins_address(emitter: &mut Emitter, reg: &str) {
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!(
-                    "add {}, x28, #{}",
-                    reg, CTX_HEAP_SMALL_BINS_OFFSET
-                )); // base of the per-context small-bin head array
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "lea {}, [r14 + {}]",
-                    reg, CTX_HEAP_SMALL_BINS_OFFSET
-                )); // base of the per-context small-bin head array
-            }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!(
+                "add {}, x28, #{}",
+                reg, CTX_HEAP_SMALL_BINS_OFFSET
+            )); // base of the per-context small-bin head array
         }
-        return;
+        Arch::X86_64 => {
+            emitter.instruction(&format!(
+                "lea {}, [r14 + {}]",
+                reg, CTX_HEAP_SMALL_BINS_OFFSET
+            )); // base of the per-context small-bin head array
+        }
     }
-    abi::emit_symbol_address(emitter, reg, "_heap_small_bins");
 }
 
 /// Materializes the heap ARENA BASE into `reg` — the address the allocator adds
@@ -1042,24 +955,20 @@ pub fn emit_small_bins_address(emitter: &mut Emitter, reg: &str) {
 /// which installs the main context's base — pinned by
 /// `ctx_runtime_names_the_heap_arena_symbol_once`.
 pub fn emit_heap_base_address(emitter: &mut Emitter, reg: &str) {
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!(
-                    "ldr {}, [x28, #{}]",
-                    reg, CTX_HEAP_BASE_OFFSET
-                )); // load this context's heap arena base
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "mov {}, QWORD PTR [r14 + {}]",
-                    reg, CTX_HEAP_BASE_OFFSET
-                )); // load this context's heap arena base
-            }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!(
+                "ldr {}, [x28, #{}]",
+                reg, CTX_HEAP_BASE_OFFSET
+            )); // load this context's heap arena base
         }
-        return;
+        Arch::X86_64 => {
+            emitter.instruction(&format!(
+                "mov {}, QWORD PTR [r14 + {}]",
+                reg, CTX_HEAP_BASE_OFFSET
+            )); // load this context's heap arena base
+        }
     }
-    abi::emit_symbol_address(emitter, reg, "_heap_buf");
 }
 
 /// Loads the heap CAPACITY in bytes into `reg`.
@@ -1075,31 +984,19 @@ pub fn emit_heap_base_address(emitter: &mut Emitter, reg: &str) {
 /// allocation into "heap memory exhausted" — the limit check read a corrupted
 /// working register instead of the capacity.
 pub fn emit_heap_max_load(emitter: &mut Emitter, reg: &str) {
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!(
-                    "ldr {}, [x28, #{}]",
-                    reg, CTX_HEAP_MAX_OFFSET
-                )); // load this context's heap capacity
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "mov {}, QWORD PTR [r14 + {}]",
-                    reg, CTX_HEAP_MAX_OFFSET
-                )); // load this context's heap capacity
-            }
-        }
-        return;
-    }
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, reg, "_heap_max");
-            emitter.instruction(&format!("ldr {}, [{}]", reg, reg)); // read the capacity through the destination register — no borrowed scratch
+            emitter.instruction(&format!(
+                "ldr {}, [x28, #{}]",
+                reg, CTX_HEAP_MAX_OFFSET
+            )); // load this context's heap capacity
         }
-        // x86_64 loads it RIP-relative (or GOT-indirect through the destination
-        // register in PIC), so no scratch is borrowed either way.
-        Arch::X86_64 => abi::emit_load_symbol_to_reg(emitter, reg, "_heap_max", 0),
+        Arch::X86_64 => {
+            emitter.instruction(&format!(
+                "mov {}, QWORD PTR [r14 + {}]",
+                reg, CTX_HEAP_MAX_OFFSET
+            )); // load this context's heap capacity
+        }
     }
 }
 
@@ -1110,30 +1007,18 @@ pub fn emit_heap_max_load(emitter: &mut Emitter, reg: &str) {
 /// that validates `ptr < _heap_buf + _heap_off` goes through it, so the
 /// ctx-mode runtime keeps one consistent source for the live heap end.
 pub fn emit_heap_off_load(emitter: &mut Emitter, reg: &str) {
-    if emitter.ctx_register {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!(
-                    "ldr {}, [x28, #{}]",
-                    reg, CTX_HEAP_OFF_OFFSET
-                )); // load the per-context heap bump offset
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!(
-                    "mov {}, QWORD PTR [r14 + {}]",
-                    reg, CTX_HEAP_OFF_OFFSET
-                )); // load the per-context heap bump offset
-            }
-        }
-        return;
-    }
-    abi::emit_symbol_address(emitter, reg, "_heap_off");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr {}, [{}]", reg, reg)); // load the legacy global heap offset
+            emitter.instruction(&format!(
+                "ldr {}, [x28, #{}]",
+                reg, CTX_HEAP_OFF_OFFSET
+            )); // load the per-context heap bump offset
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [{}]", reg, reg)); // load the legacy global heap offset
+            emitter.instruction(&format!(
+                "mov {}, QWORD PTR [r14 + {}]",
+                reg, CTX_HEAP_OFF_OFFSET
+            )); // load the per-context heap bump offset
         }
     }
 }
@@ -1357,38 +1242,34 @@ mod tests {
         }
     }
 
-    /// The shared heap-offset loader picks the addressing mode from the emitter:
-    /// ctx-relative through x28/r14 in ctx mode, legacy symbol otherwise.
+    /// The heap bump offset is read through the ctx register, with no symbol in sight.
+    ///
+    /// This test used to check BOTH arms of an addressing switch — ctx through x28, legacy
+    /// through `adrp`/`add`/`ldr` against `_heap_off`. There is one arm now. What is left
+    /// is worth keeping on its own: a symbol materialization reappearing here would mean
+    /// the allocator had found the global again, which is the shape that let a half-routed
+    /// free path exhaust an 8 MiB heap during the spike.
     #[test]
-    fn heap_off_load_switches_addressing_mode() {
-        // AArch64 ctx mode reads through x28 with no symbol materialization.
+    fn heap_off_load_reads_through_the_ctx_register() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
-        emitter.ctx_register = true;
         emit_heap_off_load(&mut emitter, "x10");
         let asm = emitter.output();
         assert!(
             asm.contains(&format!("ldr x10, [x28, #{}]", CTX_HEAP_OFF_OFFSET)),
             "{asm}"
         );
-        assert!(!asm.contains("adrp"), "ctx mode must not materialize symbols: {asm}");
+        assert!(!asm.contains("adrp"), "no symbol may be materialized here: {asm}");
 
-        // AArch64 legacy mode keeps the adrp+add+ldr sequence against the global.
-        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
-        emit_heap_off_load(&mut emitter, "x10");
-        let asm = emitter.output();
-        assert!(asm.contains("adrp x10, _heap_off"), "{asm}");
-        assert!(asm.contains("ldr x10, [x10]"), "{asm}");
-
-        // x86_64 ctx mode reads through r14.
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
-        emitter.ctx_register = true;
         emit_heap_off_load(&mut emitter, "r11");
         let asm = emitter.output();
         assert!(
             asm.contains(&format!("mov r11, QWORD PTR [r14 + {}]", CTX_HEAP_OFF_OFFSET)),
             "{asm}"
         );
+        assert!(!asm.contains("rip +"), "no symbol may be materialized here: {asm}");
     }
+
     /// The full generated runtime honors the ctx-register feature end to end:
     /// `__rt_ctx_init` is present, `__rt_heap_alloc` reads heap state through
     /// x28, and the `_rt_ctx` data block is declared.
@@ -1414,18 +1295,6 @@ mod tests {
         );
         // The data block backs it, zero-filled rather than written to the image.
         assert!(asm.contains(&format!(".comm _rt_ctx, {}", CTX_SIZE)), "{asm}");
-    }
-
-    /// The legacy runtime is untouched by the feature: no `__rt_ctx_init`, no
-    /// `_rt_ctx` block, and the allocator still materializes `_heap_off`.
-    #[test]
-    fn legacy_feature_keeps_symbol_addressed_runtime() {
-        use crate::codegen_support::driver_support::generate_runtime_with_features;
-        let target = Target::new(Platform::MacOS, Arch::AArch64);
-        let asm = generate_runtime_with_features(8 * 1024 * 1024, target, RuntimeFeatures::none());
-        assert!(!asm.contains("__rt_ctx_init"), "legacy runtime must not emit ctx helpers");
-        assert!(!asm.contains("_rt_ctx"), "legacy runtime must not declare the ctx block");
-        assert!(asm.contains("_heap_off"), "legacy runtime keeps symbol addressing");
     }
 
     /// Collects every instruction of the ALL-features ctx-mode runtime that
@@ -1502,38 +1371,6 @@ mod tests {
             }
         }
         offenders
-    }
-
-    /// The legacy arms must follow the target's data-reference mode: a library
-    /// build (`pic_data_refs`) resolves globals through the GOT, so the plain
-    /// RIP-relative form would bind to the wrong copy or fail the link. The
-    /// `abi::` helpers these arms replaced already did this; the ctx helpers
-    /// have to keep doing it.
-    #[test]
-    fn legacy_concat_off_access_follows_the_targets_data_reference_mode() {
-        let target = Target::new(Platform::Linux, Arch::X86_64);
-        for pic in [false, true] {
-            let mut emitter = Emitter::new(target);
-            emitter.pic_data_refs = pic;
-            emit_concat_off_load(&mut emitter, "r10");
-            emit_concat_off_store(&mut emitter, "r10");
-            let asm = emitter.output();
-            if pic {
-                assert!(
-                    !asm.contains("[rip + _concat_off]"),
-                    "a PIC build must not reference _concat_off directly:\n{asm}"
-                );
-                assert!(
-                    asm.contains("_concat_off@GOTPCREL"),
-                    "a PIC build must resolve _concat_off through the GOT:\n{asm}"
-                );
-            } else {
-                assert!(
-                    asm.contains("mov r10, QWORD PTR [rip + _concat_off]"),
-                    "a non-PIC build keeps the scratch-free RIP-relative form:\n{asm}"
-                );
-            }
-        }
     }
 
     /// A NON-ZERO concat-offset reset must emit a real store on both targets.
@@ -1665,23 +1502,12 @@ mod tests {
                 asm.contains(pattern),
                 "{arch:?} ctx runtime must install the default arena in __rt_ctx_init"
             );
-            // The legacy build keeps naming it everywhere, as it always did.
-            let legacy = generate_runtime_with_features(
-                8 * 1024 * 1024,
-                Target::new(platform, arch),
-                RuntimeFeatures::all(),
-            );
-            let legacy_sites = legacy
-                .lines()
-                .map(str::trim)
-                .filter(|line| line.contains("_heap_buf") && line.starts_with(materializer))
-                .count();
-            assert!(
-                legacy_sites > 1,
-                "{arch:?} legacy runtime must keep addressing _heap_buf directly \
-                 (found {legacy_sites}); if this ever drops to one, the two modes have \
-                 silently converged and this test no longer distinguishes them"
-            );
+            // This used to compare against a legacy runtime that named `_heap_buf`
+            // everywhere, as a control proving the two modes really differed. There is
+            // no legacy runtime now, and the assertion that carries the weight was
+            // always the one above: ONE materialization, in the init. A second would
+            // mean some helper found the arena without going through the context, which
+            // is exactly what stops a second context from owning its own memory.
         }
     }
 

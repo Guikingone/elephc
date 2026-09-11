@@ -81,13 +81,11 @@ pub(super) fn emit_owned_string_export(
     // Foreign-entry publish (spike review, B2): re-establish the per-context
     // state pointer before compiled PHP code runs; the host's callee-saved ctx
     // register is foreign. Publish-only: never reset allocator state here.
-    if emitter.ctx_register {
-        crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(
-            emitter,
-            layout.saved_ctx_offset,
-        );
-        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
-    }
+    crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(
+        emitter,
+        layout.saved_ctx_offset,
+    );
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
     emit_save_public_arguments(emitter, export, &layout);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,
@@ -510,9 +508,7 @@ fn emit_unentered_return(
 /// The ctx register is callee-saved on both targets, so the publish in the
 /// wrapper prologue is a borrow that every return path has to give back.
 fn emit_restore_foreign_ctx(emitter: &mut Emitter, saved_ctx_offset: usize) {
-    if emitter.ctx_register {
-        crate::codegen_support::runtime::ctx::emit_ctx_restore_foreign(emitter, saved_ctx_offset);
-    }
+    crate::codegen_support::runtime::ctx::emit_ctx_restore_foreign(emitter, saved_ctx_offset);
 }
 
 /// Materializes one public status code in the target's integer return register.

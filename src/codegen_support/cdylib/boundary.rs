@@ -397,12 +397,10 @@ fn emit_zero_scalar_result(emitter: &mut Emitter, return_type: &PhpType) {
 fn emit_scalar_native_return(emitter: &mut Emitter, layout: &ScalarBoundaryLayout) {
     // The ctx register is callee-saved: hand the host back its own value on
     // every return path, including the error and exception returns.
-    if emitter.ctx_register {
-        crate::codegen_support::runtime::ctx::emit_ctx_restore_foreign(
-            emitter,
-            layout.saved_ctx_offset,
-        );
-    }
+    crate::codegen_support::runtime::ctx::emit_ctx_restore_foreign(
+        emitter,
+        layout.saved_ctx_offset,
+    );
     abi::emit_frame_restore(emitter, layout.frame_size);
     abi::emit_return(emitter);
 }
@@ -429,13 +427,11 @@ fn emit_scalar_export_aarch64(
     // its own callee-saved ctx register (pointing at HOST data, not zero), so
     // the per-context pointer must be re-published before any compiled PHP code
     // can run. Publish-only: never reset allocator state here.
-    if emitter.ctx_register {
-        crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(
-            emitter,
-            layout.saved_ctx_offset,
-        );
-        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
-    }
+    crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(
+        emitter,
+        layout.saved_ctx_offset,
+    );
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
     emit_save_scalar_c_inputs(emitter, export, layout);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,
@@ -518,13 +514,11 @@ fn emit_scalar_export_x86_64(
     // Foreign-entry publish (spike review, B2): re-establish the per-context
     // state pointer before compiled PHP code runs; the host's r14 is foreign.
     // Publish-only: never reset allocator state here.
-    if emitter.ctx_register {
-        crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(
-            emitter,
-            layout.saved_ctx_offset,
-        );
-        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
-    }
+    crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(
+        emitter,
+        layout.saved_ctx_offset,
+    );
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
     emit_save_scalar_c_inputs(emitter, export, layout);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,
