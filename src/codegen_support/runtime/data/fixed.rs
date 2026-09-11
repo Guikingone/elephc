@@ -142,32 +142,43 @@ pub(crate) fn emit_runtime_data_fixed(
     // byte count; _print_r_buf is the 64 KiB accumulation buffer finalized by
     // __rt_pr_finish into an owned heap string. Only non-zero during an active
     // print_r return-mode rendering, so non-print_r output is unaffected.
-    out.push_str(&comm_directive("_print_r_mode", 8, target));
-    out.push_str(&comm_directive("_print_r_off", 8, target));
-    out.push_str(&comm_directive("_print_r_buf", 65536, target));
+    // Per-context in ctx-register mode: `print_r($x, true)` captures the CALLING context's
+    // output, and a shared buffer would interleave two contexts' renderings.
+    if !ctx_register {
+        out.push_str(&comm_directive("_print_r_mode", 8, target));
+        out.push_str(&comm_directive("_print_r_off", 8, target));
+        out.push_str(&comm_directive("_print_r_buf", 65536, target));
+    }
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
     // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
     // arrays (heap buffer base pointer, used bytes, capacity) indexed by level-1.
     // Buffers are heap-allocated by __rt_ob_start, grown by __rt_ob_append, and
     // written to the terminal sink by __rt_ob_flush_all at process exit.
-    out.push_str(&comm_directive("_ob_level", 8, target));
-    out.push_str(&comm_directive("_ob_ptrs", 512, target));
-    out.push_str(&comm_directive("_ob_lens", 512, target));
-    out.push_str(&comm_directive("_ob_caps", 512, target));
+    // Per-context in ctx-register mode: `ob_start()` opens a buffer on the calling
+    // context's stack. A shared level counter would let one context's ob_end_flush close
+    // a buffer another context opened.
+    if !ctx_register {
+        out.push_str(&comm_directive("_ob_level", 8, target));
+        out.push_str(&comm_directive("_ob_ptrs", 512, target));
+        out.push_str(&comm_directive("_ob_lens", 512, target));
+        out.push_str(&comm_directive("_ob_caps", 512, target));
+    }
     // Per-level output-buffer metadata (parallel to _ob_ptrs, indexed by level-1):
     // the user-handler invocation stub + env word (stub 0 = default handler; env
     // is a retained callable-descriptor pointer for AOT handlers or a magician
     // registry id for eval handlers), the persisted handler display name
     // (ptr/len), the auto-flush chunk size, the ob_start() flags word, and the
     // started flag (set at the first handler invocation; feeds PHP started bits).
-    out.push_str(&comm_directive("_ob_handler_stubs", 512, target));
-    out.push_str(&comm_directive("_ob_handler_envs", 512, target));
-    out.push_str(&comm_directive("_ob_name_ptrs", 512, target));
-    out.push_str(&comm_directive("_ob_name_lens", 512, target));
-    out.push_str(&comm_directive("_ob_chunk_sizes", 512, target));
-    out.push_str(&comm_directive("_ob_flags", 512, target));
-    out.push_str(&comm_directive("_ob_started", 512, target));
+    if !ctx_register {
+        out.push_str(&comm_directive("_ob_handler_stubs", 512, target));
+        out.push_str(&comm_directive("_ob_handler_envs", 512, target));
+        out.push_str(&comm_directive("_ob_name_ptrs", 512, target));
+        out.push_str(&comm_directive("_ob_name_lens", 512, target));
+        out.push_str(&comm_directive("_ob_chunk_sizes", 512, target));
+        out.push_str(&comm_directive("_ob_flags", 512, target));
+        out.push_str(&comm_directive("_ob_started", 512, target));
+    }
     // _ob_in_handler: non-zero while a user output handler runs. Output produced
     // inside a handler is discarded (PHP behavior) via the __rt_stdout_write and
     // __rt_pr_write branches, and ob_start() inside a handler is a fatal error.

@@ -129,6 +129,33 @@ pub(crate) const CTX_GC_PEAK_OFFSET: usize = CTX_GC_LIVE_OFFSET + 8;
 /// a flag the other is relying on.
 pub(crate) const CTX_GC_COLLECTING_OFFSET: usize = CTX_GC_PEAK_OFFSET + 8;
 
+/// Output-buffering and print_r capture state, formerly the `_ob_*` and `_print_r_*`
+/// globals.
+///
+/// Per-context for the plainest of reasons: `ob_start()` opens a buffer on the CALLING
+/// context's stack, and `print_r($x, true)` captures that context's output. Sharing either
+/// would interleave two contexts' output into one buffer.
+///
+/// The three scalars join the scalar block; the six 512-byte handle arrays follow it,
+/// still inside the first 4 KiB window so their base addresses stay one instruction.
+pub(crate) const CTX_PRINT_R_MODE_OFFSET: usize = CTX_GC_COLLECTING_OFFSET + 8;
+pub(crate) const CTX_PRINT_R_OFF_OFFSET: usize = CTX_PRINT_R_MODE_OFFSET + 8;
+pub(crate) const CTX_OB_LEVEL_OFFSET: usize = CTX_PRINT_R_OFF_OFFSET + 8;
+
+/// One entry per nested output buffer, 64 levels of 8 bytes.
+pub(crate) const CTX_OB_TABLE_SIZE: usize = 512;
+pub(crate) const CTX_OB_PTRS_OFFSET: usize = CTX_OB_LEVEL_OFFSET + 8;
+pub(crate) const CTX_OB_LENS_OFFSET: usize = CTX_OB_PTRS_OFFSET + CTX_OB_TABLE_SIZE;
+pub(crate) const CTX_OB_CAPS_OFFSET: usize = CTX_OB_LENS_OFFSET + CTX_OB_TABLE_SIZE;
+pub(crate) const CTX_OB_HANDLER_STUBS_OFFSET: usize = CTX_OB_CAPS_OFFSET + CTX_OB_TABLE_SIZE;
+pub(crate) const CTX_OB_HANDLER_ENVS_OFFSET: usize =
+    CTX_OB_HANDLER_STUBS_OFFSET + CTX_OB_TABLE_SIZE;
+pub(crate) const CTX_OB_NAME_PTRS_OFFSET: usize = CTX_OB_HANDLER_ENVS_OFFSET + CTX_OB_TABLE_SIZE;
+pub(crate) const CTX_OB_NAME_LENS_OFFSET: usize = CTX_OB_NAME_PTRS_OFFSET + CTX_OB_TABLE_SIZE;
+pub(crate) const CTX_OB_CHUNK_SIZES_OFFSET: usize = CTX_OB_NAME_LENS_OFFSET + CTX_OB_TABLE_SIZE;
+pub(crate) const CTX_OB_FLAGS_OFFSET: usize = CTX_OB_CHUNK_SIZES_OFFSET + CTX_OB_TABLE_SIZE;
+pub(crate) const CTX_OB_STARTED_OFFSET: usize = CTX_OB_FLAGS_OFFSET + CTX_OB_TABLE_SIZE;
+
 /// The C-string scratch pair, formerly `_cstr_buf` / `_cstr_buf2` (4 KiB each).
 ///
 /// `__rt_cstr` copies a PHP string into one of these to hand a NUL-terminated pointer to
@@ -142,17 +169,26 @@ pub(crate) const CTX_GC_COLLECTING_OFFSET: usize = CTX_GC_PEAK_OFFSET + 8;
 /// each buffer starts on a 4 KiB boundary. Placing a buffer at, say, 4280 would silently
 /// cost a second instruction on every use, or fail to assemble.
 pub(crate) const CTX_CSTR_BUF_SIZE: usize = 4096;
-pub(crate) const CTX_CSTR_BUF_OFFSET: usize = 4096;
+pub(crate) const CTX_CSTR_BUF_OFFSET: usize =
+    (CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE + 4095) & !4095;
 pub(crate) const CTX_CSTR_BUF2_OFFSET: usize = CTX_CSTR_BUF_OFFSET + CTX_CSTR_BUF_SIZE;
 
 pub(crate) const CTX_CONCAT_BUF_OFFSET: usize = CTX_CSTR_BUF2_OFFSET + CTX_CSTR_BUF_SIZE;
+
+/// The print_r capture buffer, formerly `_print_r_buf` (64 KiB), closing the layout.
+///
+/// Its offset is a multiple of 4096 because every buffer before it is, which is what the
+/// layout test pins: a buffer landing off that grid would cost a second instruction on
+/// every address materialization, or fail to assemble outright.
+pub(crate) const CTX_PRINT_R_BUF_OFFSET: usize =
+    CTX_CONCAT_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY;
 
 /// Total byte size of one `_rt_ctx` instance (16-byte aligned).
 ///
 /// Covers the leading scalar fields, the four small-bin heads, and the closing
 /// 64 KiB concat scratch buffer.
 pub(crate) const CTX_SIZE: usize =
-    (CTX_CONCAT_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY + 15) & !15;
+    (CTX_PRINT_R_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY + 15) & !15;
 
 /// Returns the reserved ctx-pointer register name for the target.
 ///
@@ -279,6 +315,9 @@ pub fn emit_ctx_zero_fields(emitter: &mut Emitter) {
         CTX_GC_LIVE_OFFSET,
         CTX_GC_PEAK_OFFSET,
         CTX_GC_COLLECTING_OFFSET,
+        CTX_PRINT_R_MODE_OFFSET,
+        CTX_PRINT_R_OFF_OFFSET,
+        CTX_OB_LEVEL_OFFSET,
         // `_stack_limit` / `_stack_limit_main` are NOT in this list on purpose. They are
         // published by `__rt_stack_limit_init` from the real stack bounds, and a zeroed
         // floor would make every prologue's `cmp sp, floor` succeed at any depth — the
@@ -408,6 +447,20 @@ const PER_CONTEXT_SYMBOLS: &[(&str, usize)] = &[
     // helper needed, the lesson the GC family taught.
     ("_cstr_buf", CTX_CSTR_BUF_OFFSET),
     ("_cstr_buf2", CTX_CSTR_BUF2_OFFSET),
+    ("_print_r_mode", CTX_PRINT_R_MODE_OFFSET),
+    ("_print_r_off", CTX_PRINT_R_OFF_OFFSET),
+    ("_print_r_buf", CTX_PRINT_R_BUF_OFFSET),
+    ("_ob_level", CTX_OB_LEVEL_OFFSET),
+    ("_ob_ptrs", CTX_OB_PTRS_OFFSET),
+    ("_ob_lens", CTX_OB_LENS_OFFSET),
+    ("_ob_caps", CTX_OB_CAPS_OFFSET),
+    ("_ob_handler_stubs", CTX_OB_HANDLER_STUBS_OFFSET),
+    ("_ob_handler_envs", CTX_OB_HANDLER_ENVS_OFFSET),
+    ("_ob_name_ptrs", CTX_OB_NAME_PTRS_OFFSET),
+    ("_ob_name_lens", CTX_OB_NAME_LENS_OFFSET),
+    ("_ob_chunk_sizes", CTX_OB_CHUNK_SIZES_OFFSET),
+    ("_ob_flags", CTX_OB_FLAGS_OFFSET),
+    ("_ob_started", CTX_OB_STARTED_OFFSET),
 ];
 
 /// The ctx field offset serving `symbol`, when this build routes it.
@@ -475,9 +528,25 @@ pub fn emit_ctx_address(emitter: &mut Emitter, dest: &str, field_offset: usize) 
     let ctx = ctx_reg(emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("add {}, {}, #{}", dest, ctx, field_offset));
+            // `add xN, xM, #imm` takes a 12-bit immediate, optionally shifted left by 12 —
+            // so one instruction covers an offset below 4096, or an exact multiple of it,
+            // and nothing else. The context has grown past 4 KiB of scalars and handle
+            // tables, so an offset like 4712 is ordinary now and must not be left to the
+            // assembler to reject. Split it into the two encodable halves rather than
+            // contorting the layout to keep every field on a 4 KiB grid.
+            if field_offset < 4096 {
+                emitter.instruction(&format!("add {}, {}, #{}", dest, ctx, field_offset));
+            } else {
+                let page = field_offset & !0xfff;
+                let rest = field_offset & 0xfff;
+                emitter.instruction(&format!("add {}, {}, #{}", dest, ctx, page)); // 4 KiB-aligned part, encodable with the lsl #12 form
+                if rest != 0 {
+                    emitter.instruction(&format!("add {}, {}, #{}", dest, dest, rest)); // remainder, below 4096
+                }
+            }
         }
         Arch::X86_64 => {
+            // x86_64 takes a full 32-bit displacement, so one `lea` covers any ctx field.
             emitter.instruction(&format!("lea {}, [{} + {}]", dest, ctx, field_offset));
         }
     }
@@ -942,16 +1011,23 @@ mod tests {
         assert_eq!(CTX_GC_COLLECTING_OFFSET, CTX_GC_PEAK_OFFSET + 8);
         // Every scalar stays inside the first 4 KiB window, which is what keeps
         // `add xN, x28, #off` and `ldr xN, [x28, #off]` single instructions.
-        assert!(
-            CTX_GC_COLLECTING_OFFSET + 8 <= CTX_CSTR_BUF_OFFSET,
-            "the scalar block has grown into the buffer region"
-        );
+        assert_eq!(CTX_PRINT_R_MODE_OFFSET, CTX_GC_COLLECTING_OFFSET + 8);
+        assert_eq!(CTX_OB_LEVEL_OFFSET, CTX_PRINT_R_OFF_OFFSET + 8);
+        assert_eq!(CTX_OB_PTRS_OFFSET, CTX_OB_LEVEL_OFFSET + 8);
+        assert_eq!(CTX_OB_NAME_PTRS_OFFSET, CTX_OB_HANDLER_ENVS_OFFSET + CTX_OB_TABLE_SIZE);
+        assert_eq!(CTX_OB_STARTED_OFFSET, CTX_OB_FLAGS_OFFSET + CTX_OB_TABLE_SIZE);
+        // Ten handle tables of 512 bytes do not fit under 4 KiB beside the scalars, and
+        // that is fine: `emit_ctx_address` splits an offset above the imm12 window into two
+        // encodable adds. What must hold is only that the buffers start after them.
+        assert!(CTX_CSTR_BUF_OFFSET >= CTX_OB_STARTED_OFFSET + CTX_OB_TABLE_SIZE);
         // The buffers follow, each on a 4 KiB boundary so its address stays one `add`.
         assert_eq!(CTX_CSTR_BUF_OFFSET % 4096, 0);
         assert_eq!(CTX_CSTR_BUF2_OFFSET % 4096, 0);
         assert_eq!(CTX_CONCAT_BUF_OFFSET % 4096, 0);
         assert_eq!(CTX_CSTR_BUF2_OFFSET, CTX_CSTR_BUF_OFFSET + CTX_CSTR_BUF_SIZE);
         assert_eq!(CTX_CONCAT_BUF_OFFSET, CTX_CSTR_BUF2_OFFSET + CTX_CSTR_BUF_SIZE);
+        assert_eq!(CTX_PRINT_R_BUF_OFFSET, CTX_CONCAT_BUF_OFFSET + CTX_CONCAT_BUF_CAPACITY);
+        assert_eq!(CTX_PRINT_R_BUF_OFFSET % 4096, 0);
         // Every scalar offset must be encodable as ldr [x28, #imm] (imm12 ≤ 4095).
         for offset in [
             CTX_CONCAT_OFF_OFFSET,
