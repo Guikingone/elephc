@@ -136,6 +136,17 @@ pub struct ElephcEvalContext {
     pub(super) call_line: i64,
     pub(super) file_magic_override: Option<String>,
     pub(super) error_suppression_depth: usize,
+    /// Depth of nested class-like-member-default evaluation (constant initializers, property
+    /// defaults, enum case values). `static::` has no meaning there -- php refuses it as an
+    /// uncatchable compile-time error -- so `resolve_eval_static_class_name` consults this
+    /// instead of silently falling back to `self` the way a live method call frame would.
+    pub(super) compile_time_constant_depth: usize,
+    /// Class-like constants currently being evaluated on this call chain, keyed by
+    /// `(declaring_class, constant_name)`. Constant initializers are lazily materialized and
+    /// cached on first read (`eval_class_like_constant_cell`); a constant whose initializer
+    /// reads itself, directly or through another constant, would otherwise recurse without
+    /// bound instead of raising php's catchable `Cannot declare self-referencing constant`.
+    pub(super) evaluating_class_constants: HashSet<(String, String)>,
 }
 
 impl ElephcEvalContext {
@@ -235,6 +246,8 @@ impl ElephcEvalContext {
             call_line: 0,
             file_magic_override: None,
             error_suppression_depth: 0,
+            compile_time_constant_depth: 0,
+            evaluating_class_constants: HashSet::new(),
         }
     }
 
@@ -335,6 +348,8 @@ impl ElephcEvalContext {
             call_line: 0,
             file_magic_override: None,
             error_suppression_depth: 0,
+            compile_time_constant_depth: 0,
+            evaluating_class_constants: HashSet::new(),
         }
     }
 

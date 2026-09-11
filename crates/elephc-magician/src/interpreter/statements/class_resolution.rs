@@ -39,11 +39,27 @@ pub(in crate::interpreter) fn resolve_eval_static_class_name(
             .current_class_scope()
             .map(str::to_string)
             .ok_or(EvalStatus::RuntimeFatal),
-        "static" => context
-            .current_called_class_scope()
-            .or_else(|| context.current_class_scope())
-            .map(str::to_string)
-            .ok_or(EvalStatus::RuntimeFatal),
+        "static" => {
+            // php refuses `static::` inside a compile-time constant (a class constant
+            // initializer, a property default, or an enum case value) as an uncatchable zend
+            // compile error -- `"static::" is not allowed in compile-time constants` -- because
+            // there is no live call frame to bind late. `current_class_scope()` (pushed by
+            // `eval_class_like_member_default` so `self::`/`parent::` resolve there) would
+            // otherwise make `static::` silently answer the SAME class as `self::`, which is a
+            // wrong-value hole rather than a visible refusal.
+            if context.in_compile_time_constant_context() {
+                note_eval_runtime_failure(
+                    "\"static::\" is not allowed in compile-time constants",
+                    context,
+                );
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            context
+                .current_called_class_scope()
+                .or_else(|| context.current_class_scope())
+                .map(str::to_string)
+                .ok_or(EvalStatus::RuntimeFatal)
+        }
         "parent" => {
             let current = context
                 .current_class_scope()

@@ -255,7 +255,18 @@ pub(super) fn initialize_eval_enum_cases(
     let mut backing_values = Vec::new();
     for case in enum_decl.cases() {
         let backing_value = if let Some(value_expr) = case.value() {
-            let value = eval_expr(value_expr, context, scope, values)?;
+            // Routed through `eval_class_like_member_default` (like constant initializers and
+            // property defaults) so `self::CONST`/`parent::CONST` resolve against the enum's own
+            // class scope instead of finding no live method frame -- a case value is php's same
+            // compile-time-constant position, so `static::` is refused there too.
+            let value = eval_class_like_member_default(
+                enum_decl.name(),
+                None,
+                value_expr,
+                context,
+                scope,
+                values,
+            )?;
             validate_eval_enum_backing_value(enum_decl.backing_type(), value, values)?;
             for existing in &backing_values {
                 let equal = values.compare(EvalBinOp::StrictEq, value, *existing)?;
@@ -359,6 +370,22 @@ pub(in crate::interpreter) fn eval_class_like_constant_cell(
     if let Some(cell) = context.class_constant_cell(declaring_class, constant.name()) {
         return Ok(cell);
     }
+    // A constant's initializer is only evaluated on first read (or the eager pass at
+    // declaration time, which reaches the same cache-on-miss path for a forward reference), so
+    // `self::A` referencing `self::B` referencing `self::A` recurses through this exact function
+    // without ever finding a cached cell. php detects the cycle and raises a catchable `Error`
+    // (`Cannot declare self-referencing constant self::X`); marking the pair in progress here
+    // reproduces that instead of overflowing the stack.
+    if !context.begin_class_constant_evaluation(declaring_class, constant.name()) {
+        return eval_throw_error(
+            &format!(
+                "Cannot declare self-referencing constant self::{}",
+                constant.name()
+            ),
+            context,
+            values,
+        );
+    }
     let mut scope = ElephcEvalScope::new();
     let value = eval_class_like_member_default(
         declaring_class,
@@ -367,7 +394,9 @@ pub(in crate::interpreter) fn eval_class_like_constant_cell(
         context,
         &mut scope,
         values,
-    )?;
+    );
+    context.end_class_constant_evaluation(declaring_class, constant.name());
+    let value = value?;
     if let Some(replaced) =
         context.set_class_constant_cell(declaring_class, constant.name(), value)
     {
@@ -377,6 +406,18 @@ pub(in crate::interpreter) fn eval_class_like_constant_cell(
 }
 
 /// Evaluates a class-like constant or property initializer with PHP magic scope.
+///
+/// Constant initializers, property defaults, and enum case values are php's "compile-time
+/// constant" positions: `self::`/`parent::` resolve to the DECLARING class regardless of which
+/// subclass triggered evaluation, and `static::` has no meaning at all (php refuses it as an
+/// uncatchable compile error). Pushing the class scope here — not just the magic-constant scope
+/// — is what lets `resolve_eval_static_class_name`'s `self`/`parent` arms see the right class:
+/// before this, `self::CONST` used inside one of these positions found `current_class_scope()`
+/// empty (that stack is populated only by a live METHOD call frame) and failed with `unsupported
+/// ClassConstantFetch expression` for every caller, `symfony/http-foundation/Request.php`'s
+/// `self::HEADER_X_FORWARDED_FOR`-keyed constant array included. The compile-time-constant depth
+/// counter is what lets `static::` be refused instead of silently falling back to the newly
+/// working `self::` answer.
 pub(super) fn eval_class_like_member_default(
     owner_name: &str,
     trait_origin: Option<&str>,
@@ -387,7 +428,11 @@ pub(super) fn eval_class_like_member_default(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let trait_name = trait_origin.or_else(|| context.has_trait(owner_name).then_some(owner_name));
     context.push_class_like_member_magic_scope(owner_name, trait_name);
+    context.push_class_scope(owner_name.to_string());
+    context.push_compile_time_constant_context();
     let result = eval_expr(default, context, scope, values);
+    context.pop_compile_time_constant_context();
+    context.pop_class_scope();
     context.pop_magic_scope();
     result
 }

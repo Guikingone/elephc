@@ -166,6 +166,22 @@ impl ElephcEvalContext {
         previous.filter(|previous| *previous != cell)
     }
 
+    /// Marks one class-like constant as under evaluation, detecting a self-referencing cycle.
+    ///
+    /// Returns `false` when the constant is already being evaluated on this call chain -- php's
+    /// `Cannot declare self-referencing constant` condition -- so the caller can raise a
+    /// catchable `Error` instead of recursing into the same uncached cell forever.
+    pub fn begin_class_constant_evaluation(&mut self, class_name: &str, name: &str) -> bool {
+        self.evaluating_class_constants
+            .insert((normalize_class_name(class_name), name.to_string()))
+    }
+
+    /// Clears a class-like constant's in-progress marker once its value resolves or fails.
+    pub fn end_class_constant_evaluation(&mut self, class_name: &str, name: &str) {
+        self.evaluating_class_constants
+            .remove(&(normalize_class_name(class_name), name.to_string()));
+    }
+
     /// Returns the PHP internal array pointer tracked for one runtime array cell.
     ///
     /// Cells without a stored cursor answer `Position(0)`, matching PHP, where a
@@ -474,6 +490,24 @@ impl ElephcEvalContext {
     /// Returns the current eval class scope, if execution is inside a method.
     pub fn current_class_scope(&self) -> Option<&str> {
         self.class_stack.last().map(String::as_str)
+    }
+
+    /// Enters a class-like-member-default evaluation (constant initializer, property default,
+    /// enum case value), where `static::` has no live call frame to bind late.
+    pub fn push_compile_time_constant_context(&mut self) {
+        self.compile_time_constant_depth += 1;
+    }
+
+    /// Leaves a class-like-member-default evaluation started by
+    /// `push_compile_time_constant_context`.
+    pub fn pop_compile_time_constant_context(&mut self) {
+        self.compile_time_constant_depth = self.compile_time_constant_depth.saturating_sub(1);
+    }
+
+    /// Returns whether evaluation is currently inside a class-like-member default, where php
+    /// refuses `static::` as an uncatchable compile-time error rather than binding it late.
+    pub fn in_compile_time_constant_context(&self) -> bool {
+        self.compile_time_constant_depth > 0
     }
 
     /// Pushes the class name used to dispatch the current eval method call.
