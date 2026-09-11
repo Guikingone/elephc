@@ -140,7 +140,14 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp-64] eval context.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // fixed frame pointer (rsp moves while records are pushed)
-    emitter.instruction("sub rsp, 72");                                         // reserve the helper locals plus the callee-saved rbx spill slot
+    // 80, not 72: the rbx spill slot added 8 bytes to a frame that was already
+    // aligned, which put every `call` in this body on a stack System V forbids —
+    // and a float conversion reaches snprintf, whose first aligned SSE spill
+    // faults. `__rt_vsprintf` is in the alignment audit's NOT_STATICALLY_ANALYZABLE
+    // list ("two paths reach one instruction with different frames"), so nothing
+    // checked it; the arithmetic is `push rbp` (-8) + this, which must stay
+    // 8 mod 16.
+    emitter.instruction("sub rsp, 80");                                         // reserve the helper locals plus the callee-saved rbx spill slot
     emitter.instruction("mov QWORD PTR [rbp - 72], rbx");                       // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the format pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the format length
