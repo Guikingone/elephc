@@ -64,7 +64,12 @@ pub(super) fn eval_closure_from_callable(
 }
 
 /// Converts a normalized callable target into the storage used by eval Closure objects.
-pub(super) fn eval_closure_object_target_from_callable(
+///
+/// `pub(in crate::interpreter)`: `EXPR(...)` first-class-callable syntax on an arbitrary
+/// runtime value (`expressions::calls::first_class`) needs the exact same normalized-callable
+/// -> closure-target conversion `Closure::fromCallable()` uses here, rather than assuming every
+/// `EXPR` denotes an invokable object.
+pub(in crate::interpreter) fn eval_closure_object_target_from_callable(
     callable: EvaluatedCallable,
 ) -> EvalClosureObjectTarget {
     match callable {
@@ -111,7 +116,10 @@ pub(super) fn eval_closure_object_target_from_callable(
 }
 
 /// Allocates a PHP-visible eval Closure object for one retained callable target.
-pub(super) fn eval_closure_object_from_target(
+///
+/// `pub(in crate::interpreter)`: shared with `expressions::calls::first_class` for the same
+/// reason as `eval_closure_object_target_from_callable` above.
+pub(in crate::interpreter) fn eval_closure_object_from_target(
     target: EvalClosureObjectTarget,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

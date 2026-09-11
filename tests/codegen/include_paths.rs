@@ -50,6 +50,38 @@ fn test_runtime_dynamic_include_nested_by_reference_foreach_writes_through_outer
     assert_eq!(out, "X,Y/Z");
 }
 
+/// Verifies `EXPR(...)` first-class-callable syntax produces a working `Closure` for every
+/// runtime value shape when the whole fragment executes through the eval bridge (a
+/// runtime-only-known include path forces the interpreter to run the included file, rather than
+/// the AOT compiler lowering it directly) -- the exact surface
+/// `Symfony\Component\EventDispatcher\EventDispatcher::optimizeListeners()` exercises through
+/// `$listener(...)` where `$listener` already holds a `Closure`.
+///
+/// `php -n` 8.5.6 prints `closurevar:6|arrayvar:m:7|stringvar:eight`. Before the fix, the
+/// interpreter unconditionally wrapped every `EXPR(...)` value in an `InvokableObject { object }`
+/// closure target regardless of what `EXPR` evaluated to: a Closure-valued variable produced a
+/// target whose "object" was itself a closure vessel, so calling it asked the runtime for that
+/// vessel's native class -- the placeholder `stdClass`, never `Closure` -- and raised `Error:
+/// Object of type stdClass is not callable`; an array or string callable variable had no matching
+/// dispatch case at all and failed with `unsupported DynamicCall expression`.
+#[test]
+fn test_runtime_dynamic_include_first_class_callable_syntax_on_variable_values() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function load($path) { include $path; } load('piece.php');",
+            ),
+            (
+                "piece.php",
+                "<?php\nclass FccValHolder {\n    public function m($t) { return \"m:\" . $t; }\n}\n$h = new FccValHolder();\n\n$arrow = static function ($t) { return $t; };\n$closureVar = $arrow;\n$e = $closureVar(...);\necho \"closurevar:\" . $e(\"6\") . \"|\";\n\n$pair = [$h, \"m\"];\n$arrayCallableVar = $pair;\n$f = $arrayCallableVar(...);\necho \"arrayvar:\" . $f(\"7\") . \"|\";\n\n$name = \"strtolower\";\n$stringNameVar = $name;\n$i = $stringNameVar(...);\necho \"stringvar:\" . $i(\"EIGHT\");\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "closurevar:6|arrayvar:m:7|stringvar:eight");
+}
+
 /// Verifies a dynamic require expression returns the included file's explicit value.
 #[test]
 fn test_runtime_dynamic_require_expression_returns_value() {
