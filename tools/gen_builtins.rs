@@ -297,7 +297,20 @@ fn unsupported_reason_name(reason: UnsupportedReason) -> &'static str {
         UnsupportedReason::InternalCompilerSurface => "internal-compiler-surface",
         UnsupportedReason::EvalImplementationPending => "eval-implementation-pending",
         UnsupportedReason::EvalOnlyReflection => "eval-only-reflection",
+        UnsupportedReason::AotImplementationPending => "aot-implementation-pending",
     }
+}
+
+#[test]
+fn unsupported_reason_names_cover_both_backend_directions() {
+    assert_eq!(
+        unsupported_reason_name(UnsupportedReason::AotImplementationPending),
+        "aot-implementation-pending",
+    );
+    assert_eq!(
+        unsupported_reason_name(UnsupportedReason::EvalImplementationPending),
+        "eval-implementation-pending",
+    );
 }
 
 /// Returns the stable documentation spelling for an AOT signature override.
