@@ -433,7 +433,7 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, rax");                                        // compute the replacement output length from the output start and final write cursor
     crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");
     emitter.instruction("add r10, rdx");                                        // extend the concat scratch-buffer offset by the length of the replacement result
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the updated concat scratch-buffer offset for later string-producing helpers
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r10"); // publish the updated concat scratch-buffer offset for later string-producing helpers
     emitter.instruction("jmp __rt_preg_replace_ret_linux_x86_64");              // share the common epilogue after materializing the replacement string result
 
     emitter.label("__rt_preg_replace_fail_linux_x86_64");

@@ -107,30 +107,13 @@ fn test_cli_rt_ctx_user_codegen_never_scratches_the_ctx_register() {
             offenders.push(line.to_string());
         }
     }
-    // A SHRINKING baseline, not a clean gate yet. What is left is one role:
-    // `len_reg` in the invoker's indexed-array path, which holds the argument
-    // count across `__rt_array_new` while the tail array is built. The allocator
-    // is itself a ctx helper, so a length parked in r14 corrupts the pointer it
-    // reads. Fixing it needs a fourth survivable register the invoker does not
-    // have (r12 carries the callable, r13/r15/rbx are taken), so the length has
-    // to move to a frame slot or be reloaded from the array header — a change
-    // that deserves reading the invoker's frame rather than a guess.
-    //
-    // Until then the count may only go DOWN: a new borrow fails here at once.
-    const BASELINE: usize = 7;
     assert!(
-        offenders.len() <= BASELINE,
-        "--rt-ctx user codegen grew its r14 debt: {} offenders (baseline {BASELINE}). \
-         Compiled PHP reads per-context state through r14, so a callback invoked with \
-         a borrowed r14 faults on its first heap access:\n{}",
+        offenders.is_empty(),
+        "--rt-ctx user codegen borrowed r14, the reserved context register \
+         ({} offenders). Compiled PHP reads per-context state through it, so a \
+         callback invoked with a borrowed r14 faults on its first heap access:\n{}",
         offenders.len(),
         offenders.join("\n")
-    );
-    assert!(
-        offenders.len() >= BASELINE,
-        "--rt-ctx user codegen r14 debt shrank to {} — lower BASELINE to match, and \
-         switch to a zero-tolerance assertion once it reaches 0.",
-        offenders.len()
     );
 
     let _ = fs::remove_dir_all(&dir);
