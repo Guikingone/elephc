@@ -2091,3 +2091,46 @@ fn test_cli_probe_embeds_in_process_sampler() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// `--heap-debug --rt-ctx` together: the heap-debug free-list validator was
+/// ctx-routed with the rest of the heap family, but a pattern test only pins
+/// its emitted text. This drives a real alloc/free workload through the
+/// validating allocator under ctx addressing on the host target — the
+/// validator reads the per-context bins and free list through x28/r14, so a
+/// misrouted validator reports corruption or misses real corruption here.
+#[test]
+fn test_cli_rt_ctx_heap_debug_validator_passes_clean_workload() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_heap_debug");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\n$sum = 0;\nfor ($i = 0; $i < 5000; $i++) {\n    $a = [$i, $i + 1, $i + 2];\n    $s = 'v' . $i;\n    unset($a);\n    $sum = ($sum + strlen($s)) % 1000003;\n}\necho $sum;\n",
+    )
+    .expect("failed to write the rt-ctx heap-debug fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--rt-ctx")
+        .arg("--heap-debug")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx heap-debug fixture");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx --heap-debug compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bin = dir.join("main");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("failed to run the rt-ctx heap-debug binary");
+    assert!(
+        run.status.success(),
+        "rt-ctx heap-debug binary failed (validator corruption?): {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let ctx_out = String::from_utf8_lossy(&run.stdout);
+    assert!(!ctx_out.trim().is_empty(), "heap-debug program printed nothing");
+
+    let _ = fs::remove_dir_all(&dir);
+}
