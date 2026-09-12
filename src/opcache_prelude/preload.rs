@@ -295,15 +295,18 @@ pub fn preload_verdict(
 /// entry, `preload_statistics`, in eighth position). `preload_statistics` is also NOT suppressed
 /// by `opcache_get_status(false)`; only `scripts` is.
 ///
-/// DOCUMENTED DIVERGENCE (verified, deliberately not reproduced): reference PHP additionally
-/// inserts a SYNTHETIC `$PRELOAD$` pseudo-entry into the top-level `scripts` map (with
-/// `full_path` literally `$PRELOAD$` and `memory_consumption` equal to
-/// `preload_statistics.memory_consumption`), which also bumps
-/// `opcache_statistics.num_cached_scripts` by one. That entry stands for the shared-memory block
-/// preloading itself allocates. An elephc binary allocates no such block — its scripts are native
-/// code in the executable — so fabricating a `$PRELOAD$` script would be inventing a cache entry
-/// that does not exist. `scripts` and `num_cached_scripts` therefore keep reporting exactly the
-/// manifest.
+/// THE SYNTHETIC `$PRELOAD$` ENTRY IS REPRODUCED, in
+/// `super::scripts_configuration::preload_marker_entry`: `full_path` is literally `$PRELOAD$`,
+/// `memory_consumption` equals the `memory_consumption` below to the byte, every clock is zero,
+/// and `opcache_statistics.num_cached_scripts` counts it — all verified against reference PHP
+/// 8.5.10.
+///
+/// This block previously argued the opposite, that fabricating the entry would invent a cache
+/// entry that does not exist. That argument does not survive what this very struct reports:
+/// `memory_consumption` here is ALREADY a synthetic sum over the manifest, and `scripts`
+/// already reports the manifest as though it were a cache. Under "the binary IS the cache",
+/// the block the marker stands for is real here too — the baked code, resident for the whole
+/// process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreloadStatistics {
     /// Total memory the preloaded scripts occupy. Derived as Σ of the manifest entries'

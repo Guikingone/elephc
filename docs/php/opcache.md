@@ -163,10 +163,14 @@ used_memory - wasted_memory` with `wasted_memory = 0`, and
 interned-strings block. `hits`, `misses` and `opcache_hit_rate` are LIVE, counted by the
 [runtime script cache](#the-runtime-script-cache); they stay at zero in a binary
 that has no dynamic tier, which genuinely performs no cache lookups.
-`blacklist_misses` and `blacklist_miss_ratio` are LIVE too, counted by
-[`opcache.blacklist_filename`](#opcacheblacklist_filename). The ratio is
-`blacklist_misses * 100 / (misses + blacklist_misses)` — hits are not in the
-denominator — and it is `0.0` when there have been no compile attempts at all.
+`blacklist_misses` and `blacklist_miss_ratio` are LIVE too. The counter is bumped
+by [`opcache.blacklist_filename`](#opcacheblacklist_filename) **and** by the
+`opcache.max_file_size` refusal — php-src counts both, the name meaning "compiled
+but deliberately not stored" rather than "matched a blacklist". The ratio is
+`blacklist_misses * 100 / (hits + misses + blacklist_misses)`: php-src divides by
+its INTERNAL miss count, which includes blacklist misses, while the `misses` it
+*reports* has them subtracted back out — so all three reported figures are in the
+denominator. It is `0.0` when there have been no lookups at all.
 
 `interned_strings_usage` is **absent** — not empty, not zeroed — when
 `opcache.interned_strings_buffer=0`, leaving eight top-level keys instead of
@@ -681,7 +685,7 @@ never referenced. Such a binary reports exactly its manifest, with zero counters
 |---|---|
 | `opcache.validate_timestamps` | `1`: revalidate by mtime and size. `0`: never re-stat |
 | `opcache.revalidate_freq` | Seconds between two revalidations of one entry |
-| `opcache.max_file_size` | Refuses to *cache* a larger file; the file still runs. `0` means no limit |
+| `opcache.max_file_size` | Refuses to *cache* a larger file; the file still runs, and the refusal counts as a `blacklist_misses`, as in php-src. `0` means no limit |
 | `opcache.memory_consumption` | A real byte budget for the cached segments |
 | `opcache.max_accelerated_files` | A real entry-count ceiling |
 | `opcache.file_update_protection` | Refuses to *cache* a file younger than its value; the file still runs. `0` disables it |
@@ -1030,12 +1034,15 @@ include executes exactly as it would otherwise — the directive changes what is
   original compiler before any cache accounting, so the refusal replaces the
   miss rather than accompanying it.
 
-The directive value is itself a `glob()` naming the blacklist files, and **every**
-matching file is loaded and their entries unioned:
+The directive value is itself a `glob()` naming the blacklist files — wildcards
+and `[...]` classes included — and **every** matching file is loaded and their
+entries unioned:
 
 ```ini
 opcache.blacklist_filename=/etc/opcache/deny-*.list
 ```
+
+The files are read **once**, when the eval context is built, and never re-read.
 
 Inside each file:
 
@@ -1045,11 +1052,25 @@ Inside each file:
 | Blank, or only whitespace | Skipped |
 | Anything else | A pattern |
 
+Every surviving line is **expanded, not taken verbatim**: a surrounding pair of
+double quotes is stripped, a relative entry is resolved against *the blacklist
+file's own directory* (not the process cwd), and `.` / `..` are folded out. So a
+list sitting beside the code it names can simply say `vendor/`. The expanded form
+is also what `opcache_get_configuration()['blacklist']` reports.
+
 A pattern is **anchored at the start and open at the end**, so it matches as a
 prefix: a bare directory blocks everything under it, and `/srv/app/p_pref`
-blocks `/srv/app/p_prefix.php`. `*` matches any run of characters and `?`
-exactly one, but **neither crosses `/`** — `/srv/app/*.php` does not reach into
-`/srv/app/sub/`. Matching is case-sensitive even where the filesystem is not.
+blocks `/srv/app/p_prefix.php`. Matching is case-sensitive even where the
+filesystem is not.
+
+Three wildcards, and the difference between the first two is the subtle one —
+php-src compiles `*` to `[^/]*` but `**` to `.*`:
+
+| Wildcard | Matches | Crosses `/` |
+|---|---|---|
+| `?` | exactly one character | no |
+| `*` | any run of characters | **no** — `/srv/app/*.php` stays out of `/srv/app/sub/` |
+| `**` | any run of characters | **yes** — `/srv/app/**.php` reaches every depth |
 
 A value matching no file is not an error: it blacklists nothing and logs
 `No blacklist file found matching: <value>` through the

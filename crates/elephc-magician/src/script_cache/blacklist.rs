@@ -32,7 +32,7 @@
 //!   `opcache.log_verbosity_level >= 2` to be seen — and blacklists nothing.
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::accel_log::{accel_log, AccelLogLevel};
 
@@ -65,13 +65,21 @@ impl Blacklist {
     /// Skips blank lines and `;` comments. php-src tests the FIRST character of the line
     /// for `;`, so a comment marker that follows anything else — even whitespace — is not
     /// a comment; the line is kept and simply will not match a real path.
-    pub(crate) fn extend_from_file_contents(&mut self, contents: &str) {
+    ///
+    /// EVERY SURVIVING LINE IS EXPANDED, not stored verbatim. php-src strips a surrounding
+    /// pair of double quotes, then resolves the entry against `base_dir` — the directory of
+    /// the blacklist file itself, NOT the process cwd — and normalises `.` and `..`. This is
+    /// what makes a list of bare filenames beside the list work at all, and it is also what
+    /// `opcache_get_configuration()['blacklist']` reports. VERIFIED against reference PHP
+    /// 8.5.10: a list containing only `flat.php` refuses `<dir>/flat.php` and reports the
+    /// expanded path; a quoted entry behaves as the unquoted one.
+    pub(crate) fn extend_from_file_contents(&mut self, contents: &str, base_dir: &Path) {
         for line in contents.lines() {
             let trimmed = line.trim_end_matches(['\r', ' ', '\t']);
             if trimmed.is_empty() || trimmed.starts_with(';') {
                 continue;
             }
-            self.patterns.push(trimmed.to_string());
+            self.patterns.push(expand_entry(trimmed, base_dir));
         }
     }
 
@@ -86,9 +94,14 @@ impl Blacklist {
 /// Matches one blacklist entry against a path, the way php-src's matcher does.
 ///
 /// Anchored at the START and NOT at the end, so an entry is a PREFIX: `/srv/vendor/` blocks
-/// everything beneath it. `*` matches any run of characters and `?` exactly one, but
-/// NEITHER CROSSES `/` — both stop at a separator, so `/srv/*.php` cannot reach into a
-/// subdirectory. Every other byte is literal and case-sensitive.
+/// everything beneath it. Every byte other than a wildcard is literal and case-sensitive.
+///
+/// THE THREE WILDCARDS, and the difference between the first two is the whole subtlety:
+/// php-src compiles `*` to `[^/]*` but `**` to `.*`. So a SINGLE star stops at a separator
+/// while a DOUBLED star crosses it, and `?` (compiled to `[^/]`) stops. VERIFIED against
+/// reference PHP 8.5.10: `<dir>/**.php` refuses `<dir>/sub/nested.php` while `<dir>/*.php`
+/// caches it. An earlier revision treated `**` as one `*`; the differential corpus missed it
+/// because a TRAILING `**` behaves identically under both readings.
 ///
 /// Implemented as a backtracking walk rather than by building a regexp: the alternative is
 /// a regex engine this crate does not have, for patterns that are a handful of literals and
@@ -100,11 +113,20 @@ fn prefix_matches(pattern: &str, path: &str) -> bool {
     // fails, which is what makes this match the regexp's greedy-with-backtracking answer
     // without recursing.
     let (mut p, mut s) = (0usize, 0usize);
-    let mut star: Option<(usize, usize)> = None;
+    // The third element records whether this star may cross `/` — i.e. whether it was
+    // written `**`. Without it a doubled star would merely re-arm the single-star rule.
+    let mut star: Option<(usize, usize, bool)> = None;
     while s < path.len() {
         if p < pattern.len() && pattern[p] == b'*' {
-            star = Some((p, s));
-            p += 1;
+            let doubled = pattern.get(p + 1) == Some(&b'*');
+            // A run of three or more stars is still just "crosses `/`"; consume it whole so
+            // the resume point below lands after the entire run.
+            let mut end = p;
+            while end < pattern.len() && pattern[end] == b'*' {
+                end += 1;
+            }
+            star = Some((end - 1, s, doubled));
+            p = end;
             continue;
         }
         if p < pattern.len()
@@ -122,12 +144,13 @@ fn prefix_matches(pattern: &str, path: &str) -> bool {
             return true;
         }
         match star {
-            // Extending the star consumes the character it currently sits on. A `/` is
-            // where it has to stop, which is what keeps `/srv/*.php` out of subdirectories.
-            Some((star_p, star_s)) if path[star_s] != SEPARATOR => {
+            // Extending the star consumes the character it currently sits on. A single star
+            // has to stop at `/` — that is what keeps `/srv/*.php` out of subdirectories —
+            // while a doubled one may swallow it.
+            Some((star_p, star_s, crosses)) if crosses || path[star_s] != SEPARATOR => {
                 p = star_p + 1;
                 s = star_s + 1;
-                star = Some((star_p, s));
+                star = Some((star_p, s, crosses));
             }
             _ => return false,
         }
@@ -141,21 +164,34 @@ fn prefix_matches(pattern: &str, path: &str) -> bool {
 
 /// Expands the directive value as a `glob()` over blacklist FILES and loads each match.
 ///
-/// php-src calls `glob()` here, whose `*` and `?` stay INSIDE one path component. Only the
+/// php-src calls `glob()` here, whose wildcards stay INSIDE one path component. Only the
 /// final component is expanded: a wildcard in a DIRECTORY component is the one part of
 /// `glob()` not reproduced, because it would mean walking the tree for a shape no real
 /// configuration uses. Such a value finds no file and takes the warning path below, which
 /// is the same outcome php-src reaches whenever a pattern matches nothing.
-fn expand_and_read(value: &str) -> Vec<String> {
+///
+/// Files are read as BYTES and converted lossily, never through `read_to_string`: a single
+/// non-UTF-8 byte used to drop the whole file — silently losing every valid line in it — and
+/// then take the "no blacklist file found" path, which was a false statement because the
+/// glob HAD matched. php-src reads bytes and keeps every line.
+///
+/// Each match is returned with its own directory, because a relative entry inside a blacklist
+/// file resolves against THAT file's location rather than the process cwd.
+fn expand_and_read(value: &str) -> Vec<(PathBuf, String)> {
     let mut contents = Vec::new();
     let path = Path::new(value);
     let Some(file_pattern) = path.file_name().and_then(|name| name.to_str()) else {
         return contents;
     };
-    if !file_pattern.contains(['*', '?']) {
+    let read_lossy = |file: &Path| -> Option<(PathBuf, String)> {
+        let bytes = std::fs::read(file).ok()?;
+        let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
+        Some((dir, String::from_utf8_lossy(&bytes).into_owned()))
+    };
+    if !is_glob(file_pattern) {
         // A literal path: read it directly rather than listing its parent.
-        if let Ok(text) = std::fs::read_to_string(path) {
-            contents.push(text);
+        if let Some(entry) = read_lossy(path) {
+            contents.push(entry);
         }
         return contents;
     }
@@ -175,24 +211,155 @@ fn expand_and_read(value: &str) -> Vec<String> {
         .collect();
     matched.sort();
     for file in matched {
-        if let Ok(text) = std::fs::read_to_string(&file) {
-            contents.push(text);
+        if let Some(entry) = read_lossy(&file) {
+            contents.push(entry);
         }
     }
     contents
 }
 
-/// `glob()` matching for ONE path component: the same wildcards as `prefix_matches`, and
-/// the same refusal to cross `/`, differing only in that it must consume the WHOLE name
-/// rather than a prefix of it.
+/// Whether a filename component carries any `glob()` metacharacter.
+///
+/// `[` counts: `glob()` honours character classes, and treating `bl_[ab].list` as a literal
+/// filename made it match nothing at all — reference loads both `bl_a.list` and `bl_b.list`
+/// (VERIFIED). A `[` with no closing `]` is not a class, and `glob()` then treats it
+/// literally, which is why the scan below looks for the pair.
+fn is_glob(component: &str) -> bool {
+    if component.contains(['*', '?']) {
+        return true;
+    }
+    match component.find('[') {
+        Some(open) => component[open + 1..].contains(']'),
+        None => false,
+    }
+}
+
+/// Matches one `glob()` character class against `byte`, returning the index just past the
+/// closing `]`. `[!abc]` and `[^abc]` negate; `a-z` is a range; `]` first is literal.
+fn class_matches(pattern: &[u8], open: usize, byte: u8) -> Option<(bool, usize)> {
+    let mut i = open + 1;
+    let negated = matches!(pattern.get(i), Some(b'!') | Some(b'^'));
+    if negated {
+        i += 1;
+    }
+    let mut hit = false;
+    let mut first = true;
+    while i < pattern.len() {
+        if pattern[i] == b']' && !first {
+            return Some((hit != negated, i + 1));
+        }
+        first = false;
+        // A range needs a `-` with a member on each side; a trailing `-` is literal.
+        if i + 2 < pattern.len() && pattern[i + 1] == b'-' && pattern[i + 2] != b']' {
+            if pattern[i] <= byte && byte <= pattern[i + 2] {
+                hit = true;
+            }
+            i += 3;
+            continue;
+        }
+        if pattern[i] == byte {
+            hit = true;
+        }
+        i += 1;
+    }
+    None // unterminated: not a class after all
+}
+
+/// `glob()` matching for ONE path component: like `prefix_matches` it refuses to cross `/`
+/// (there is none inside a component), but it must consume the WHOLE name rather than a
+/// prefix, and it additionally honours `[...]` classes, which `glob()` has and the blacklist
+/// entry matcher does not.
 fn component_matches(pattern: &str, name: &str) -> bool {
-    // Anchoring the end is the whole difference, and appending a sentinel that only the
-    // end of the name can satisfy is cheaper than a second matcher.
-    prefix_matches(&format!("{pattern}\u{0}"), &format!("{name}\u{0}"))
+    let (pat, nam) = (pattern.as_bytes(), name.as_bytes());
+    let (mut p, mut n) = (0usize, 0usize);
+    let mut star: Option<(usize, usize)> = None;
+    while n < nam.len() {
+        if p < pat.len() {
+            if pat[p] == b'*' {
+                star = Some((p, n));
+                p += 1;
+                continue;
+            }
+            if pat[p] == b'[' {
+                if let Some((hit, next)) = class_matches(pat, p, nam[n]) {
+                    if hit {
+                        p = next;
+                        n += 1;
+                        continue;
+                    }
+                    // A class that does not match is a hard miss for this position; fall
+                    // through to the star backtracking below.
+                    match star {
+                        Some((star_p, star_n)) => {
+                            p = star_p + 1;
+                            n = star_n + 1;
+                            star = Some((star_p, n));
+                            continue;
+                        }
+                        None => return false,
+                    }
+                }
+            }
+            if pat[p] == b'?' || pat[p] == nam[n] {
+                p += 1;
+                n += 1;
+                continue;
+            }
+        }
+        match star {
+            Some((star_p, star_n)) => {
+                p = star_p + 1;
+                n = star_n + 1;
+                star = Some((star_p, n));
+            }
+            None => return false,
+        }
+    }
+    while p < pat.len() && pat[p] == b'*' {
+        p += 1;
+    }
+    p >= pat.len()
+}
+
+/// Resolves one blacklist entry the way php-src's `zend_accel_blacklist_loadone` does.
+///
+/// A surrounding pair of double quotes is stripped, then a relative entry is joined to
+/// `base_dir` — the blacklist FILE's directory — and `.` / `..` are folded out. An absolute
+/// entry is normalised but not relocated. Wildcards survive untouched: this is a textual
+/// expansion, never a filesystem resolution, so an entry naming files that do not exist yet
+/// still works.
+fn expand_entry(entry: &str, base_dir: &Path) -> String {
+    let unquoted = entry
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(entry);
+    let joined = if unquoted.starts_with('/') {
+        unquoted.to_string()
+    } else {
+        format!("{}/{}", base_dir.display(), unquoted)
+    };
+    let mut out: Vec<&str> = Vec::new();
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    // A trailing separator is meaningful — `/srv/vendor/` blocks only what is beneath it —
+    // so it is preserved rather than normalised away.
+    let tail = if joined.ends_with('/') { "/" } else { "" };
+    format!("/{}{}", out.join("/"), tail)
 }
 
 thread_local! {
     static BLACKLIST: RefCell<Blacklist> = RefCell::new(Blacklist::empty());
+
+    /// The directive value the blacklist above was built from, so a repeated call with the
+    /// same value is a no-op instead of re-reading every file. See `load`.
+    static LOADED_FROM: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Loads `opcache.blacklist_filename` for the current thread.
@@ -204,6 +371,18 @@ pub(crate) fn load(value: &str) {
     if value.is_empty() {
         return;
     }
+    // LOAD ONCE. Generated code calls this from `ensure_eval_context`, whose guard is a
+    // FUNCTION-LOCAL stack slot zeroed in every prologue — so five calls of a function
+    // containing an `eval()` re-globbed and re-read every blacklist file five times, and
+    // repeated the no-match warning five times (measured). Reference PHP reads the files
+    // once at startup and never again. The bridge cannot assume anything about how often
+    // generated code calls it, so "once" is enforced here rather than in codegen.
+    let already = LOADED_FROM.with(|cell| cell.borrow().clone());
+    if already.as_deref() == Some(value) {
+        return;
+    }
+    LOADED_FROM.with(|cell| *cell.borrow_mut() = Some(value.to_string()));
+
     let files = expand_and_read(value);
     if files.is_empty() {
         accel_log(
@@ -213,8 +392,8 @@ pub(crate) fn load(value: &str) {
         return;
     }
     let mut blacklist = Blacklist::empty();
-    for contents in &files {
-        blacklist.extend_from_file_contents(contents);
+    for (dir, contents) in &files {
+        blacklist.extend_from_file_contents(contents, dir);
     }
     BLACKLIST.with(|cell| *cell.borrow_mut() = blacklist);
 }
@@ -246,9 +425,10 @@ pub(crate) fn blocks(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// Builds a blacklist from file contents, as if the list lived in `/srv/lists`.
     fn of(lines: &str) -> Blacklist {
         let mut blacklist = Blacklist::empty();
-        blacklist.extend_from_file_contents(lines);
+        blacklist.extend_from_file_contents(lines, std::path::Path::new("/srv/lists"));
         blacklist
     }
 
@@ -363,6 +543,74 @@ mod tests {
         assert!(!blacklist.blocks("/srv/app/cache/deep/twig.php"));
     }
 
+    /// A DOUBLED star crosses `/` where a single one does not: php-src compiles `*` to
+    /// `[^/]*` but `**` to `.*`. VERIFIED on reference PHP 8.5.10 — `<dir>/**.php` refuses
+    /// `<dir>/sub/nested.php` while `<dir>/*.php` caches it.
+    ///
+    /// Found by review. The differential corpus missed it because the only doubled star it
+    /// carried was TRAILING, and a trailing `**` behaves the same under both readings.
+    #[test]
+    fn a_doubled_star_crosses_a_directory_separator() {
+        let single = of("/srv/app/*.php\n");
+        assert!(single.blocks("/srv/app/flat.php"));
+        assert!(!single.blocks("/srv/app/sub/nested.php"));
+
+        let doubled = of("/srv/app/**.php\n");
+        assert!(doubled.blocks("/srv/app/flat.php"));
+        assert!(doubled.blocks("/srv/app/sub/nested.php"));
+        assert!(doubled.blocks("/srv/app/a/b/c/deep.php"));
+
+        // A doubled star mid-pattern still has to honour the literals after it.
+        let middle = of("/srv/**/vendor/\n");
+        assert!(middle.blocks("/srv/a/b/c/vendor/x.php"));
+        assert!(!middle.blocks("/srv/a/b/c/vendorish/x.php"));
+    }
+
+    /// An entry is EXPANDED, not stored verbatim: quotes stripped, a relative entry resolved
+    /// against the blacklist FILE's directory, `.` and `..` folded out. VERIFIED on reference
+    /// PHP 8.5.10, where a list containing only `flat.php` refuses `<dir>/flat.php` and the
+    /// configuration reports the expanded path.
+    #[test]
+    fn entries_are_expanded_against_the_lists_own_directory() {
+        let relative = of("flat.php\n");
+        assert_eq!(relative.patterns, vec!["/srv/lists/flat.php".to_string()]);
+        assert!(relative.blocks("/srv/lists/flat.php"));
+
+        let quoted = of("\"/srv/app/blocked.php\"\n");
+        assert_eq!(quoted.patterns, vec!["/srv/app/blocked.php".to_string()]);
+        assert!(quoted.blocks("/srv/app/blocked.php"));
+
+        let dotted = of("../app/./blocked.php\n");
+        assert_eq!(dotted.patterns, vec!["/srv/app/blocked.php".to_string()]);
+        assert!(dotted.blocks("/srv/app/blocked.php"));
+
+        // A trailing separator survives: it is what makes a directory entry a prefix.
+        let dir = of("vendor/\n");
+        assert_eq!(dir.patterns, vec!["/srv/lists/vendor/".to_string()]);
+        assert!(dir.blocks("/srv/lists/vendor/lib.php"));
+
+        // An absolute entry keeps its own location, and wildcards survive expansion.
+        let absolute = of("/srv/other/*.php\n");
+        assert_eq!(absolute.patterns, vec!["/srv/other/*.php".to_string()]);
+    }
+
+    /// The directive value goes through `glob()`, which honours `[...]` classes.
+    #[test]
+    fn the_directive_glob_honours_character_classes() {
+        assert!(component_matches("bl_[ab].list", "bl_a.list"));
+        assert!(component_matches("bl_[ab].list", "bl_b.list"));
+        assert!(!component_matches("bl_[ab].list", "bl_c.list"));
+        assert!(component_matches("bl_[a-c].list", "bl_b.list"));
+        assert!(!component_matches("bl_[a-c].list", "bl_d.list"));
+        assert!(component_matches("bl_[!a].list", "bl_z.list"));
+        assert!(!component_matches("bl_[!a].list", "bl_a.list"));
+        assert!(component_matches("x[*]y", "x*y"));
+        // An unterminated `[` is literal, and is therefore not a glob at all.
+        assert!(!is_glob("bl_[ab.list"));
+        assert!(is_glob("bl_[ab].list"));
+        assert!(!is_glob("plain.list"));
+    }
+
     /// Creates a fresh directory for one test's blacklist files.
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -384,6 +632,8 @@ mod tests {
         let dir = scratch("union");
         std::fs::write(dir.join("bl_a.list"), "/srv/one.php\n").unwrap();
         std::fs::write(dir.join("bl_b.list"), "/srv/two.php\n").unwrap();
+        // Reset the once-only guard: these tests load several different values in a row.
+        reset_for_tests();
         // Must NOT be picked up: the glob anchors the whole component.
         std::fs::write(dir.join("bl_c.list.bak"), "/srv/three.php\n").unwrap();
 
@@ -400,6 +650,7 @@ mod tests {
         let dir = scratch("literal");
         let file = dir.join("blacklist.txt");
         std::fs::write(&file, "; a comment\n/srv/literal.php\n").unwrap();
+        reset_for_tests();
 
         load(&file.to_string_lossy());
 
@@ -413,6 +664,7 @@ mod tests {
     fn an_empty_value_loads_nothing() {
         let dir = scratch("empty");
         std::fs::write(dir.join("b.list"), "/srv/kept.php\n").unwrap();
+        reset_for_tests();
         load(&dir.join("b.list").to_string_lossy());
         assert!(blocks(std::path::Path::new("/srv/kept.php")));
 
@@ -424,10 +676,61 @@ mod tests {
         );
     }
 
+    /// Clears the once-only guard so one test thread can load several values in turn.
+    fn reset_for_tests() {
+        LOADED_FROM.with(|cell| *cell.borrow_mut() = None);
+        BLACKLIST.with(|cell| *cell.borrow_mut() = Blacklist::empty());
+    }
+
+    /// `load` reads the files ONCE per value. Generated code calls it from
+    /// `ensure_eval_context`, whose guard is a function-local stack slot zeroed in every
+    /// prologue, so it arrives once per call of any function containing an `eval()` —
+    /// measured at five reads for five calls before this guard existed.
+    #[test]
+    fn loading_the_same_value_twice_reads_the_files_once() {
+        let dir = scratch("once");
+        let file = dir.join("deny.list");
+        std::fs::write(&file, "/srv/first.php\n").unwrap();
+        reset_for_tests();
+        load(&file.to_string_lossy());
+        assert!(blocks(std::path::Path::new("/srv/first.php")));
+
+        // Rewrite the file behind the loader's back, then ask for the SAME value again.
+        std::fs::write(&file, "/srv/second.php\n").unwrap();
+        load(&file.to_string_lossy());
+
+        assert!(
+            blocks(std::path::Path::new("/srv/first.php")),
+            "a repeated load of the same value must not re-read the file"
+        );
+        assert!(!blocks(std::path::Path::new("/srv/second.php")));
+    }
+
+    /// A file that is not valid UTF-8 keeps its usable lines instead of being dropped whole,
+    /// and does NOT take the "no blacklist file found" path — the glob did match a file, so
+    /// that message would be false.
+    #[test]
+    fn a_non_utf8_file_keeps_its_usable_lines() {
+        let dir = scratch("nonutf8");
+        let file = dir.join("deny.list");
+        // A stray 0xFF byte on its own line, with valid entries on both sides.
+        let mut bytes = b"/srv/before.php\n".to_vec();
+        bytes.extend_from_slice(&[0xFF, b'\n']);
+        bytes.extend_from_slice(b"/srv/after.php\n");
+        std::fs::write(&file, bytes).unwrap();
+        reset_for_tests();
+
+        load(&file.to_string_lossy());
+
+        assert!(blocks(std::path::Path::new("/srv/before.php")));
+        assert!(blocks(std::path::Path::new("/srv/after.php")));
+    }
+
     /// A value matching no file blacklists nothing and is NOT fatal — reference PHP only
     /// logs `No blacklist file found matching: <value>`, and only at verbosity >= 2.
     #[test]
     fn a_value_matching_no_file_blacklists_nothing() {
+        reset_for_tests();
         load("/nonexistent-elephc-dir/nope-*.list");
         assert!(!blocks(std::path::Path::new("/srv/anything.php")));
     }

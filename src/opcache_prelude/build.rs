@@ -516,15 +516,27 @@ fn runtime_cache_prologue() -> Vec<Stmt> {
             vec![],
             None,
         ),
-        // `blacklist_miss_ratio` is a PERCENTAGE of the compile attempts that were refused
-        // by the blacklist, over blacklist misses PLUS ordinary misses — hits are not in the
-        // denominator. DERIVED from reference PHP 8.5.10, where misses=6 and
-        // blacklist_misses=29 reported 82.8571428571, which is 29*100/(6+29) and matches no
-        // other candidate formula. Zero attempts report `0.0` rather than dividing by zero.
+        // `blacklist_miss_ratio` is a PERCENTAGE of ALL lookups — php-src's
+        // `reqs = hits + misses`, where its INTERNAL `misses` counts blacklist refusals too
+        // and the REPORTED `misses` has them subtracted back out. So the denominator here is
+        // `hits + misses + blacklist_misses`, all three reported figures.
+        //
+        // An earlier revision used `misses + blacklist_misses`, derived from a single probe
+        // where misses=6 and blacklist_misses=29 reported 82.8571428571. That probe could not
+        // discriminate: it had hits=0, so `misses + bl` and `hits + misses + bl` were the same
+        // 35. VERIFIED on reference PHP 8.5.10 with two runs built so no two candidate
+        // denominators coincide — hits=4 misses=2 bl=1 reports 14.285714 (1*100/7), and
+        // hits=12 misses=3 bl=3 reports 16.666667 (3*100/18).
+        //
+        // Zero lookups report `0.0` rather than dividing by zero.
         s_assign(
             "__elephc_rt_blacklist_total",
             e_binop(
-                e_var("__elephc_rt_misses"),
+                e_binop(
+                    e_var("__elephc_rt_hits"),
+                    BinOp::Add,
+                    e_var("__elephc_rt_misses"),
+                ),
                 BinOp::Add,
                 e_var("__elephc_rt_blacklist"),
             ),

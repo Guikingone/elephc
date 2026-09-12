@@ -221,7 +221,13 @@ fn fill_entry(
     let mut cache = lock_script_cache();
     cache.misses += 1;
     let size = file_size;
+    // php-src counts an OVERSIZED file as a `blacklist_misses`, in the same branch that
+    // hands the file back to the original compiler. VERIFIED on reference PHP 8.5.10:
+    // `-d opcache.max_file_size=50` over two oversized scripts reports
+    // `misses=0 blacklist_misses=2`. The name is php-src's, not a mistake here: that counter
+    // is "compiled but deliberately not stored", which is exactly what a size refusal is.
     if !config.admits_size(size) {
+        cache.blacklist_misses += 1;
         return Ok(segments);
     }
     // A file younger than `opcache.file_update_protection` is RUN but not STORED, so a
