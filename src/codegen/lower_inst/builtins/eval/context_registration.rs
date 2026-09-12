@@ -118,7 +118,41 @@ fn configure_eval_opcache_file_cache(
         .target
         .extern_symbol("__elephc_eval_configure_opcache_file_cache");
     abi::emit_call_label(ctx.emitter, &symbol);
+    load_eval_opcache_blacklist(ctx, config);
     configure_eval_opcache_swapped_directives(ctx, config);
+}
+
+/// Loads `opcache.blacklist_filename`, the paths that run but are never cached.
+///
+/// A THIRD call for the same reason there is a second one: the two above already spend
+/// every integer argument register. Emitted AFTER the file-cache call because a directive
+/// value matching no file logs through the accelerator channel that call installs.
+///
+/// Skipped entirely when the directive is unset, which is the overwhelmingly common case —
+/// the bridge would return immediately, so the call would be pure code size.
+fn load_eval_opcache_blacklist(
+    ctx: &mut FunctionContext<'_>,
+    config: &crate::opcache::runtime_cache::RuntimeCacheConfig,
+) {
+    if config.blacklist_filename.is_empty() {
+        return;
+    }
+    let (label, len) = ctx.data.add_string(config.blacklist_filename.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_load_blacklist");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// `opcache.file_update_protection`, as the bridge's `swap_directive` addresses it.

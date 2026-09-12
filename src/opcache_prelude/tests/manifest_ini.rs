@@ -150,14 +150,20 @@ pub(super) fn renders_parsable_opcache_ini_helpers() {
         assert!(helpers.contains(
             "if ($option === 'opcache.jit_prof_threshold') { return __elephc_opcache_env_raw('ELEPHC_INI_opcache__jit_prof_threshold', 'ELEPHC_INI_opcache.jit_prof_threshold', 'f', '0.005'); }"
         ));
-        // A reporting-only STRING still carries its env-override call.
+        // A reporting-only STRING still carries its env-override call, with its own default.
         assert!(helpers.contains(
-            "if ($option === 'opcache.blacklist_filename') { return __elephc_opcache_env_raw('ELEPHC_INI_opcache__blacklist_filename', 'ELEPHC_INI_opcache.blacklist_filename', 's', ''); }"
+            "if ($option === 'opcache.lockfile_path') { return __elephc_opcache_env_raw('ELEPHC_INI_opcache__lockfile_path', 'ELEPHC_INI_opcache.lockfile_path', 's', '/tmp'); }"
         ));
-        // `opcache.error_log` is NOT one of them any more: it now selects where the
-        // `zend_accel_error` channel writes, so it renders as a plain literal.
+        // Two string directives are NOT among them any more, because both now bake behaviour
+        // rather than only being reported, and so render as plain literals:
+        // `opcache.error_log` selects where the `zend_accel_error` channel writes, and
+        // `opcache.blacklist_filename` is READ AT STARTUP to build the blacklist the runtime
+        // script cache consults — a later env override would name a list the cache was
+        // already built without.
         assert!(helpers.contains("if ($option === 'opcache.error_log') { return ''; }"));
         assert!(!helpers.contains("ELEPHC_INI_opcache__error_log"));
+        assert!(helpers.contains("if ($option === 'opcache.blacklist_filename') { return ''; }"));
+        assert!(!helpers.contains("ELEPHC_INI_opcache__blacklist_filename"));
         // The helper functions are present and the whole block parses.
         assert!(helpers.contains("function __elephc_opcache_ini_string(string $option): string|false"));
         assert!(helpers.contains("function __elephc_opcache_ini_access(string $option): int"));

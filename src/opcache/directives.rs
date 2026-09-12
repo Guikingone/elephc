@@ -1255,6 +1255,11 @@ pub fn directive_runtime_overridable(name: &str) -> bool {
             // Refuses to cache a file younger than its value, so it governs what the
             // runtime script cache admits rather than only what the binary reports.
             | "opcache.file_update_protection"
+            // Read ONCE at eval-context setup, php-src's `MINIT` equivalent, because the
+            // directive is `PHP_INI_SYSTEM` there and reference PHP never re-reads the
+            // files either. A runtime override would name a blacklist the cache had
+            // already been built without.
+            | "opcache.blacklist_filename"
     )
 }
 
@@ -2571,13 +2576,13 @@ mod tests {
     }
 
     /// The runtime-override scope rule, asserted over the WHOLE matrix of every maintained
-    /// version: exactly the ten directives elephc derives compiled-in behavior from are excluded,
+    /// version: exactly the directives elephc derives compiled-in behavior from are excluded,
     /// and every other directive is overridable.
     #[test]
     fn runtime_override_scope_covers_every_directive() {
         /// The directives whose value is consumed at COMPILE TIME to bake code or constants.
         // Present in every 8.2–8.5 table.
-        const EXCLUDED: [&str; 16] = [
+        const EXCLUDED: [&str; 17] = [
             "opcache.enable",
             "opcache.enable_cli",
             "opcache.memory_consumption",
@@ -2594,6 +2599,7 @@ mod tests {
             "opcache.validate_timestamps",
             "opcache.max_file_size",
             "opcache.file_update_protection",
+            "opcache.blacklist_filename",
         ];
         // Excluded for the same reason, but REGISTERED ONLY BY 8.5 — so it cannot be
         // asserted present in the older tables the way the rest can.
@@ -2628,11 +2634,11 @@ mod tests {
                 .filter(|(name, _)| directive_runtime_overridable(name))
                 .count();
             assert_eq!(overridable, directives.len() - excluded_here);
-            // Every version lands on the same 37: 8.5 excludes 17 of 54, the older tables
-            // exclude 16 of 53.
-            assert_eq!(overridable, 37, "for {version}");
+            // Every version lands on the same 36: 8.5 excludes 18 of 54, the older tables
+            // exclude 17 of 53.
+            assert_eq!(overridable, 36, "for {version}");
         }
-        // 8.5 registers 54 directives, so 37 are runtime-overridable.
+        // 8.5 registers 54 directives, so 36 are runtime-overridable.
         assert_eq!(opcache_directives(80500).len(), 54);
     }
 

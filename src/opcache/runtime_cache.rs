@@ -49,6 +49,9 @@ pub struct RuntimeCacheConfig {
     pub error_log: String,
     /// `opcache.file_update_protection`, in seconds; `0` disables the guard.
     pub file_update_protection: u64,
+    /// `opcache.blacklist_filename` — a `glob()` naming the files that list the paths to
+    /// run but never cache. Empty means unset.
+    pub blacklist_filename: String,
 }
 
 /// Resolves the runtime cache configuration for a compile target and SAPI.
@@ -115,6 +118,7 @@ pub fn runtime_cache_config(
         log_verbosity_level: signed("opcache.log_verbosity_level"),
         error_log: text("opcache.error_log"),
         file_update_protection: count("opcache.file_update_protection"),
+        blacklist_filename: text("opcache.blacklist_filename"),
     }
 }
 

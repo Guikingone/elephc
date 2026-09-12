@@ -20,10 +20,15 @@
 //!   they share that same enabled gate: `accel_log` is php-src's `zend_accel_error`
 //!   channel (timestamped, pid-tagged, gated by `opcache.log_verbosity_level` rather
 //!   than by `error_reporting`), and `file_cache` reproduces its startup refusal of a
-//!   bad `opcache.file_cache`. elephc has no on-disk opcode cache, but reference PHP
-//!   REFUSES TO START on a bad setting, and that refusal is observable.
+//!   bad `opcache.file_cache` — reference PHP REFUSES TO START on a bad setting, and
+//!   that refusal is observable. The on-disk cache the setting then names is real and
+//!   lives in `file_store`.
+//! - `blacklist` is `opcache.blacklist_filename`: the paths that RUN but are never
+//!   stored. It is an admission rule like `config`'s, kept separate because it is
+//!   pattern matching rather than a scalar comparison.
 
 pub(crate) mod accel_log;
+pub(crate) mod blacklist;
 pub(crate) mod config;
 pub(crate) mod file_cache;
 pub(crate) mod file_store;
@@ -35,6 +40,7 @@ pub(crate) mod segments;
 pub(crate) mod store;
 
 pub(crate) use accel_log::{set_config as set_accel_log_config, AccelLogConfig};
+pub(crate) use blacklist::load as load_blacklist;
 pub(crate) use config::{config, set_config, ScriptCacheConfig};
 #[allow(unused_imports)]
 pub use config::{

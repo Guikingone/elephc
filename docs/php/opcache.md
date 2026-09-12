@@ -160,7 +160,10 @@ used_memory - wasted_memory` with `wasted_memory = 0`, and
 interned-strings block. `hits`, `misses` and `opcache_hit_rate` are LIVE, counted by the
 [runtime script cache](#the-runtime-script-cache); they stay at zero in a binary
 that has no dynamic tier, which genuinely performs no cache lookups.
-`blacklist_misses` is always zero.
+`blacklist_misses` and `blacklist_miss_ratio` are LIVE too, counted by
+[`opcache.blacklist_filename`](#opcacheblacklist_filename). The ratio is
+`blacklist_misses * 100 / (misses + blacklist_misses)` — hits are not in the
+denominator — and it is `0.0` when there have been no compile attempts at all.
 
 `interned_strings_usage` is **absent** — not empty, not zeroed — when
 `opcache.interned_strings_buffer=0`, leaving eight top-level keys instead of
@@ -679,6 +682,7 @@ never referenced. Such a binary reports exactly its manifest, with zero counters
 | `opcache.memory_consumption` | A real byte budget for the cached segments |
 | `opcache.max_accelerated_files` | A real entry-count ceiling |
 | `opcache.file_update_protection` | Refuses to *cache* a file younger than its value; the file still runs. `0` disables it |
+| `opcache.blacklist_filename` | Refuses to *cache* any path a blacklist entry matches; the file still runs. See [below](#opcacheblacklist_filename) |
 
 The cache **never evicts**. Like php-src, it refuses new entries once the budget
 or the entry ceiling is reached and latches `cache_full`; a refused file is still
@@ -844,7 +848,7 @@ Two mechanisms, both documented in full on the
   override (only `PHPRC` / `PHP_INI_SCAN_DIR`, which are file-granularity).
 
 The runtime override is deliberately narrower than `--ini`. It is honored only
-for directives elephc merely *reports*. **Seventeen** directives are consumed at
+for directives elephc merely *reports*. **Eighteen** directives are consumed at
 compile time to bake code or baked constants, and honoring them on the reporting
 surface alone would produce a binary that contradicts itself —
 `ini_get('opcache.enable_cli') === '1'` next to an `opcache_get_status()` that
@@ -861,9 +865,11 @@ still returns `false`. Their environment variables are ignored:
 | `opcache.preload` | compiles the preload file into the binary; can fail the compile; bakes `preload_statistics` |
 | `opcache.file_cache`, `opcache.file_cache_read_only` | the [startup validation](#opcachefile_cache) that can refuse to run |
 | `opcache.log_verbosity_level`, `opcache.error_log` | the `zend_accel_error` channel that reports it |
+| `opcache.blacklist_filename` | the [blacklist](#opcacheblacklist_filename) the runtime script cache consults, read once when the eval context is built |
 
-The other 37 directives of the 8.5 set are runtime-overridable. Pinned by
-`tests/opcache_env_override_tests.rs`.
+The other 36 directives of the 8.5 set are runtime-overridable. Pinned by
+`tests/opcache_env_override_tests.rs` and
+`tests/opcache_blacklist_tests.rs`.
 
 ### Range-validated directives
 
@@ -1005,6 +1011,64 @@ $ echo $?
 
 Reference PHP prints no `BEFORE`, because its check runs before the script does.
 The message and the exit status are identical; only the position differs.
+
+### `opcache.blacklist_filename`
+
+Names the files that list paths to **run but never cache**. A blacklisted
+include executes exactly as it would otherwise — the directive changes what is
+*stored*, never what happens — so the only observable difference is in
+`opcache_get_status()`:
+
+- the script is absent from `scripts`;
+- `opcache_is_script_cached()` answers `false` for it;
+- `blacklist_misses` counts one per **refusal**, not per file: a script included
+  twice is refused twice;
+- `misses` does **not** move. php-src hands a blacklisted file back to the
+  original compiler before any cache accounting, so the refusal replaces the
+  miss rather than accompanying it.
+
+The directive value is itself a `glob()` naming the blacklist files, and **every**
+matching file is loaded and their entries unioned:
+
+```ini
+opcache.blacklist_filename=/etc/opcache/deny-*.list
+```
+
+Inside each file:
+
+| Line | Meaning |
+|---|---|
+| `;` as the **first** character | Comment, skipped. A `;` after anything else — even a space — does not start one |
+| Blank, or only whitespace | Skipped |
+| Anything else | A pattern |
+
+A pattern is **anchored at the start and open at the end**, so it matches as a
+prefix: a bare directory blocks everything under it, and `/srv/app/p_pref`
+blocks `/srv/app/p_prefix.php`. `*` matches any run of characters and `?`
+exactly one, but **neither crosses `/`** — `/srv/app/*.php` does not reach into
+`/srv/app/sub/`. Matching is case-sensitive even where the filesystem is not.
+
+A value matching no file is not an error: it blacklists nothing and logs
+`No blacklist file found matching: <value>` through the
+[accelerator channel](#opcachefile_cache), which needs
+`opcache.log_verbosity_level >= 2` to be visible.
+
+**Divergences.**
+
+- Only the **dynamic tier** is governed. The compile-time script manifest is
+  frozen into the binary and is never consulted against the blacklist, so a
+  blacklisted path that is part of the compiled program still appears in
+  `scripts`. Blacklisting is a property of what the *runtime cache* stores.
+- The blacklist is read when the eval context is built, so a binary with no
+  dynamic tier never loads one at all.
+- `opcache_get_configuration()['blacklist']` stays `[]` even when the blacklist
+  is being honoured: reference PHP resolves the patterns at startup and can list
+  them, whereas elephc bakes that array as a literal at compile time and resolves
+  the files later.
+- The directive is **compile-time only**. Unlike the reporting-only majority it
+  ignores its `ELEPHC_INI_*` runtime override, because a value arriving after the
+  cache was built could not retroactively keep anything out of it — see
+  [Overriding a directive](#overriding-a-directive).
 
 ### `opcache.preload`
 
@@ -1190,7 +1254,7 @@ on macOS arm64.
 | `opcache_compile_file()` on a file outside the manifest | Compiles it, returns `true`, and the file becomes cached | Inside `eval()`: compiles and caches it, returns `true`. In natively compiled code: still `false` | A dynamic include is a compile error at AOT top level, so a natively compiled `opcache_compile_file()` names a file that program could never run |
 | `opcache_is_script_cached()` on a file outside the manifest | `false` until something compiles it, then `true` | Inside `eval()`: `true` once it is cached. In natively compiled code: `false` | Same reason. `opcache_get_status()['scripts']` DOES report it from native code |
 | `ini_set('opcache.*', …)` | Succeeds for all 18 `PHP_INI_ALL` directives, returning the previous value | Succeeds for **3** of them — `revalidate_freq`, `validate_timestamps`, `file_update_protection` — and returns `false` for the other 15 | Those three are the only `PHP_INI_ALL` directives elephc's cache actually reads, and for them the whole surface moves together, byte-identical to reference. The other 15 are inert here (14 JIT knobs and `dups_fix`), so succeeding would report a value nothing honors. Exact for the 36 `PHP_INI_SYSTEM` directives |
-| `blacklist_misses`, `blacklist_miss_ratio`, `oom_restarts`, `hash_restarts` | Live counters | Always `0` | `opcache.blacklist_filename` is reported but not applied, and the runtime cache refuses rather than restarting when it fills. `hits`, `misses` and `opcache_hit_rate` are NOT in this row any more: they are live for the [runtime script cache](#the-runtime-script-cache) |
+| `oom_restarts`, `hash_restarts` | Live counters | Always `0` | The runtime cache refuses rather than restarting when it fills. `hits`, `misses`, `opcache_hit_rate`, `blacklist_misses` and `blacklist_miss_ratio` are NOT in this row any more: they are live for the [runtime script cache](#the-runtime-script-cache) |
 
 | `memory_usage` / `interned_strings_usage` *absolute figures* | Real shared-memory accounting | Synthetic baselines, plus Σ of the manifest's source-file sizes, plus the runtime cache's real accounted bytes | No shared-memory segment exists. The *invariants* are exact: `free = total − used − wasted`, `free = buffer_size − used`, `0 < used < buffer_size`, and the whole `interned_strings_usage` key is omitted for a zero buffer. `max_cached_keys` is the exact php-src prime rounding |
 | `num_cached_scripts` / `num_cached_keys` | Live cache entry count | The manifest size PLUS the runtime cache's entries | The manifest half cannot grow; the runtime half does |
@@ -1198,8 +1262,8 @@ on macOS arm64.
 | `preload_statistics.functions` / `.classes` | The symbols the preload file added | The whole binary's user-declared symbols | An AOT binary cannot separate "preloaded" from "compiled in". A superset, never a fabrication — every name reported is genuinely declared, and the preload file's own symbols are among them |
 | A preloaded file's CONSTANTS | Not carried into the request | Available, like any compiled-in declaration | The startup request whose symbol table reference tears down does not exist in an AOT binary |
 | `scripts` under preloading | Carries a synthetic `$PRELOAD$` pseudo-entry and `num_cached_scripts` is bumped by one | No such entry | It stands for a shared-memory block an elephc binary never allocates |
-| `opcache_get_configuration()['blacklist']` | Lists the resolved patterns from `opcache.blacklist_filename` | Always `[]` | The directive is reported but not applied |
-| Directives that change engine behavior (`huge_code_pages`, `protect_memory`, `blacklist_filename`, …) | Change what the cache does | Reported faithfully, inert | There is no compile-time cache for them to act on. `validate_timestamps`, `revalidate_freq`, `max_file_size`, `memory_consumption` and `max_accelerated_files` are NOT in this row: they govern the [runtime script cache](#the-runtime-script-cache) |
+| `opcache_get_configuration()['blacklist']` | Lists the resolved patterns from `opcache.blacklist_filename` | Always `[]` | The directive IS applied (see [below](#opcacheblacklist_filename)), but the patterns are resolved when the eval context is built, which is after this array has already been baked as a literal. The list is therefore empty even in a binary whose cache is honouring it |
+| Directives that change engine behavior (`huge_code_pages`, `protect_memory`, …) | Change what the cache does | Reported faithfully, inert | There is no compile-time cache for them to act on. `validate_timestamps`, `revalidate_freq`, `max_file_size`, `memory_consumption`, `max_accelerated_files`, `file_update_protection` and `blacklist_filename` are NOT in this row: they govern the [runtime script cache](#the-runtime-script-cache) |
 | `opcache.file_cache` contents | Serialized php-src opcodes, keyed by a `system_id` | elephc's own parsed form, keyed by crate version plus format version | The two are different compilers; neither could read the other's file. The directive, the validation, the read-only mode and the `opcache_is_script_cached_in_file_cache()` answer all behave as reference does — only the bytes inside differ |
 | `opcache_is_script_cached_in_file_cache()` from NATIVE code | Answers for any path | `false`; only a call inside `eval()` answers from the cache | The same native-versus-`eval()` boundary its sibling file functions have: the dynamic tier the cache belongs to is reachable only from `eval()` |
 | `opcache.file_cache` validation in a binary that never reaches the eval bridge | Validated at every startup | Never validated | The check runs where the runtime cache is configured. A binary with no dynamic tier has no cache to configure, and paying for the check in every binary would break the pay-for-use rule the rest of this tier follows. The set is wider than "no `eval()`": a const-folded `eval('$x = 1;')` is resolved at compile time and emits no bridge call |
@@ -1209,7 +1273,7 @@ on macOS arm64.
 | `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` out of range | Refuses the store and logs through `zend_accel_error`, which is silent below `opcache.log_verbosity_level = 2` | Refuses the store, silently | The refusal is exact, and it happens at COMPILE time, where there is no running process to log from. The `zend_accel_error` channel itself now exists — it is what carries the [`opcache.file_cache`](#opcachefile_cache) fatals — but only at run time. At reference PHP's default verbosity these two lines are not printed either |
 | `ini_get_all()` unfiltered | Every directive of every loaded module (403 on the reference build) | Only the blocks elephc owns — 54 on CLI, 87 under `--web` | The filter *rule* is reproduced; the population is elephc's |
 | `ini_get_all('pdo')` in a `--with-pdo` build | `[]` (known module) | `false` + `E_WARNING` | The known-module list is rendered before codegen decides the link set |
-| Per-directive environment override | Does not exist (`PHP_INI_opcache_jit`, `opcache_jit`, `opcache.jit` in the environment all do nothing) | `ELEPHC_INI_*` re-points 37 of the 54 directives at run time | An elephc extension, not parity: an AOT binary has no `php.ini` to edit |
+| Per-directive environment override | Does not exist (`PHP_INI_opcache_jit`, `opcache_jit`, `opcache.jit` in the environment all do nothing) | `ELEPHC_INI_*` re-points 36 of the 54 directives at run time | An elephc extension, not parity: an AOT binary has no `php.ini` to edit |
 | `extension_loaded()` under `eval()` | n/a | Reports only the core set, so `extension_loaded('PDO')` is `false` under `eval()` even in a `--with-pdo` build | The eval interpreter runs at compile time with no link step |
 | OPcache file functions under `eval()` | n/a | `opcache_is_script_cached()`, `opcache_invalidate()` and `opcache_compile_file()` answer about the [runtime script cache](#the-runtime-script-cache) — they are no longer terminal `false`s. `opcache_is_script_cached_in_file_cache()` stays `false` and `opcache_jit_blacklist()` `null` | The dynamic tier gave the first three something real to answer about. The last two have no backing subsystem in either tier |
 | `get_loaded_extensions()` argument | Accepts any expression | Must be a `bool`/`int` (literal or dynamic) | Both candidate lists are compile-time constants, so a dynamic flag selects between them at run time; a non-bool/int argument has no runtime truthiness conversion |

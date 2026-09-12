@@ -63,6 +63,7 @@ pub extern "C" fn __elephc_eval_opcache_rt_stat(key: i64) -> i64 {
         stats.manual_restarts,
         stats.last_restart_time,
         stats.restart_pending,
+        stats.blacklist_misses,
     )
 }
 

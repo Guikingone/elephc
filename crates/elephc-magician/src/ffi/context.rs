@@ -151,6 +151,33 @@ pub unsafe extern "C" fn __elephc_eval_configure_opcache_file_cache(
     crate::script_cache::set_file_cache_config(file_cache);
 }
 
+/// Loads `opcache.blacklist_filename`, the list of paths that RUN but are never cached.
+///
+/// Emitted at eval-context setup, which is elephc's analogue of php-src's `MINIT`: the
+/// directive is `PHP_INI_SYSTEM`, so reference PHP reads the files once at startup and
+/// never re-reads them. A separate symbol rather than another argument on the two
+/// `configure` calls above, because both already spend all six integer argument registers
+/// x86_64 provides.
+///
+/// ORDER MATTERS: generated code emits this AFTER
+/// `__elephc_eval_configure_opcache_file_cache`, because a value matching no file logs
+/// through the accelerator channel that call installs — without it the warning would be
+/// written at the wrong verbosity and to the wrong place.
+///
+/// An empty value is "unset" and loads nothing.
+///
+/// # Safety
+/// `value_ptr` must be readable for `value_len` bytes when `value_len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_load_blacklist(
+    value_ptr: *const u8,
+    value_len: u64,
+) {
+    // SAFETY: the caller guarantees the pointer is readable for the paired length.
+    let value = unsafe { borrow_configured_string(value_ptr, value_len) };
+    crate::script_cache::load_blacklist(&value);
+}
+
 /// Installs one runtime-cache directive by id, returning the value it replaced.
 ///
 /// Two callers, one symbol, told apart by `as_override`. Generated code emits it with `0`

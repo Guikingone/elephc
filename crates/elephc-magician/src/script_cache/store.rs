@@ -65,6 +65,8 @@ pub struct ScriptCacheStats {
     pub manual_restarts: u64,
     pub last_restart_time: i64,
     pub restart_pending: bool,
+    /// `opcache.blacklist_filename` refusals — one per script run but not stored.
+    pub blacklist_misses: u64,
 }
 
 /// The process-wide cache state.
@@ -77,6 +79,7 @@ struct ScriptCache {
     cache_full: bool,
     oom_restarts: u64,
     manual_restarts: u64,
+    blacklist_misses: u64,
     last_restart_time: i64,
     restart_pending: bool,
 }
@@ -185,6 +188,19 @@ fn fill_entry(
     let metadata = std::fs::metadata(path).ok();
     let mtime = metadata.as_ref().and_then(mtime_seconds);
     let file_size = metadata.as_ref().map_or(bytes.len() as u64, |meta| meta.len());
+    // `opcache.blacklist_filename` is decided FIRST, and the ordering is the contract, not
+    // a preference. php-src hands a blacklisted file straight back to the original compiler
+    // before any cache accounting, so such a script: runs normally, is stored NOWHERE — not
+    // in the memory cache and not in `opcache.file_cache` either — and counts as a
+    // `blacklist_misses` INSTEAD of a `misses`. VERIFIED against reference PHP 8.5.10, where
+    // including a blacklisted file left `misses` untouched and moved only `blacklist_misses`,
+    // and where including it twice counted TWO refusals: the counter is of refusals, not of
+    // distinct files.
+    if super::blacklist::blocks(key) {
+        let segments: Arc<[ScriptSegment]> = Arc::from(segment_script(&bytes, ParseMode::Fresh));
+        lock_script_cache().blacklist_misses += 1;
+        return Ok(segments);
+    }
     // The FILE CACHE is consulted before the parser. It holds this script already parsed,
     // and only hands it back when the source's mtime, size and canonical path still match
     // what was stored — so a hit is the same segments a parse would produce, for roughly a
@@ -380,6 +396,7 @@ pub fn stats() -> ScriptCacheStats {
         manual_restarts: cache.manual_restarts,
         last_restart_time: cache.last_restart_time,
         restart_pending: cache.restart_pending,
+        blacklist_misses: cache.blacklist_misses,
     }
 }
 

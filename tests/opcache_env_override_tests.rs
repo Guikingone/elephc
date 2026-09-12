@@ -54,7 +54,7 @@ static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 /// - `opcache.optimization_level` — `'i'`, and the one whose DEFAULT raw string is hex
 /// - `opcache.max_wasted_percentage` — `'p'` (percent, `atoi` + `1..=50` + `/100`)
 /// - `opcache.jit_prof_threshold` — `'f'` (plain float, `strtod` leading prefix)
-/// - `opcache.blacklist_filename` — `'s'` (string, verbatim). Same substitution, for the same
+/// - `opcache.lockfile_path` — `'s'` (string, verbatim). Same substitution, for the same
 ///   reason: `opcache.error_log` now selects where the `zend_accel_error` channel writes.
 /// - `opcache.enable_cli` — EXCLUDED (bakes the cache-enabled gate)
 const PROBE: &str = r#"<?php
@@ -69,8 +69,8 @@ echo 'cfg.max_wasted_percentage=', var_export($d['opcache.max_wasted_percentage'
 echo 'ini.max_wasted_percentage=', var_export(ini_get('opcache.max_wasted_percentage'), true), "\n";
 echo 'cfg.jit_prof_threshold=', var_export($d['opcache.jit_prof_threshold'], true), "\n";
 echo 'ini.jit_prof_threshold=', var_export(ini_get('opcache.jit_prof_threshold'), true), "\n";
-echo 'cfg.blacklist_filename=', var_export($d['opcache.blacklist_filename'], true), "\n";
-echo 'ini.blacklist_filename=', var_export(ini_get('opcache.blacklist_filename'), true), "\n";
+echo 'cfg.lockfile_path=', var_export($d['opcache.lockfile_path'], true), "\n";
+echo 'ini.lockfile_path=', var_export(ini_get('opcache.lockfile_path'), true), "\n";
 echo 'cfg.enable_cli=', var_export($d['opcache.enable_cli'], true), "\n";
 echo 'ini.enable_cli=', var_export(ini_get('opcache.enable_cli'), true), "\n";
 echo 'status_is_array=', var_export(is_array(opcache_get_status()), true), "\n";
@@ -186,8 +186,8 @@ fn no_env_reports_the_compile_time_values() {
     assert_eq!(line(&out, "ini.max_wasted_percentage"), "'5'");
     assert_eq!(line(&out, "cfg.jit_prof_threshold"), "0.005");
     assert_eq!(line(&out, "ini.jit_prof_threshold"), "'0.005'");
-    assert_eq!(line(&out, "cfg.blacklist_filename"), "''");
-    assert_eq!(line(&out, "ini.blacklist_filename"), "''");
+    assert_eq!(line(&out, "cfg.lockfile_path"), "'/tmp'");
+    assert_eq!(line(&out, "ini.lockfile_path"), "'/tmp'");
     assert_eq!(line(&out, "cfg.enable_cli"), "false");
     assert_eq!(line(&out, "ini.enable_cli"), "'0'");
     // A default CLI binary reports the cache disabled (matching reference `php script.php`).
@@ -212,7 +212,7 @@ fn empty_env_value_is_treated_as_unset() {
 /// The normalizations pinned here are byte-verified against reference PHP 8.5.6 with the matching
 /// `-d` flag: `save_comments=0` → `false` / `'0'`; `jit_debug=1M` → `1048576` / `'1M'`;
 /// `optimization_level=0x10` → `16` / `'0x10'`; `max_wasted_percentage=10` → `0.1` / `'10'`;
-/// `jit_prof_threshold=0.5` → `0.5` / `'0.5'`; `blacklist_filename=/tmp/o.log` → the path on both.
+/// `jit_prof_threshold=0.5` → `0.5` / `'0.5'`; `lockfile_path=/tmp/o.log` → the path on both.
 #[test]
 fn underscore_spelling_moves_both_surfaces() {
     let (_dir, binary) = probe_binary("opcache_env_both", &[]);
@@ -224,7 +224,7 @@ fn underscore_spelling_moves_both_surfaces() {
             ("ELEPHC_INI_opcache__optimization_level", "0x10"),
             ("ELEPHC_INI_opcache__max_wasted_percentage", "10"),
             ("ELEPHC_INI_opcache__jit_prof_threshold", "0.5"),
-            ("ELEPHC_INI_opcache__blacklist_filename", "/tmp/o.log"),
+            ("ELEPHC_INI_opcache__lockfile_path", "/tmp/o.log"),
         ],
     );
     assert_eq!(line(&out, "cfg.save_comments"), "false");
@@ -237,8 +237,8 @@ fn underscore_spelling_moves_both_surfaces() {
     assert_eq!(line(&out, "ini.max_wasted_percentage"), "'10'");
     assert_eq!(line(&out, "cfg.jit_prof_threshold"), "0.5");
     assert_eq!(line(&out, "ini.jit_prof_threshold"), "'0.5'");
-    assert_eq!(line(&out, "cfg.blacklist_filename"), "'/tmp/o.log'");
-    assert_eq!(line(&out, "ini.blacklist_filename"), "'/tmp/o.log'");
+    assert_eq!(line(&out, "cfg.lockfile_path"), "'/tmp/o.log'");
+    assert_eq!(line(&out, "ini.lockfile_path"), "'/tmp/o.log'");
 }
 
 /// The DOTTED spelling (`ELEPHC_INI_opcache.save_comments`) is the secondary lookup. It exists

@@ -557,17 +557,18 @@ fn rust_and_php_override_paths_agree() {
         ("opcache.save_comments", "on"),
         ("opcache.save_comments", "none"),
         // The int and string exemplars must be directives elephc only REPORTS, since one half
-        // of this comparison is the `ELEPHC_INI_*` path. `opcache.max_file_size` and
-        // `opcache.error_log` used to serve here and no longer can: they now bake the runtime
-        // cache's admission rule and the `zend_accel_error` channel respectively, so they are
-        // excluded from runtime override. These two normalize through the identical handlers.
+        // of this comparison is the `ELEPHC_INI_*` path. `opcache.max_file_size`,
+        // `opcache.error_log` and `opcache.blacklist_filename` used to serve here and no longer
+        // can: they now bake the runtime cache's admission rule, the `zend_accel_error` channel
+        // and the startup-loaded blacklist respectively, so all three are excluded from runtime
+        // override. These two normalize through the identical handlers.
         ("opcache.jit_debug", "12abc"),
         ("opcache.jit_debug", "0b101"),
         ("opcache.jit_debug", "12MM"),
         ("opcache.jit_debug", "garbage"),
         ("opcache.jit_debug", "on"),
-        ("opcache.blacklist_filename", "TRUE"),
-        ("opcache.blacklist_filename", "/tmp/o.log"),
+        ("opcache.lockfile_path", "TRUE"),
+        ("opcache.lockfile_path", "/tmp/o.log"),
     ];
     // One binary with NO override: the environment path is what moves it.
     let (env_bin, _) = compile_with_ini(
@@ -575,7 +576,7 @@ fn rust_and_php_override_paths_agree() {
         &two_surface_probe(&[
             "opcache.save_comments",
             "opcache.jit_debug",
-            "opcache.blacklist_filename",
+            "opcache.lockfile_path",
         ]),
         "envapp",
         &[],

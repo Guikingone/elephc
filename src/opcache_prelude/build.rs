@@ -326,8 +326,11 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
             (e_str("hash_restarts"), e_int(0)),
             (e_str("manual_restarts"), e_var("__elephc_rt_manual")),
             (e_str("misses"), e_var("__elephc_rt_misses")),
-            (e_str("blacklist_misses"), e_int(0)),
-            (e_str("blacklist_miss_ratio"), e_float(0.0)),
+            (e_str("blacklist_misses"), e_var("__elephc_rt_blacklist")),
+            (
+                e_str("blacklist_miss_ratio"),
+                e_var("__elephc_rt_blacklist_rate"),
+            ),
             (e_str("opcache_hit_rate"), e_var("__elephc_rt_rate")),
         ]),
     ));
@@ -419,6 +422,7 @@ fn runtime_cache_prologue() -> Vec<Stmt> {
         s_assign("__elephc_rt_manual", stat(keys::RT_STAT_MANUAL_RESTARTS)),
         s_assign("__elephc_rt_restart_time", stat(keys::RT_STAT_LAST_RESTART_TIME)),
         s_assign("__elephc_rt_pending", stat(keys::RT_STAT_RESTART_PENDING)),
+        s_assign("__elephc_rt_blacklist", stat(keys::RT_STAT_BLACKLIST_MISSES)),
         // php-src reports the hit rate as a PERCENTAGE of lookups, and `0.0` when there have
         // been none — not a division by zero and not `NAN`.
         s_assign(
@@ -441,6 +445,43 @@ fn runtime_cache_prologue() -> Vec<Stmt> {
                             e_var("__elephc_rt_hits"),
                             BinOp::Div,
                             e_var("__elephc_rt_lookups"),
+                        ),
+                        BinOp::Mul,
+                        e_float(100.0),
+                    ),
+                ),
+            )],
+            vec![],
+            None,
+        ),
+        // `blacklist_miss_ratio` is a PERCENTAGE of the compile attempts that were refused
+        // by the blacklist, over blacklist misses PLUS ordinary misses — hits are not in the
+        // denominator. DERIVED from reference PHP 8.5.10, where misses=6 and
+        // blacklist_misses=29 reported 82.8571428571, which is 29*100/(6+29) and matches no
+        // other candidate formula. Zero attempts report `0.0` rather than dividing by zero.
+        s_assign(
+            "__elephc_rt_blacklist_total",
+            e_binop(
+                e_var("__elephc_rt_misses"),
+                BinOp::Add,
+                e_var("__elephc_rt_blacklist"),
+            ),
+        ),
+        s_assign("__elephc_rt_blacklist_rate", e_float(0.0)),
+        s_if(
+            e_binop(e_var("__elephc_rt_blacklist_total"), BinOp::Gt, e_int(0)),
+            // Cast for the same reason the hit rate casts: PHP's `/` on two ints is
+            // `int|float`, and letting that union reach a local that starts as a float is
+            // the branch-divergent retype that miscompiles order-dependently.
+            vec![s_assign(
+                "__elephc_rt_blacklist_rate",
+                e_cast(
+                    CastType::Float,
+                    e_binop(
+                        e_binop(
+                            e_var("__elephc_rt_blacklist"),
+                            BinOp::Div,
+                            e_var("__elephc_rt_blacklist_total"),
                         ),
                         BinOp::Mul,
                         e_float(100.0),
