@@ -36,6 +36,8 @@ pub const RT_STAT_LAST_RESTART_TIME: i64 = 6;
 pub const RT_STAT_RESTART_PENDING: i64 = 7;
 /// `opcache.blacklist_filename` refusals — scripts run but deliberately not cached.
 pub const RT_STAT_BLACKLIST_MISSES: i64 = 8;
+/// How many blacklist patterns are loaded, for the `opcache_get_configuration()` listing.
+pub const RT_STAT_BLACKLIST_COUNT: i64 = 9;
 
 /// One cached script's hit count.
 pub const RT_SCRIPT_HITS: i64 = 0;
@@ -66,6 +68,7 @@ pub fn rt_stat_value(
     last_restart_time: i64,
     restart_pending: bool,
     blacklist_misses: u64,
+    blacklist_count: usize,
 ) -> i64 {
     match key {
         RT_STAT_HITS => hits as i64,
@@ -77,6 +80,7 @@ pub fn rt_stat_value(
         RT_STAT_LAST_RESTART_TIME => last_restart_time,
         RT_STAT_RESTART_PENDING => i64::from(restart_pending),
         RT_STAT_BLACKLIST_MISSES => blacklist_misses as i64,
+        RT_STAT_BLACKLIST_COUNT => blacklist_count as i64,
         _ => 0,
     }
 }
@@ -110,8 +114,9 @@ mod tests {
                 RT_STAT_LAST_RESTART_TIME,
                 RT_STAT_RESTART_PENDING,
                 RT_STAT_BLACKLIST_MISSES,
+                RT_STAT_BLACKLIST_COUNT,
             ],
-            [0, 1, 2, 3, 4, 5, 6, 7, 8]
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
         );
     }
 
@@ -132,7 +137,7 @@ mod tests {
     /// Verifies each key selects its own figure.
     #[test]
     fn every_key_selects_its_own_figure() {
-        let value = |key| rt_stat_value(key, 11, 22, 33, 44, true, 55, 66, true, 77);
+        let value = |key| rt_stat_value(key, 11, 22, 33, 44, true, 55, 66, true, 77, 88);
 
         assert_eq!(value(RT_STAT_HITS), 11);
         assert_eq!(value(RT_STAT_MISSES), 22);
@@ -143,12 +148,13 @@ mod tests {
         assert_eq!(value(RT_STAT_LAST_RESTART_TIME), 66);
         assert_eq!(value(RT_STAT_RESTART_PENDING), 1);
         assert_eq!(value(RT_STAT_BLACKLIST_MISSES), 77);
+        assert_eq!(value(RT_STAT_BLACKLIST_COUNT), 88);
     }
 
     /// Verifies booleans arrive as `0` when false, not as an absent field.
     #[test]
     fn false_booleans_arrive_as_zero() {
-        let value = |key| rt_stat_value(key, 0, 0, 0, 0, false, 0, 0, false, 0);
+        let value = |key| rt_stat_value(key, 0, 0, 0, 0, false, 0, 0, false, 0, 0);
 
         assert_eq!(value(RT_STAT_CACHE_FULL), 0);
         assert_eq!(value(RT_STAT_RESTART_PENDING), 0);
@@ -157,6 +163,6 @@ mod tests {
     /// Verifies an unknown key answers `0` rather than panicking across the ABI.
     #[test]
     fn an_unknown_key_answers_zero() {
-        assert_eq!(rt_stat_value(9999, 11, 22, 33, 44, true, 55, 66, true, 77), 0);
+        assert_eq!(rt_stat_value(9999, 11, 22, 33, 44, true, 55, 66, true, 77, 88), 0);
     }
 }

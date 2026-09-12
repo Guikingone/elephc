@@ -123,11 +123,71 @@ fn in_manifest(manifest_paths: Expr) -> Expr {
     )
 }
 
+/// Fills `$__elephc_blacklist` with the patterns `opcache.blacklist_filename` resolved.
+///
+/// Reference PHP lists the RESOLVED entries — the lines of every file the directive's glob
+/// matched — not the directive's own value, and keys them 0..n-1. The explicit write index
+/// reproduces that keying and leaves no hole if a read ever comes back empty.
+///
+/// Both calls fold at lowering time in a binary with no eval bridge: the count becomes `0`
+/// and the loop never runs. The empty list that binary then reports is the TRUTHFUL answer,
+/// because a binary with no dynamic tier never loads a blacklist in the first place.
+fn blacklist_prologue() -> Vec<Stmt> {
+    use crate::opcache::rt_status_keys as keys;
+
+    vec![
+        s_assign("__elephc_blacklist", e_array(vec![])),
+        s_assign("__elephc_bl_i", e_int(0)),
+        s_assign("__elephc_bl_out", e_int(0)),
+        s_assign(
+            "__elephc_bl_n",
+            e_call(
+                "__elephc_opcache_rt_stat",
+                vec![e_int(keys::RT_STAT_BLACKLIST_COUNT)],
+            ),
+        ),
+        s_while(
+            e_binop(e_var("__elephc_bl_i"), BinOp::Lt, e_var("__elephc_bl_n")),
+            vec![
+                s_assign(
+                    "__elephc_bl_entry",
+                    e_call(
+                        "__elephc_opcache_rt_blacklist_entry",
+                        vec![e_var("__elephc_bl_i")],
+                    ),
+                ),
+                s_if(
+                    e_binop(e_var("__elephc_bl_entry"), BinOp::StrictNotEq, e_str("")),
+                    vec![
+                        s_array_assign(
+                            "__elephc_blacklist",
+                            e_var("__elephc_bl_out"),
+                            e_var("__elephc_bl_entry"),
+                        ),
+                        s_assign(
+                            "__elephc_bl_out",
+                            e_binop(e_var("__elephc_bl_out"), BinOp::Add, e_int(1)),
+                        ),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign(
+                    "__elephc_bl_i",
+                    e_binop(e_var("__elephc_bl_i"), BinOp::Add, e_int(1)),
+                ),
+            ],
+        ),
+    ]
+}
+
 /// `opcache_get_configuration()`: returns the baked configuration array.
 pub(crate) fn get_configuration_decl(configuration: Expr) -> Stmt {
+    let mut body = blacklist_prologue();
+    body.push(s_return(configuration));
     function("opcache_get_configuration")
         .returns(t_array())
-        .body(vec![s_return(configuration)])
+        .body(body)
         .build()
 }
 
@@ -135,16 +195,18 @@ pub(crate) fn get_configuration_decl(configuration: Expr) -> Stmt {
 /// real configuration array kept as a DEAD arm so the inferred return stays `array|false` and a
 /// caller's `is_array()` guard still narrows.
 pub(crate) fn restricted_get_configuration_decl(configuration: Expr, warning: Stmt) -> Stmt {
+    // The prologue sits AFTER the restricted exit, not before it: a denied call returns
+    // `false` without ever reading the bridge, so the dead arm costs no runtime work.
+    let mut body = vec![s_if(
+        e_binop(e_bool(false), BinOp::StrictEq, e_bool(false)),
+        vec![warning, s_return(e_bool(false))],
+        vec![],
+        None,
+    )];
+    body.extend(blacklist_prologue());
+    body.push(s_return(configuration));
     function("opcache_get_configuration")
-        .body(vec![
-            s_if(
-                e_binop(e_bool(false), BinOp::StrictEq, e_bool(false)),
-                vec![warning, s_return(e_bool(false))],
-                vec![],
-                None,
-            ),
-            s_return(configuration),
-        ])
+        .body(body)
         .build()
 }
 

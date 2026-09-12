@@ -1,15 +1,15 @@
 ---
-title: "__elephc_phar_get_signature_hash() — internals"
-description: "Compiler internals for __elephc_phar_get_signature_hash(): lowering path, type checks, and runtime helpers."
+title: "__elephc_opcache_rt_blacklist_entry() — internals"
+description: "Compiler internals for __elephc_opcache_rt_blacklist_entry(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1047
+  order: 1034
 ---
 
-## `__elephc_phar_get_signature_hash()` — internals
+## `__elephc_opcache_rt_blacklist_entry()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/io/__elephc_phar_get_signature_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_get_signature_hash.rs)
+- **Signature**: [`src/builtins/system/__elephc_opcache_rt_blacklist_entry.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_blacklist_entry.rs)
 - **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
@@ -17,7 +17,7 @@ sidebar:
 ### Lowering notes
 
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.__elephc_phar_get_signature_hash` through `BuiltinLoweringContext`.
+- Emits the typed EIR target `runtime.__elephc_opcache_rt_blacklist_entry` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
@@ -26,20 +26,20 @@ sidebar:
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (1 requirements)`
+- **Effects**: `static (2 declared effects)`
+- **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.__elephc_phar_get_signature_hash`
+- **Typed EIR target**: `runtime.__elephc_opcache_rt_blacklist_entry`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 
 ```php
-function __elephc_phar_get_signature_hash(string $path): string
+function __elephc_opcache_rt_blacklist_entry(int $index): string
 ```
 
 ## What the type checker enforces

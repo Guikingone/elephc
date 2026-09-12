@@ -93,7 +93,7 @@ extension, not the cache):
 [
     'directives' => [ /* every opcache.* directive, registration order */ ],
     'version'    => ['version' => '8.5.0', 'opcache_product_name' => 'Zend OPcache'],
-    'blacklist'  => [],
+    'blacklist'  => [ /* the resolved opcache.blacklist_filename patterns */ ],
 ]
 ```
 
@@ -104,8 +104,10 @@ extension, not the cache):
 registration order, not sorted.
 
 `version.version` is the targeted *language* version (`8.2.0` … `8.5.0`), since
-elephc targets a PHP minor rather than a patch release. `blacklist` is always
-empty.
+elephc targets a PHP minor rather than a patch release. `blacklist` carries the
+patterns [`opcache.blacklist_filename`](#opcacheblacklist_filename) resolved —
+reported verbatim, keyed `0..n-1` — and is empty when the directive is unset or
+the binary has no dynamic tier.
 
 Under `opcache.restrict_api` denial the function warns and returns `false`, so
 its signature is `array|false`; guard with `is_array()`.
@@ -1061,10 +1063,10 @@ A value matching no file is not an error: it blacklists nothing and logs
   `scripts`. Blacklisting is a property of what the *runtime cache* stores.
 - The blacklist is read when the eval context is built, so a binary with no
   dynamic tier never loads one at all.
-- `opcache_get_configuration()['blacklist']` stays `[]` even when the blacklist
-  is being honoured: reference PHP resolves the patterns at startup and can list
-  them, whereas elephc bakes that array as a literal at compile time and resolves
-  the files later.
+- `opcache_get_configuration()['blacklist']` lists the resolved entries exactly as
+  reference does: verbatim, wildcards unexpanded, keyed `0..n-1`, with every matched
+  file's lines unioned. A binary with **no dynamic tier** reports `[]` — truthful,
+  since such a binary never loads a blacklist at all.
 - The directive is **compile-time only**. Unlike the reporting-only majority it
   ignores its `ELEPHC_INI_*` runtime override, because a value arriving after the
   cache was built could not retroactively keep anything out of it — see
@@ -1262,7 +1264,7 @@ on macOS arm64.
 | `preload_statistics.functions` / `.classes` | The symbols the preload file added | The whole binary's user-declared symbols | An AOT binary cannot separate "preloaded" from "compiled in". A superset, never a fabrication — every name reported is genuinely declared, and the preload file's own symbols are among them |
 | A preloaded file's CONSTANTS | Not carried into the request | Available, like any compiled-in declaration | The startup request whose symbol table reference tears down does not exist in an AOT binary |
 | `scripts` under preloading | Carries a synthetic `$PRELOAD$` pseudo-entry and `num_cached_scripts` is bumped by one | No such entry | It stands for a shared-memory block an elephc binary never allocates |
-| `opcache_get_configuration()['blacklist']` | Lists the resolved patterns from `opcache.blacklist_filename` | Always `[]` | The directive IS applied (see [below](#opcacheblacklist_filename)), but the patterns are resolved when the eval context is built, which is after this array has already been baked as a literal. The list is therefore empty even in a binary whose cache is honouring it |
+| `opcache_get_configuration()['blacklist']` | Lists the resolved patterns from `opcache.blacklist_filename` | Lists them, verbatim and in order | No divergence any more. A binary with no dynamic tier reports `[]`, which is truthful: it never loads a blacklist |
 | Directives that change engine behavior (`huge_code_pages`, `protect_memory`, …) | Change what the cache does | Reported faithfully, inert | There is no compile-time cache for them to act on. `validate_timestamps`, `revalidate_freq`, `max_file_size`, `memory_consumption`, `max_accelerated_files`, `file_update_protection` and `blacklist_filename` are NOT in this row: they govern the [runtime script cache](#the-runtime-script-cache) |
 | `opcache.file_cache` contents | Serialized php-src opcodes, keyed by a `system_id` | elephc's own parsed form, keyed by crate version plus format version | The two are different compilers; neither could read the other's file. The directive, the validation, the read-only mode and the `opcache_is_script_cached_in_file_cache()` answer all behave as reference does — only the bytes inside differ |
 | `opcache_is_script_cached_in_file_cache()` from NATIVE code | Answers for any path | `false`; only a call inside `eval()` answers from the cache | The same native-versus-`eval()` boundary its sibling file functions have: the dynamic tier the cache belongs to is reachable only from `eval()` |

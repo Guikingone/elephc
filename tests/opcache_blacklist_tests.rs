@@ -11,8 +11,13 @@
 //!   paths by 26 patterns with zero disagreements. The probes are recorded in each
 //!   test's own doc comment.
 //! - THE SCRIPT STILL RUNS. A blacklisted include executes normally and is merely never
-//!   stored, so the observable difference is in the counters and in `scripts`, never in
-//!   the program's output. Every test therefore asserts the side that is visible.
+//!   stored, so the observable difference is in the counters, in `scripts` and in
+//!   `opcache_get_configuration()['blacklist']`, never in the program's output. Every test
+//!   therefore asserts the side that is visible.
+//! - The `blacklist` listing is reached through two completely different paths: the eval
+//!   interpreter reads the loaded patterns directly, while natively compiled code reads
+//!   them back one at a time across the bridge. `both_surfaces_report_the_same_blacklist`
+//!   is what keeps those two from drifting.
 //! - `opcache.file_update_protection` is pinned to `0` in every fixture. Left at its
 //!   default of 2 seconds it refuses a just-written file for its AGE, which looks exactly
 //!   like a blacklist refusal and silently invalidates the test — this is the confound
@@ -126,7 +131,10 @@ foreach (array_keys($s['scripts'] ?? []) as $p) {
 }
 sort($names);
 echo 'scripts=', implode(',', $names), "\n";
-echo 'cfg=', opcache_get_configuration()['directives']['opcache.blacklist_filename'], "\n";
+$c = opcache_get_configuration();
+echo 'cfg=', $c['directives']['opcache.blacklist_filename'], "\n";
+echo 'blacklist=', implode('|', $c['blacklist']), "\n";
+echo 'blacklist_is_array=', is_array($c['blacklist']) ? '1' : '', "\n";
 // A reporting-only directive, to prove in the same run that the env mechanism is live.
 echo 'save_comments=', opcache_get_configuration()['directives']['opcache.save_comments'] ? '1' : '', "\n";
 "#,
@@ -424,4 +432,157 @@ fn the_runtime_env_override_is_ignored() {
     assert_eq!(line(&out, "scripts"), "allowed.php,blocked.php");
     // ... while a reporting-only directive in the same run DID move.
     assert_eq!(line(&out, "save_comments"), "");
+}
+
+/// The `blacklist` key lists the RESOLVED patterns, and lists them verbatim.
+///
+/// VERIFIED against reference PHP 8.5.10 on the same fixture: entries are reported exactly
+/// as written — a wildcard entry is NOT expanded — keyed `0..n-1`, and every file the
+/// directive's glob matched contributes its lines.
+#[test]
+fn the_configuration_lists_the_resolved_patterns() {
+    let dir = make_test_dir("opcache_blacklist_cfg");
+    write_fixtures(&dir);
+    fs::write(
+        dir.join("bl_a.list"),
+        format!("{}\n", dir.join("blocked.php").display()),
+    )
+    .unwrap();
+    // A wildcard entry and a comment, to pin that one is kept verbatim and the other dropped.
+    fs::write(
+        dir.join("bl_b.list"),
+        format!("; a comment\n{}/other*.php\n", dir.display()),
+    )
+    .unwrap();
+
+    let binary = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            &format!("opcache.blacklist_filename={}/bl_*.list", dir.display()),
+        ],
+    );
+    let out = run_binary(&binary);
+
+    assert_eq!(
+        line(&out, "blacklist"),
+        format!(
+            "{}|{}/other*.php",
+            dir.join("blocked.php").display(),
+            dir.display()
+        )
+    );
+}
+
+/// A binary with no blacklist reports an EMPTY list, not a missing key.
+#[test]
+fn without_a_blacklist_the_configuration_lists_nothing() {
+    let dir = make_test_dir("opcache_blacklist_cfg_none");
+    write_fixtures(&dir);
+
+    let binary = compile(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+    );
+    let out = run_binary(&binary);
+
+    assert_eq!(line(&out, "blacklist"), "");
+    assert_eq!(line(&out, "blacklist_is_array"), "1");
+}
+
+/// The eval interpreter and natively compiled code must answer identically.
+///
+/// They reach the same list by completely different routes — the interpreter reads the
+/// loaded patterns in-process, native code reads them back across the bridge one at a time
+/// with a count and an indexed accessor — so agreement here is the thing that stops the two
+/// surfaces drifting. VERIFIED that reference PHP answers the same on both.
+#[test]
+fn both_surfaces_report_the_same_blacklist() {
+    let dir = make_test_dir("opcache_blacklist_cfg_both");
+    fs::write(dir.join("blocked.php"), "<?php $blocked_ran = 1;\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+eval('
+require __DIR__ . "/blocked.php";
+$inner = opcache_get_configuration();
+echo "eval=", implode(",", $inner["blacklist"]), "\n";
+');
+$outer = opcache_get_configuration();
+echo 'native=', implode(',', $outer['blacklist']), "\n";
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("deny.list"),
+        format!(
+            "{}\n{}/other*.php\n",
+            dir.join("blocked.php").display(),
+            dir.display()
+        ),
+    )
+    .unwrap();
+
+    let binary = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            &format!(
+                "opcache.blacklist_filename={}",
+                dir.join("deny.list").display()
+            ),
+        ],
+    );
+    let out = run_binary(&binary);
+
+    let expected = format!(
+        "{},{}/other*.php",
+        dir.join("blocked.php").display(),
+        dir.display()
+    );
+    assert_eq!(line(&out, "eval"), expected);
+    assert_eq!(line(&out, "native"), expected);
+}
+
+/// A binary with NO dynamic tier reports an empty list, and that is the truthful answer.
+///
+/// Both bridge calls fold to their empty answers at lowering time when the eval bridge is
+/// not linked, so the loop never runs. Such a binary never loads a blacklist either, which
+/// is why reporting nothing is correct rather than merely convenient — and it is what keeps
+/// `opcache_get_configuration()` from dragging the interpreter into a program that has no
+/// `eval()`.
+#[test]
+fn a_binary_without_a_dynamic_tier_lists_nothing() {
+    let dir = make_test_dir("opcache_blacklist_cfg_static");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$c = opcache_get_configuration();
+echo 'blacklist=', implode('|', $c['blacklist']), "\n";
+echo 'blacklist_is_array=', is_array($c['blacklist']) ? '1' : '', "\n";
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("deny.list"),
+        format!("{}/anything.php\n", dir.display()),
+    )
+    .unwrap();
+
+    let binary = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            &format!(
+                "opcache.blacklist_filename={}",
+                dir.join("deny.list").display()
+            ),
+        ],
+    );
+    let out = run_binary(&binary);
+
+    assert_eq!(line(&out, "blacklist"), "");
+    assert_eq!(line(&out, "blacklist_is_array"), "1");
 }

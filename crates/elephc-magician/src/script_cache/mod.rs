@@ -41,6 +41,7 @@ pub(crate) mod store;
 
 pub(crate) use accel_log::{set_config as set_accel_log_config, AccelLogConfig};
 pub(crate) use blacklist::load as load_blacklist;
+pub(crate) use blacklist::patterns as blacklist_patterns;
 pub(crate) use config::{config, set_config, ScriptCacheConfig};
 #[allow(unused_imports)]
 pub use config::{

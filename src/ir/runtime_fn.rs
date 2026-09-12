@@ -402,6 +402,7 @@ pub enum RuntimeFnId {
     ElephcObjectPropCount,
     ElephcObjectPropName,
     ElephcObjectPropValue,
+    ElephcOpcacheRtBlacklistEntry,
     ElephcOpcacheRtScriptField,
     ElephcOpcacheRtScriptPath,
     ElephcOpcacheRtReset,
@@ -1179,6 +1180,10 @@ impl RuntimeFnId {
             ),
             // Same read, plus the owned PHP string copied out of the bridge's buffer.
             RuntimeFnId::ElephcOpcacheRtScriptPath => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
+            // Identical shape: reads the bridge's loaded blacklist, allocates the copy.
+            RuntimeFnId::ElephcOpcacheRtBlacklistEntry => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
             // Re-boxing a property slot allocates the Mixed cell it hands back.
@@ -2366,6 +2371,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropValue => "__elephc_object_prop_value",
             RuntimeFnId::ElephcOpcacheRtScriptField => "__elephc_opcache_rt_script_field",
             RuntimeFnId::ElephcOpcacheRtScriptPath => "__elephc_opcache_rt_script_path",
+            RuntimeFnId::ElephcOpcacheRtBlacklistEntry => "__elephc_opcache_rt_blacklist_entry",
             RuntimeFnId::ElephcOpcacheRtReset => "__elephc_opcache_rt_reset",
             RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
             RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",

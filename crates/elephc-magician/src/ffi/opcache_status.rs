@@ -44,6 +44,13 @@ thread_local! {
     /// process-global buffer would let another thread's call free what this caller is
     /// still reading.
     static SCRIPT_PATH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+
+    /// Holds the bytes of the most recently requested blacklist pattern.
+    ///
+    /// Its OWN buffer, not shared with `SCRIPT_PATH`: the prelude reads a script path and a
+    /// blacklist entry in the same `opcache_get_status()` / `opcache_get_configuration()`
+    /// pair, and one buffer would let the second read invalidate the first's borrow.
+    static BLACKLIST_ENTRY: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Returns one runtime script-cache figure, selected by `key`.
@@ -64,6 +71,7 @@ pub extern "C" fn __elephc_eval_opcache_rt_stat(key: i64) -> i64 {
         stats.last_restart_time,
         stats.restart_pending,
         stats.blacklist_misses,
+        crate::script_cache::blacklist_patterns().len(),
     )
 }
 
@@ -111,6 +119,35 @@ pub extern "C" fn __elephc_eval_opcache_rt_script_path(index: i64) -> BorrowedSt
         let mut buffer = buffer.borrow_mut();
         buffer.clear();
         buffer.extend_from_slice(path.as_bytes());
+        BorrowedStr {
+            ptr: buffer.as_ptr(),
+            len: buffer.len(),
+        }
+    })
+}
+
+/// Returns one loaded blacklist pattern as borrowed bytes.
+///
+/// Same contract as `__elephc_eval_opcache_rt_script_path`: the bytes live in this thread's
+/// buffer and stay valid only until the next call on this thread, and an out-of-range index
+/// answers a null pointer with length `0` for the caller to turn into the empty string.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_opcache_rt_blacklist_entry(index: i64) -> BorrowedStr {
+    let patterns = crate::script_cache::blacklist_patterns();
+    let pattern = usize::try_from(index)
+        .ok()
+        .and_then(|index| patterns.get(index))
+        .cloned();
+    let Some(pattern) = pattern else {
+        return BorrowedStr {
+            ptr: std::ptr::null(),
+            len: 0,
+        };
+    };
+    BLACKLIST_ENTRY.with(|buffer| {
+        let mut buffer = buffer.borrow_mut();
+        buffer.clear();
+        buffer.extend_from_slice(pattern.as_bytes());
         BorrowedStr {
             ptr: buffer.as_ptr(),
             len: buffer.len(),

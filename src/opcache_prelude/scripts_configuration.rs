@@ -106,7 +106,9 @@ pub(super) fn configuration_expr(
                 ),
             ]),
         ),
-        (e_str("blacklist"), e_array(vec![])),
+        // Filled by `build::blacklist_prologue`, which runs immediately before this array is
+        // returned. Reference PHP lists the resolved `opcache.blacklist_filename` patterns here.
+        (e_str("blacklist"), e_var("__elephc_blacklist")),
     ])
 }
 

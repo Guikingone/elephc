@@ -219,6 +219,16 @@ pub(crate) fn load(value: &str) {
     BLACKLIST.with(|cell| *cell.borrow_mut() = blacklist);
 }
 
+/// Returns the loaded patterns, in the order php-src would list them.
+///
+/// This is what `opcache_get_configuration()['blacklist']` reports. Reference PHP lists the
+/// RESOLVED entries — the lines of every file the directive's glob matched, unioned — not
+/// the directive's own value, so the order across files is the sorted file order and the
+/// order within a file is the file's.
+pub(crate) fn patterns() -> Vec<String> {
+    BLACKLIST.with(|cell| cell.borrow().patterns.clone())
+}
+
 /// Returns whether `path` must run without being cached.
 ///
 /// Cheap on the overwhelmingly common empty blacklist: one `is_empty` on a thread-local.

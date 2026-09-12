@@ -203,6 +203,44 @@ pub(crate) fn lower_opcache_rt_script_field(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `__elephc_opcache_rt_blacklist_entry(index)` to the bridge's pattern reader.
+///
+/// Byte-for-byte the same shape as `lower_opcache_rt_script_path` below, including the
+/// register dance before `__rt_str_persist`; only the bridge symbol differs.
+pub(crate) fn lower_opcache_rt_blacklist_entry(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_opcache_rt_blacklist_entry", 1)?;
+    ctx.emitter.blank();
+    ctx.emitter.comment("__elephc_opcache_rt_blacklist_entry()");
+    if !links_the_eval_bridge(ctx) {
+        emit_empty_string_result(ctx);
+        return store_if_result(ctx, inst);
+    }
+    resolve_int_operand_to_result(ctx, expect_operand(inst, 0)?, "opcache blacklist index")?;
+    super::super::call_operands::move_int_result_to_first_arg(ctx);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_rt_blacklist_entry");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // The pair lands in x0/x1; str_persist reads ptr from x1 and len from x2, so
+            // the length moves FIRST or the pointer write would destroy it.
+            ctx.emitter.instruction("mov x2, x1");                              // borrowed length → str_persist length register
+            ctx.emitter.instruction("mov x1, x0");                              // borrowed pointer → str_persist source register
+        }
+        Arch::X86_64 => {
+            // The pair lands in rax/rdx, and str_persist already reads the length from rdx.
+            ctx.emitter.instruction("mov rdi, rax");                            // borrowed pointer → str_persist source register
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");                      // copy the borrowed bytes into an owned PHP string
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `__elephc_opcache_rt_script_path(index)` to the bridge's path reader.
 ///
 /// The bridge returns a borrowed `(ptr, len)` pair in the first two result registers; a

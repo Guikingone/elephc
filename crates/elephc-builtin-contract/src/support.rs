@@ -386,14 +386,15 @@ mod tests {
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
         assert_eq!(eval_registry, 583 + curl_surface);
-        // 87 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
-        // image prelude declares for its own use. The five most recent helpers are the
+        // 88 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
+        // image prelude declares for its own use. The six most recent helpers are the
         // `__elephc_opcache_rt_*` family: three readers the injected `opcache_get_status()`
-        // body uses to report the runtime script cache, `__elephc_opcache_rt_swap`, which
-        // `ini_set()` uses to install a directive on it, and `__elephc_opcache_rt_reset`,
-        // which `opcache_reset()` uses to schedule its restart. None is callable from
-        // eval'd code.
-        assert_eq!(eval_internal, 104);
+        // body uses to report the runtime script cache, `__elephc_opcache_rt_blacklist_entry`,
+        // which `opcache_get_configuration()` uses to list the resolved blacklist patterns,
+        // `__elephc_opcache_rt_swap`, which `ini_set()` uses to install a directive on it,
+        // and `__elephc_opcache_rt_reset`, which `opcache_reset()` uses to schedule its
+        // restart. None is callable from eval'd code.
+        assert_eq!(eval_internal, 105);
         // 31 registry builtins awaiting eval homes, plus the 326 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 357);
@@ -402,10 +403,10 @@ mod tests {
         // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
         // internal `__elephc_curl_*` entry points, the ten `ext/xml` registry
         // builtins (`xml_parse_into_struct` plus the nine handler setters), and the
-        // five `__elephc_opcache_rt_*` runtime script-cache helpers (three readers, the
-        // `_swap` setter `ini_set()` uses, and the `_reset` scheduler `opcache_reset()`
-        // uses).
-        assert_eq!(aot_registry, 634);
+        // six `__elephc_opcache_rt_*` runtime script-cache helpers (three readers, the
+        // `_blacklist_entry` reader `opcache_get_configuration()` uses, the `_swap` setter
+        // `ini_set()` uses, and the `_reset` scheduler `opcache_reset()` uses).
+        assert_eq!(aot_registry, 635);
         // Ten constructs/dedicated-syntax/hash surfaces, the 397 prelude-provided and
         // name-resolver-rewritten contracts (54 of them the xml prelude), and the curl
         // prelude when published.
@@ -458,9 +459,9 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 562 + curl_surface);
-        // Includes the five `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
+        // Includes the six `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own.
-        assert_eq!(unsupported, 461);
+        assert_eq!(unsupported, 462);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {
