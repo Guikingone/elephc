@@ -373,6 +373,113 @@ fn preloading_the_entry_file_emits_statistics_silently() {
     }
 }
 
+/// Preloading inserts reference PHP's synthetic `$PRELOAD$` entry, and `num_cached_scripts`
+/// counts it.
+///
+/// VERIFIED on reference PHP 8.5.10, preloading a file that pulls in one dependency:
+///
+/// ```text
+/// scripts keys: preloader.php, $PRELOAD$, entry.php, lib.php
+/// $PRELOAD$  => full_path '$PRELOAD$', hits 0, memory_consumption 38488,
+///               last_used 'Thu Jan  1 01:00:00 1970', last_used_timestamp 0,
+///               timestamp 0, revalidate 0
+/// preload_statistics.memory_consumption = 38488      <- the SAME figure
+/// num_cached_scripts = 4                             <- three real scripts plus the marker
+/// ```
+///
+/// The key is NOT a path: a caller walking `scripts` meets it among real filenames, and
+/// `file_exists('$PRELOAD$')` is false. An earlier revision deliberately omitted it, on the
+/// grounds that an elephc binary allocates no shared-memory block for it to stand for. That
+/// argument did not survive what the surface already reports: `preload_statistics.memory_consumption`
+/// is already a synthetic figure over the same manifest, and `scripts` already reports the
+/// manifest as if it were a cache — the repo's own "the binary IS the cache" premise, under
+/// which the block the marker stands for is real here too.
+///
+/// Its POSITION is not asserted. Reference puts it second, which is hash insertion order rather
+/// than a contract, and elephc's `scripts` is manifest order — already a different order from
+/// reference's.
+#[test]
+fn preloading_inserts_the_synthetic_preload_entry() {
+    let dir = make_test_dir("opcache_preload_marker");
+    let lib = dir.join("lib.php");
+    fs::write(&lib, PRELOAD_LIB).unwrap();
+    let bin = compile_source(
+        &dir,
+        "app",
+        r#"<?php
+$s = opcache_get_status();
+$scripts = $s['scripts'];
+echo 'has_marker=', array_key_exists('$PRELOAD$', $scripts) ? '1' : '', "\n";
+$m = $scripts['$PRELOAD$'] ?? [];
+echo 'full_path=', $m['full_path'] ?? '', "\n";
+echo 'hits=', $m['hits'] ?? '', "\n";
+echo 'mem=', $m['memory_consumption'] ?? '', "\n";
+echo 'last_used_timestamp=', $m['last_used_timestamp'] ?? '', "\n";
+echo 'timestamp=', $m['timestamp'] ?? '', "\n";
+echo 'revalidate=', $m['revalidate'] ?? '', "\n";
+echo 'preload_mem=', $s['preload_statistics']['memory_consumption'], "\n";
+echo 'num_cached_scripts=', $s['opcache_statistics']['num_cached_scripts'], "\n";
+echo 'real_scripts=', count($scripts) - 1, "\n";
+"#,
+        &[
+            "opcache.enable_cli=1".to_string(),
+            format!("opcache.preload={}", lib.display()),
+        ],
+    );
+
+    let out = run_binary(&bin);
+    let line = |key: &str| -> String {
+        out.lines()
+            .find_map(|l| l.strip_prefix(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("missing `{key}=` in:\n{out}"))
+            .to_string()
+    };
+
+    assert_eq!(line("has_marker"), "1", "{out}");
+    assert_eq!(line("full_path"), "$PRELOAD$");
+    assert_eq!(line("hits"), "0");
+    // The marker's memory is the preload block's, to the byte.
+    assert_eq!(line("mem"), line("preload_mem"));
+    // Every clock is zero: it stands for a block, not a file there is anything to stat.
+    assert_eq!(line("last_used_timestamp"), "0");
+    assert_eq!(line("timestamp"), "0");
+    assert_eq!(line("revalidate"), "0");
+    // Counted, exactly once, on top of the real manifest entries.
+    let real: i64 = line("real_scripts").parse().unwrap();
+    assert_eq!(
+        line("num_cached_scripts"),
+        (real + 1).to_string(),
+        "the marker must be counted once:\n{out}"
+    );
+}
+
+/// WITHOUT preloading there is no marker, and the count is the manifest alone.
+///
+/// The companion to the test above: it is what fails if the entry is ever inserted
+/// unconditionally.
+#[test]
+fn without_preloading_there_is_no_synthetic_entry() {
+    let dir = make_test_dir("opcache_preload_no_marker");
+    let bin = compile_source(
+        &dir,
+        "app",
+        r#"<?php
+$s = opcache_get_status();
+echo 'has_marker=', array_key_exists('$PRELOAD$', $s['scripts']) ? '1' : '', "\n";
+echo 'num_cached_scripts=', $s['opcache_statistics']['num_cached_scripts'], "\n";
+echo 'count=', count($s['scripts']), "\n";
+echo 'preload=', array_key_exists('preload_statistics', $s) ? 'present' : 'absent', "\n";
+"#,
+        &["opcache.enable_cli=1".to_string()],
+    );
+
+    let out = run_binary(&bin);
+    assert!(out.contains("has_marker=\n"), "{out}");
+    assert!(out.contains("preload=absent\n"), "{out}");
+    assert!(out.contains("num_cached_scripts=1\n"), "{out}");
+    assert!(out.contains("count=1\n"), "{out}");
+}
+
 /// A preload file the entry script never mentions is COMPILED IN, silently, and its symbols
 /// become part of the binary — which is what preloading MEANS.
 ///

@@ -24,8 +24,13 @@ pub(super) const SCRIPTS_REVALIDATE_MIN_VERSION_ID: u32 = 80300;
 /// — so every entry reports the same instant, exactly as reference PHP does. `timestamp` goes
 /// through `__elephc_opcache_script_timestamp` rather than being the bare mtime so a
 /// FORCE-INVALIDATED entry reports `0`.
-pub(super) fn scripts_map_expr(manifest: &[ScriptEntry], revalidate_freq: i64, version_id: u32) -> Expr {
-    let entries = manifest
+pub(super) fn scripts_map_expr(
+    manifest: &[ScriptEntry],
+    revalidate_freq: i64,
+    version_id: u32,
+    preload_memory: Option<i64>,
+) -> Expr {
+    let mut entries = manifest
         .iter()
         .map(|entry| {
             let mut fields = vec![
@@ -66,8 +71,50 @@ pub(super) fn scripts_map_expr(manifest: &[ScriptEntry], revalidate_freq: i64, v
             }
             (e_str(&entry.path), e_array_assoc(fields))
         })
-        .collect();
+        .collect::<Vec<_>>();
+    if let Some(memory) = preload_memory {
+        entries.insert(0, preload_marker_entry(memory, version_id));
+    }
     build::php_assoc(entries)
+}
+
+/// The literal key reference PHP gives its synthetic preload entry. NOT a path: a caller
+/// walking `scripts` meets it among real filenames, and `file_exists('$PRELOAD$')` is false.
+const PRELOAD_MARKER: &str = "$PRELOAD$";
+
+/// Reference PHP's synthetic `$PRELOAD$` entry, for the block preloading holds resident.
+///
+/// VERIFIED on PHP 8.5.10: `full_path` is the literal `$PRELOAD$`, `hits` is `0`,
+/// `memory_consumption` equals `preload_statistics.memory_consumption` exactly, and all three
+/// CLOCKS ARE ZERO — `timestamp`, `last_used_timestamp` and `revalidate` are `0` and
+/// `last_used` is the epoch, because the entry stands for a block rather than a file there is
+/// anything to stat. `num_cached_scripts` counts it.
+///
+/// POSITION: reference puts it second, after the file named by `opcache.preload`. That is hash
+/// insertion order rather than a documented contract, and elephc's `scripts` is manifest order,
+/// which already differs from reference's compile order. It goes FIRST here — it precedes what
+/// it contains — and the position is not something either runtime guarantees.
+fn preload_marker_entry(memory_consumption: i64, version_id: u32) -> (Expr, Expr) {
+    let mut fields = vec![
+        (e_str("full_path"), e_str(PRELOAD_MARKER)),
+        (e_str("hits"), e_int(0)),
+        (
+            e_str("memory_consumption"),
+            build::php_int(memory_consumption),
+        ),
+        // The epoch, spelled the way `asctime` spells it, rather than the request clock every
+        // real entry carries.
+        (
+            e_str("last_used"),
+            e_call("__elephc_opcache_asctime", vec![e_int(0)]),
+        ),
+        (e_str("last_used_timestamp"), e_int(0)),
+        (e_str("timestamp"), e_int(0)),
+    ];
+    if version_id >= SCRIPTS_REVALIDATE_MIN_VERSION_ID {
+        fields.push((e_str("revalidate"), e_int(0)));
+    }
+    (e_str(PRELOAD_MARKER), e_array_assoc(fields))
 }
 
 /// The full `opcache_get_configuration()` return array for the given compile target.

@@ -141,7 +141,7 @@ order:
                                  'blacklist_miss_ratio' => 0.0,
                                  'opcache_hit_rate' => 0.0],
     // 'preload_statistics' here, when opcache.preload is set — see below
-    'scripts'                => [ /* keyed by canonical full_path */ ],
+    'scripts'                => [ /* keyed by canonical full_path, plus '$PRELOAD$' when preloading */ ],
     'jit'                    => [ /* see below */ ],
 ]
 ```
@@ -150,7 +150,8 @@ order:
 empty). `preload_statistics` is unaffected by that flag and still precedes
 `jit`, matching reference PHP.
 
-`num_cached_scripts` and `num_cached_keys` are the manifest size.
+`num_cached_scripts` and `num_cached_keys` are the manifest size, plus one for the
+synthetic `$PRELOAD$` entry when [preloading](#opcachepreload) is configured.
 `max_cached_keys` is the first prime `>=` `opcache.max_accelerated_files` from
 php-src's own table (`223, 463, 983, 1979, 3907, 7963, 16229, 32531, 65407,
 130987, 262237, 524521, 1048793`), so the default `10000` reports `16229` and
@@ -1072,6 +1073,44 @@ A value matching no file is not an error: it blacklists nothing and logs
   cache was built could not retroactively keep anything out of it — see
   [Overriding a directive](#overriding-a-directive).
 
+### `opcache.preload_user`
+
+Reported faithfully, and **inert**. This is the one preload directive elephc does
+not act on, and the reason is structural rather than unfinished work.
+
+Reference PHP runs the preload file in a **privileged startup pass**: the process
+compiles and executes it before serving anything, and because that pass may run as
+root, OPcache requires `opcache.preload_user` to drop to an unprivileged user
+first. Its absence under uid 0 is a startup fatal
+(`"opcache.preload" requires "opcache.preload_user" when running under uid 0`),
+and when the process is *not* root the directive is ignored outright — at
+`opcache.log_verbosity_level >= 2` it says so:
+`"opcache.preload_user" is ignored because the current user is not "root"`
+(both VERIFIED on PHP 8.5.10; the warning needs `opcache.preload` set too).
+
+An elephc binary has no such pass. `opcache.preload` is resolved at compile time
+and the file is *inlined* — its top-level code becomes part of the program and
+runs with exactly the privileges of whoever runs the binary. No privilege boundary
+is crossed, so there is nothing to drop from.
+
+That makes each half of the directive's behaviour un-transferable for a different
+reason:
+
+| Reference behaviour | Why elephc does not reproduce it |
+|---|---|
+| Fatal under uid 0 with no `preload_user` | Would refuse to start a binary that is doing nothing privileged |
+| Switch to `preload_user` when root | Means dropping privileges in a compiled binary — a security-behaviour change, not a reporting one |
+| Warn when not root | Reference's message names a reason (*"the current user is not root"*) that is not elephc's: elephc ignores the directive at **every** uid, so the message would be false when run as root |
+
+The two halves also cannot be split: implementing the fatal **without** the
+privilege switch would be worse than neither, because setting `preload_user` as
+root would then let the binary keep running *as root* while appearing to have
+honoured the guard.
+
+If you rely on this guard, the equivalent in an elephc deployment is not to run
+the binary as root in the first place — which is what the guard is trying to
+achieve anyway.
+
 ### `opcache.preload`
 
 Reference PHP resolves `opcache.preload` during startup, before a line of the
@@ -1263,7 +1302,7 @@ on macOS arm64.
 | `jit.enabled`, `jit.on`, `jit.buffer_size`, `jit.buffer_free` | Reflect the running JIT | Clamped to `false`/`false`/`0`/`0` | Reference emits this same shape when the JIT is configured but unavailable, which is an AOT binary's permanent state. `kind`/`opt_level`/`opt_flags` *are* the real directive-derived values |
 | `preload_statistics.functions` / `.classes` | The symbols the preload file added | The whole binary's user-declared symbols | An AOT binary cannot separate "preloaded" from "compiled in". A superset, never a fabrication — every name reported is genuinely declared, and the preload file's own symbols are among them |
 | A preloaded file's CONSTANTS | Not carried into the request | Available, like any compiled-in declaration | The startup request whose symbol table reference tears down does not exist in an AOT binary |
-| `scripts` under preloading | Carries a synthetic `$PRELOAD$` pseudo-entry and `num_cached_scripts` is bumped by one | No such entry | It stands for a shared-memory block an elephc binary never allocates |
+| `opcache.preload_user` | Switches the preload pass to that user, and its absence is a startup fatal under uid 0 | Reported faithfully, inert | There is no privileged preload pass to switch: the preload file's top-level code is part of the program and runs with the program's own privileges. See [below](#opcachepreload_user) |
 | `opcache_get_configuration()['blacklist']` | Lists the resolved patterns from `opcache.blacklist_filename` | Lists them, verbatim and in order | No divergence any more. A binary with no dynamic tier reports `[]`, which is truthful: it never loads a blacklist |
 | Directives that change engine behavior (`huge_code_pages`, `protect_memory`, …) | Change what the cache does | Reported faithfully, inert | There is no compile-time cache for them to act on. `validate_timestamps`, `revalidate_freq`, `max_file_size`, `memory_consumption`, `max_accelerated_files`, `file_update_protection` and `blacklist_filename` are NOT in this row: they govern the [runtime script cache](#the-runtime-script-cache) |
 | `opcache.file_cache` contents | Serialized php-src opcodes, keyed by a `system_id` | elephc's own parsed form, keyed by crate version plus format version | The two are different compilers; neither could read the other's file. The directive, the validation, the read-only mode and the `opcache_is_script_cached_in_file_cache()` answer all behave as reference does — only the bytes inside differ |

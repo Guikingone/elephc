@@ -49,7 +49,7 @@ pub(super) fn renders_manifest_paths_literal() {
     #[test]
 pub(super) fn renders_scripts_map_literal() {
         // revalidate_freq = 2 (the 8.5 directive default).
-        let map = rendered_expr(&scripts_map_expr(&sample_manifest(), 2, 80500));
+        let map = rendered_expr(&scripts_map_expr(&sample_manifest(), 2, 80500, None));
         // Keyed by full_path.
         assert!(map.contains("'/srv/app/index.php' => ["));
         assert!(map.contains("'full_path' => '/srv/app/index.php'"));
@@ -70,8 +70,27 @@ pub(super) fn renders_scripts_map_literal() {
         // The whole map parses as a PHP expression.
         let _ = parse(&format!("<?php $s = {map};"));
 
+        // No preload → no synthetic entry anywhere in the map.
+        assert!(!map.contains("$PRELOAD$"), "unexpected preload marker:\n{map}");
+
         // Empty manifest → empty map.
-        assert_eq!(rendered_expr(&scripts_map_expr(&[], 2, 80500)), "[]");
+        assert_eq!(rendered_expr(&scripts_map_expr(&[], 2, 80500, None)), "[]");
+
+        // Preloading inserts reference PHP's synthetic entry, carrying the preload block's
+        // memory and ZERO clocks — it stands for a block, not a file there is anything to stat.
+        let preloaded = rendered_expr(&scripts_map_expr(&sample_manifest(), 2, 80500, Some(999)));
+        assert!(preloaded.contains("'$PRELOAD$' => ["), "{preloaded}");
+        assert!(preloaded.contains("'full_path' => '$PRELOAD$'"), "{preloaded}");
+        assert!(preloaded.contains("'memory_consumption' => 999"), "{preloaded}");
+        assert!(preloaded.contains("'last_used' => __elephc_opcache_asctime(0)"), "{preloaded}");
+        assert!(preloaded.contains("'last_used_timestamp' => 0"), "{preloaded}");
+        assert!(preloaded.contains("'revalidate' => 0"), "{preloaded}");
+        let _ = parse(&format!("<?php $s = {preloaded};"));
+
+        // A pre-8.3 target has no `revalidate` key, marker included.
+        let older = rendered_expr(&scripts_map_expr(&sample_manifest(), 2, 80200, Some(999)));
+        assert!(older.contains("'$PRELOAD$' => ["), "{older}");
+        assert!(!older.contains("'revalidate'"), "{older}");
     }
 
     /// `opcache_get_status` bakes the manifest count into `num_cached_scripts` /

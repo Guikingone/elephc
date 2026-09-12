@@ -848,12 +848,16 @@ fn parse_ini_int(name: &str, raw: &str) -> Option<i64> {
 /// modelled because reference PHP prints them through `zend_error(E_WARNING, …)`, i.e.
 /// unconditionally, and because they are the only refusals a user cannot otherwise attribute (the
 /// off-by-one in three of their message bounds means the reverted value is genuinely surprising —
-/// see [`directive_int_range`]). NOT modelled: the `zend_accel_error(ACCEL_LOG_WARNING, …)` lines
-/// for `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` / the
+/// see [`directive_int_range`]). NOT modelled HERE: the `zend_accel_error(ACCEL_LOG_WARNING, …)`
+/// lines for `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` / the
 /// `opcache.memory_consumption` floor, which reference PHP itself suppresses at the default
-/// `opcache.log_verbosity_level` of 1 (they appear only at `>= 2`, on a timestamped channel elephc
-/// has no counterpart for) — those refusals stay silent here too, exactly as reference PHP's
-/// default configuration renders them. `opcache.max_wasted_percentage` and an invalid
+/// `opcache.log_verbosity_level` of 1 — they appear only at `>= 2`. They stay silent here too,
+/// exactly as reference PHP's default configuration renders them, and this compile-time channel
+/// would be the WRONG place for them regardless: it is unconditional, so emitting them would
+/// produce noise reference does not. elephc does now have the timestamped accelerator channel
+/// they belong on (`crate::opcache_prelude`'s `zend_accel_error` emulation, which
+/// `opcache.blacklist_filename` already uses for its no-match warning), so moving them there is
+/// possible — it is just not this function's job. `opcache.max_wasted_percentage` and an invalid
 /// `opcache.jit` spelling are likewise silent in reference PHP. The runtime
 /// `ELEPHC_INI_*` path emits nothing — it is an elephc extension with no reference counterpart
 /// (see [`directive_runtime_overridable`]), and a compiled binary has no startup phase to warn in.
