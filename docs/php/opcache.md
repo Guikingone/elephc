@@ -408,11 +408,16 @@ compile, not the store, so it is `true` either way.
 opcache_is_script_cached_in_file_cache(string $filename): bool
 ```
 
-Always `false`, and that is exact. php-src returns early on
+Always `false`, and that is exact for the default build. php-src returns early on
 `!ZCG(accel_directives).file_cache`, and `opcache.file_cache` is the one
 directive registered with a C `NULL` default — so an unconfigured reference PHP
 returns `false` for every path too. elephc has no on-disk opcode cache to point
 the directive at. Guarded by `opcache.restrict_api`.
+
+Setting the directive does **not** change this answer, but it is no longer
+ignored: a configured `opcache.file_cache` is validated at startup exactly as
+reference PHP validates it, and a bad one refuses to run. See
+[`opcache.file_cache`](#opcachefile_cache).
 
 ### `opcache_jit_blacklist()`
 
@@ -730,8 +735,10 @@ registration order). With `$details = true` each entry is
 `''` — the only one of the 54 that does, in both the `$details = true` and
 `$details = false` surfaces. php-src registers it with a C `NULL` default while
 every other opcache string directive defaults to `""`. The `null` means "never
-set": assigning it (`--ini opcache.file_cache=/x`, or `ELEPHC_INI_*` at run
-time) reports the string, and assigning the *empty* string reports `''`.
+set": assigning it (`--ini opcache.file_cache=/x`) reports the string, and
+assigning the *empty* string reports `''`. It is a compile-time assignment only —
+the directive now bakes a [startup validation](#opcachefile_cache), so
+`ELEPHC_INI_*` does not re-point it.
 `ini_get('opcache.file_cache')` reports `''` in all three cases — the `null` is
 visible through `ini_get_all()` alone.
 
@@ -783,9 +790,9 @@ Two mechanisms, both documented in full on the
   override (only `PHPRC` / `PHP_INI_SCAN_DIR`, which are file-granularity).
 
 The runtime override is deliberately narrower than `--ini`. It is honored only
-for directives elephc merely *reports*. Ten directives are consumed at compile
-time to bake code or baked constants, and honoring them on the reporting surface
-alone would produce a binary that contradicts itself —
+for directives elephc merely *reports*. **Sixteen** directives are consumed at
+compile time to bake code or baked constants, and honoring them on the reporting
+surface alone would produce a binary that contradicts itself —
 `ini_get('opcache.enable_cli') === '1'` next to an `opcache_get_status()` that
 still returns `false`. Their environment variables are ignored:
 
@@ -793,12 +800,15 @@ still returns `false`. Their environment variables are ignored:
 |---|---|
 | `opcache.enable`, `opcache.enable_cli` | the baked enabled gate in every OPcache function |
 | `opcache.memory_consumption`, `opcache.interned_strings_buffer`, `opcache.max_accelerated_files` | the `opcache_get_status()` memory arithmetic, the `interned_strings_usage` key's presence, and the `max_cached_keys` prime rounding |
-| `opcache.revalidate_freq` | the `scripts` map's `revalidate` field |
+| `opcache.revalidate_freq` | the `scripts` map's `revalidate` field, and the [runtime script cache](#the-runtime-script-cache)'s revalidation interval |
+| `opcache.validate_timestamps`, `opcache.max_file_size` | the [runtime script cache](#the-runtime-script-cache)'s freshness and admission rules |
 | `opcache.jit`, `opcache.jit_buffer_size` | the `opcache_get_status()['jit']` triple |
 | `opcache.restrict_api` | selects the restricted function bodies |
 | `opcache.preload` | compiles the preload file into the binary; can fail the compile; bakes `preload_statistics` |
+| `opcache.file_cache`, `opcache.file_cache_read_only` | the [startup validation](#opcachefile_cache) that can refuse to run |
+| `opcache.log_verbosity_level`, `opcache.error_log` | the `zend_accel_error` channel that reports it |
 
-The other 44 directives of the 8.5 set are runtime-overridable. Pinned by
+The other 38 directives of the 8.5 set are runtime-overridable. Pinned by
 `tests/opcache_env_override_tests.rs`.
 
 ### Range-validated directives
@@ -837,6 +847,75 @@ with C `atoi` rather than the quantity parser (the other is
 `opcache.memory_consumption`), so a `K`/`M`/`G` suffix or an `0x` prefix is
 ignored: `--ini opcache.max_accelerated_files=8K` reads `8`, falls below the 200
 floor, and leaves the default `10000`. It carries no quantity diagnostic either.
+
+### `opcache.file_cache`
+
+elephc has no on-disk opcode cache, so the directive stores nothing and
+[`opcache_is_script_cached_in_file_cache()`](#opcache_is_script_cached_in_file_cache)
+stays `false`. But reference PHP does something before any of that: it
+**validates the directory at startup and refuses to run** if it is unusable.
+That refusal is observable, so elephc reproduces it.
+
+The check runs only when the cache is **enabled**. That is reference behavior,
+not an elephc shortcut — verified on PHP 8.5.10, `opcache.enable=0` and the CLI
+default `opcache.enable_cli=0` both run the script without looking at the
+directory at all, however broken it is. A default CLI binary is therefore
+completely unaffected.
+
+| `opcache.file_cache` | `file_cache_read_only` | Result |
+|---|---|---|
+| empty (default) | `0` | nothing happens — php-src's `NULL` default |
+| empty | `1` | **fatal**: `opcache.file_cache_read_only is set without a proper setting of opcache.file_cache` |
+| absolute dir, `R_OK`+`W_OK` | `0` | accepted |
+| absolute dir, `R_OK` only | `1` | accepted — read-only needs no write access |
+| absolute dir, `R_OK` only | `0` | **fatal**: `opcache.file_cache must be a full path of an accessible directory` |
+| relative path, missing path, or a file | either | same **fatal** |
+
+Both fatals go through php-src's `zend_accel_error` channel rather than PHP's
+error reporting, so the line carries its timestamp and pid and the process exits
+with status **254** (php-src's `exit(-2)`):
+
+```console
+$ elephc --ini opcache.enable_cli=1 --ini opcache.file_cache=/no/such/dir app.php
+$ ./app
+Sat Sep 12 18:19:28 2026 (26639): Fatal Error opcache.file_cache must be a full path of an accessible directory
+$ echo $?
+254
+```
+
+`opcache.log_verbosity_level` gates that channel, but **not** these two lines: the
+gate is `level <= verbosity` and a fatal is level `0`, so it prints even at `0`.
+`opcache.error_log` redirects it to a file, falling back to stderr if the file
+cannot be opened — both exactly as php-src does. `opcache.file_cache_read_only`
+exists only on an 8.5 target; older profiles never reach its branch.
+
+The check happens where the runtime cache is configured, which is the first time
+the program reaches the eval bridge **at run time** — not before the program's
+first statement, as reference PHP's startup does. Two consequences, both in
+[Limitations](#limitations).
+
+First, a binary that never reaches the bridge never validates. That is a wider
+set than "contains no `eval()`": an `eval()` whose argument folds to a constant
+is resolved at compile time and emits no bridge call at all, so
+
+```php
+eval('$x = 1;');                          // const-folded — never validates
+eval('include __DIR__ . "/lib.php";');    // reaches the bridge — validates
+```
+
+Second, output written before that point is already flushed when the fatal
+lands:
+
+```console
+$ ./app                # --ini opcache.file_cache=/no/such/dir
+BEFORE
+Sat Sep 12 18:35:29 2026 (93850): Fatal Error opcache.file_cache must be a full path of an accessible directory
+$ echo $?
+254
+```
+
+Reference PHP prints no `BEFORE`, because its check runs before the script does.
+The message and the exit status are identical; only the position differs.
 
 ### `opcache.preload`
 
@@ -1029,13 +1108,16 @@ on macOS arm64.
 | A preloaded file's CONSTANTS | Not carried into the request | Available, like any compiled-in declaration | The startup request whose symbol table reference tears down does not exist in an AOT binary |
 | `scripts` under preloading | Carries a synthetic `$PRELOAD$` pseudo-entry and `num_cached_scripts` is bumped by one | No such entry | It stands for a shared-memory block an elephc binary never allocates |
 | `opcache_get_configuration()['blacklist']` | Lists the resolved patterns from `opcache.blacklist_filename` | Always `[]` | The directive is reported but not applied |
-| Directives that change engine behavior (`file_cache*`, `huge_code_pages`, `protect_memory`, `blacklist_filename`, …) | Change what the cache does | Reported faithfully, inert | There is no compile-time cache for them to act on. `validate_timestamps`, `revalidate_freq`, `max_file_size`, `memory_consumption` and `max_accelerated_files` are NOT in this row: they govern the [runtime script cache](#the-runtime-script-cache) |
+| Directives that change engine behavior (`huge_code_pages`, `protect_memory`, `blacklist_filename`, …) | Change what the cache does | Reported faithfully, inert | There is no compile-time cache for them to act on. `validate_timestamps`, `revalidate_freq`, `max_file_size`, `memory_consumption` and `max_accelerated_files` are NOT in this row: they govern the [runtime script cache](#the-runtime-script-cache) |
+| `opcache.file_cache` as a CACHE | Persists compiled scripts to disk and serves them back | Stores nothing; `opcache_is_script_cached_in_file_cache()` stays `false` | What php-src's file cache stores is compiled opcodes keyed by a `system_id`. elephc has no serialized form of its eval IR, and a cache holding something else while reporting `true` would be the first place this model claims a cache state PHP does not mean. The directive's *startup validation* IS reproduced — see [`opcache.file_cache`](#opcachefile_cache) |
+| `opcache.file_cache` validation in a binary that never reaches the eval bridge | Validated at every startup | Never validated | The check runs where the runtime cache is configured. A binary with no dynamic tier has no cache to configure, and paying for the check in every binary would break the pay-for-use rule the rest of this tier follows. The set is wider than "no `eval()`": a const-folded `eval('$x = 1;')` is resolved at compile time and emits no bridge call |
+| When the `opcache.file_cache` fatal is raised | Before the first statement runs, so nothing is output | At the first `eval()`, so output written before that point is already flushed | Same cause as the row above. The fatal, its message and its exit status 254 are identical; only its position relative to the program's own output can differ |
 | `version.version` | The running patch release (`8.5.6`) | The targeted language version (`8.5.0`) | elephc targets a PHP minor, not a patch. Understating is the safe direction — a caller gating on `>= 8.5.6` applies a redundant workaround rather than skipping a fix elephc may not have. See [System and I/O](system-and-io.md) for the full rationale and its cost |
 | Diagnostics | `Warning: … in <file> on line <n>` | Same text, no ` in <file> on line <n>` suffix | elephc does not synthesize the call-site suffix |
-| `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` out of range | Refuses the store and logs through `zend_accel_error`, which is silent below `opcache.log_verbosity_level = 2` | Refuses the store, silently | The refusal is exact; the verbosity-gated timestamped log channel has no elephc counterpart, so the diagnostic is not reproduced — matching what reference PHP prints at its default verbosity |
+| `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` out of range | Refuses the store and logs through `zend_accel_error`, which is silent below `opcache.log_verbosity_level = 2` | Refuses the store, silently | The refusal is exact, and it happens at COMPILE time, where there is no running process to log from. The `zend_accel_error` channel itself now exists — it is what carries the [`opcache.file_cache`](#opcachefile_cache) fatals — but only at run time. At reference PHP's default verbosity these two lines are not printed either |
 | `ini_get_all()` unfiltered | Every directive of every loaded module (403 on the reference build) | Only the blocks elephc owns — 54 on CLI, 87 under `--web` | The filter *rule* is reproduced; the population is elephc's |
 | `ini_get_all('pdo')` in a `--with-pdo` build | `[]` (known module) | `false` + `E_WARNING` | The known-module list is rendered before codegen decides the link set |
-| Per-directive environment override | Does not exist (`PHP_INI_opcache_jit`, `opcache_jit`, `opcache.jit` in the environment all do nothing) | `ELEPHC_INI_*` re-points 44 of the 54 directives at run time | An elephc extension, not parity: an AOT binary has no `php.ini` to edit |
+| Per-directive environment override | Does not exist (`PHP_INI_opcache_jit`, `opcache_jit`, `opcache.jit` in the environment all do nothing) | `ELEPHC_INI_*` re-points 38 of the 54 directives at run time | An elephc extension, not parity: an AOT binary has no `php.ini` to edit |
 | `extension_loaded()` under `eval()` | n/a | Reports only the core set, so `extension_loaded('PDO')` is `false` under `eval()` even in a `--with-pdo` build | The eval interpreter runs at compile time with no link step |
 | OPcache file functions under `eval()` | n/a | `opcache_is_script_cached()` / `opcache_invalidate()` / `opcache_compile_file()` / `opcache_is_script_cached_in_file_cache()` always return `false` (and `opcache_jit_blacklist()` `null`), with no notice | The eval interpreter has no AOT binary and therefore no manifest |
 | `get_loaded_extensions()` argument | Accepts any expression | Must be a `bool`/`int` (literal or dynamic) | Both candidate lists are compile-time constants, so a dynamic flag selects between them at run time; a non-bool/int argument has no runtime truthiness conversion |
