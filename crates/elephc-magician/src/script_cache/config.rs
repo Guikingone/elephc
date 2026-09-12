@@ -37,6 +37,9 @@ pub(crate) struct ScriptCacheConfig {
     pub(crate) memory_consumption: usize,
     /// `opcache.max_accelerated_files` — the cache's entry-count ceiling.
     pub(crate) max_accelerated_files: usize,
+    /// `opcache.file_update_protection` — refuse to cache a file this many seconds
+    /// young, so a file caught mid-write is never stored. `0` disables the guard.
+    pub(crate) file_update_protection: u64,
 }
 
 impl ScriptCacheConfig {
@@ -53,7 +56,27 @@ impl ScriptCacheConfig {
             max_file_size: 0,
             memory_consumption: 128 * 1024 * 1024,
             max_accelerated_files: 10_000,
+            file_update_protection: 2,
         }
+    }
+
+    /// Returns whether a file last modified at `mtime` may be admitted now.
+    ///
+    /// php-src refuses to cache a file younger than `opcache.file_update_protection`
+    /// seconds, so a file caught part-written is never stored. The comparison is a
+    /// STRICT `<` against the age: VERIFIED on reference PHP 8.5.10 that with the
+    /// default `2`, ages 0 and 1 are refused and age 2 is admitted.
+    ///
+    /// `0` disables the guard (every age is `>= 0`), and an UNKNOWN mtime is admitted —
+    /// php-src compares against a zero timestamp there, which can never be in the
+    /// protected window either.
+    pub(crate) fn admits_age(&self, mtime: Option<i64>, now: i64) -> bool {
+        let Some(mtime) = mtime else {
+            return true;
+        };
+        // A file dated in the FUTURE has a negative age and is refused while the clock
+        // catches up, which is what php-src's comparison does with the same inputs.
+        now.saturating_sub(mtime) >= self.file_update_protection as i64
     }
 
     /// Returns whether a file of `size` bytes may be admitted under `max_file_size`.
@@ -79,6 +102,54 @@ pub(crate) fn set_config(config: ScriptCacheConfig) {
 /// Returns a copy of the configuration active on the current thread.
 pub(crate) fn config() -> ScriptCacheConfig {
     SCRIPT_CACHE_CONFIG.with(|cell| cell.borrow().clone())
+}
+
+/// `opcache.revalidate_freq`, as [`swap_directive`] addresses it.
+pub const DIRECTIVE_REVALIDATE_FREQ: u64 = 0;
+/// `opcache.validate_timestamps`, as [`swap_directive`] addresses it.
+pub const DIRECTIVE_VALIDATE_TIMESTAMPS: u64 = 1;
+/// `opcache.file_update_protection`, as [`swap_directive`] addresses it.
+pub const DIRECTIVE_FILE_UPDATE_PROTECTION: u64 = 2;
+
+/// The value [`swap_directive`] answers for an id it does not know.
+pub const DIRECTIVE_UNKNOWN: u64 = u64::MAX;
+
+/// Installs one directive's value on the live configuration, returning the previous one.
+///
+/// This is the mutable half of the channel, and it exists because the three directives
+/// it addresses are `PHP_INI_ALL` in php-src: `ini_set()` genuinely moves them there, and
+/// the runtime cache reads all three on every lookup, so a change takes effect on the
+/// very next include rather than needing a restart.
+///
+/// THE IDS ARE A WIRE CONTRACT shared with generated code, not an internal detail — they
+/// are matched by number on the other side of the C ABI, so their values may never be
+/// reordered, only appended to.
+///
+/// Answers [`DIRECTIVE_UNKNOWN`] for an id this build does not know, which is what lets
+/// generated code from a newer compiler fail soft against an older archive instead of
+/// silently writing the wrong field.
+pub fn swap_directive(id: u64, value: u64) -> u64 {
+    SCRIPT_CACHE_CONFIG.with(|cell| {
+        let mut config = cell.borrow_mut();
+        match id {
+            DIRECTIVE_REVALIDATE_FREQ => {
+                let previous = config.revalidate_freq;
+                config.revalidate_freq = value;
+                previous
+            }
+            DIRECTIVE_VALIDATE_TIMESTAMPS => {
+                let previous = u64::from(config.validate_timestamps);
+                config.validate_timestamps = value != 0;
+                previous
+            }
+            DIRECTIVE_FILE_UPDATE_PROTECTION => {
+                let previous = config.file_update_protection;
+                config.file_update_protection = value;
+                previous
+            }
+            _ => DIRECTIVE_UNKNOWN,
+        }
+    })
 }
 
 #[cfg(test)]
@@ -121,6 +192,76 @@ mod tests {
         assert!(config.admits_size(1023));
         assert!(config.admits_size(1024));
         assert!(!config.admits_size(1025));
+    }
+
+    /// Verifies the `file_update_protection` boundary, which is a STRICT `<` on the age.
+    ///
+    /// VERIFIED on reference PHP 8.5.10 with the default `2`: a file aged 0s and 1s is
+    /// refused, and one aged exactly 2s is admitted. Getting this off by one would either
+    /// cache a file php-src protects or refuse one it caches.
+    #[test]
+    fn file_update_protection_refuses_only_younger_files() {
+        let config = ScriptCacheConfig {
+            file_update_protection: 2,
+            ..ScriptCacheConfig::disabled()
+        };
+        let now = 1_000_000;
+
+        assert!(!config.admits_age(Some(now), now), "age 0 must be refused");
+        assert!(!config.admits_age(Some(now - 1), now), "age 1 must be refused");
+        assert!(config.admits_age(Some(now - 2), now), "age 2 must be admitted");
+        assert!(config.admits_age(Some(now - 60), now));
+    }
+
+    /// Verifies `0` disables the guard, matching php-src treating it as "no protection".
+    #[test]
+    fn zero_file_update_protection_admits_every_age() {
+        let config = ScriptCacheConfig::disabled();
+        let now = 1_000_000;
+
+        assert_eq!(config.file_update_protection, 2, "the DEFAULT is php-src's 2");
+        let off = ScriptCacheConfig {
+            file_update_protection: 0,
+            ..ScriptCacheConfig::disabled()
+        };
+        assert!(off.admits_age(Some(now), now));
+    }
+
+    /// Verifies an unknown mtime is admitted rather than refused.
+    ///
+    /// php-src compares against a zero timestamp, which can never fall inside the
+    /// protected window, so "no timestamp" admits there too.
+    #[test]
+    fn an_unknown_mtime_is_admitted() {
+        assert!(ScriptCacheConfig::disabled().admits_age(None, 1_000_000));
+    }
+
+    /// Verifies the directive setter round-trips each id and answers the previous value.
+    ///
+    /// The returned previous value is what `ini_set()` reports, so it is part of the
+    /// contract rather than a convenience.
+    #[test]
+    fn swap_directive_returns_the_previous_value() {
+        set_config(ScriptCacheConfig::disabled());
+
+        assert_eq!(swap_directive(DIRECTIVE_REVALIDATE_FREQ, 30), 2);
+        assert_eq!(config().revalidate_freq, 30);
+        assert_eq!(swap_directive(DIRECTIVE_VALIDATE_TIMESTAMPS, 0), 1);
+        assert!(!config().validate_timestamps);
+        assert_eq!(swap_directive(DIRECTIVE_FILE_UPDATE_PROTECTION, 9), 2);
+        assert_eq!(config().file_update_protection, 9);
+
+        set_config(ScriptCacheConfig::disabled());
+    }
+
+    /// Verifies an unknown id writes nothing and reports it, so a newer compiler's
+    /// generated call fails soft against an older archive.
+    #[test]
+    fn an_unknown_directive_id_writes_nothing() {
+        set_config(ScriptCacheConfig::disabled());
+
+        assert_eq!(swap_directive(9_999, 1), DIRECTIVE_UNKNOWN);
+        assert_eq!(config(), ScriptCacheConfig::disabled());
     }
 
     /// Verifies the thread-local setter round-trips and stays isolated per thread.

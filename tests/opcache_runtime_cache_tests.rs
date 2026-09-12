@@ -318,3 +318,67 @@ echo "inside_keys=", implode(",", array_keys($inside)), "\n";
     assert_eq!(field(&output, "native_type"), "array");
     assert_eq!(field(&output, "native_num"), "2");
 }
+
+/// The probe: include the same freshly written file twice from `eval()`, then report
+/// whether the cache kept it. A stored entry makes the second include a HIT.
+const FRESH_FILE_PROBE: &str = r#"<?php
+eval('include __DIR__ . "/lib.php"; include __DIR__ . "/lib.php";');
+$s = opcache_get_status();
+echo 'hits=', $s['opcache_statistics']['hits'], "\n";
+echo 'misses=', $s['opcache_statistics']['misses'], "\n";
+"#;
+
+/// Verifies `opcache.file_update_protection` refuses to CACHE a just-written file, while
+/// still running it.
+///
+/// `lib.php` is (re)written AFTER the compile and immediately before the run, so its age at
+/// run time is ~0s — inside the default 2s window. Writing it before compiling would not
+/// work: compilation takes seconds, and the file would age out of the window before the
+/// binary ever looked at it.
+///
+/// Both includes must therefore MISS, and the file must still run: refusing to cache is not
+/// refusing to execute.
+#[test]
+fn a_freshly_written_file_is_run_but_not_cached() {
+    let dir = make_test_dir("opcache_fup_fresh");
+    write_dynamic_fixture(&dir, FRESH_FILE_PROBE);
+    let binary = compile(&dir, &["opcache.enable_cli=1"]);
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
+
+    let output = run_binary(&binary);
+
+    // `hits`/`misses` are the only usable signal here: `opcache_is_script_cached()` called
+    // natively answers from the frozen manifest, so it reports `false` for a dynamically
+    // included file whether or not the runtime cache stored it.
+    assert_eq!(
+        field(&output, "hits"),
+        "0",
+        "a protected file must never hit; probe said:\n{output}"
+    );
+    assert_eq!(field(&output, "misses"), "2", "both includes miss");
+}
+
+/// Verifies `opcache.file_update_protection=0` disables the guard, so the identically fresh
+/// fixture caches immediately and the second include hits.
+///
+/// This is the differential that proves the refusal above comes from the directive rather
+/// than from the file being uncacheable for some other reason.
+#[test]
+fn zero_file_update_protection_caches_a_fresh_file() {
+    let dir = make_test_dir("opcache_fup_off");
+    write_dynamic_fixture(&dir, FRESH_FILE_PROBE);
+    let binary = compile(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+    );
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
+
+    let output = run_binary(&binary);
+
+    assert_eq!(
+        field(&output, "hits"),
+        "1",
+        "the second include must hit; probe said:\n{output}"
+    );
+    assert_eq!(field(&output, "misses"), "1", "only the first include misses");
+}

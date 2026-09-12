@@ -1252,6 +1252,9 @@ pub fn directive_runtime_overridable(name: &str) -> bool {
             // leaving a binary that could report a `max_file_size` its cache did not apply.
             | "opcache.validate_timestamps"
             | "opcache.max_file_size"
+            // Refuses to cache a file younger than its value, so it governs what the
+            // runtime script cache admits rather than only what the binary reports.
+            | "opcache.file_update_protection"
     )
 }
 
@@ -2574,7 +2577,7 @@ mod tests {
     fn runtime_override_scope_covers_every_directive() {
         /// The directives whose value is consumed at COMPILE TIME to bake code or constants.
         // Present in every 8.2–8.5 table.
-        const EXCLUDED: [&str; 15] = [
+        const EXCLUDED: [&str; 16] = [
             "opcache.enable",
             "opcache.enable_cli",
             "opcache.memory_consumption",
@@ -2590,6 +2593,7 @@ mod tests {
             "opcache.error_log",
             "opcache.validate_timestamps",
             "opcache.max_file_size",
+            "opcache.file_update_protection",
         ];
         // Excluded for the same reason, but REGISTERED ONLY BY 8.5 — so it cannot be
         // asserted present in the older tables the way the rest can.
@@ -2624,11 +2628,11 @@ mod tests {
                 .filter(|(name, _)| directive_runtime_overridable(name))
                 .count();
             assert_eq!(overridable, directives.len() - excluded_here);
-            // Every version lands on the same 38: 8.5 excludes 16 of 54, the older tables
-            // exclude 15 of 53.
-            assert_eq!(overridable, 38, "for {version}");
+            // Every version lands on the same 37: 8.5 excludes 17 of 54, the older tables
+            // exclude 16 of 53.
+            assert_eq!(overridable, 37, "for {version}");
         }
-        // 8.5 registers 54 directives, so 38 are runtime-overridable.
+        // 8.5 registers 54 directives, so 37 are runtime-overridable.
         assert_eq!(opcache_directives(80500).len(), 54);
     }
 

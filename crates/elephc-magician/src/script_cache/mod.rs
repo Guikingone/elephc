@@ -31,6 +31,11 @@ pub(crate) mod store;
 
 pub(crate) use accel_log::{set_config as set_accel_log_config, AccelLogConfig};
 pub(crate) use config::{config, set_config, ScriptCacheConfig};
+#[allow(unused_imports)]
+pub use config::{
+    swap_directive, DIRECTIVE_FILE_UPDATE_PROTECTION, DIRECTIVE_REVALIDATE_FREQ,
+    DIRECTIVE_UNKNOWN, DIRECTIVE_VALIDATE_TIMESTAMPS,
+};
 pub(crate) use file_cache::{validate_file_cache_directives, FileCacheConfig};
 pub(crate) use segments::ScriptSegment;
 pub(crate) use store::load_script;

@@ -666,6 +666,7 @@ never referenced. Such a binary reports exactly its manifest, with zero counters
 | `opcache.max_file_size` | Refuses to *cache* a larger file; the file still runs. `0` means no limit |
 | `opcache.memory_consumption` | A real byte budget for the cached segments |
 | `opcache.max_accelerated_files` | A real entry-count ceiling |
+| `opcache.file_update_protection` | Refuses to *cache* a file younger than its value; the file still runs. `0` disables it |
 
 The cache **never evicts**. Like php-src, it refuses new entries once the budget
 or the entry ceiling is reached and latches `cache_full`; a refused file is still
@@ -790,7 +791,7 @@ Two mechanisms, both documented in full on the
   override (only `PHPRC` / `PHP_INI_SCAN_DIR`, which are file-granularity).
 
 The runtime override is deliberately narrower than `--ini`. It is honored only
-for directives elephc merely *reports*. **Sixteen** directives are consumed at
+for directives elephc merely *reports*. **Seventeen** directives are consumed at
 compile time to bake code or baked constants, and honoring them on the reporting
 surface alone would produce a binary that contradicts itself —
 `ini_get('opcache.enable_cli') === '1'` next to an `opcache_get_status()` that
@@ -801,14 +802,14 @@ still returns `false`. Their environment variables are ignored:
 | `opcache.enable`, `opcache.enable_cli` | the baked enabled gate in every OPcache function |
 | `opcache.memory_consumption`, `opcache.interned_strings_buffer`, `opcache.max_accelerated_files` | the `opcache_get_status()` memory arithmetic, the `interned_strings_usage` key's presence, and the `max_cached_keys` prime rounding |
 | `opcache.revalidate_freq` | the `scripts` map's `revalidate` field, and the [runtime script cache](#the-runtime-script-cache)'s revalidation interval |
-| `opcache.validate_timestamps`, `opcache.max_file_size` | the [runtime script cache](#the-runtime-script-cache)'s freshness and admission rules |
+| `opcache.validate_timestamps`, `opcache.max_file_size`, `opcache.file_update_protection` | the [runtime script cache](#the-runtime-script-cache)'s freshness and admission rules |
 | `opcache.jit`, `opcache.jit_buffer_size` | the `opcache_get_status()['jit']` triple |
 | `opcache.restrict_api` | selects the restricted function bodies |
 | `opcache.preload` | compiles the preload file into the binary; can fail the compile; bakes `preload_statistics` |
 | `opcache.file_cache`, `opcache.file_cache_read_only` | the [startup validation](#opcachefile_cache) that can refuse to run |
 | `opcache.log_verbosity_level`, `opcache.error_log` | the `zend_accel_error` channel that reports it |
 
-The other 38 directives of the 8.5 set are runtime-overridable. Pinned by
+The other 37 directives of the 8.5 set are runtime-overridable. Pinned by
 `tests/opcache_env_override_tests.rs`.
 
 ### Range-validated directives
@@ -1031,7 +1032,9 @@ divergence when it is not:
   `opcache_is_script_cached(__FILE__) === false`. Wait three seconds, or pass
   `-d opcache.file_update_protection=0`, and reference caches its own entry
   script exactly as elephc does. (An earlier revision of this page recorded the
-  un-waited result as a permanent divergence. It is not one.)
+  un-waited result as a permanent divergence. It is not one.) elephc's
+  [runtime script cache](#the-runtime-script-cache) now applies the same rule to
+  the dynamic tier, so a comparison of *that* tier needs the same care.
 - **Xdebug** — the host `php` loads it, and it overrides `var_dump()`. Pass
   `-d xdebug.mode=off` for byte-comparable output. It also puts the JIT in
   reference PHP's "configured but unavailable" state, which is coincidentally
@@ -1117,7 +1120,7 @@ on macOS arm64.
 | `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` out of range | Refuses the store and logs through `zend_accel_error`, which is silent below `opcache.log_verbosity_level = 2` | Refuses the store, silently | The refusal is exact, and it happens at COMPILE time, where there is no running process to log from. The `zend_accel_error` channel itself now exists — it is what carries the [`opcache.file_cache`](#opcachefile_cache) fatals — but only at run time. At reference PHP's default verbosity these two lines are not printed either |
 | `ini_get_all()` unfiltered | Every directive of every loaded module (403 on the reference build) | Only the blocks elephc owns — 54 on CLI, 87 under `--web` | The filter *rule* is reproduced; the population is elephc's |
 | `ini_get_all('pdo')` in a `--with-pdo` build | `[]` (known module) | `false` + `E_WARNING` | The known-module list is rendered before codegen decides the link set |
-| Per-directive environment override | Does not exist (`PHP_INI_opcache_jit`, `opcache_jit`, `opcache.jit` in the environment all do nothing) | `ELEPHC_INI_*` re-points 38 of the 54 directives at run time | An elephc extension, not parity: an AOT binary has no `php.ini` to edit |
+| Per-directive environment override | Does not exist (`PHP_INI_opcache_jit`, `opcache_jit`, `opcache.jit` in the environment all do nothing) | `ELEPHC_INI_*` re-points 37 of the 54 directives at run time | An elephc extension, not parity: an AOT binary has no `php.ini` to edit |
 | `extension_loaded()` under `eval()` | n/a | Reports only the core set, so `extension_loaded('PDO')` is `false` under `eval()` even in a `--with-pdo` build | The eval interpreter runs at compile time with no link step |
 | OPcache file functions under `eval()` | n/a | `opcache_is_script_cached()`, `opcache_invalidate()` and `opcache_compile_file()` answer about the [runtime script cache](#the-runtime-script-cache) — they are no longer terminal `false`s. `opcache_is_script_cached_in_file_cache()` stays `false` and `opcache_jit_blacklist()` `null` | The dynamic tier gave the first three something real to answer about. The last two have no backing subsystem in either tier |
 | `get_loaded_extensions()` argument | Accepts any expression | Must be a `bool`/`int` (literal or dynamic) | Both candidate lists are compile-time constants, so a dynamic flag selects between them at run time; a non-bool/int argument has no runtime truthiness conversion |

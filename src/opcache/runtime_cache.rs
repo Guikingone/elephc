@@ -47,6 +47,8 @@ pub struct RuntimeCacheConfig {
     pub log_verbosity_level: i64,
     /// `opcache.error_log`. Empty, or the literal `stderr`, means stderr.
     pub error_log: String,
+    /// `opcache.file_update_protection`, in seconds; `0` disables the guard.
+    pub file_update_protection: u64,
 }
 
 /// Resolves the runtime cache configuration for a compile target and SAPI.
@@ -112,6 +114,7 @@ pub fn runtime_cache_config(
         file_cache_read_only: boolean("opcache.file_cache_read_only"),
         log_verbosity_level: signed("opcache.log_verbosity_level"),
         error_log: text("opcache.error_log"),
+        file_update_protection: count("opcache.file_update_protection"),
     }
 }
 

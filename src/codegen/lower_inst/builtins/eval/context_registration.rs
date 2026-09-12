@@ -118,6 +118,44 @@ fn configure_eval_opcache_file_cache(
         .target
         .extern_symbol("__elephc_eval_configure_opcache_file_cache");
     abi::emit_call_label(ctx.emitter, &symbol);
+    configure_eval_opcache_swapped_directives(ctx, config);
+}
+
+/// `opcache.file_update_protection`, as the bridge's `swap_directive` addresses it.
+///
+/// The id is a wire contract with `elephc_magician::script_cache::config`; it is matched
+/// by number across the C ABI, so it may never be reordered.
+const OPCACHE_DIRECTIVE_FILE_UPDATE_PROTECTION: i64 = 2;
+
+/// Carries the settings that did not fit either configure call's argument budget.
+///
+/// Both calls above spend all six integer argument registers x86_64 SysV provides, so
+/// rather than a third fixed-shape call this reuses the same id/value setter `ini_set()`
+/// uses at run time — one symbol serving the initial install and every later change.
+fn configure_eval_opcache_swapped_directives(
+    ctx: &mut FunctionContext<'_>,
+    config: &crate::opcache::runtime_cache::RuntimeCacheConfig,
+) {
+    emit_opcache_directive_swap(
+        ctx,
+        OPCACHE_DIRECTIVE_FILE_UPDATE_PROTECTION,
+        config.file_update_protection as i64,
+    );
+}
+
+/// Emits one `__elephc_eval_opcache_swap_directive(id, value)` call, discarding the result.
+fn emit_opcache_directive_swap(ctx: &mut FunctionContext<'_>, id: i64, value: i64) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), id);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        value,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_swap_directive");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.

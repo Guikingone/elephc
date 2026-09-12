@@ -191,6 +191,14 @@ fn fill_entry(
     if !config.admits_size(size) {
         return Ok(segments);
     }
+    // A file younger than `opcache.file_update_protection` is RUN but not STORED, so a
+    // file caught part-written never becomes a cached entry that outlives the write.
+    // This sits beside the size refusal because it is the same kind of decision, and it
+    // must stay AFTER the `misses` bump: php-src counts the lookup that found nothing
+    // whether or not it goes on to store anything.
+    if !config.admits_age(metadata.as_ref().and_then(mtime_seconds), now) {
+        return Ok(segments);
+    }
     let footprint: usize = segments
         .iter()
         .map(ScriptSegment::memory_footprint)
