@@ -169,6 +169,16 @@ pub(crate) fn reset_decl(enabled: bool) -> Stmt {
                 "scheduled",
                 e_call("__elephc_opcache_restart_pending", vec![e_bool(true)]),
             ),
+            // Schedule on the RUNTIME SCRIPT CACHE as well, not just the reported latch
+            // above. Without this a natively compiled `opcache_reset()` moved what the
+            // status array says while the dynamic tier kept serving its entries — and the
+            // flush php-src performs at the next request never happened at all.
+            //
+            // The result is deliberately discarded: the once-then-false answer is the
+            // native latch's to give, and it has already been taken. In a binary with no
+            // eval bridge this whole call folds away at lowering time, leaving that latch
+            // as the entire effect, which is correct when there is no cache to restart.
+            s_expr(e_call("__elephc_opcache_rt_reset", vec![])),
             s_return(e_var("scheduled")),
         ])
         .build()

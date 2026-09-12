@@ -50,6 +50,9 @@ pub(super) fn lower(
                 ctx, inst,
             )
         }),
+        RuntimeFnId::ElephcOpcacheRtReset => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_reset(ctx, inst)
+        }),
         RuntimeFnId::ElephcOpcacheRtStat => Some({
             crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_stat(ctx, inst)
         }),

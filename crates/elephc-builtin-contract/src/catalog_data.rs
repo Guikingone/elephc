@@ -2199,6 +2199,32 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     },
 
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_opcache_rt_reset"),
+        name: "__elephc_opcache_rt_reset",
+        area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Internal: schedule a runtime script-cache restart; true only for the call that scheduled it.",
+        examples: &[
+        ],
+        php_manual: None,
+        deprecation: None,
+        extension: false,
+        internal: true,
+        requirements: &[],
+    },
+
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("__elephc_opcache_rt_stat"),
         name: "__elephc_opcache_rt_stat",
         area: Area::System,

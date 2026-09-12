@@ -2196,9 +2196,8 @@ fn opcache_ini_set_works_under_web() {
 /// The contrast is what pins the behaviour — without a reset, request 2 reports `h=1 m=1`,
 /// because the entry survived.
 ///
-/// The reset runs INSIDE `eval()` deliberately: that is the only path that reaches the
-/// runtime script cache today. A natively compiled `opcache_reset()` moves the reported
-/// latch but never schedules a cache restart — see the OPcache page's Limitations.
+/// The reset is issued from NATIVE code, which is where ordinary programs call it and the
+/// path that reaches the cache through `__elephc_opcache_rt_reset`.
 ///
 /// `--workers 1` is load-bearing: both requests must land in the same process.
 #[test]
@@ -2209,8 +2208,10 @@ fn opcache_reset_is_performed_at_the_next_request_boundary() {
         echo 'h=' . $s['opcache_statistics']['hits'] \
            . ' m=' . $s['opcache_statistics']['misses'] \
            . ' r=' . $s['opcache_statistics']['manual_restarts'];";
+    // The reset is NATIVE, not inside `eval()`: that is the path ordinary code takes, and
+    // the one that used to move only the reported latch.
     let src = format!(
-        "<?php eval('include __DIR__ . \"/lib.php\";'); {counters} eval('opcache_reset();');"
+        "<?php eval('include __DIR__ . \"/lib.php\";'); {counters} opcache_reset();"
     );
     let bin = compile_web(&dir, &src, "app");
     let port = free_port();

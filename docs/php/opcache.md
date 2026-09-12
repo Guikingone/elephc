@@ -296,6 +296,10 @@ performs it beside the other per-request resets. A CLI program is one request an
 therefore never performs it — which is also right, since reference PHP would
 restart at a next request a CLI process does not have.
 
+This holds wherever the reset is written. A natively compiled `opcache_reset()`
+schedules on the dynamic tier too, not only on the reported latch, so ordinary
+code gets the same behaviour as a reset issued from inside `eval()`.
+
 ### `opcache_is_script_cached()`
 
 ```php
@@ -1151,7 +1155,7 @@ on macOS arm64.
 | `opcache_is_script_cached()` on a file outside the manifest | `false` until something compiles it, then `true` | Inside `eval()`: `true` once it is cached. In natively compiled code: `false` | Same reason. `opcache_get_status()['scripts']` DOES report it from native code |
 | `ini_set('opcache.*', …)` | Succeeds for all 18 `PHP_INI_ALL` directives, returning the previous value | Succeeds for **3** of them — `revalidate_freq`, `validate_timestamps`, `file_update_protection` — and returns `false` for the other 15 | Those three are the only `PHP_INI_ALL` directives elephc's cache actually reads, and for them the whole surface moves together, byte-identical to reference. The other 15 are inert here (14 JIT knobs and `dups_fix`), so succeeding would report a value nothing honors. Exact for the 36 `PHP_INI_SYSTEM` directives |
 | `blacklist_misses`, `blacklist_miss_ratio`, `oom_restarts`, `hash_restarts` | Live counters | Always `0` | `opcache.blacklist_filename` is reported but not applied, and the runtime cache refuses rather than restarting when it fills. `hits`, `misses` and `opcache_hit_rate` are NOT in this row any more: they are live for the [runtime script cache](#the-runtime-script-cache) |
-| `opcache_reset()` called from NATIVE code, with the [runtime script cache](#the-runtime-script-cache) on | Schedules a restart that flushes the cache at the next request | Moves the reported latch but never schedules a cache restart, so the dynamic tier is untouched | The natively compiled `opcache_reset()` has no channel into the interpreter's cache. Called from inside `eval()` it schedules correctly and the restart is deferred exactly as reference does |
+
 | `memory_usage` / `interned_strings_usage` *absolute figures* | Real shared-memory accounting | Synthetic baselines, plus Σ of the manifest's source-file sizes, plus the runtime cache's real accounted bytes | No shared-memory segment exists. The *invariants* are exact: `free = total − used − wasted`, `free = buffer_size − used`, `0 < used < buffer_size`, and the whole `interned_strings_usage` key is omitted for a zero buffer. `max_cached_keys` is the exact php-src prime rounding |
 | `num_cached_scripts` / `num_cached_keys` | Live cache entry count | The manifest size PLUS the runtime cache's entries | The manifest half cannot grow; the runtime half does |
 | `jit.enabled`, `jit.on`, `jit.buffer_size`, `jit.buffer_free` | Reflect the running JIT | Clamped to `false`/`false`/`0`/`0` | Reference emits this same shape when the JIT is configured but unavailable, which is an AOT binary's permanent state. `kind`/`opt_level`/`opt_flags` *are* the real directive-derived values |

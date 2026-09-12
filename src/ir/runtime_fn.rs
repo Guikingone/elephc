@@ -404,6 +404,7 @@ pub enum RuntimeFnId {
     ElephcObjectPropValue,
     ElephcOpcacheRtScriptField,
     ElephcOpcacheRtScriptPath,
+    ElephcOpcacheRtReset,
     ElephcOpcacheRtStat,
     ElephcOpcacheRtSwap,
     ElephcPtrIsNull,
@@ -1168,6 +1169,12 @@ impl RuntimeFnId {
             // pure read would let the optimizer fold two `ini_set()` calls into one, or
             // drop one whose result is discarded — which is the common spelling.
             RuntimeFnId::ElephcOpcacheRtSwap => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            // Also a WRITE: it latches a restart on the process-wide cache. Its result is
+            // the once-then-false answer `opcache_reset()` reports, so a second call must
+            // not be folded into the first.
+            RuntimeFnId::ElephcOpcacheRtReset => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
             // Same read, plus the owned PHP string copied out of the bridge's buffer.
@@ -2359,6 +2366,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropValue => "__elephc_object_prop_value",
             RuntimeFnId::ElephcOpcacheRtScriptField => "__elephc_opcache_rt_script_field",
             RuntimeFnId::ElephcOpcacheRtScriptPath => "__elephc_opcache_rt_script_path",
+            RuntimeFnId::ElephcOpcacheRtReset => "__elephc_opcache_rt_reset",
             RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
             RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",

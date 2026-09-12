@@ -89,6 +89,33 @@ pub(crate) fn lower_opcache_rt_stat(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `__elephc_opcache_rt_reset()` to the bridge's restart scheduler.
+///
+/// Answers `1` for the call that scheduled the restart and `0` for any later one in the
+/// same request, which is the once-then-false shape `opcache_reset()` reports.
+///
+/// PAY-FOR-USE: a binary with no eval bridge has no dynamic tier to restart, so the call
+/// folds to `0` and the interpreter archive is never referenced. The prelude's own latch
+/// still answers there, so what such a binary REPORTS does not change.
+pub(crate) fn lower_opcache_rt_reset(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_opcache_rt_reset", 0)?;
+    ctx.emitter.blank();
+    ctx.emitter.comment("__elephc_opcache_rt_reset()");
+    if !links_the_eval_bridge(ctx) {
+        emit_zero_result(ctx);
+        return store_if_result(ctx, inst);
+    }
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_schedule_restart");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `__elephc_opcache_rt_swap(id, value)` to the bridge's directive setter.
 ///
 /// The one `rt_*` lowering whose bridge call WRITES. It installs a directive on the live

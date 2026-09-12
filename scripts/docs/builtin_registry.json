@@ -7793,6 +7793,97 @@
   {
     "aot": {
       "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_reset",
+    "description": "Internal: schedule a runtime script-cache restart; true only for the call that scheduled it.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 639,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_reset` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_reset.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_reset",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "writes_global"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_reset"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_reset"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_reset",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
       "params": [
         {
           "by_ref": false,
@@ -65899,7 +65990,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_get_all",
-      "codegen_line": 5029,
+      "codegen_line": 5037,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -66041,7 +66132,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_set",
-      "codegen_line": 4452,
+      "codegen_line": 4857,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -84828,7 +84919,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_compile_file",
-      "codegen_line": 666,
+      "codegen_line": 676,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -84940,7 +85031,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_get_status",
-      "codegen_line": 383,
+      "codegen_line": 393,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -85011,7 +85102,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_invalidate",
-      "codegen_line": 602,
+      "codegen_line": 612,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -85082,7 +85173,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached",
-      "codegen_line": 537,
+      "codegen_line": 547,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -85146,7 +85237,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached_in_file_cache",
-      "codegen_line": 676,
+      "codegen_line": 686,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -85210,7 +85301,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_jit_blacklist",
-      "codegen_line": 703,
+      "codegen_line": 713,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],

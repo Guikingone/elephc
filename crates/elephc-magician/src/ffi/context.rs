@@ -175,6 +175,21 @@ pub extern "C" fn __elephc_eval_opcache_swap_directive(
     crate::script_cache::swap_directive(id, value, as_override != 0)
 }
 
+/// Schedules a restart of the runtime script cache, as `opcache_reset()` does.
+///
+/// Answers `1` for the call that scheduled it and `0` for any later one in the same
+/// request, matching php-src, whose `zend_accel_schedule_restart` clears the flag
+/// `opcache_reset()`'s own guard tests.
+///
+/// SCHEDULES ONLY — the restart itself runs at the next request boundary, through
+/// [`__elephc_eval_opcache_apply_restart`]. Generated code emits this from the natively
+/// compiled `opcache_reset()`, which without it moved only the reported latch and left the
+/// dynamic tier untouched.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_opcache_schedule_restart() -> u64 {
+    u64::from(crate::script_cache::schedule_restart())
+}
+
 /// Performs a restart `opcache_reset()` scheduled in an earlier request, if any.
 ///
 /// THE REQUEST BOUNDARY php-src restarts at. Generated code emits this at the top of the
