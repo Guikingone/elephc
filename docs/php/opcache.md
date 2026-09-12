@@ -247,11 +247,14 @@ between `opcache_statistics` and `scripts`:
 ```
 
 `functions` and `classes` are real user-declared symbols (functions, classes,
-interfaces, traits and enums, fully qualified, original case), never built-ins.
-They are the symbols of the *whole binary* rather than of the preload file
-specifically — an AOT binary cannot separate "preloaded" from "compiled in".
-Reference PHP omits `functions`/`classes` when empty; elephc reproduces that.
-Pinned by `tests/opcache_preload_tests.rs`.
+interfaces, traits and enums, fully qualified, original case), never built-ins,
+and never the `__elephc_include_variant_…` spelling the resolver gives a
+function it inlines out of an include. They are the symbols of the *whole
+binary* rather than of the preload file specifically — an AOT binary cannot
+separate "preloaded" from "compiled in", and since the preload file is now one
+of the files compiled in, its own symbols are genuinely among them. Reference
+PHP omits `functions`/`classes` when empty; elephc reproduces that. Pinned by
+`tests/opcache_preload_tests.rs`.
 
 ### `opcache_reset()`
 
@@ -793,7 +796,7 @@ still returns `false`. Their environment variables are ignored:
 | `opcache.revalidate_freq` | the `scripts` map's `revalidate` field |
 | `opcache.jit`, `opcache.jit_buffer_size` | the `opcache_get_status()['jit']` triple |
 | `opcache.restrict_api` | selects the restricted function bodies |
-| `opcache.preload` | can fail the compile; bakes `preload_statistics` |
+| `opcache.preload` | compiles the preload file into the binary; can fail the compile; bakes `preload_statistics` |
 
 The other 44 directives of the 8.5 set are runtime-overridable. Pinned by
 `tests/opcache_env_override_tests.rs`.
@@ -845,13 +848,46 @@ script runs, and a missing file is a **startup fatal**. For an AOT binary,
 |---|---|---|---|
 | empty (default) | any | — | nothing happens; no `preload_statistics` key |
 | set | disabled | any | nothing happens; the path is never validated |
-| set | enabled | resolves | `preload_statistics` is emitted |
-| set | enabled | outside the manifest | compile **warning**, build proceeds |
+| set | enabled | resolves | the file is **compiled into the binary**; `preload_statistics` is emitted |
+| set | enabled | is the entry file | already the program; the injection is skipped |
 | set | enabled | unresolvable | compile **error** |
 
 Refusing to build is the only way to avoid shipping a binary that would report
-statistics for a file that is not there. Preloading a file this program never
-includes is a legitimate configuration, so it warns rather than fails.
+statistics for a file that is not there.
+
+### What preloading actually does
+
+`opcache.preload` becomes an implicit `require_once` of the preload file at the
+very top of the entry program, so the resolver inlines it: its declarations are
+compiled into the binary and its top-level statements run first, exactly once.
+That is reference PHP's semantic expressed in the mechanism a compiler already
+has — and it means the entry script can **use** preloaded symbols without
+including the file:
+
+```php
+// lib.php, named by --ini opcache.preload=lib.php
+function preloaded_helper(): string { return "from preload"; }
+class PreloadedClass {}
+
+// the entry script, which never mentions lib.php
+preloaded_helper();          // works
+new PreloadedClass();        // works
+```
+
+Functions, classes, interfaces, traits and enums all carry over, and so do the
+symbols of everything the preload file itself `require`s — preloading is
+transitive, and every file it pulls in joins the script manifest. All of it
+verified against reference PHP 8.5.6 and pinned by
+`tests/opcache_preload_tests.rs`.
+
+One difference, in elephc's favour and unavoidable: reference PHP does **not**
+carry the preload file's CONSTANTS into the request (verified — both `const X =
+1;` and `define('X', 1)` leave `defined('X')` false), because preloading keeps
+the compiled function and class tables while the startup request's own symbol
+table is torn down. An AOT binary has no torn-down startup request: the preload
+file's top-level code is part of the program, so its constants exist. elephc is
+a superset here; reproducing the absence would mean building machinery to
+un-define a constant the program legitimately declared.
 
 ## Extensions
 
@@ -989,7 +1025,8 @@ on macOS arm64.
 | `memory_usage` / `interned_strings_usage` *absolute figures* | Real shared-memory accounting | Synthetic baselines, plus Σ of the manifest's source-file sizes, plus the runtime cache's real accounted bytes | No shared-memory segment exists. The *invariants* are exact: `free = total − used − wasted`, `free = buffer_size − used`, `0 < used < buffer_size`, and the whole `interned_strings_usage` key is omitted for a zero buffer. `max_cached_keys` is the exact php-src prime rounding |
 | `num_cached_scripts` / `num_cached_keys` | Live cache entry count | The manifest size PLUS the runtime cache's entries | The manifest half cannot grow; the runtime half does |
 | `jit.enabled`, `jit.on`, `jit.buffer_size`, `jit.buffer_free` | Reflect the running JIT | Clamped to `false`/`false`/`0`/`0` | Reference emits this same shape when the JIT is configured but unavailable, which is an AOT binary's permanent state. `kind`/`opt_level`/`opt_flags` *are* the real directive-derived values |
-| `preload_statistics.functions` / `.classes` | The symbols the preload file added | The whole binary's user-declared symbols | An AOT binary cannot separate "preloaded" from "compiled in". A superset, never a fabrication — every name reported is genuinely declared |
+| `preload_statistics.functions` / `.classes` | The symbols the preload file added | The whole binary's user-declared symbols | An AOT binary cannot separate "preloaded" from "compiled in". A superset, never a fabrication — every name reported is genuinely declared, and the preload file's own symbols are among them |
+| A preloaded file's CONSTANTS | Not carried into the request | Available, like any compiled-in declaration | The startup request whose symbol table reference tears down does not exist in an AOT binary |
 | `scripts` under preloading | Carries a synthetic `$PRELOAD$` pseudo-entry and `num_cached_scripts` is bumped by one | No such entry | It stands for a shared-memory block an elephc binary never allocates |
 | `opcache_get_configuration()['blacklist']` | Lists the resolved patterns from `opcache.blacklist_filename` | Always `[]` | The directive is reported but not applied |
 | Directives that change engine behavior (`file_cache*`, `huge_code_pages`, `protect_memory`, `blacklist_filename`, …) | Change what the cache does | Reported faithfully, inert | There is no compile-time cache for them to act on. `validate_timestamps`, `revalidate_freq`, `max_file_size`, `memory_consumption` and `max_accelerated_files` are NOT in this row: they govern the [runtime script cache](#the-runtime-script-cache) |
