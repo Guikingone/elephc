@@ -59,6 +59,15 @@ pub(super) fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exc
     {
         return true;
     }
+    // `Generator implements Iterator` (which itself extends `Traversable`) in real PHP; the
+    // interpreter's own eval_generator_new() creates a `Generator`-tagged object regardless of
+    // whether the fake or real backend is asked, so both must answer the same instanceof chain.
+    if class_name.eq_ignore_ascii_case("Generator")
+        && (target_class.eq_ignore_ascii_case("Iterator")
+            || target_class.eq_ignore_ascii_case("Traversable"))
+    {
+        return true;
+    }
     if target_class.eq_ignore_ascii_case("Throwable") {
         return fake_runtime_exception_like_class(class_name);
     }

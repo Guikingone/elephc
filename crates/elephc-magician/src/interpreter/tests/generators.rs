@@ -566,3 +566,109 @@ echo $g->current();"#,
     assert_eq!(output, "");
     assert_eq!(status, EvalStatus::UncaughtThrowable);
 }
+
+/// Verifies a generator method reads `$this->property` AND calls another `$this` method,
+/// resumed across suspensions -- the receiver has to survive past the call that created the
+/// generator, which is what `eval_dynamic_method_with_values_and_ref_mode` retains it for
+/// (`ScopeCellOwnership::Owned` instead of `Borrowed` when the body is a generator).
+///
+/// `php -n` 8.5.6 prints `11,21,31,`.
+#[test]
+fn a_generator_method_reads_this_property_and_calls_a_this_method_across_resumes() {
+    assert_eq!(
+        out(
+            br#"class Box {
+    private array $items = [10, 20, 30];
+    public function items() {
+        foreach ($this->items as $i) {
+            yield $i + $this->bonus();
+        }
+    }
+    private function bonus(): int { return 1; }
+}
+$b = new Box();
+foreach ($b->items() as $v) { echo $v, ","; }"#
+        ),
+        "11,21,31,",
+    );
+}
+
+/// Verifies the object a generator function returns answers `instanceof` for `Generator`,
+/// `Traversable` and `Iterator` -- the interfaces PHP wires it through.
+///
+/// `php -n` 8.5.6 prints `GTI`: all three checks are true.
+#[test]
+fn a_generator_object_is_instanceof_generator_traversable_and_iterator() {
+    assert_eq!(
+        out(
+            br#"function g() { yield 1; }
+$x = g();
+echo $x instanceof Generator ? "G" : "-";
+echo $x instanceof Traversable ? "T" : "-";
+echo $x instanceof Iterator ? "I" : "-";"#
+        ),
+        "GTI",
+    );
+}
+
+/// Verifies a bare `yield;` (no key, no value) yields `null` and still takes the next
+/// auto-increment key, exactly like a `yield` with a value.
+///
+/// `php -n` 8.5.6 prints `0=1;1=null;2=3;`.
+#[test]
+fn a_bare_yield_produces_null_and_still_advances_the_auto_increment_key() {
+    assert_eq!(
+        out(
+            br#"function g() { yield 1; yield; yield 3; }
+foreach (g() as $k => $v) { echo $k, "=", $v ?? "null", ";"; }"#
+        ),
+        "0=1;1=null;2=3;",
+    );
+}
+
+/// Verifies a `static` generator method resolves late static binding (`static::class`) from
+/// the CALLED class, not the declaring one.
+///
+/// `php -n` 8.5.6 prints `1,D,`: the second yield reports `D`, the subclass through which the
+/// static method was called, not `C` where it is declared.
+#[test]
+fn a_static_generator_method_resolves_late_static_binding() {
+    assert_eq!(
+        out(
+            br#"class C {
+    public static function make() {
+        yield 1;
+        yield static::class;
+    }
+}
+class D extends C {}
+foreach (D::make() as $v) { echo $v, ","; }"#
+        ),
+        "1,D,",
+    );
+}
+
+/// Verifies an exception thrown directly from a generator body -- with no enclosing try/catch
+/// in the body itself -- propagates out through the consuming `foreach` to a catch that wraps
+/// the loop, exactly like an ordinary function call that throws.
+///
+/// `php -n` 8.5.6 prints `1,caught:boom`: the first yielded value runs one loop iteration, then
+/// the thrown exception unwinds the foreach into the surrounding catch.
+#[test]
+fn an_uncaught_throw_in_the_body_propagates_to_the_consumers_catch() {
+    assert_eq!(
+        out(
+            br#"function g() {
+    yield 1;
+    throw new RuntimeException("boom");
+    yield 2;
+}
+try {
+    foreach (g() as $v) { echo $v, ","; }
+} catch (RuntimeException $e) {
+    echo "caught:", $e->getMessage(), "\n";
+}"#
+        ),
+        "1,caught:boom\n",
+    );
+}

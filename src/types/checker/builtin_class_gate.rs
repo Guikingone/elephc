@@ -204,11 +204,25 @@ fn program_names(usage: &Usage, class_name: &str) -> bool {
 /// A declared `Generator` RETURN TYPE also makes a function a generator in elephc
 /// (`ir_lower::function::is_generator_return_type`); that spells the class, so it is covered.
 ///
+/// `usage.includes_runtime_php` covers the route the doc comment above used to miss: an
+/// `include`/`require` whose path is not a literal hands the included file to the interpreter at
+/// run time, and that file can contain a `yield` no static walk of THIS program ever sees.
+/// `Kernel::doInitializeBundles()`'s `foreach ($this->registerBundles() as $bundle)` is exactly
+/// this shape in Symfony -- `registerBundles()` is a generator method that lives in a file
+/// reached only through the autoloader's dynamic include, so `uses_yield` and the name scan both
+/// come back empty for the compiled entry point even though the program can and does build a
+/// `Generator` at run time. Without this, `new_object("Generator")` returned null (no class
+/// registered), which `eval_generator_new` turned into a bare `RuntimeFatal` with no message, and
+/// the enclosing `Call`/`MethodCall` picked up the generic "unsupported X expression" label.
+///
 /// When absent, `_generator_class_id` is emitted as `u64::MAX`, a value no object header carries,
 /// so the runtime comparisons simply never match.
 pub(crate) fn program_may_reference_generator(program: &[Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
-    usage.introspects || usage.uses_yield || program_names(&usage, "Generator")
+    usage.introspects
+        || usage.uses_yield
+        || usage.includes_runtime_php
+        || program_names(&usage, "Generator")
 }
 
 /// Returns whether `program` can reach the builtin `Fiber` and `FiberError` classes.
@@ -457,6 +471,23 @@ mod tests {
         assert!(!program_may_reference_generator(&parse(
             "<?php function f(array $a): int { return count($a); } echo f([1]);"
         )));
+    }
+
+    /// An include whose path is decided at run time can execute a file whose `yield` no static
+    /// walk of THIS program ever sees -- `Kernel::doInitializeBundles()`'s
+    /// `foreach ($this->registerBundles() as $bundle)` over a generator method reached only
+    /// through the autoloader's dynamic include is exactly this shape. A literal path is a file
+    /// the compiler resolves and inlines, so it stays narrow, mirroring
+    /// `a_runtime_include_registers_every_builtin_throwable`.
+    #[test]
+    fn a_runtime_include_registers_generator() {
+        assert!(program_may_reference_generator(&parse(
+            "<?php $path = $argv[1]; include $path;"
+        )));
+        assert!(program_may_reference_generator(&parse(
+            "<?php function load($p) { require $p; } load($argv[1]);"
+        )));
+        assert!(!program_may_reference_generator(&parse("<?php include 'lib.php';")));
     }
 
     /// Fiber and FiberError are both in the dynamic-new list, so `new $c` widens here too.

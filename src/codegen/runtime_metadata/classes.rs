@@ -55,7 +55,14 @@ pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> crate::fast_ha
 /// Returns classes that EIR object allocation or named `instanceof` can reference at runtime.
 pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
     let mut names = HashSet::new();
-    if module_contains_generator(module) {
+    // `module_contains_generator` only sees a `yield` in THIS module's own compiled AST. The
+    // eval bridge (an `include`/`eval` whose target is only known at run time) can execute a
+    // generator function or method the compiler never parsed, exactly like
+    // `runtime_referenced_interfaces` already widens to every known interface once the bridge is
+    // in play. Without this, `values.new_object("Generator")` found no registered class, and
+    // `eval_generator_new` turned that into a bare `RuntimeFatal` the outer `Call`/`MethodCall`
+    // then mislabeled as "unsupported ... expression".
+    if module_contains_generator(module) || module.required_runtime_features.eval_bridge {
         names.insert("Generator".to_string());
     }
     if module_uses_dynamic_instanceof(module) {
