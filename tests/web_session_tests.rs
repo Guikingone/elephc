@@ -2146,3 +2146,38 @@ echo implode('#', $parts);"#;
          observable behavior): {response:?}\nexpected suffix: {expected:?}"
     );
 }
+
+/// Verifies `ini_set()` moves the settable `opcache.*` directives under `--web` exactly as
+/// it does on CLI, without disturbing the session directives the web wrapper owns.
+///
+/// The `--web` `ini_set` is a SEPARATE declaration from the CLI one — the session-aware body
+/// owns that name here — and it refuses every `opcache.*` key before reaching the session
+/// logic. Running the shared opcache arms ahead of that refusal is what keeps the two
+/// surfaces from disagreeing about the same directive in the same program.
+///
+/// `opcache.memory_consumption` must still be refused: it is `PHP_INI_SYSTEM` in reference
+/// PHP, so `false` is exact there too.
+#[test]
+fn opcache_ini_set_works_under_web() {
+    let dir = make_test_dir("ini_opcache_web");
+    let src = "<?php \
+        $old = ini_set('opcache.revalidate_freq', '77'); \
+        $now = ini_get('opcache.revalidate_freq'); \
+        $cfg = opcache_get_configuration()['directives']['opcache.revalidate_freq']; \
+        $sys = ini_set('opcache.memory_consumption', '256'); \
+        $sess = ini_set('session.gc_maxlifetime', 999); \
+        echo $old . '|' . $now . '|' . $cfg . '|' . var_export($sys, true) . '|' . $sess;";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with("2|77|77|false|1440"),
+        "opcache ini_set must move all three surfaces under --web, refuse the \
+         PHP_INI_SYSTEM key, and leave the session directives alone: {:?}",
+        resp
+    );
+}

@@ -940,36 +940,7 @@ pub(crate) const INI_SETTABLE_DIRECTIVES: [(&str, i64); 3] = [
 /// and `ELEPHC_INI_*` apply, so `ini_set('opcache.validate_timestamps', 'off')` stores
 /// `''` exactly as the other two paths would.
 pub(crate) fn cli_ini_set_decl() -> Stmt {
-    let mut body = vec![
-        s_assign("value", e_cast(CastType::String, e_var("value"))),
-        s_assign("value", e_call("__elephc_ini_scan", vec![e_var("value")])),
-    ];
-    for (name, id) in INI_SETTABLE_DIRECTIVES {
-        body.push(s_if(
-            e_binop(e_var("option"), BinOp::StrictEq, e_str(name)),
-            vec![
-                s_assign(
-                    "previous",
-                    e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
-                ),
-                s_expr(e_call(
-                    "__elephc_opcache_ini_override",
-                    vec![e_var("option"), e_var("value"), e_int(1)],
-                )),
-                // The cache push. In a binary with no eval bridge this whole call folds
-                // to `0` at lowering time and the interpreter is never linked; the
-                // override store above still moved, so `ini_get()` reports the new value
-                // in that binary too.
-                s_expr(e_call(
-                    "__elephc_opcache_rt_swap",
-                    vec![e_int(id), e_cast(CastType::Int, e_var("value"))],
-                )),
-                s_return(e_var("previous")),
-            ],
-            vec![],
-            None,
-        ));
-    }
+    let mut body = opcache_ini_set_arms();
     body.push(s_return(e_bool(false)));
     function("ini_set")
         .param("option", TypeExpr::Str)
@@ -977,6 +948,56 @@ pub(crate) fn cli_ini_set_decl() -> Stmt {
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(body)
         .build()
+}
+
+/// The `ini_set()` statements that handle [`INI_SETTABLE_DIRECTIVES`], shared by the CLI
+/// wrapper and the `--web` one.
+///
+/// ONE SOURCE OF TRUTH ON PURPOSE. The two wrappers are separate declarations — under
+/// `--web` the session-aware body owns the `ini_set` name — and letting each spell this
+/// logic itself is how the two surfaces drift apart, which is exactly the class of bug the
+/// override-scope rule keeps producing when it is only half-applied.
+///
+/// Reads `$option` and `$value` from the enclosing wrapper, and DOES NOT ASSIGN `$value`:
+/// the `--web` body goes on to use it for the session directives, so the scanned copy lives
+/// in its own local. Each arm returns, so the caller appends its own fallthrough.
+pub(crate) fn opcache_ini_set_arms() -> Vec<Stmt> {
+    let mut body = vec![s_assign(
+        "oc_scanned",
+        e_call(
+            "__elephc_ini_scan",
+            vec![e_cast(CastType::String, e_var("value"))],
+        ),
+    )];
+    for (name, id) in INI_SETTABLE_DIRECTIVES {
+        body.push(s_if(
+            e_binop(e_var("option"), BinOp::StrictEq, e_str(name)),
+            vec![
+                // Read BEFORE the write, and through `__elephc_opcache_ini_string` so the
+                // previous value already accounts for an earlier `ini_set()`.
+                s_assign(
+                    "oc_previous",
+                    e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
+                ),
+                s_expr(e_call(
+                    "__elephc_opcache_ini_override",
+                    vec![e_var("option"), e_var("oc_scanned"), e_int(1)],
+                )),
+                // The cache push. In a binary with no eval bridge this whole call folds
+                // to `0` at lowering time and the interpreter is never linked; the
+                // override store above still moved, so `ini_get()` reports the new value
+                // in that binary too.
+                s_expr(e_call(
+                    "__elephc_opcache_rt_swap",
+                    vec![e_int(id), e_cast(CastType::Int, e_var("oc_scanned"))],
+                )),
+                s_return(e_var("oc_previous")),
+            ],
+            vec![],
+            None,
+        ));
+    }
+    body
 }
 
 /// The CLI `ini_get_all(?string $extension = null, bool $details = true)` wrapper — the

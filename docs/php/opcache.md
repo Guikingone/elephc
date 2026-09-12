@@ -755,6 +755,11 @@ when the eval context is first built, which is that first `eval()` — so an
 override is held separately and applied on read, and the later install cannot
 clobber the earlier call.
 
+This works identically under `--web`, where the session-aware `ini_set()` owns
+the name: it runs the same three arms before its own `opcache.*` refusal, so a
+CLI and a `--web` binary never disagree about the same directive. The session
+directives that wrapper handles are unaffected.
+
 ### `ini_get_all()`
 
 ```php
