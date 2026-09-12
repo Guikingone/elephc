@@ -51,7 +51,29 @@ pub(super) fn ensure_eval_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
 }
 
 /// Ensures a persistent eval global-scope exists and stores its handle in scratch.
+///
+/// At true program top level (`is_main`) the calling scope IS the global scope: nothing tells
+/// them apart the way a function's locals differ from the program's real globals. Reusing the
+/// SAME persistent scope object `ensure_eval_scope` already ensures -- rather than the ordinarily
+/// separate one this function allocates -- means a dynamically included or eval'd fragment's own
+/// top-level names (never known to the AOT compiler, e.g. a dynamically selected vendor file) and
+/// the native globals `flush_eval_global_scope`/`reload_eval_global_scope` sync into this handle
+/// by name land in the SAME place. `context.global_scope_ptr()` (installed from this handle by
+/// `set_eval_context_global_scope`) is what `$GLOBALS`, `global $x;`, and php's auto-global
+/// superglobals resolve through from inside a function or method the fragment declares, so both
+/// halves must agree on which object that is. Non-`is_main` call sites (eval()/include() written
+/// inside a PHP function) keep the separate object: there, the calling scope is that function's
+/// own locals, not the program's real global scope.
 pub(super) fn ensure_eval_global_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    if ctx.is_main {
+        ensure_eval_scope(ctx)?;
+        let slot = eval_scope_slot(ctx)?;
+        let offset = ctx.local_offset(slot)?;
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, result_reg, offset);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_GLOBAL_SCOPE_HANDLE_OFFSET);
+        return Ok(());
+    }
     let slot = eval_global_scope_slot(ctx)?;
     let offset = ctx.local_offset(slot)?;
     let ready = ctx.next_label("eval_global_scope_ready");

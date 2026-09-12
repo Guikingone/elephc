@@ -553,7 +553,7 @@ echo ":" . getenv("ELEPHC_EVAL_ENV_TEST") . ":";
 echo getenv()["ELEPHC_EVAL_ENV_TEST"] . ":";
 echo getenv(null, true)["ELEPHC_EVAL_ENV_TEST"] . ":";
 putenv("ELEPHC_EVAL_ENV_TEST");
-echo getenv("ELEPHC_EVAL_ENV_TEST") === "" ? "empty" : "bad";
+echo getenv("ELEPHC_EVAL_ENV_TEST") === false ? "missing" : "bad";
 echo ":"; echo function_exists("getenv");
 return function_exists("putenv");"#,
         )
@@ -563,8 +563,24 @@ return function_exists("putenv");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "direct:named:named:set:spread:spread:spread:empty:1");
+    assert_eq!(values.output, "direct:named:named:set:spread:spread:spread:missing:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+/// Verifies `getenv()` distinguishes an unset name (`false`) from a set-but-empty one (`""`),
+/// matching php: `var_dump(getenv("..."))` on a name the process never set answers `bool(false)`.
+#[test]
+fn execute_program_getenv_reports_false_for_a_name_the_process_never_set() {
+    let program = parse_fragment(
+        br#"$u = getenv("ELEPHC_EVAL_ENV_DEFINITELY_UNSET_TEST");
+return $u === false ? "false" : "not-false";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("false".to_string()));
 }
 /// Verifies eval shell process builtins capture or echo stdout across all call paths.
 #[test]

@@ -5,8 +5,11 @@
 //! - `crate::interpreter::builtins::network_env` direct and by-value dispatch.
 //!
 //! Key details:
-//! - Unset variables return an empty string to match current eval semantics.
+//! - Missing names return false; present names and environment arrays preserve raw bytes.
 //! - A null or omitted name materializes the process environment as an associative array.
+
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 
 use super::*;
 eval_builtin! {
@@ -38,6 +41,10 @@ pub(in crate::interpreter) fn eval_builtin_getenv(
 }
 
 /// Reads one variable, or enumerates all variables when the name is null.
+///
+/// Missing names answer `false` -- php distinguishes it from a variable that IS set to the
+/// empty string -- and a present name's bytes are read without a lossy UTF-8 round trip, so a
+/// non-UTF-8 environment value (or lookup name) survives intact.
 pub(in crate::interpreter) fn eval_getenv_result(
     name: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -46,11 +53,10 @@ pub(in crate::interpreter) fn eval_getenv_result(
         return eval_getenv_all_result(values);
     }
     let name = values.string_bytes(name)?;
-    let name = String::from_utf8_lossy(&name);
-    let value = std::env::var_os(name.as_ref())
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    values.string(&value)
+    match std::env::var_os(OsStr::from_bytes(&name)) {
+        Some(value) => values.string_bytes_value(value.as_bytes()),
+        None => values.bool_value(false),
+    }
 }
 
 /// Materializes the process environment as a string-keyed associative array.
@@ -60,8 +66,8 @@ pub(in crate::interpreter) fn eval_getenv_all_result(
     let entries: Vec<_> = std::env::vars_os().collect();
     let mut result = values.assoc_new(entries.len().max(1))?;
     for (name, value) in entries {
-        let key = values.string(&name.to_string_lossy())?;
-        let value = values.string(&value.to_string_lossy())?;
+        let key = values.string_bytes_value(name.as_bytes())?;
+        let value = values.string_bytes_value(value.as_bytes())?;
         result = values.array_set(result, key, value)?;
     }
     Ok(result)

@@ -7,8 +7,32 @@
 //! Key details:
 //! - Global aliases redirect through `ElephcEvalContext` while local aliases stay in the materialized eval scope.
 //! - Replaced owned cells are released by callers through existing scope APIs.
+//! - Php's request superglobals behave like an automatic `global $name;` in EVERY scope, on every
+//!   mention -- unlike an explicit `global` statement, this is not a one-time bind: a name in
+//!   `REQUEST_SUPERGLOBAL_NAMES` redirects to the context's global scope even where no `global`
+//!   statement was ever written and even after a local `unset()` of that name in this scope.
 
 use super::*;
+
+/// The eight request superglobals php auto-globalizes in every scope without a `global`
+/// statement. `$GLOBALS` is handled separately (`globals::is_globals_array`) because it is a
+/// pseudo-array rather than an ordinary variable name.
+pub(in crate::interpreter) const REQUEST_SUPERGLOBAL_NAMES: [&str; 8] = [
+    "_SERVER", "_ENV", "_GET", "_POST", "_COOKIE", "_FILES", "_REQUEST", "_SESSION",
+];
+
+/// Returns true when `name` is one of php's automatically global request superglobals.
+pub(in crate::interpreter) fn is_request_superglobal_name(name: &str) -> bool {
+    REQUEST_SUPERGLOBAL_NAMES.contains(&name)
+}
+
+/// Returns the effective global-alias target for a name: an explicit `global` alias first, then
+/// a request superglobal's own name, matching php's implicit per-mention auto-global fetch.
+fn effective_global_alias_target<'a>(scope: &'a ElephcEvalScope, name: &'a str) -> Option<&'a str> {
+    scope
+        .global_alias_target(name)
+        .or_else(|| is_request_superglobal_name(name).then_some(name))
+}
 
 /// Returns the eval-visible entry for a variable, following `global` aliases.
 pub(in crate::interpreter) fn scope_entry(
@@ -28,7 +52,7 @@ pub(in crate::interpreter) fn scope_entry(
             .and_then(|statics| statics.visible_cell(&slot))
             .map(|cell| ScopeEntry::present(cell, ScopeCellOwnership::Borrowed, 0));
     }
-    let Some(global_name) = scope.global_alias_target(name) else {
+    let Some(global_name) = effective_global_alias_target(scope, name) else {
         return scope.entry(name);
     };
     let Some(global_scope) = context.global_scope_ptr() else {
@@ -74,9 +98,18 @@ pub(in crate::interpreter) fn set_scope_cell(
         };
         return Ok(statics.set_respecting_references(slot, cell, ownership));
     }
-    if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
+    if let Some(global_name) = effective_global_alias_target(scope, &name).map(str::to_string) {
         let Some(global_scope) = context.global_scope_ptr() else {
-            return Err(EvalStatus::RuntimeFatal);
+            // An explicit `global $x;` already validated a global scope exists before it could
+            // ever mark this alias (see `execute_global_stmt`), so reaching here with no scope
+            // pointer is a genuine fatal for it. A superglobal name carries no such guarantee --
+            // nothing declared it -- so with no established global scope at all it degrades to an
+            // ordinary local write rather than failing a statement php would never refuse.
+            return if scope.global_alias_target(&name).is_some() {
+                Err(EvalStatus::RuntimeFatal)
+            } else {
+                Ok(scope.set(name, cell, ownership).into_iter().collect())
+            };
         };
         let current_scope = scope as *mut ElephcEvalScope;
         if global_scope == current_scope {
