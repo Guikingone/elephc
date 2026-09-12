@@ -22,6 +22,12 @@ fn enabled_config(revalidate_freq: u64) -> ScriptCacheConfig {
     ScriptCacheConfig {
         enabled: true,
         revalidate_freq,
+        // The freshness guard is OFF for these fixtures. They are written microseconds
+        // before the assertion, so php-src's default `file_update_protection = 2` would
+        // refuse to cache every one of them and these tests would be measuring that guard
+        // instead of what they mean to measure. Reference PHP needs the same
+        // `-d opcache.file_update_protection=0` for exactly this reason.
+        file_update_protection: 0,
         ..ScriptCacheConfig::disabled()
     }
 }
