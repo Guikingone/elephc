@@ -49,6 +49,7 @@ mod explode;
 mod implode;
 mod implode_cast;
 mod implode_bool;
+mod implode_float;
 mod implode_int;
 mod ucwords;
 mod str_ireplace;
@@ -189,6 +190,8 @@ pub use implode_int::emit_implode_int;
 /// Emit integer-optimized implode helper.
 pub use implode_bool::emit_implode_bool;
 /// Emit bool-element implode helper (`true` → `"1"`, `false` → `""`).
+pub use implode_float::emit_implode_float;
+/// Emit float-element implode helper (PHP `precision = 14` spelling, via `__rt_ftoa`).
 pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.
 pub use str_ireplace::emit_str_ireplace;
