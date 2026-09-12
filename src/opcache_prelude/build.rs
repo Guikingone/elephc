@@ -895,13 +895,42 @@ pub(crate) fn state_helper_decls() -> Program {
         function("__elephc_opcache_system_timezone")
             .returns(TypeExpr::Str)
             .body(vec![
+                // MEMOIZED, and the memo is the whole point rather than an optimisation.
+                // The lookup consults `TZ`, and elephc's own `date_default_timezone_set()`
+                // WRITES `TZ` — it drives libc through `putenv` + `tzset`, because the binary
+                // carries no tzdata and lets libc resolve offsets and DST. Without the memo
+                // the first `__elephc_opcache_asctime` call restores the PHP default and
+                // leaves `TZ=UTC` behind, and every later call reads that back as though it
+                // were the system zone: `opcache_get_status()['scripts']` then reported its
+                // FIRST entry in local time and every other entry in UTC. Resolving once,
+                // before any of this helper's own writes exist, makes every entry agree.
+                //
+                // TWO statics rather than one with a `null` sentinel: `''` is a real answer
+                // here (it means "no zone could be determined", which the caller reads as
+                // "leave the default timezone alone"), so the memo needs a separate
+                // "resolved yet?" flag. A `null` marker would type the static `Mixed`, and
+                // the EIR backend refuses to store a `Str` into a `Mixed` static local —
+                // each static has to keep ONE PHP type for its whole life.
+                s_static("memo", e_str("")),
+                s_static("memo_resolved", e_bool(false)),
+                s_if(
+                    e_binop(e_var("memo_resolved"), BinOp::StrictEq, e_bool(true)),
+                    vec![s_return(e_var("memo"))],
+                    vec![],
+                    None,
+                ),
+                s_assign("memo_resolved", e_bool(true)),
+                s_assign("memo", e_str("")),
                 s_assign(
                     "tz",
                     e_cast(CastType::String, e_call("getenv", vec![e_str("TZ")])),
                 ),
                 s_if(
                     e_binop(e_var("tz"), BinOp::StrictNotEq, e_str("")),
-                    vec![s_return(e_var("tz"))],
+                    vec![
+                        s_assign("memo", e_var("tz")),
+                        s_return(e_var("tz")),
+                    ],
                     vec![],
                     None,
                 ),
@@ -936,6 +965,7 @@ pub(crate) fn state_helper_decls() -> Program {
                         ],
                     ),
                 ),
+                s_assign("memo", e_var("zone")),
                 s_return(e_var("zone")),
             ])
             .build(),
