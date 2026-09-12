@@ -272,12 +272,37 @@ pub fn schedule_restart() -> bool {
     if cache.restart_pending {
         return false;
     }
+    // SCHEDULES, and does nothing else. php-src's `zend_accel_schedule_restart` sets the
+    // flag and defers the restart itself to the next request, so within THIS one the cache
+    // keeps answering and every figure stays put. VERIFIED on reference PHP 8.5.10: right
+    // after `opcache_reset()`, `opcache_is_script_cached()` is still true,
+    // `num_cached_scripts` is unchanged, `manual_restarts` is still 0 and
+    // `last_restart_time` is still 0. [`apply_pending_restart`] is what moves all four.
     cache.restart_pending = true;
+    true
+}
+
+/// Performs a scheduled restart, if one is pending. Returns whether anything was flushed.
+///
+/// This is the deferred half of `opcache_reset()`, and it runs at a REQUEST BOUNDARY —
+/// generated code calls it at the top of each `--web` request. A CLI program is one
+/// request, so it never runs there, which is exactly right: reference PHP would restart at
+/// the next request, and a CLI process has none.
+///
+/// Clearing the latch is what lets a LATER request schedule its own restart again, matching
+/// php-src, where the second `opcache_reset()` of one request fails but the next request's
+/// succeeds.
+pub fn apply_pending_restart() -> bool {
+    let mut cache = lock_script_cache();
+    if !cache.restart_pending {
+        return false;
+    }
     cache.entries.clear();
     cache.used_memory = 0;
     cache.cache_full = false;
     cache.manual_restarts += 1;
     cache.last_restart_time = now_seconds();
+    cache.restart_pending = false;
     true
 }
 

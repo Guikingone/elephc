@@ -175,6 +175,21 @@ pub extern "C" fn __elephc_eval_opcache_swap_directive(
     crate::script_cache::swap_directive(id, value, as_override != 0)
 }
 
+/// Performs a restart `opcache_reset()` scheduled in an earlier request, if any.
+///
+/// THE REQUEST BOUNDARY php-src restarts at. Generated code emits this at the top of the
+/// `--web` handler, beside the other per-request resets, so the flush lands where reference
+/// PHP's does: at the START of the request after the one that called `opcache_reset()`,
+/// never inside it.
+///
+/// A CLI program is a single request and never emits this call, which is also right —
+/// reference PHP would restart at a next request that a CLI process does not have, so the
+/// cache correctly keeps answering for that program's whole life.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_opcache_apply_restart() {
+    crate::script_cache::apply_pending_restart();
+}
+
 /// Copies one generated directive string out of the binary's read-only data.
 ///
 /// A null pointer or a zero length is the EMPTY string, which both directives spell as

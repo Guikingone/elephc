@@ -242,10 +242,18 @@ fn a_default_cli_binary_still_reports_no_status() {
     assert_eq!(field(&output, "status"), "false");
 }
 
-/// Verifies `opcache_reset()` from inside `eval()` shows up as a pending restart natively.
+/// Verifies `opcache_reset()` from inside `eval()` shows up as a pending restart natively,
+/// and that nothing else moves until the restart is actually performed.
 ///
 /// The native latch and the runtime cache's latch are different objects; reporting only the
 /// native one would deny a restart the cache has actually scheduled.
+///
+/// The other three figures are the DEFERRAL: php-src schedules the restart and performs it
+/// at the next request, so within this one the cache keeps its entries and neither
+/// `manual_restarts` nor `last_restart_time` moves. VERIFIED on reference PHP 8.5.10, which
+/// reports exactly this shape. A CLI program is a single request and so never reaches the
+/// boundary that performs it — correctly, since reference would restart at a next request
+/// a CLI process does not have.
 #[test]
 fn a_reset_issued_from_eval_is_reported_natively() {
     let dir = make_test_dir("opcache_rt_reset");
@@ -263,11 +271,11 @@ echo 'num=', $s['opcache_statistics']['num_cached_scripts'], "\n";
 
     let output = run_binary(&compile(&dir, &["opcache.enable_cli=1"]));
 
-    assert_eq!(field(&output, "pending"), "1");
-    assert_eq!(field(&output, "restarts"), "1");
-    assert_eq!(field(&output, "last_positive"), "1");
-    // The reset flushed the dynamic entry, leaving the compile-time manifest alone.
-    assert_eq!(field(&output, "num"), "1");
+    assert_eq!(field(&output, "pending"), "1", "the latch is the only thing that moves");
+    assert_eq!(field(&output, "restarts"), "0", "counted at the restart, not the schedule");
+    assert_eq!(field(&output, "last_positive"), "0");
+    // The dynamic entry SURVIVES the schedule: manifest (1) plus the cached include (1).
+    assert_eq!(field(&output, "num"), "2");
 }
 
 /// Verifies `opcache_get_status()` answers the same thing natively and from inside `eval()`.

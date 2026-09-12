@@ -2181,3 +2181,52 @@ fn opcache_ini_set_works_under_web() {
         resp
     );
 }
+
+/// Verifies a scheduled `opcache_reset()` is performed at the NEXT REQUEST's boundary, the
+/// way php-src defers its restart, rather than flushing inside the request that asked.
+///
+/// Two requests against one persistent worker, and the counters tell the whole story:
+///
+/// - request 1 misses and fills (`h=0 m=1`), then schedules a restart (`r=0` — php-src
+///   counts the restart when it happens, not when it is scheduled);
+/// - request 2 starts AFTER the boundary performed it, so the entry is gone: the include
+///   misses again (`h=0 m=2`) instead of hitting, and the restart is finally counted
+///   (`r=1`).
+///
+/// The contrast is what pins the behaviour — without a reset, request 2 reports `h=1 m=1`,
+/// because the entry survived.
+///
+/// The reset runs INSIDE `eval()` deliberately: that is the only path that reaches the
+/// runtime script cache today. A natively compiled `opcache_reset()` moves the reported
+/// latch but never schedules a cache restart — see the OPcache page's Limitations.
+///
+/// `--workers 1` is load-bearing: both requests must land in the same process.
+#[test]
+fn opcache_reset_is_performed_at_the_next_request_boundary() {
+    let dir = make_test_dir("opcache_deferred_reset");
+    std::fs::write(dir.join("lib.php"), "<?php $marker = 1;\n").unwrap();
+    let counters = "$s = opcache_get_status(); \
+        echo 'h=' . $s['opcache_statistics']['hits'] \
+           . ' m=' . $s['opcache_statistics']['misses'] \
+           . ' r=' . $s['opcache_statistics']['manual_restarts'];";
+    let src = format!(
+        "<?php eval('include __DIR__ . \"/lib.php\";'); {counters} eval('opcache_reset();');"
+    );
+    let bin = compile_web(&dir, &src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        first.ends_with("h=0 m=1 r=0"),
+        "the scheduling request fills the cache and counts no restart yet: {first:?}"
+    );
+    assert!(
+        second.ends_with("h=0 m=2 r=1"),
+        "the next request must start with the restart already performed: {second:?}"
+    );
+}

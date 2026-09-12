@@ -291,9 +291,14 @@ fn compile_file_is_inert_while_disabled() {
     assert!(!is_cached(&path));
 }
 
-/// Verifies a scheduled restart empties the cache and records a manual restart.
+/// Verifies a scheduled restart LATCHES and changes nothing else until it is applied.
+///
+/// php-src defers the restart to the next request, so within the scheduling one the cache
+/// keeps answering. VERIFIED on reference PHP 8.5.10: straight after `opcache_reset()`,
+/// `opcache_is_script_cached()` is still true, `num_cached_scripts` is unchanged, and both
+/// `manual_restarts` and `last_restart_time` are still 0.
 #[test]
-fn a_restart_empties_the_cache_and_counts_itself() {
+fn a_scheduled_restart_latches_without_flushing() {
     let _guard = test_lock();
     set_config(enabled_config(2));
     let path = write_fixture("reset", "<?php $x = 1;");
@@ -302,11 +307,35 @@ fn a_restart_empties_the_cache_and_counts_itself() {
     assert!(schedule_restart());
     let stats = stats();
 
+    assert_eq!(stats.num_cached_scripts, 1, "the entry must survive");
+    assert!(stats.used_memory > 0, "and keep its footprint");
+    assert_eq!(stats.manual_restarts, 0, "counted at the restart, not the schedule");
+    assert_eq!(stats.last_restart_time, 0);
+    assert!(stats.restart_pending, "only the latch moves");
+}
+
+/// Verifies applying the pending restart is what empties the cache and counts it.
+///
+/// This runs at a request boundary, which is where php-src performs the restart it
+/// scheduled. Clearing the latch is part of it: the next request must be able to schedule
+/// its own.
+#[test]
+fn applying_a_pending_restart_empties_the_cache_and_counts_it() {
+    let _guard = test_lock();
+    set_config(enabled_config(2));
+    let path = write_fixture("reset-apply", "<?php $x = 1;");
+    load_script(&path).expect("fixture should load");
+    assert!(schedule_restart());
+
+    assert!(apply_pending_restart(), "a pending restart is performed");
+    let stats = stats();
+
     assert_eq!(stats.num_cached_scripts, 0);
     assert_eq!(stats.used_memory, 0);
     assert_eq!(stats.manual_restarts, 1);
-    assert!(stats.restart_pending);
     assert!(stats.last_restart_time > 0);
+    assert!(!stats.restart_pending, "the latch clears for the next request");
+    assert!(!apply_pending_restart(), "and nothing is pending afterwards");
 }
 
 /// Verifies a second restart in the same request reports `false` and counts nothing.
@@ -319,7 +348,7 @@ fn a_second_restart_reports_false_and_counts_nothing() {
 
     assert!(schedule_restart());
     assert!(!schedule_restart());
-    assert_eq!(stats().manual_restarts, 1);
+    assert_eq!(stats().manual_restarts, 0, "nothing is counted until it is applied");
 }
 
 /// Verifies the cache still fills after a restart: the latch reports, it does not disable.

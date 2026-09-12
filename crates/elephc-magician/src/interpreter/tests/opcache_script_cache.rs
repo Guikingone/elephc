@@ -259,12 +259,18 @@ echo opcache_is_script_cached({file}) ? '1' : '0';"#
     assert_eq!(output, "111011");
 }
 
-/// Verifies `opcache_reset()` reports `true` once, then `false`, and flushes the cache.
+/// Verifies `opcache_reset()` reports `true` once, then `false`, and leaves the cache
+/// ANSWERING until the restart is actually applied.
 ///
 /// The once-then-false shape is php-src's: `zend_accel_schedule_restart()` clears the flag
 /// `opcache_reset()`'s own guard tests, so only the first call in a request succeeds.
+///
+/// The third digit is the one that matters here. php-src DEFERS the restart to the next
+/// request, so the script is still cached straight after the reset — VERIFIED on reference
+/// PHP 8.5.10, which answers `true` there. The flush happens in
+/// `script_cache::apply_pending_restart`, at a request boundary a CLI program never reaches.
 #[test]
-fn reset_reports_true_once_and_flushes_the_cache() {
+fn reset_reports_true_once_and_defers_the_flush() {
     let _guard = lock_for_test();
     set_config(enabled_config());
     let file = fixture_literal("reset", "<?php $x = 1;");
@@ -277,7 +283,7 @@ echo opcache_is_script_cached({file}) ? '1' : '0';
 echo opcache_reset() ? '1' : '0';"#
     ));
 
-    assert_eq!(output, "1100");
+    assert_eq!(output, "1110", "cached, reset ok, STILL cached, second reset refused");
 }
 
 /// Verifies `opcache_reset()` still reports `false` while the cache is disabled.
