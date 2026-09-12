@@ -85,6 +85,37 @@ pub(in crate::interpreter) fn eval_expr_result_aliases_storage(expr: &EvalExpr) 
     }
 }
 
+/// Evaluates an expression and hands back a value safe to give to a CONSUMING sink -- one that
+/// takes ownership of the reference outright instead of retaining its own, such as
+/// `values.array_set` (`__rt_mixed_array_set` stores the pointer it is handed and frees it on
+/// every path that does not keep it, never incrementing it first).
+///
+/// `eval_expr` on an aliasing expression (a `LoadVar`, a re-used property read, ...) hands back the
+/// SAME cell its owner still holds. Passing that handle straight into a consuming sink gives the
+/// sink the owner's only reference: the owner's next use of the same cell then walks into memory
+/// the sink has since released. `eval_assign` already applies this rule before writing an aliasing
+/// source into its target (`values.copy_value` when `eval_expr_result_aliases_storage` is true);
+/// this is that same rule, shared for every OTHER writer that stores a raw `eval_expr` result into
+/// a consuming sink. A method that stores one of its arguments into `$this->prop[]` and ALSO hands
+/// that same argument to a freshly constructed object of another class is exactly the case this
+/// covers: without the copy here, the array's element and the new object's promoted property ended
+/// up sharing one physical reference between two logical owners, and freeing either one first left
+/// the other pointing at released memory.
+pub(in crate::interpreter) fn eval_expr_value_for_consuming_store(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let aliases_storage = eval_expr_result_aliases_storage(expr);
+    let value = eval_expr(expr, context, scope, values)?;
+    if aliases_storage {
+        values.copy_value(value)
+    } else {
+        Ok(value)
+    }
+}
+
 /// Evaluates a boolean condition, consuming its temporary but not a borrowed scope value.
 pub(in crate::interpreter) fn eval_truthy_expr(
     expr: &EvalExpr,

@@ -363,8 +363,18 @@ pub(super) fn eval_non_object_array_append_var_stmt(
         values.array_new(1)?
     };
     let index = eval_array_append_key(array, values)?;
-    let owns_value = !super::super::expressions::eval_expr_result_aliases_storage(value);
-    let evaluated = eval_expr(value, context, scope, values);
+    // `values.array_set` CONSUMES the value it is handed on every path -- it stores the pointer
+    // outright on success and releases it itself when the write cannot be applied
+    // (`__rt_mixed_array_set`'s `drop` label). `eval_expr_value_for_consuming_store` mints an
+    // independent reference first when the source expression ALIASES storage (a `LoadVar`, a
+    // re-used property read, ...), so the array gets its own reference instead of stealing the
+    // one the aliased owner still needs. Releasing `value` again afterward -- the previous shape
+    // of this function, gated on whether the source was a fresh temporary -- double-consumed a
+    // fresh temporary's sole reference (an object appended by `$arr[] = new Foo();` was destructed
+    // by the very next statement, before anything else could read it back out of the array) and
+    // did nothing to fix the aliasing case, which needed a retain BEFORE the store, not a skipped
+    // release after it.
+    let evaluated = eval_expr_value_for_consuming_store(value, context, scope, values);
     let value = match evaluated {
         Ok(value) => value,
         Err(status) => {
@@ -375,20 +385,13 @@ pub(super) fn eval_non_object_array_append_var_stmt(
             return Err(status);
         }
     };
-    // The setter borrows the key and retains its own element reference.
     let stored = values.array_set(array, index, value);
     let released_index = values.release(index);
-    let released_value = if owns_value {
-        eval_release_value(context, values, value)
-    } else {
-        Ok(())
-    };
     if stored.is_err() && existing.is_none_or(|(cell, _)| cell != array) {
         values.release(array)?;
     }
     let array = stored?;
     released_index?;
-    released_value?;
     for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
         values.release(replaced)?;
     }
@@ -457,7 +460,7 @@ pub(super) fn eval_non_object_array_set_var_stmt(
         values.array_new(1)?
     };
     let index = eval_array_set_index(index, context, scope, values)?;
-    let value = eval_expr(value, context, scope, values)?;
+    let value = eval_expr_value_for_consuming_store(value, context, scope, values)?;
     let array = eval_array_set_target_for_index(array, index, values)?;
     let array = values.array_set(array, index, value)?;
     for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
@@ -617,7 +620,7 @@ pub(super) fn eval_property_array_append_result(
         values.array_new(1)?
     };
     let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
+    let value = eval_expr_value_for_consuming_store(value, context, scope, values)?;
     let array = values.array_set(array, index, value)?;
     eval_property_set_result(object, property, array, context, values)
 }
@@ -671,7 +674,7 @@ pub(super) fn eval_property_array_set_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(op) = op else {
-        return eval_expr(value, context, scope, values);
+        return eval_expr_value_for_consuming_store(value, context, scope, values);
     };
     let current = eval_array_get_result(array, index, context, values)?;
     let right = eval_expr(value, context, scope, values)?;
@@ -709,7 +712,7 @@ pub(super) fn eval_static_property_array_append_result(
         values.array_new(1)?
     };
     let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
+    let value = eval_expr_value_for_consuming_store(value, context, scope, values)?;
     let array = values.array_set(array, index, value)?;
     eval_static_property_set_result(class_name, property, array, context, values)
 }

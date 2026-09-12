@@ -80,6 +80,7 @@ mod control_flow;
 mod core;
 mod declare_directives;
 mod destructuring;
+mod discarded_call_new_object_shared_argument;
 mod dynamic_calls;
 mod dynamic_property_store;
 mod element_reference_bind;

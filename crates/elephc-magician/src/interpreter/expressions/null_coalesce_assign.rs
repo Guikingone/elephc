@@ -451,7 +451,7 @@ pub(in crate::interpreter) fn eval_array_append_result(
         current
     };
     let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
+    let value = eval_expr_value_for_consuming_store(value, context, scope, values)?;
     let updated = values.array_set(array, index, value)?;
     write_location(location, updated, false, context, scope, values)?;
     Ok(value)
