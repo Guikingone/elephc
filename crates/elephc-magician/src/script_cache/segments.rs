@@ -40,7 +40,10 @@ pub(crate) enum ParseMode {
 }
 
 /// One replayable piece of an included file.
-#[derive(Debug, Clone)]
+///
+/// Serializable as one unit: this is what the on-disk file cache stores, so a warm start
+/// replays exactly the segments an in-memory hit would.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub(crate) enum ScriptSegment {
     /// Literal bytes outside any `<?php … ?>` block, echoed verbatim.
     Output(Arc<[u8]>),

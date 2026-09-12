@@ -26,6 +26,8 @@
 pub(crate) mod accel_log;
 pub(crate) mod config;
 pub(crate) mod file_cache;
+#[cfg(test)]
+mod format_bench;
 pub(crate) mod segments;
 pub(crate) mod store;
 
