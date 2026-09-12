@@ -339,10 +339,15 @@ echo 'misses=', $s['opcache_statistics']['misses'], "\n";
 /// Verifies `opcache.file_update_protection` refuses to CACHE a just-written file, while
 /// still running it.
 ///
-/// `lib.php` is (re)written AFTER the compile and immediately before the run, so its age at
-/// run time is ~0s — inside the default 2s window. Writing it before compiling would not
-/// work: compilation takes seconds, and the file would age out of the window before the
-/// binary ever looked at it.
+/// The window is set ENORMOUS rather than left at the default 2s, and that is what makes
+/// this deterministic: with 2s the assertion depends on the binary starting within two
+/// seconds of the fixture being written, which loses under parallel test load and fails for
+/// a reason that has nothing to do with the directive. The exact boundary is pinned
+/// precisely, and without a clock, by
+/// `script_cache::config::tests::file_update_protection_refuses_only_younger_files`.
+///
+/// `lib.php` is still written AFTER the compile: compilation takes seconds, and a fixture
+/// written before it would be measurably older than the test intends.
 ///
 /// Both includes must therefore MISS, and the file must still run: refusing to cache is not
 /// refusing to execute.
@@ -350,7 +355,10 @@ echo 'misses=', $s['opcache_statistics']['misses'], "\n";
 fn a_freshly_written_file_is_run_but_not_cached() {
     let dir = make_test_dir("opcache_fup_fresh");
     write_dynamic_fixture(&dir, FRESH_FILE_PROBE);
-    let binary = compile(&dir, &["opcache.enable_cli=1"]);
+    let binary = compile(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=100000"],
+    );
     fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
 
     let output = run_binary(&binary);
