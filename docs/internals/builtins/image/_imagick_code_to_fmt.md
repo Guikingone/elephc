@@ -2,7 +2,7 @@
 title: "_imagick_code_to_fmt() — internals"
 description: "Compiler internals for _imagick_code_to_fmt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1068
+  order: 1069
 ---
 
 ## `_imagick_code_to_fmt()` — internals

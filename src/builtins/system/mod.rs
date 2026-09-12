@@ -34,6 +34,7 @@ pub mod __elephc_new_without_constructor;
 pub mod __elephc_opcache_rt_script_field;
 pub mod __elephc_opcache_rt_script_path;
 pub mod __elephc_opcache_rt_stat;
+pub mod __elephc_opcache_rt_swap;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_strtotime_raw;

@@ -76,11 +76,20 @@ pub(super) fn scripts_map_expr(manifest: &[ScriptEntry], revalidate_freq: i64, v
 /// is instead a CALL to the typed environment helper carrying its compile-time value as the
 /// default, which is what makes `opcache_get_configuration()['directives']` and `ini_get()` move
 /// TOGETHER under an `ELEPHC_INI_*` override, the way `-d` moves both surfaces in reference PHP.
-pub(super) fn configuration_expr(php_version: PhpVersion, overrides: &[(String, String)]) -> Expr {
+pub(super) fn configuration_expr(
+    php_version: PhpVersion,
+    overrides: &[(String, String)],
+    ini_set_injected: bool,
+) -> Expr {
     let version_id = php_version.version_id();
     let directives = effective_opcache_directives(version_id, overrides)
         .into_iter()
-        .map(|(name, value)| (e_str(name), directive_runtime_value_expr(name, &value)))
+        .map(|(name, value)| {
+            (
+                e_str(name),
+                directive_runtime_value_expr(name, &value, ini_set_injected),
+            )
+        })
         .collect();
     e_array_assoc(vec![
         (e_str("directives"), e_array_assoc(directives)),

@@ -143,7 +143,10 @@ fn configure_eval_opcache_swapped_directives(
     );
 }
 
-/// Emits one `__elephc_eval_opcache_swap_directive(id, value)` call, discarding the result.
+/// Emits one compiled-install `__elephc_eval_opcache_swap_directive` call.
+///
+/// Passes `as_override = 0`: this is the value `--ini` baked, not an `ini_set()`, so it
+/// writes the base configuration and leaves any override in place.
 fn emit_opcache_directive_swap(ctx: &mut FunctionContext<'_>, id: i64, value: i64) {
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), id);
     abi::emit_load_int_immediate(
@@ -151,6 +154,7 @@ fn emit_opcache_directive_swap(ctx: &mut FunctionContext<'_>, id: i64, value: i6
         abi::int_arg_reg_name(ctx.emitter.target, 1),
         value,
     );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 0);
     let symbol = ctx
         .emitter
         .target

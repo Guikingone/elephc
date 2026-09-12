@@ -89,6 +89,58 @@ pub(crate) fn lower_opcache_rt_stat(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `__elephc_opcache_rt_swap(id, value)` to the bridge's directive setter.
+///
+/// The one `rt_*` lowering whose bridge call WRITES. It installs a directive on the live
+/// runtime-cache configuration and answers the value it replaced, which is what
+/// `ini_set()` reports.
+///
+/// PAY-FOR-USE, same rule as its sibling readers: a binary with no eval bridge has no
+/// runtime cache to configure, so the call folds to `0` and the interpreter archive is
+/// never referenced. That is not a silent loss — the prelude keeps the REPORTED value in
+/// its own override store, so `ini_get()` still moves in such a binary; only the cache
+/// that does not exist goes unconfigured.
+pub(crate) fn lower_opcache_rt_swap(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_opcache_rt_swap", 2)?;
+    ctx.emitter.blank();
+    ctx.emitter.comment("__elephc_opcache_rt_swap()");
+    if !links_the_eval_bridge(ctx) {
+        emit_zero_result(ctx);
+        return store_if_result(ctx, inst);
+    }
+    // The VALUE is materialized first and spilled, for the same reason the field reader
+    // stages its second operand first: resolving the id can clobber the argument
+    // registers, which would lose a value staged before it.
+    let value_reg = abi::secondary_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(expect_operand(inst, 1)?, value_reg)?;
+    abi::emit_push_reg(ctx.emitter, value_reg);
+    resolve_int_operand_to_result(ctx, expect_operand(inst, 0)?, "opcache rt swap id")?;
+    abi::emit_pop_reg(ctx.emitter, value_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("mov x1, {}", value_reg));                // new value → second bridge argument
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // directive id → SysV first argument register
+            ctx.emitter
+                .instruction(&format!("mov rsi, {}", value_reg));               // new value → SysV second argument register
+        }
+    }
+    // `as_override = 1`: this write comes from `ini_set()`, so it lands in the override
+    // table and outranks the compiled install that the first eval performs afterwards.
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 1);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_swap_directive");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `__elephc_opcache_rt_script_field(index, field)` to the bridge's field reader.
 pub(crate) fn lower_opcache_rt_script_field(
     ctx: &mut FunctionContext<'_>,

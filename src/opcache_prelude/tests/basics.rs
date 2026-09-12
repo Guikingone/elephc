@@ -51,7 +51,7 @@ pub(super) fn parse_internal(source: &str) -> Program {
     /// as the `$def` argument.
     #[test]
 pub(super) fn renders_parsable_php85_literal() {
-        let literal = rendered_expr(&configuration_expr(PhpVersion::Php85, &[]));
+        let literal = rendered_expr(&configuration_expr(PhpVersion::Php85, &[], false));
         assert!(literal.contains("'opcache.jit' => 'disable'"));
         assert!(literal.contains("'opcache.memory_consumption' => 134217728"));
         assert!(literal.contains(
@@ -74,7 +74,7 @@ pub(super) fn renders_parsable_php85_literal() {
     /// The 8.2 literal flips the JIT defaults and drops the 8.5-only directive.
     #[test]
 pub(super) fn renders_php82_deltas() {
-        let literal = rendered_expr(&configuration_expr(PhpVersion::Php82, &[]));
+        let literal = rendered_expr(&configuration_expr(PhpVersion::Php82, &[], false));
         assert!(literal.contains("'opcache.jit' => 'tracing'"));
         assert!(literal.contains("'opcache.jit_buffer_size' => 0"));
         // 8.2-only, and reporting-only ⇒ it carries the runtime env-override call.

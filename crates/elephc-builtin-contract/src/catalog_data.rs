@@ -2160,6 +2160,45 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         requirements: &[],
     },
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_opcache_rt_swap"),
+        name: "__elephc_opcache_rt_swap",
+        area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "id",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "value",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Internal: install one runtime script-cache directive, returning the previous value.",
+        examples: &[
+        ],
+        php_manual: None,
+        deprecation: None,
+        extension: false,
+        internal: true,
+        requirements: &[],
+    },
+
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("__elephc_opcache_rt_stat"),
         name: "__elephc_opcache_rt_stat",
         area: Area::System,

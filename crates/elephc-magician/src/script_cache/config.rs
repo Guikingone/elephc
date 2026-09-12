@@ -99,9 +99,35 @@ pub(crate) fn set_config(config: ScriptCacheConfig) {
     SCRIPT_CACHE_CONFIG.with(|cell| *cell.borrow_mut() = config);
 }
 
-/// Returns a copy of the configuration active on the current thread.
+thread_local! {
+    /// Per-directive `ini_set()` overrides, indexed by the ids below.
+    ///
+    /// KEPT SEPARATE FROM THE CONFIGURATION ON PURPOSE, and this is load-bearing rather
+    /// than tidy: generated code installs the compiled configuration when the eval context
+    /// is first created, which happens at the program's FIRST eval — and an `ini_set()`
+    /// before that point would otherwise be silently clobbered by an install that runs
+    /// later. Holding overrides beside the configuration and applying them on read makes
+    /// the order irrelevant, and matches PHP, where `ini_set()` outranks the ini file.
+    static DIRECTIVE_OVERRIDES: RefCell<[Option<u64>; DIRECTIVE_COUNT]> =
+        const { RefCell::new([None; DIRECTIVE_COUNT]) };
+}
+
+/// Returns the configuration active on the current thread, with `ini_set()` applied.
 pub(crate) fn config() -> ScriptCacheConfig {
-    SCRIPT_CACHE_CONFIG.with(|cell| cell.borrow().clone())
+    let mut config = SCRIPT_CACHE_CONFIG.with(|cell| cell.borrow().clone());
+    DIRECTIVE_OVERRIDES.with(|cell| {
+        let overrides = cell.borrow();
+        if let Some(value) = overrides[DIRECTIVE_REVALIDATE_FREQ as usize] {
+            config.revalidate_freq = value;
+        }
+        if let Some(value) = overrides[DIRECTIVE_VALIDATE_TIMESTAMPS as usize] {
+            config.validate_timestamps = value != 0;
+        }
+        if let Some(value) = overrides[DIRECTIVE_FILE_UPDATE_PROTECTION as usize] {
+            config.file_update_protection = value;
+        }
+    });
+    config
 }
 
 /// `opcache.revalidate_freq`, as [`swap_directive`] addresses it.
@@ -113,6 +139,9 @@ pub const DIRECTIVE_FILE_UPDATE_PROTECTION: u64 = 2;
 
 /// The value [`swap_directive`] answers for an id it does not know.
 pub const DIRECTIVE_UNKNOWN: u64 = u64::MAX;
+
+/// How many ids [`swap_directive`] knows; the override table's width.
+const DIRECTIVE_COUNT: usize = 3;
 
 /// Installs one directive's value on the live configuration, returning the previous one.
 ///
@@ -128,28 +157,45 @@ pub const DIRECTIVE_UNKNOWN: u64 = u64::MAX;
 /// Answers [`DIRECTIVE_UNKNOWN`] for an id this build does not know, which is what lets
 /// generated code from a newer compiler fail soft against an older archive instead of
 /// silently writing the wrong field.
-pub fn swap_directive(id: u64, value: u64) -> u64 {
+pub fn swap_directive(id: u64, value: u64, as_override: bool) -> u64 {
+    if id as usize >= DIRECTIVE_COUNT {
+        return DIRECTIVE_UNKNOWN;
+    }
+    // The PREVIOUS value is the one a reader would have seen, so it comes from the
+    // override-applied view rather than from the raw compiled configuration.
+    let effective = config();
+    let previous = match id {
+        DIRECTIVE_REVALIDATE_FREQ => effective.revalidate_freq,
+        DIRECTIVE_VALIDATE_TIMESTAMPS => u64::from(effective.validate_timestamps),
+        DIRECTIVE_FILE_UPDATE_PROTECTION => effective.file_update_protection,
+        _ => return DIRECTIVE_UNKNOWN,
+    };
+    if as_override {
+        DIRECTIVE_OVERRIDES.with(|cell| cell.borrow_mut()[id as usize] = Some(value));
+        return previous;
+    }
+    // The COMPILED install, emitted once while the eval context is built. It writes the
+    // base configuration and deliberately leaves the override table alone, so an
+    // `ini_set()` that ran before the program's first eval still wins afterwards.
     SCRIPT_CACHE_CONFIG.with(|cell| {
         let mut config = cell.borrow_mut();
         match id {
-            DIRECTIVE_REVALIDATE_FREQ => {
-                let previous = config.revalidate_freq;
-                config.revalidate_freq = value;
-                previous
-            }
-            DIRECTIVE_VALIDATE_TIMESTAMPS => {
-                let previous = u64::from(config.validate_timestamps);
-                config.validate_timestamps = value != 0;
-                previous
-            }
-            DIRECTIVE_FILE_UPDATE_PROTECTION => {
-                let previous = config.file_update_protection;
-                config.file_update_protection = value;
-                previous
-            }
-            _ => DIRECTIVE_UNKNOWN,
+            DIRECTIVE_REVALIDATE_FREQ => config.revalidate_freq = value,
+            DIRECTIVE_VALIDATE_TIMESTAMPS => config.validate_timestamps = value != 0,
+            DIRECTIVE_FILE_UPDATE_PROTECTION => config.file_update_protection = value,
+            _ => {}
         }
-    })
+    });
+    previous
+}
+
+/// Drops every `ini_set()` override, restoring the compiled configuration.
+///
+/// Exists for tests, which share one thread and would otherwise leak an override from one
+/// case into the next.
+#[cfg(test)]
+pub(crate) fn clear_directive_overrides() {
+    DIRECTIVE_OVERRIDES.with(|cell| *cell.borrow_mut() = [None; DIRECTIVE_COUNT]);
 }
 
 #[cfg(test)]
@@ -244,13 +290,14 @@ mod tests {
     fn swap_directive_returns_the_previous_value() {
         set_config(ScriptCacheConfig::disabled());
 
-        assert_eq!(swap_directive(DIRECTIVE_REVALIDATE_FREQ, 30), 2);
+        assert_eq!(swap_directive(DIRECTIVE_REVALIDATE_FREQ, 30, true), 2);
         assert_eq!(config().revalidate_freq, 30);
-        assert_eq!(swap_directive(DIRECTIVE_VALIDATE_TIMESTAMPS, 0), 1);
+        assert_eq!(swap_directive(DIRECTIVE_VALIDATE_TIMESTAMPS, 0, true), 1);
         assert!(!config().validate_timestamps);
-        assert_eq!(swap_directive(DIRECTIVE_FILE_UPDATE_PROTECTION, 9), 2);
+        assert_eq!(swap_directive(DIRECTIVE_FILE_UPDATE_PROTECTION, 9, true), 2);
         assert_eq!(config().file_update_protection, 9);
 
+        clear_directive_overrides();
         set_config(ScriptCacheConfig::disabled());
     }
 
@@ -260,7 +307,7 @@ mod tests {
     fn an_unknown_directive_id_writes_nothing() {
         set_config(ScriptCacheConfig::disabled());
 
-        assert_eq!(swap_directive(9_999, 1), DIRECTIVE_UNKNOWN);
+        assert_eq!(swap_directive(9_999, 1, true), DIRECTIVE_UNKNOWN);
         assert_eq!(config(), ScriptCacheConfig::disabled());
     }
 

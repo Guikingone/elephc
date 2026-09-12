@@ -405,6 +405,7 @@ pub enum RuntimeFnId {
     ElephcOpcacheRtScriptField,
     ElephcOpcacheRtScriptPath,
     ElephcOpcacheRtStat,
+    ElephcOpcacheRtSwap,
     ElephcPtrIsNull,
     ElephcPtrReadString,
     ElephcPtrWriteString,
@@ -1162,6 +1163,13 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtScriptField | RuntimeFnId::ElephcOpcacheRtStat => {
                 crate::ir::Effects::READS_GLOBAL
             }
+            // WRITES, unlike every other `rt_*` reader: it installs a directive on the
+            // live cache configuration and answers the value it replaced. Marking it a
+            // pure read would let the optimizer fold two `ini_set()` calls into one, or
+            // drop one whose result is discarded — which is the common spelling.
+            RuntimeFnId::ElephcOpcacheRtSwap => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
             // Same read, plus the owned PHP string copied out of the bridge's buffer.
             RuntimeFnId::ElephcOpcacheRtScriptPath => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
@@ -2352,6 +2360,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtScriptField => "__elephc_opcache_rt_script_field",
             RuntimeFnId::ElephcOpcacheRtScriptPath => "__elephc_opcache_rt_script_path",
             RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
+            RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",

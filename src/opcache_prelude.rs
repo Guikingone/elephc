@@ -87,10 +87,11 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::names::{canonical_name_for_decl, Name};
-use crate::parser::ast::{BinOp, Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::span::Span;
 use crate::synthetic_class::{
-    e_array, e_array_assoc, e_binop, e_bool, e_call, e_float, e_int, e_str, e_var,
+    e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast, e_float, e_int, e_str, e_ternary,
+    e_var,
 };
 use crate::web_prelude::PhpVersion;
 

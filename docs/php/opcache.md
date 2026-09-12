@@ -714,10 +714,46 @@ same function also serves the `session.*` block; see
 
 ### `ini_set()`
 
-`ini_set('opcache.*', …)` always returns `false`. Every directive is baked into
-the binary and cannot be mutated at run time. This is exact for the
-`PHP_INI_SYSTEM` majority and a divergence for the 18 `PHP_INI_ALL` directives —
-see [Limitations](#limitations).
+`ini_set('opcache.*', …)` succeeds for **three** directives and returns `false`
+for the other 51:
+
+| Directive | Effect |
+|---|---|
+| `opcache.revalidate_freq` | the [runtime script cache](#the-runtime-script-cache)'s revalidation interval |
+| `opcache.validate_timestamps` | whether it revalidates at all |
+| `opcache.file_update_protection` | how young a file it refuses to store |
+
+These are exactly the intersection of two sets: the 18 directives php-src
+registers `PHP_INI_ALL`, where reference PHP's own `ini_set()` succeeds, and the
+ones elephc's cache actually reads. A successful call returns the **previous**
+raw value and moves every surface together — `ini_get()`,
+`ini_get_all()`, `opcache_get_configuration()['directives']`, and the cache
+itself, from the very next include:
+
+```php
+var_dump(ini_get('opcache.revalidate_freq'));   // "2"
+var_dump(ini_set('opcache.revalidate_freq', '77'));  // "2"  — the previous value
+var_dump(ini_get('opcache.revalidate_freq'));   // "77"
+var_dump(opcache_get_configuration()['directives']['opcache.revalidate_freq']); // 77
+var_dump(ini_set('opcache.memory_consumption', '256'));  // false — PHP_INI_SYSTEM
+```
+
+That sequence is byte-identical on reference PHP 8.5.10, `false` included:
+`opcache.memory_consumption` is `PHP_INI_SYSTEM` there too, so refusing it is
+**exact** rather than a shortfall.
+
+The remaining 15 `PHP_INI_ALL` directives still return `false`, and that is
+deliberate. Fourteen of them are JIT knobs and one is `opcache.dups_fix`; all are
+inert in elephc, so succeeding would move a reported value while nothing changed
+— the same contradiction the
+[runtime-override scope rule](#overriding-a-directive) exists to prevent. The
+remaining divergence is listed in [Limitations](#limitations).
+
+An `ini_set()` **before the program's first `eval()`** still reaches the cache.
+That ordering is not free: generated code installs the compiled configuration
+when the eval context is first built, which is that first `eval()` — so an
+override is held separately and applied on read, and the later install cannot
+clobber the earlier call.
 
 ### `ini_get_all()`
 
@@ -1101,7 +1137,7 @@ on macOS arm64.
 | Cache population | Grows at run time as scripts are compiled/included | The compile-time manifest never *grows*; the [runtime script cache](#the-runtime-script-cache) does, for dynamically included files | The binary is the cache for everything compiled into it; only the dynamic tier can gain an entry at run time |
 | `opcache_compile_file()` on a file outside the manifest | Compiles it, returns `true`, and the file becomes cached | Inside `eval()`: compiles and caches it, returns `true`. In natively compiled code: still `false` | A dynamic include is a compile error at AOT top level, so a natively compiled `opcache_compile_file()` names a file that program could never run |
 | `opcache_is_script_cached()` on a file outside the manifest | `false` until something compiles it, then `true` | Inside `eval()`: `true` once it is cached. In natively compiled code: `false` | Same reason. `opcache_get_status()['scripts']` DOES report it from native code |
-| `ini_set('opcache.*', …)` | Succeeds for the 18 `PHP_INI_ALL` directives (e.g. `opcache.enable`, `opcache.jit_debug`), returning the previous value | Always returns `false` | Values are baked into the binary; a successful `ini_set()` would report a value nothing else honors. Exact for the `PHP_INI_SYSTEM` majority |
+| `ini_set('opcache.*', …)` | Succeeds for all 18 `PHP_INI_ALL` directives, returning the previous value | Succeeds for **3** of them — `revalidate_freq`, `validate_timestamps`, `file_update_protection` — and returns `false` for the other 15 | Those three are the only `PHP_INI_ALL` directives elephc's cache actually reads, and for them the whole surface moves together, byte-identical to reference. The other 15 are inert here (14 JIT knobs and `dups_fix`), so succeeding would report a value nothing honors. Exact for the 36 `PHP_INI_SYSTEM` directives |
 | `blacklist_misses`, `blacklist_miss_ratio`, `oom_restarts`, `hash_restarts` | Live counters | Always `0` | `opcache.blacklist_filename` is reported but not applied, and the runtime cache refuses rather than restarting when it fills. `hits`, `misses` and `opcache_hit_rate` are NOT in this row any more: they are live for the [runtime script cache](#the-runtime-script-cache) |
 | `opcache_reset()` with the [runtime script cache](#the-runtime-script-cache) on | Schedules a restart; the cache keeps answering for the rest of the request, and is flushed at the next one | Flushes immediately, so `opcache_is_script_cached()` reports `false` straight after | VERIFIED on PHP 8.5.6, which still answers `true` there. The request boundary that would carry a deferred flush lives in `elephc-web`, which does not depend on the interpreter crate, so deferring would mean never flushing at all |
 | `memory_usage` / `interned_strings_usage` *absolute figures* | Real shared-memory accounting | Synthetic baselines, plus Σ of the manifest's source-file sizes, plus the runtime cache's real accounted bytes | No shared-memory segment exists. The *invariants* are exact: `free = total − used − wasted`, `free = buffer_size − used`, `0 < used < buffer_size`, and the whole `interned_strings_usage` key is omitted for a zero buffer. `max_cached_keys` is the exact php-src prime rounding |

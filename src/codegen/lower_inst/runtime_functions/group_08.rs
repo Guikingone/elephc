@@ -53,6 +53,9 @@ pub(super) fn lower(
         RuntimeFnId::ElephcOpcacheRtStat => Some({
             crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_stat(ctx, inst)
         }),
+        RuntimeFnId::ElephcOpcacheRtSwap => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_swap(ctx, inst)
+        }),
         RuntimeFnId::ElephcPtrIsNull => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_is_null(ctx, inst)
         }),

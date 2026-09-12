@@ -150,19 +150,29 @@ pub unsafe extern "C" fn __elephc_eval_configure_opcache_file_cache(
 
 /// Installs one runtime-cache directive by id, returning the value it replaced.
 ///
-/// Two callers, one symbol. Generated code emits it at eval-context setup to carry the
-/// settings that did not fit the two configure calls above — both of which already spend
-/// all six integer argument registers x86_64 provides — and `ini_set()` emits it again at
-/// run time for the three directives php-src registers as `PHP_INI_ALL`. The runtime
-/// cache reads all three on every lookup, so a later change applies to the next include.
+/// Two callers, one symbol, told apart by `as_override`. Generated code emits it with `0`
+/// at eval-context setup to carry the COMPILED settings that did not fit the two configure
+/// calls above — both of which already spend all six integer argument registers x86_64
+/// provides — and `ini_set()` emits it with `1` at run time for the three directives
+/// php-src registers as `PHP_INI_ALL`.
+///
+/// THE FLAG IS NOT COSMETIC. The compiled install runs when the eval context is first
+/// built, which is the program's FIRST eval — after any `ini_set()` that precedes it. An
+/// override is therefore kept in its own table and applied on read, so the later install
+/// cannot clobber the earlier `ini_set()`. The runtime cache reads all three on every
+/// lookup, so either write applies to the next include.
 ///
 /// Returning the PREVIOUS value is what lets `ini_set()` answer with it, as PHP requires.
 /// An unknown id writes nothing and answers `u64::MAX`.
 ///
 /// See `crate::script_cache::config::swap_directive` for the id contract.
 #[no_mangle]
-pub extern "C" fn __elephc_eval_opcache_swap_directive(id: u64, value: u64) -> u64 {
-    crate::script_cache::swap_directive(id, value)
+pub extern "C" fn __elephc_eval_opcache_swap_directive(
+    id: u64,
+    value: u64,
+    as_override: u8,
+) -> u64 {
+    crate::script_cache::swap_directive(id, value, as_override != 0)
 }
 
 /// Copies one generated directive string out of the binary's read-only data.

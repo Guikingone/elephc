@@ -908,27 +908,74 @@ pub(crate) fn cli_ini_get_decl() -> Stmt {
         .build()
 }
 
-/// The CLI `ini_set(string $option, $value): string|false` wrapper: every `opcache.*` directive
-/// is baked into the binary, so it reports failure for every key.
+/// The `opcache.*` directives `ini_set()` genuinely moves, with the id the runtime-cache
+/// setter addresses each by.
+///
+/// These are exactly the intersection of two sets: the directives php-src registers
+/// `PHP_INI_ALL` (so reference PHP's own `ini_set()` succeeds on them) and the ones
+/// elephc's runtime script cache actually reads. Every other `opcache.*` key keeps
+/// reporting failure, which is exact for the `PHP_INI_SYSTEM` majority and deliberate for
+/// the rest: succeeding there would move a reported value while nothing changed.
+///
+/// THE IDS ARE A WIRE CONTRACT with `elephc_magician::script_cache::config`, matched by
+/// number across the C ABI, so they may never be reordered.
+pub(crate) const INI_SETTABLE_DIRECTIVES: [(&str, i64); 3] = [
+    ("opcache.revalidate_freq", 0),
+    ("opcache.validate_timestamps", 1),
+    ("opcache.file_update_protection", 2),
+];
+
+/// The `ini_set(string $option, $value): string|false` wrapper.
+///
+/// Succeeds for [`INI_SETTABLE_DIRECTIVES`] and fails for every other key. A successful
+/// call does two things, and needs both to stay honest: it records the new raw string in
+/// the override store every reporting surface consults, and it installs the value on the
+/// live runtime script cache through `__elephc_opcache_rt_swap`. Moving only the report
+/// would be the contradiction the runtime-override scope rule exists to prevent.
+///
+/// Returns the PREVIOUS raw value, as PHP requires — read before the write, and through
+/// `__elephc_opcache_ini_string` so it already accounts for an earlier `ini_set()`.
+///
+/// The value goes through `__elephc_ini_scan` first, the same bareword normalizer `--ini`
+/// and `ELEPHC_INI_*` apply, so `ini_set('opcache.validate_timestamps', 'off')` stores
+/// `''` exactly as the other two paths would.
 pub(crate) fn cli_ini_set_decl() -> Stmt {
+    let mut body = vec![
+        s_assign("value", e_cast(CastType::String, e_var("value"))),
+        s_assign("value", e_call("__elephc_ini_scan", vec![e_var("value")])),
+    ];
+    for (name, id) in INI_SETTABLE_DIRECTIVES {
+        body.push(s_if(
+            e_binop(e_var("option"), BinOp::StrictEq, e_str(name)),
+            vec![
+                s_assign(
+                    "previous",
+                    e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
+                ),
+                s_expr(e_call(
+                    "__elephc_opcache_ini_override",
+                    vec![e_var("option"), e_var("value"), e_int(1)],
+                )),
+                // The cache push. In a binary with no eval bridge this whole call folds
+                // to `0` at lowering time and the interpreter is never linked; the
+                // override store above still moved, so `ini_get()` reports the new value
+                // in that binary too.
+                s_expr(e_call(
+                    "__elephc_opcache_rt_swap",
+                    vec![e_int(id), e_cast(CastType::Int, e_var("value"))],
+                )),
+                s_return(e_var("previous")),
+            ],
+            vec![],
+            None,
+        ));
+    }
+    body.push(s_return(e_bool(false)));
     function("ini_set")
         .param("option", TypeExpr::Str)
         .param_untyped("value")
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
-        .body(vec![
-            s_assign("value", e_cast(CastType::String, e_var("value"))),
-            s_if(
-                e_binop(
-                    e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
-                    BinOp::StrictEq,
-                    e_var("value"),
-                ),
-                vec![s_return(e_bool(false))],
-                vec![],
-                None,
-            ),
-            s_return(e_bool(false)),
-        ])
+        .body(body)
         .build()
 }
 
@@ -1056,13 +1103,83 @@ pub(crate) fn ini_helper_decls(
         )
     };
 
-    let mut string_body: Vec<Stmt> = string_arms.into_iter().map(arm).collect();
+    // The `ini_set()` override wins over every baked or environment-derived value, so it
+    // is consulted FIRST. An empty answer means "never set": the three settable
+    // directives are all numeric, so the empty string is a value none of them can take
+    // and is safe as the absent sentinel.
+    let mut string_body: Vec<Stmt> = vec![
+        s_assign(
+            "overridden",
+            e_call(
+                "__elephc_opcache_ini_override",
+                vec![e_var("option"), e_str(""), e_int(2)],
+            ),
+        ),
+        s_if(
+            e_binop(e_var("overridden"), BinOp::StrictEq, e_str("1")),
+            vec![s_return(e_call(
+                "__elephc_opcache_ini_override",
+                vec![e_var("option"), e_str(""), e_int(0)],
+            ))],
+            vec![],
+            None,
+        ),
+    ];
+    string_body.extend(string_arms.into_iter().map(arm));
     string_body.push(s_return(e_bool(false)));
 
     let mut null_body: Vec<Stmt> = null_arms.into_iter().map(arm).collect();
     null_body.push(s_return(e_bool(false)));
 
     vec![
+        // The `ini_set()` override store. `$op` 1 writes, 0 reads the value, 2 answers
+        // whether the key is set at all.
+        //
+        // THE PRESENCE TEST IS NOT REDUNDANT: the empty string cannot serve as the "never
+        // set" sentinel, because it is a legitimate stored value. `__elephc_ini_scan`
+        // rewrites the boolean barewords to `''`, so `ini_set('opcache.validate_timestamps',
+        // 'off')` stores exactly that, and a value-only read could not tell it from absent.
+        //
+        // Every reporting surface funnels through this one store, which is what keeps
+        // `ini_get()`, `ini_get_all()` and `opcache_get_configuration()` agreeing with each
+        // other and with the cache.
+        function("__elephc_opcache_ini_override")
+            .param("option", TypeExpr::Str)
+            .param("value", TypeExpr::Str)
+            .param("op", TypeExpr::Int)
+            .returns(TypeExpr::Str)
+            .body(vec![
+                // Seeded with one typed dummy entry: the EIR backend rejects
+                // `static $s = [];`, the same restriction
+                // `__elephc_opcache_invalidate_state` documents.
+                s_static("overrides", e_array_assoc(vec![(e_str(""), e_str(""))])),
+                s_if(
+                    e_binop(e_var("op"), BinOp::StrictEq, e_int(1)),
+                    vec![s_array_assign("overrides", e_var("option"), e_var("value"))],
+                    vec![],
+                    None,
+                ),
+                // An `isset` guard plus a bound local, not `?? ''`: the coalesce reads
+                // `true` for an absent key in elephc.
+                s_if(
+                    e_not(e_call(
+                        "isset",
+                        vec![e_index(e_var("overrides"), e_var("option"))],
+                    )),
+                    vec![s_return(e_str(""))],
+                    vec![],
+                    None,
+                ),
+                s_if(
+                    e_binop(e_var("op"), BinOp::StrictEq, e_int(2)),
+                    vec![s_return(e_str("1"))],
+                    vec![],
+                    None,
+                ),
+                s_assign("current", e_index(e_var("overrides"), e_var("option"))),
+                s_return(e_var("current")),
+            ])
+            .build(),
         function("__elephc_opcache_ini_string")
             .param("option", TypeExpr::Str)
             .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
