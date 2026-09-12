@@ -104,7 +104,7 @@ fn now_seconds() -> i64 {
 }
 
 /// Returns a file's mtime in whole seconds since the Unix epoch, if it has one.
-fn mtime_seconds(metadata: &std::fs::Metadata) -> Option<i64> {
+pub(super) fn mtime_seconds(metadata: &std::fs::Metadata) -> Option<i64> {
     metadata
         .modified()
         .ok()?
@@ -183,11 +183,28 @@ fn fill_entry(
 ) -> io::Result<Arc<[ScriptSegment]>> {
     let bytes = std::fs::read(path)?;
     let metadata = std::fs::metadata(path).ok();
-    let segments: Arc<[ScriptSegment]> = Arc::from(segment_script(&bytes, ParseMode::Fresh));
+    let mtime = metadata.as_ref().and_then(mtime_seconds);
+    let file_size = metadata.as_ref().map_or(bytes.len() as u64, |meta| meta.len());
+    // The FILE CACHE is consulted before the parser. It holds this script already parsed,
+    // and only hands it back when the source's mtime, size and canonical path still match
+    // what was stored — so a hit is the same segments a parse would produce, for roughly a
+    // quarter of the cost (see `file_store`). A miss, a stale entry or any I/O failure all
+    // fall through to the parse below.
+    let from_disk = super::file_store::load(config, key, mtime, file_size);
+    let parsed_here = from_disk.is_none();
+    let segments: Arc<[ScriptSegment]> = match from_disk {
+        Some(cached) => Arc::from(cached),
+        None => Arc::from(segment_script(&bytes, ParseMode::Fresh)),
+    };
+    if parsed_here {
+        // Only a script this process actually parsed is written back. Re-writing one that
+        // came FROM the cache would be pure I/O for a byte-identical file.
+        super::file_store::store(config, key, mtime, file_size, &segments);
+    }
     let now = now_seconds();
     let mut cache = lock_script_cache();
     cache.misses += 1;
-    let size = metadata.as_ref().map_or(bytes.len() as u64, |meta| meta.len());
+    let size = file_size;
     if !config.admits_size(size) {
         return Ok(segments);
     }
@@ -196,7 +213,7 @@ fn fill_entry(
     // This sits beside the size refusal because it is the same kind of decision, and it
     // must stay AFTER the `misses` bump: php-src counts the lookup that found nothing
     // whether or not it goes on to store anything.
-    if !config.admits_age(metadata.as_ref().and_then(mtime_seconds), now) {
+    if !config.admits_age(mtime, now) {
         return Ok(segments);
     }
     let footprint: usize = segments
@@ -212,7 +229,7 @@ fn fill_entry(
         key.to_path_buf(),
         Entry {
             segments: Arc::clone(&segments),
-            mtime: metadata.as_ref().and_then(mtime_seconds),
+            mtime,
             size,
             footprint,
             hits: 0,

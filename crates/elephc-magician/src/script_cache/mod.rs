@@ -26,6 +26,9 @@
 pub(crate) mod accel_log;
 pub(crate) mod config;
 pub(crate) mod file_cache;
+pub(crate) mod file_store;
+
+mod format_guard;
 #[cfg(test)]
 mod format_bench;
 pub(crate) mod segments;
@@ -38,7 +41,10 @@ pub use config::{
     swap_directive, DIRECTIVE_FILE_UPDATE_PROTECTION, DIRECTIVE_REVALIDATE_FREQ,
     DIRECTIVE_UNKNOWN, DIRECTIVE_VALIDATE_TIMESTAMPS,
 };
-pub(crate) use file_cache::{validate_file_cache_directives, FileCacheConfig};
+pub(crate) use file_store::contains as file_cache_contains;
+pub(crate) use file_cache::{
+    set_file_cache_config, validate_file_cache_directives, FileCacheConfig,
+};
 pub(crate) use segments::ScriptSegment;
 pub(crate) use store::load_script;
 

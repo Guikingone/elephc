@@ -87,6 +87,26 @@ fn compile(dir: &Path, ini: &[&str]) -> PathBuf {
     dir.join("main")
 }
 
+/// Runs a compiled binary, asserting success, and returns its stdout.
+fn run_binary(bin: &Path) -> String {
+    let output = Command::new(bin).output().expect("failed to run binary");
+    assert!(
+        output.status.success(),
+        "binary failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Returns the value of a `key=value` line the probe printed.
+fn field<'a>(output: &'a str, key: &str) -> &'a str {
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{key}=")))
+        .unwrap_or_else(|| panic!("probe printed no `{key}=` line; output was:\n{output}"))
+}
+
 /// Builds a fixture with the given directives and runs it, returning the raw output.
 fn compile_and_run(prefix: &str, ini: &[&str]) -> (PathBuf, Output) {
     let dir = make_test_dir(prefix);
@@ -372,4 +392,115 @@ fn error_log_receives_the_fatal_instead_of_stderr() {
         !String::from_utf8_lossy(&output.stderr).contains("Fatal Error"),
         "the fatal was also written to stderr"
     );
+}
+
+/// The probe: include a file from `eval()`, and report whether the ON-DISK cache holds it.
+///
+/// `opcache_is_script_cached_in_file_cache()` is asked BEFORE the include on purpose — that
+/// is what separates a cold first process from a warm second one sharing the directory.
+const FILE_CACHE_PROBE: &str = r#"<?php
+eval('
+$f = __DIR__ . "/lib.php";
+echo "before=", (opcache_is_script_cached_in_file_cache($f) ? "T" : "F"), "\n";
+include $f;
+echo "after=", (opcache_is_script_cached_in_file_cache($f) ? "T" : "F"), "\n";
+');
+"#;
+
+/// Verifies the on-disk cache survives the process that wrote it.
+///
+/// This is the whole point of `opcache.file_cache`: the runtime script cache is per-process
+/// and dies with it, so a worker that starts cold re-reads and re-parses every dynamically
+/// included file. An entry on disk is what makes the SECOND process start warm.
+///
+/// Run twice, same binary, same cache directory:
+/// - run 1 finds nothing on disk (`before=F`), parses, and writes the entry (`after=T`);
+/// - run 2 is a brand-new process with an empty in-memory cache, and finds the entry
+///   already there (`before=T`).
+///
+/// `before=T` on the second run is the assertion that cannot pass without a real file
+/// cache — no in-process state survives between two `Command` invocations.
+#[test]
+fn the_file_cache_outlives_the_process_that_wrote_it() {
+    let dir = make_test_dir("opcache_fc_persist");
+    let cache = dir.join("file-cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
+    fs::write(dir.join("main.php"), FILE_CACHE_PROBE).unwrap();
+    let bin = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            &format!("opcache.file_cache={}", cache.display()),
+        ],
+    );
+
+    let first = run_binary(&bin);
+    let second = run_binary(&bin);
+
+    assert_eq!(field(&first, "before"), "F", "a cold directory holds nothing");
+    assert_eq!(field(&first, "after"), "T", "the include writes the entry");
+    assert_eq!(
+        field(&second, "before"),
+        "T",
+        "a NEW process must find the entry the previous one left:\n{second}"
+    );
+}
+
+/// Verifies an edited source is not served from disk by a later process.
+///
+/// The stored entry records the source's mtime and size; rewriting the file invalidates it,
+/// so the second process must find nothing rather than run the previous contents. This is
+/// the check that keeps the file cache from turning a code change into a silent no-op.
+#[test]
+fn an_edited_source_invalidates_its_disk_entry() {
+    let dir = make_test_dir("opcache_fc_edit");
+    let cache = dir.join("file-cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
+    fs::write(dir.join("main.php"), FILE_CACHE_PROBE).unwrap();
+    let bin = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            &format!("opcache.file_cache={}", cache.display()),
+        ],
+    );
+    let first = run_binary(&bin);
+    assert_eq!(field(&first, "after"), "T", "the entry was written");
+
+    // A different length, so the size check alone is enough even if the mtime lands in the
+    // same whole second.
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 2; $extra = 'changed';\n").unwrap();
+    let second = run_binary(&bin);
+
+    assert_eq!(
+        field(&second, "before"),
+        "F",
+        "an edited source must not be served from disk:\n{second}"
+    );
+}
+
+/// Verifies `opcache.file_cache_read_only` reads entries but never creates them.
+#[test]
+fn read_only_never_writes_an_entry() {
+    let dir = make_test_dir("opcache_fc_ro");
+    let cache = dir.join("file-cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
+    fs::write(dir.join("main.php"), FILE_CACHE_PROBE).unwrap();
+    let bin = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            &format!("opcache.file_cache={}", cache.display()),
+            "opcache.file_cache_read_only=1",
+        ],
+    );
+
+    let first = run_binary(&bin);
+    let second = run_binary(&bin);
+
+    assert_eq!(field(&first, "after"), "F", "read-only stores nothing");
+    assert_eq!(field(&second, "before"), "F", "so the next process finds nothing");
 }

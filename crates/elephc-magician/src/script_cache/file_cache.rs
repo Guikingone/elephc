@@ -26,6 +26,7 @@
 //!   report `true` for it and never reach that branch.
 
 use super::accel_log::{accel_error, AccelLogLevel};
+use std::cell::RefCell;
 use std::ffi::CString;
 use std::path::Path;
 
@@ -36,6 +37,36 @@ pub(crate) struct FileCacheConfig {
     pub(crate) path: String,
     /// `opcache.file_cache_read_only`, an 8.5-only directive. Always `false` below it.
     pub(crate) read_only: bool,
+}
+
+impl FileCacheConfig {
+    /// The unconfigured pair: no directory, so the whole file cache is inert.
+    pub(crate) const fn new() -> Self {
+        Self {
+            path: String::new(),
+            read_only: false,
+        }
+    }
+}
+
+thread_local! {
+    /// The file-cache directives this binary was compiled with.
+    ///
+    /// Installed beside the validation below rather than derived again later: the pair is
+    /// what decides where entries live and whether they may be written, and both readers
+    /// must see exactly the values the validation approved.
+    static FILE_CACHE_CONFIG: RefCell<FileCacheConfig> =
+        const { RefCell::new(FileCacheConfig::new()) };
+}
+
+/// Installs the file-cache directives for the current thread.
+pub(crate) fn set_file_cache_config(config: FileCacheConfig) {
+    FILE_CACHE_CONFIG.with(|cell| *cell.borrow_mut() = config);
+}
+
+/// Returns the file-cache directives active on the current thread.
+pub(crate) fn file_cache_config() -> FileCacheConfig {
+    FILE_CACHE_CONFIG.with(|cell| cell.borrow().clone())
 }
 
 /// php-src's message for a `opcache.file_cache` that is not a usable directory.

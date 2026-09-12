@@ -419,16 +419,17 @@ compile, not the store, so it is `true` either way.
 opcache_is_script_cached_in_file_cache(string $filename): bool
 ```
 
-Always `false`, and that is exact for the default build. php-src returns early on
-`!ZCG(accel_directives).file_cache`, and `opcache.file_cache` is the one
-directive registered with a C `NULL` default — so an unconfigured reference PHP
-returns `false` for every path too. elephc has no on-disk opcode cache to point
-the directive at. Guarded by `opcache.restrict_api`.
+`false` with `opcache.file_cache` unset — php-src returns early on
+`!ZCG(accel_directives).file_cache`, which is the one directive registered with a
+C `NULL` default, so an unconfigured reference PHP answers `false` for every path
+too. Guarded by `opcache.restrict_api`.
 
-Setting the directive does **not** change this answer, but it is no longer
-ignored: a configured `opcache.file_cache` is validated at startup exactly as
-reference PHP validates it, and a bad one refuses to run. See
-[`opcache.file_cache`](#opcachefile_cache).
+With the directive **set**, it answers from the real on-disk cache: `true` once a
+script has been stored there, `false` before that and after the source changes.
+It applies exactly the validation a read does, so it never reports an entry a read
+would reject. Reachable from inside `eval()`, where the dynamic tier lives; a
+natively compiled call still answers `false`, for the same reason its sibling file
+functions do. See [`opcache.file_cache`](#opcachefile_cache).
 
 ### `opcache_jit_blacklist()`
 
@@ -903,11 +904,46 @@ floor, and leaves the default `10000`. It carries no quantity diagnostic either.
 
 ### `opcache.file_cache`
 
-elephc has no on-disk opcode cache, so the directive stores nothing and
-[`opcache_is_script_cached_in_file_cache()`](#opcache_is_script_cached_in_file_cache)
-stays `false`. But reference PHP does something before any of that: it
-**validates the directory at startup and refuses to run** if it is unusable.
-That refusal is observable, so elephc reproduces it.
+Set it to an absolute, writable directory and elephc keeps a **real on-disk cache
+of parsed scripts** there, so a process that starts cold skips the read, the
+`<?php` scan and the parse for anything it cached before:
+
+```bash
+elephc --ini opcache.enable_cli=1 --ini opcache.file_cache=/var/cache/elephc app.php
+```
+
+That matters most under `--web`, where workers are forked from a master that has
+run no PHP and are recycled after `--max-requests`: without it, every recycled
+worker re-parses every dynamically included template, continuously, in production.
+
+What it stores is elephc's parsed form, not php-src's opcodes — the two formats
+have nothing to do with each other, and a directory written by one is never read
+by the other. Entries are encoded with bincode, which was chosen by measurement:
+decoding is **3.5–5× faster than re-parsing** at about 1.8× the source size, while
+`serde_json` decodes a small script *slower* than parsing it. The benchmark ships
+as an `#[ignore]`d test (`script_cache::format_bench`) so the choice can be
+re-checked rather than believed.
+
+**An entry is never trusted blind.** Three independent checks must all pass, and
+any failure — including a corrupt or unreadable file — is treated as a miss rather
+than an error:
+
+| Check | Stops |
+|---|---|
+| the writer's directory (crate version + format version) | one build reading another build's parsed form |
+| the header's magic and format version | a foreign or outdated file |
+| the source's mtime, size and canonical path | a changed file running as its old self, and a file-name hash collision |
+
+The format version is guarded by a test that fingerprints the IR's own source, so
+a change to the stored shape cannot silently keep an old version number — bincode
+is not self-describing, and a mismatched payload could otherwise decode into a
+plausible but wrong tree.
+
+`opcache.file_cache_read_only` reads entries without ever creating one, which is
+what makes a shared read-only cache directory usable.
+
+Reference PHP also **validates the directory at startup and refuses to run** if it
+is unusable, and elephc reproduces that refusal exactly.
 
 The check runs only when the cache is **enabled**. That is reference behavior,
 not an elephc shortcut — verified on PHP 8.5.10, `opcache.enable=0` and the CLI
@@ -1164,7 +1200,8 @@ on macOS arm64.
 | `scripts` under preloading | Carries a synthetic `$PRELOAD$` pseudo-entry and `num_cached_scripts` is bumped by one | No such entry | It stands for a shared-memory block an elephc binary never allocates |
 | `opcache_get_configuration()['blacklist']` | Lists the resolved patterns from `opcache.blacklist_filename` | Always `[]` | The directive is reported but not applied |
 | Directives that change engine behavior (`huge_code_pages`, `protect_memory`, `blacklist_filename`, …) | Change what the cache does | Reported faithfully, inert | There is no compile-time cache for them to act on. `validate_timestamps`, `revalidate_freq`, `max_file_size`, `memory_consumption` and `max_accelerated_files` are NOT in this row: they govern the [runtime script cache](#the-runtime-script-cache) |
-| `opcache.file_cache` as a CACHE | Persists compiled scripts to disk and serves them back | Stores nothing; `opcache_is_script_cached_in_file_cache()` stays `false` | What php-src's file cache stores is compiled opcodes keyed by a `system_id`. elephc has no serialized form of its eval IR, and a cache holding something else while reporting `true` would be the first place this model claims a cache state PHP does not mean. The directive's *startup validation* IS reproduced — see [`opcache.file_cache`](#opcachefile_cache) |
+| `opcache.file_cache` contents | Serialized php-src opcodes, keyed by a `system_id` | elephc's own parsed form, keyed by crate version plus format version | The two are different compilers; neither could read the other's file. The directive, the validation, the read-only mode and the `opcache_is_script_cached_in_file_cache()` answer all behave as reference does — only the bytes inside differ |
+| `opcache_is_script_cached_in_file_cache()` from NATIVE code | Answers for any path | `false`; only a call inside `eval()` answers from the cache | The same native-versus-`eval()` boundary its sibling file functions have: the dynamic tier the cache belongs to is reachable only from `eval()` |
 | `opcache.file_cache` validation in a binary that never reaches the eval bridge | Validated at every startup | Never validated | The check runs where the runtime cache is configured. A binary with no dynamic tier has no cache to configure, and paying for the check in every binary would break the pay-for-use rule the rest of this tier follows. The set is wider than "no `eval()`": a const-folded `eval('$x = 1;')` is resolved at compile time and emits no bridge call |
 | When the `opcache.file_cache` fatal is raised | Before the first statement runs, so nothing is output | At the first `eval()`, so output written before that point is already flushed | Same cause as the row above. The fatal, its message and its exit status 254 are identical; only its position relative to the program's own output can differ |
 | `version.version` | The running patch release (`8.5.6`) | The targeted language version (`8.5.0`) | elephc targets a PHP minor, not a patch. Understating is the safe direction — a caller gating on `>= 8.5.6` applies a redundant workaround rather than skipping a fix elephc may not have. See [System and I/O](system-and-io.md) for the full rationale and its cost |

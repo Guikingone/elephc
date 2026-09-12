@@ -146,6 +146,9 @@ pub unsafe extern "C" fn __elephc_eval_configure_opcache_file_cache(
         &file_cache,
         crate::script_cache::config().enabled,
     );
+    // Kept after the validation, never before: only a directory php-src would have
+    // accepted may go on to be read from or written to.
+    crate::script_cache::set_file_cache_config(file_cache);
 }
 
 /// Installs one runtime-cache directive by id, returning the value it replaced.

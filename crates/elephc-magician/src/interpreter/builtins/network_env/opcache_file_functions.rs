@@ -301,12 +301,32 @@ pub(in crate::interpreter) fn eval_opcache_is_script_cached_in_file_cache_call(
     if args.len() != 1 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    eval_opcache_is_script_cached_in_file_cache_result(values)
+    let path = eval_opcache_path_arg(&args[0], _context, _scope, values)?;
+    eval_opcache_is_script_cached_in_file_cache_for_path(&path, values)
 }
 
-/// Builds the `opcache_is_script_cached_in_file_cache()` return value: `false` (no file
-/// cache is configured under eval, the same disabled result the sibling file functions
-/// produce).
+/// The `opcache_is_script_cached_in_file_cache()` answer for a resolved path.
+///
+/// Answers from the ON-DISK cache, not the in-memory one: php-src's function asks whether
+/// the script is in the FILE cache specifically, and the two can legitimately disagree — a
+/// script can sit in memory without a disk entry, or on disk without having been included
+/// in this process yet.
+///
+/// It applies exactly the validation a read does, so it never reports an entry that a read
+/// would then reject. With `opcache.file_cache` unset — php-src's default — there is no
+/// directory to look in and the answer is `false`, which is what reference PHP returns too.
+pub(in crate::interpreter) fn eval_opcache_is_script_cached_in_file_cache_for_path(
+    path: &std::path::Path,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !eval_opcache_cache_enabled() {
+        return eval_opcache_file_disabled_result(values);
+    }
+    values.bool_value(crate::script_cache::file_cache_contains(path))
+}
+
+/// Builds the `opcache_is_script_cached_in_file_cache()` return value for the by-values
+/// dispatch path, which has already evaluated its argument.
 pub(in crate::interpreter) fn eval_opcache_is_script_cached_in_file_cache_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
