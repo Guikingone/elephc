@@ -556,18 +556,27 @@ fn rust_and_php_override_paths_agree() {
         ("opcache.save_comments", "2"),
         ("opcache.save_comments", "on"),
         ("opcache.save_comments", "none"),
-        ("opcache.max_file_size", "12abc"),
-        ("opcache.max_file_size", "0b101"),
-        ("opcache.max_file_size", "12MM"),
-        ("opcache.max_file_size", "garbage"),
-        ("opcache.max_file_size", "on"),
-        ("opcache.error_log", "TRUE"),
-        ("opcache.error_log", "/tmp/o.log"),
+        // The int and string exemplars must be directives elephc only REPORTS, since one half
+        // of this comparison is the `ELEPHC_INI_*` path. `opcache.max_file_size` and
+        // `opcache.error_log` used to serve here and no longer can: they now bake the runtime
+        // cache's admission rule and the `zend_accel_error` channel respectively, so they are
+        // excluded from runtime override. These two normalize through the identical handlers.
+        ("opcache.jit_debug", "12abc"),
+        ("opcache.jit_debug", "0b101"),
+        ("opcache.jit_debug", "12MM"),
+        ("opcache.jit_debug", "garbage"),
+        ("opcache.jit_debug", "on"),
+        ("opcache.blacklist_filename", "TRUE"),
+        ("opcache.blacklist_filename", "/tmp/o.log"),
     ];
     // One binary with NO override: the environment path is what moves it.
     let (env_bin, _) = compile_with_ini(
         &dir,
-        &two_surface_probe(&["opcache.save_comments", "opcache.max_file_size", "opcache.error_log"]),
+        &two_surface_probe(&[
+            "opcache.save_comments",
+            "opcache.jit_debug",
+            "opcache.blacklist_filename",
+        ]),
         "envapp",
         &[],
     );
@@ -649,13 +658,18 @@ echo 'get=', var_export(ini_get('opcache.file_cache'), true), "\n";
     assert!(stdout.contains("get=''\n"), "ini_get() still reports '':\n{stdout}");
 }
 
-/// ASSIGNING `opcache.file_cache` — at compile time with `--ini`, or at run time through
-/// `ELEPHC_INI_*` — makes `ini_get_all()` report the STRING, exactly as `-d` does in reference
-/// PHP. The NULL means "never set", not "empty".
+/// ASSIGNING `opcache.file_cache` at compile time with `--ini` makes `ini_get_all()` report the
+/// STRING, exactly as `-d` does in reference PHP. The NULL means "never set", not "empty".
 ///
 /// REFERENCE (PHP 8.5.6): `-d opcache.file_cache=/tmp/fcx` reports
 /// `['global_value' => '/tmp/fcx', 'local_value' => '/tmp/fcx', 'access' => 4]`, and
 /// `-d opcache.file_cache=` (the empty string) reports `''`/`''` — NOT NULL.
+///
+/// `ELEPHC_INI_*` does NOT re-point it, and that is the point of the second half below. The
+/// directive now bakes the startup validation that can refuse to run
+/// (`tests/opcache_file_cache_tests.rs`), so honoring it on the reporting surface alone would
+/// report a directory the binary never checked — the exact self-contradiction the runtime-override
+/// scope rule exists to prevent.
 #[test]
 fn assigning_file_cache_replaces_the_null_with_the_string() {
     let dir = make_test_dir("opcache_ini_null_set");
@@ -673,7 +687,8 @@ if (is_array($a)) { echo 'fc=', var_export($a['opcache.file_cache']['global_valu
     let (ini_out, _) = run_binary(&ini_bin);
     assert!(ini_out.contains("fc='/tmp/fcx'"), "--ini must assign it:\n{ini_out}");
 
-    // The same directive re-pointed at RUN time on an un-overridden binary.
+    // The same directive at RUN time on an un-overridden binary: it must stay NULL. A reported
+    // path here would be one the startup validation never looked at.
     let env_bin = compile(&dir, probe, "nullenvapp");
     let output = Command::new(&env_bin)
         .env("ELEPHC_INI_opcache__file_cache", "/tmp/fcx")
@@ -681,7 +696,10 @@ if (is_array($a)) { echo 'fc=', var_export($a['opcache.file_cache']['global_valu
         .expect("failed to run compiled binary");
     assert!(output.status.success(), "env probe exited non-zero");
     let env_out = String::from_utf8_lossy(&output.stdout);
-    assert!(env_out.contains("fc='/tmp/fcx'"), "env override must assign it:\n{env_out}");
+    assert!(
+        env_out.contains("fc=NULL"),
+        "the env override must NOT assign a directive that bakes the startup validation:\n{env_out}"
+    );
 }
 
 /// An OUT-OF-RANGE integer override is REFUSED, leaving the compiled default in BOTH surfaces,

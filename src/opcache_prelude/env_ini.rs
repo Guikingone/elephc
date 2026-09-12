@@ -96,6 +96,12 @@ pub(crate) fn ini_helper_declarations(
         .map(|(name, _)| {
             let condition = if latest_ini_override(overrides, name).is_some() {
                 e_bool(false)
+            } else if !directive_runtime_overridable(name) {
+                // The null-ness must follow the SAME scope rule as the value arm above. When a
+                // directive bakes behavior, its `ELEPHC_INI_*` variable is ignored — so letting
+                // it flip the null here would report `''` ("assigned the empty string") for a
+                // directive nothing assigned, which is a third state reference PHP never shows.
+                e_bool(true)
             } else {
                 let (under, dotted) = directive_env_var_names(name);
                 e_binop(

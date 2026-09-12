@@ -1236,6 +1236,22 @@ pub fn directive_runtime_overridable(name: &str) -> bool {
             | "opcache.jit_buffer_size"
             | "opcache.restrict_api"
             | "opcache.preload"
+            // The four below bake the STARTUP VALIDATION of `opcache.file_cache` and the
+            // `zend_accel_error` channel that reports it (see
+            // `crate::opcache::runtime_cache`). Before that validation existed they were
+            // pure reporting and were overridable; now a runtime override would report a
+            // directory the binary never checked, which is exactly the self-contradiction
+            // this scope rule exists to prevent.
+            | "opcache.file_cache"
+            | "opcache.file_cache_read_only"
+            | "opcache.log_verbosity_level"
+            | "opcache.error_log"
+            // These two are baked into the same `__elephc_eval_configure_opcache` call as
+            // `revalidate_freq` and `memory_consumption`, which were excluded from the
+            // start. They were missed when the runtime script cache first consumed them,
+            // leaving a binary that could report a `max_file_size` its cache did not apply.
+            | "opcache.validate_timestamps"
+            | "opcache.max_file_size"
     )
 }
 
@@ -2557,7 +2573,8 @@ mod tests {
     #[test]
     fn runtime_override_scope_covers_every_directive() {
         /// The directives whose value is consumed at COMPILE TIME to bake code or constants.
-        const EXCLUDED: [&str; 10] = [
+        // Present in every 8.2–8.5 table.
+        const EXCLUDED: [&str; 15] = [
             "opcache.enable",
             "opcache.enable_cli",
             "opcache.memory_consumption",
@@ -2568,13 +2585,21 @@ mod tests {
             "opcache.jit_buffer_size",
             "opcache.restrict_api",
             "opcache.preload",
+            "opcache.file_cache",
+            "opcache.log_verbosity_level",
+            "opcache.error_log",
+            "opcache.validate_timestamps",
+            "opcache.max_file_size",
         ];
+        // Excluded for the same reason, but REGISTERED ONLY BY 8.5 — so it cannot be
+        // asserted present in the older tables the way the rest can.
+        const EXCLUDED_85_ONLY: [&str; 1] = ["opcache.file_cache_read_only"];
         for version in [80200u32, 80300, 80400, 80500] {
             let directives = opcache_directives(version);
             for (name, _) in &directives {
                 assert_eq!(
                     directive_runtime_overridable(name),
-                    !EXCLUDED.contains(name),
+                    !EXCLUDED.contains(name) && !EXCLUDED_85_ONLY.contains(name),
                     "{name} runtime-override scope disagrees with the excluded set ({version})"
                 );
             }
@@ -2586,22 +2611,25 @@ mod tests {
                     "{excluded} must exist in the {version} table"
                 );
             }
-            // The overridable majority is the whole rest of the table.
+            // The overridable majority is the whole rest of the table. The 8.5-only name is
+            // counted only where it is registered, which is what keeps the arithmetic exact
+            // rather than accidentally right.
+            let excluded_here = EXCLUDED.len()
+                + EXCLUDED_85_ONLY
+                    .iter()
+                    .filter(|excluded| directives.iter().any(|(name, _)| name == *excluded))
+                    .count();
             let overridable = directives
                 .iter()
                 .filter(|(name, _)| directive_runtime_overridable(name))
                 .count();
-            assert_eq!(overridable, directives.len() - EXCLUDED.len());
+            assert_eq!(overridable, directives.len() - excluded_here);
+            // Every version lands on the same 38: 8.5 excludes 16 of 54, the older tables
+            // exclude 15 of 53.
+            assert_eq!(overridable, 38, "for {version}");
         }
-        // 8.5 registers 54 directives, so 44 are runtime-overridable.
+        // 8.5 registers 54 directives, so 38 are runtime-overridable.
         assert_eq!(opcache_directives(80500).len(), 54);
-        assert_eq!(
-            opcache_directives(80500)
-                .iter()
-                .filter(|(name, _)| directive_runtime_overridable(name))
-                .count(),
-            44
-        );
     }
 
     /// The PHP-side type code mirrors `parse_ini_override`'s Rust type dispatch for every

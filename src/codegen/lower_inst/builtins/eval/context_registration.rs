@@ -64,6 +64,60 @@ fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
         .target
         .extern_symbol("__elephc_eval_configure_opcache");
     abi::emit_call_label(ctx.emitter, &symbol);
+    configure_eval_opcache_file_cache(ctx, &config);
+}
+
+/// Installs the accelerator diagnostic channel and triggers php-src's startup validation
+/// of `opcache.file_cache`.
+///
+/// A SECOND call, not four more arguments on the one above, because that one already
+/// spends all six integer argument registers x86_64 provides — a seventh would need a
+/// stack slot the emitter cannot express. It is emitted immediately after, because the
+/// validation reads the enabled flag the first call installs.
+///
+/// The bridge fatals (and exits 254) on a bad directory exactly as reference PHP's
+/// startup does, so this call can terminate the process before the program runs.
+fn configure_eval_opcache_file_cache(
+    ctx: &mut FunctionContext<'_>,
+    config: &crate::opcache::runtime_cache::RuntimeCacheConfig,
+) {
+    let (file_cache_label, file_cache_len) = ctx.data.add_string(config.file_cache.as_bytes());
+    let (error_log_label, error_log_len) = ctx.data.add_string(config.error_log.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &file_cache_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        file_cache_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        i64::from(config.file_cache_read_only),
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        config.log_verbosity_level,
+    );
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        &error_log_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        error_log_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_configure_opcache_file_cache");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.

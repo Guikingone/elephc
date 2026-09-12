@@ -57,9 +57,14 @@ pub(super) fn renders_parsable_php85_literal() {
         assert!(literal.contains(
             "'opcache.max_wasted_percentage' => __elephc_opcache_env_pct('ELEPHC_INI_opcache__max_wasted_percentage', 'ELEPHC_INI_opcache.max_wasted_percentage', 0.05)"
         ));
+        // A reporting-only BOOL still carries its env-override call.
         assert!(literal.contains(
-            "'opcache.file_cache_read_only' => __elephc_opcache_env_bool('ELEPHC_INI_opcache__file_cache_read_only', 'ELEPHC_INI_opcache.file_cache_read_only', false)"
+            "'opcache.protect_memory' => __elephc_opcache_env_bool('ELEPHC_INI_opcache__protect_memory', 'ELEPHC_INI_opcache.protect_memory', false)"
         ));
+        // `opcache.file_cache_read_only` is NOT one of them any more: it now bakes the
+        // startup validation of `opcache.file_cache`, so it renders as a plain literal.
+        assert!(literal.contains("'opcache.file_cache_read_only' => false"));
+        assert!(!literal.contains("ELEPHC_INI_opcache__file_cache_read_only"));
         assert!(literal.contains("'version' => '8.5.0'"));
         assert!(literal.contains("'opcache_product_name' => 'Zend OPcache'"));
         // The literal must parse as a standalone expression statement.

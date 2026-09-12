@@ -93,6 +93,76 @@ pub extern "C" fn __elephc_eval_configure_opcache(
     });
 }
 
+/// Installs the accelerator diagnostic channel and applies php-src's startup validation
+/// of `opcache.file_cache` / `opcache.file_cache_read_only`.
+///
+/// This is a SECOND bridge call rather than four more parameters on the one above, and
+/// that is an ABI constraint, not a style choice: `__elephc_eval_configure_opcache`
+/// already spends all six integer argument registers the x86_64 SysV ABI provides, so a
+/// seventh would have to be passed on the stack — which the emitter's
+/// `int_arg_reg_name` cannot express. Splitting also leaves the existing, working call
+/// byte-identical.
+///
+/// ORDER IS LOAD-BEARING: generated code emits this AFTER
+/// `__elephc_eval_configure_opcache`, because the validation is gated on the cache being
+/// enabled and reads that flag from the configuration the first call installed. The log
+/// configuration is installed before the validation runs so that a fatal is written to
+/// `opcache.error_log` when one is configured.
+///
+/// A fatal here TERMINATES THE PROCESS with status 254, exactly as reference PHP's
+/// startup does — see `crate::script_cache::file_cache`.
+///
+/// # Safety
+/// `file_cache_ptr` must be readable for `file_cache_len` bytes when `file_cache_len > 0`,
+/// and `error_log_ptr` for `error_log_len` bytes when `error_log_len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_configure_opcache_file_cache(
+    file_cache_ptr: *const u8,
+    file_cache_len: u64,
+    file_cache_read_only: u8,
+    log_verbosity_level: i64,
+    error_log_ptr: *const u8,
+    error_log_len: u64,
+) {
+    // SAFETY: the caller guarantees each pointer is readable for its paired length.
+    let file_cache = unsafe { borrow_configured_string(file_cache_ptr, file_cache_len) };
+    // SAFETY: as above.
+    let error_log = unsafe { borrow_configured_string(error_log_ptr, error_log_len) };
+    crate::script_cache::set_accel_log_config(crate::script_cache::AccelLogConfig {
+        verbosity: i32::try_from(log_verbosity_level).unwrap_or(i32::MAX),
+        error_log,
+    });
+    let file_cache = crate::script_cache::FileCacheConfig {
+        path: file_cache,
+        read_only: file_cache_read_only != 0,
+    };
+    crate::script_cache::validate_file_cache_directives(
+        &file_cache,
+        crate::script_cache::config().enabled,
+    );
+}
+
+/// Copies one generated directive string out of the binary's read-only data.
+///
+/// A null pointer or a zero length is the EMPTY string, which both directives spell as
+/// "unset". Invalid UTF-8 is replaced rather than refused: these are filesystem paths,
+/// and losing the fatal a malformed one should raise would be the worse failure.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+unsafe fn borrow_configured_string(ptr: *const u8, len: u64) -> String {
+    if ptr.is_null() || len == 0 {
+        return String::new();
+    }
+    let Ok(len) = usize::try_from(len) else {
+        return String::new();
+    };
+    // SAFETY: the caller guarantees `ptr` is readable for `len` bytes, and the slice is
+    // copied into an owned `String` before this borrow ends.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// Frees a process-level eval context handle allocated by the eval bridge.
 ///
 /// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP

@@ -21,7 +21,10 @@ use super::directives::{effective_opcache_directives, DirectiveValue};
 use super::state::opcache_cache_enabled_with_overrides;
 
 /// The directive values the runtime script cache needs, resolved for one compilation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// NOT `Copy`: the two path directives are owned strings, because they are emitted into
+/// the binary's read-only data rather than passed as immediates.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeCacheConfig {
     /// `opcache.enable && (web || opcache.enable_cli)` — the master gate.
     pub enabled: bool,
@@ -35,6 +38,15 @@ pub struct RuntimeCacheConfig {
     pub memory_consumption: u64,
     /// `opcache.max_accelerated_files`, as an entry count.
     pub max_accelerated_files: u64,
+    /// `opcache.file_cache`. EMPTY means unset — php-src's C `NULL` default.
+    pub file_cache: String,
+    /// `opcache.file_cache_read_only`. An 8.5-only directive; `false` on older targets,
+    /// which is what the absent-directive lookup already yields.
+    pub file_cache_read_only: bool,
+    /// `opcache.log_verbosity_level`, the gate on the accelerator diagnostic channel.
+    pub log_verbosity_level: i64,
+    /// `opcache.error_log`. Empty, or the literal `stderr`, means stderr.
+    pub error_log: String,
 }
 
 /// Resolves the runtime cache configuration for a compile target and SAPI.
@@ -63,6 +75,32 @@ pub fn runtime_cache_config(
             })
             .unwrap_or(0)
     };
+    // A missing string directive reads as empty, which is exactly how both of these
+    // spell "unset" — so an 8.2 target, where some of them do not exist, needs no
+    // per-version branch here.
+    let text = |key: &str| {
+        directives
+            .iter()
+            .find(|(name, _)| *name == key)
+            .and_then(|(_, value)| match value {
+                DirectiveValue::Str(raw) => Some((*raw).to_string()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+    // `opcache.log_verbosity_level` is signed in php-src and its gate is a `<=`, so a
+    // negative value silences even the fatals' LINE (never their exit). Preserving the
+    // sign rather than clamping to 0 is what reproduces that.
+    let signed = |key: &str| {
+        directives
+            .iter()
+            .find(|(name, _)| *name == key)
+            .and_then(|(_, value)| match value {
+                DirectiveValue::Int(raw) => Some(*raw),
+                _ => None,
+            })
+            .unwrap_or(0)
+    };
     RuntimeCacheConfig {
         enabled: opcache_cache_enabled_with_overrides(version_id, is_web_sapi, overrides),
         validate_timestamps: boolean("opcache.validate_timestamps"),
@@ -70,6 +108,10 @@ pub fn runtime_cache_config(
         max_file_size: count("opcache.max_file_size"),
         memory_consumption: count("opcache.memory_consumption"),
         max_accelerated_files: count("opcache.max_accelerated_files"),
+        file_cache: text("opcache.file_cache"),
+        file_cache_read_only: boolean("opcache.file_cache_read_only"),
+        log_verbosity_level: signed("opcache.log_verbosity_level"),
+        error_log: text("opcache.error_log"),
     }
 }
 
@@ -132,6 +174,49 @@ mod tests {
         assert_eq!(config.max_file_size, 0);
         assert_eq!(config.memory_consumption, 134_217_728);
         assert_eq!(config.max_accelerated_files, 10_000);
+    }
+
+    /// Verifies the file-cache and diagnostic directives default to php-src's own values.
+    ///
+    /// An empty `opcache.file_cache` is what makes a default binary skip the startup
+    /// validation entirely, and verbosity `1` is php-src's default — the level at which a
+    /// FATAL prints and a WARNING does not.
+    #[test]
+    fn file_cache_and_log_directives_carry_the_reference_defaults() {
+        let config = runtime_cache_config(PHP_85, true, &[]);
+
+        assert_eq!(config.file_cache, "");
+        assert!(!config.file_cache_read_only);
+        assert_eq!(config.log_verbosity_level, 1);
+        assert_eq!(config.error_log, "");
+    }
+
+    /// Verifies `--ini` moves the directives that drive the validation and the log channel.
+    #[test]
+    fn an_ini_override_moves_the_file_cache_directives() {
+        let overrides = [
+            ("opcache.file_cache".to_string(), "/var/cache/oc".to_string()),
+            ("opcache.file_cache_read_only".to_string(), "1".to_string()),
+            ("opcache.log_verbosity_level".to_string(), "3".to_string()),
+            ("opcache.error_log".to_string(), "/tmp/accel.log".to_string()),
+        ];
+        let config = runtime_cache_config(PHP_85, true, &overrides);
+
+        assert_eq!(config.file_cache, "/var/cache/oc");
+        assert!(config.file_cache_read_only);
+        assert_eq!(config.log_verbosity_level, 3);
+        assert_eq!(config.error_log, "/tmp/accel.log");
+    }
+
+    /// Verifies an 8.2 target reports `file_cache_read_only` as `false` rather than failing.
+    ///
+    /// The directive is registered only by 8.5, so the lookup finds nothing — and "nothing"
+    /// must read as `false`, which is the branch that never raises the read-only fatal.
+    #[test]
+    fn an_older_target_has_no_file_cache_read_only() {
+        let overrides = [("opcache.file_cache_read_only".to_string(), "1".to_string())];
+
+        assert!(!runtime_cache_config(80200, true, &overrides).file_cache_read_only);
     }
 
     /// Verifies a `--ini` override moves the value the cache actually spends.
