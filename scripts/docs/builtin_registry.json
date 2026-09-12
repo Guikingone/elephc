@@ -85026,7 +85026,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_compile_file",
-      "codegen_line": 779,
+      "codegen_line": 791,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -85209,7 +85209,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_invalidate",
-      "codegen_line": 715,
+      "codegen_line": 727,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -85280,7 +85280,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached",
-      "codegen_line": 650,
+      "codegen_line": 662,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -85344,7 +85344,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached_in_file_cache",
-      "codegen_line": 789,
+      "codegen_line": 801,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -85408,7 +85408,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_jit_blacklist",
-      "codegen_line": 816,
+      "codegen_line": 828,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
