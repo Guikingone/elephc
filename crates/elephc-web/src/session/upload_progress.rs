@@ -168,26 +168,26 @@ impl Tracker {
         let enough_bytes = bytes.saturating_sub(self.last_write_bytes) >= self.freq_bytes;
         let enough_time = self.last_write_time.elapsed().as_secs_f64() >= self.min_freq;
         // THE THROTTLE IS CHECKED FIRST once the trigger field and session id are known, so
-        // a frame that cannot produce an observable update does no parsing work at all
-        // (issue #885). Before they are known the advance still has to run — that is what
-        // finds them — but it is incremental, so those frames are linear too.
-        if self.sid.is_some()
-            && self.key.is_some()
-            && !self.key_provisional
-            && !(enough_bytes && enough_time)
-        {
+        // a frame that cannot produce an observable update does NO work at all — not even
+        // the incremental advance. Deferring it is safe and strictly cheaper: the cursor is
+        // an absolute offset, so a later advance consumes the skipped bytes exactly once.
+        // Before the key and session id are known the advance has to run, because it is what
+        // finds them.
+        if self.ready_to_write() && !(enough_bytes && enough_time) {
             return;
         }
-        let files = self.snapshot(body);
-        if self.sid.is_none() {
+        self.advance(body);
+        if !self.ready_to_write() || !(enough_bytes && enough_time) {
             return;
         }
         let Some(full_key) = self.full_key() else {
-            return; // No trigger field yet: nothing to write.
-        };
-        if !(enough_bytes && enough_time) {
             return;
-        }
+        };
+        // The file list is BUILT ONLY HERE, once a write is actually due. Building it on
+        // every frame copied every stored part name and filename again, so a client that
+        // sent many file parts and then kept sending tiny frames paid parts x frames in
+        // allocations — the same shape the incremental cursor removes for parsing.
+        let files = self.files(body);
         let value = self.serialize_progress(&files, bytes, false);
         if self.write_entry(&full_key, &value) {
             self.last_write_bytes = bytes;
@@ -195,17 +195,29 @@ impl Tracker {
         }
     }
 
+    /// Whether a progress entry may be written yet.
+    ///
+    /// A PROVISIONAL key does not count. It is a prefix of the real trigger-field value, so
+    /// writing under it would create a session entry at a key `complete()` never removes:
+    /// with `upload_progress.cleanup` on, that stale `done => false` record would outlive
+    /// the request. PHP requires the trigger field to be COMPLETE before it tracks anything,
+    /// so waiting also matches the interpreter.
+    fn ready_to_write(&self) -> bool {
+        self.sid.is_some() && self.key.is_some() && !self.key_provisional
+    }
+
     /// Finalizes progress once the body is fully drained: marks every file and
     /// the whole upload `done`, then does one last write — removing the entry
     /// when `cleanup` is on, or persisting the `done => true` snapshot otherwise.
     pub(crate) fn complete(&mut self, body: &[u8]) {
-        let mut files = self.snapshot(body);
-        if self.sid.is_none() {
-            return;
+        self.advance(body);
+        if !self.ready_to_write() {
+            return; // No session id, or no COMPLETE trigger field: nothing to finalize.
         }
         let Some(full_key) = self.full_key() else {
-            return; // No trigger field ever seen: nothing to finalize.
+            return;
         };
+        let mut files = self.files(body);
         for f in &mut files {
             f.done = true;
         }
@@ -217,8 +229,7 @@ impl Tracker {
         }
     }
 
-    /// Advances the incremental parse over whatever bytes are new since the last call,
-    /// then returns the per-file snapshot (completed parts plus the in-flight one).
+    /// Advances the incremental parse over whatever bytes are new since the last call.
     ///
     /// INCREMENTAL BY CONSTRUCTION. Completed parts are parsed exactly once, when the
     /// boundary that closes them arrives, and their results accumulate in `completed`. The
@@ -228,13 +239,35 @@ impl Tracker {
     /// re-parsing the whole accumulated buffer after every frame cost frames x body.
     ///
     /// The progress key and session id land in `self.key`/`self.sid` as their parts are
-    /// consumed, rather than being returned: they are set once and must survive the
-    /// incremental advance.
+    /// consumed: they are set once and must survive the incremental advance. The per-file
+    /// list is built separately by [`Tracker::files`], only when a write is due.
     ///
     /// Tolerant of truncation — never panics.
-    fn snapshot(&mut self, body: &[u8]) -> Vec<FileProgress> {
+    fn advance(&mut self, body: &[u8]) {
         self.advance_completed_parts(body);
         self.advance_inflight_part(body);
+        if let Some(inflight) = &self.inflight {
+            if inflight.filename.is_none()
+                && (self.key.is_none() || self.key_provisional)
+                && inflight.field_name == self.name_field
+            {
+                // Rare: trigger field still streaming — take what we have, and remember that
+                // it is a PREFIX so the completed part replaces it. Nothing is written while
+                // the key is provisional; see `ready_to_write`.
+                self.key = Some(body[inflight.content_start.min(body.len())..].to_vec());
+                self.key_provisional = true;
+            }
+        }
+    }
+
+    /// Builds the per-file list for one progress write: every completed part, plus the
+    /// in-flight one with the bytes received so far.
+    ///
+    /// SEPARATE FROM [`Tracker::advance`] and called ONLY when a write is due. It copies
+    /// every stored part name and filename, so running it per frame made the cost grow with
+    /// parts x frames for a client that sent many file parts and then kept the connection
+    /// trickling.
+    fn files(&self, body: &[u8]) -> Vec<FileProgress> {
         let mut files = self.completed.clone();
         if let Some(inflight) = &self.inflight {
             if let Some(name) = &inflight.filename {
@@ -244,13 +277,6 @@ impl Tracker {
                     bytes_processed: body.len().saturating_sub(inflight.content_start),
                     done: false,
                 });
-            } else if (self.key.is_none() || self.key_provisional)
-                && inflight.field_name == self.name_field
-            {
-                // Rare: trigger field still streaming — take what we have, and remember that
-                // it is a PREFIX so the completed part replaces it.
-                self.key = Some(body[inflight.content_start.min(body.len())..].to_vec());
-                self.key_provisional = true;
             }
         }
         files
@@ -1425,7 +1451,8 @@ mod tests {
         // Completed trigger field, then a file part still streaming (no closing
         // boundary yet).
         let body = b"--BOUND\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\nmykey\r\n--BOUND\r\nContent-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\r\nContent-Type: application/octet-stream\r\n\r\nPARTIAL";
-        let files = t.snapshot(body);
+        t.advance(body);
+        let files = t.files(body);
         assert_eq!(t.key.as_deref(), Some(&b"mykey"[..]));
         assert_eq!(t.sid, None);
         assert_eq!(files.len(), 1);
@@ -1463,7 +1490,8 @@ mod tests {
             key_provisional: false,
         };
         let body = b"--BOUND\r\nContent-Disposition: form-data; name=\"PHPSESSID\"\r\n\r\nsid123\r\n--BOUND\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\nkey\r\n--BOUND--\r\n";
-        let files = tracker.snapshot(body);
+        tracker.advance(body);
+        let files = tracker.files(body);
         assert_eq!(tracker.key.as_deref(), Some(&b"key"[..]));
         assert_eq!(tracker.sid.as_deref(), Some("sid123"));
         assert!(files.is_empty());
@@ -1508,12 +1536,14 @@ mod tests {
         let body: &[u8] = b"--BOUND\r\nContent-Disposition: form-data; name=\"PHPSESSID\"\r\n\r\nsid123\r\n--BOUND\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\nmykey\r\n--BOUND\r\nContent-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\r\n\r\nPARTIAL";
 
         let mut whole = incremental_tracker();
-        let whole_files = whole.snapshot(body);
+        whole.advance(body);
+        let whole_files = whole.files(body);
 
         let mut streamed = incremental_tracker();
         let mut streamed_files = Vec::new();
         for end in 1..=body.len() {
-            streamed_files = streamed.snapshot(&body[..end]);
+            streamed.advance(&body[..end]);
+            streamed_files = streamed.files(&body[..end]);
         }
 
         assert_eq!(streamed.key, whole.key);
@@ -1540,18 +1570,18 @@ mod tests {
         let head: &[u8] = b"--BOUND\r\nContent-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\r\n\r\nDATA\r\n--BOUND\r\nContent-Disposition: form-data; name=\"g\"; filename=\"y.bin\"\r\n\r\n";
         let mut tracker = incremental_tracker();
         let mut body = head.to_vec();
-        tracker.snapshot(&body);
+        tracker.advance(&body);
         assert_eq!(tracker.completed.len(), 1, "first part absorbed once");
         for _ in 0..200 {
             body.extend_from_slice(b"0123456789");
-            tracker.snapshot(&body);
+            tracker.advance(&body);
         }
         assert_eq!(
             tracker.completed.len(),
             1,
             "the completed part must not be re-absorbed by later frames"
         );
-        let files = tracker.snapshot(&body);
+        let files = tracker.files(&body);
         assert_eq!(files.len(), 2, "one completed file plus the in-flight one");
         assert!(files[0].done);
         assert!(!files[1].done);
@@ -1566,12 +1596,39 @@ mod tests {
         let mut body = b"--BOUND\r\n".to_vec();
         // A header block that never terminates: no CRLFCRLF, ever.
         body.extend_from_slice(&vec![b'A'; MAX_PART_HEADER_BYTES + 1]);
-        let files = tracker.snapshot(&body);
-        assert!(files.is_empty());
+        tracker.advance(&body);
+        assert!(tracker.files(&body).is_empty());
         assert!(
             tracker.inflight_unparsable,
             "an over-long header block must be abandoned, not retried per frame"
         );
+    }
+
+    /// A trigger field that is still STREAMING must not authorize a write.
+    ///
+    /// Its value is a prefix of the real progress key, so a write under it would create a
+    /// session entry at a key `complete()` never removes — with `upload_progress.cleanup`
+    /// on, a stale `done => false` record outliving the request. `ready_to_write()` is what
+    /// holds the write back until the part closes and the key becomes final.
+    #[test]
+    fn a_provisional_trigger_key_does_not_authorize_a_write() {
+        let mut tracker = incremental_tracker();
+        tracker.sid = Some("sid123".to_string());
+        let streaming: &[u8] = b"--BOUND\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\nmyk";
+        tracker.advance(streaming);
+        assert_eq!(tracker.key.as_deref(), Some(&b"myk"[..]), "prefix captured");
+        assert!(tracker.key_provisional);
+        assert!(
+            !tracker.ready_to_write(),
+            "a provisional key must not authorize a write"
+        );
+
+        let mut closed = streaming.to_vec();
+        closed.extend_from_slice(b"ey\r\n--BOUND\r\n");
+        tracker.advance(&closed);
+        assert_eq!(tracker.key.as_deref(), Some(&b"mykey"[..]), "full key replaces the prefix");
+        assert!(!tracker.key_provisional);
+        assert!(tracker.ready_to_write());
     }
 
     /// Issue #885: a boundary longer than RFC 2046's 70-character cap is refused, so no
