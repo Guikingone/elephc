@@ -1657,6 +1657,46 @@ fn eval_curl_string_arguments_still_coerce_every_value_php_coerces() {
     assert_eq!(output, "5|1.5|1|a%20b|a%20b|[]");
 }
 
+/// A REJECTED `curl_init()` must not strand a native easy handle.
+///
+/// The validation throws, and if it ran AFTER `easy_init()` the raw libcurl handle would be
+/// allocated and then never registered in the resource table — unreachable by `curl_close()`
+/// and by the table's own teardown, one leak per rejected call. `curl_init()` therefore
+/// validates `$url` BEFORE allocating.
+///
+/// A leaked NATIVE handle is not observable from PHP, so this fixture cannot assert the leak
+/// directly the way a heap-debug test would; the ordering in `eval_curl_init_result` is the
+/// real guarantee. What it does pin is that many rejections in a row leave the interpreter
+/// healthy and a later `curl_init()` still works — which is what would break first if the
+/// allocation came back ahead of the check and exhausted something.
+#[test]
+fn eval_rejected_curl_init_leaves_the_handle_surface_healthy() {
+    if skip_without_curl_native("eval_rejected_curl_init_leaves_the_handle_surface_healthy") {
+        return;
+    }
+    let output = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $rejected = 0;
+            for ($i = 0; $i < 200; $i++) {
+                try {
+                    curl_init(new stdClass());
+                } catch (\TypeError $e) {
+                    $rejected++;
+                }
+            }
+            $ch = curl_init("https://example.test/");
+            $escaped = curl_escape($ch, "a b");
+            curl_close($ch);
+            return $rejected . ":" . $escaped;
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(output, "200:a%20b");
+}
+
 // FIX ROUND 1, MINOR 5 — COVERAGE NOTE, deliberately a note rather than a fixture here.
 //
 // The two PHP 8.5-only curl names (`curl_multi_get_handles`, `curl_share_init_persistent`)

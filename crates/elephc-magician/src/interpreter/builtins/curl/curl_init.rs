@@ -61,6 +61,19 @@ fn eval_curl_init_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // `$url` IS VALIDATED BEFORE THE HANDLE IS ALLOCATED, and the order is load-bearing:
+    // `eval_curl_string_argument` can throw, and a throw between `easy_init()` and
+    // `open_curl_easy_handle()` would strand the raw libcurl handle — allocated, never
+    // registered in the resource table, and therefore never reachable by `curl_close()` or by
+    // the table's own teardown. One leaked easy handle per rejected `curl_init(new stdClass())`.
+    // Nothing here needs the handle to decide whether the argument is acceptable, so the check
+    // simply moves ahead of the allocation.
+    let url = match url {
+        Some(url) if values.type_tag(url)? != EVAL_TAG_NULL => Some(eval_curl_string_argument(
+            "curl_init", 1, "url", "?string", url, context, values,
+        )?),
+        _ => None,
+    };
     let Some(raw) = ffi::easy_init() else {
         return eval_throw_runtime_exception(
             "curl_init(): libcurl could not allocate an easy handle",
@@ -69,14 +82,10 @@ fn eval_curl_init_result(
         );
     };
     if let Some(url) = url {
-        if values.type_tag(url)? != EVAL_TAG_NULL {
-            let url =
-                eval_curl_string_argument("curl_init", 1, "url", "?string", url, context, values)?;
-            let bytes = values.string_bytes(url)?;
-            // Ignored, matching `curl_init()`'s own AOT wrapper: a bad URL surfaces
-            // later, at `curl_exec()`, not here.
-            let _ = ffi::easy_set_url(raw, &bytes);
-        }
+        let bytes = values.string_bytes(url)?;
+        // Ignored, matching `curl_init()`'s own AOT wrapper: a bad URL surfaces
+        // later, at `curl_exec()`, not here.
+        let _ = ffi::easy_set_url(raw, &bytes);
     }
     let table_id = context.stream_resources_mut().open_curl_easy_handle(raw);
     values.curl_handle(table_id)
