@@ -584,11 +584,16 @@ fn lower_object_to_string(
 ) -> Result<()> {
     let normalized = class_name.trim_start_matches('\\');
     if interface_has_tostring(ctx, normalized) {
-        return super::method_intrinsics::lower_interface_method_call(
+        // The receiver may be an object the INTERPRETER built, whose class id is `stdClass` and
+        // therefore matches no interface table. The runtime resolver reaches its real
+        // `__toString()`; the scan's defensive zero would hand back a null string pointer.
+        let value = expect_operand(inst, 0)?;
+        return super::method_intrinsics::lower_interface_method_call_with_miss(
             ctx,
             inst,
             normalized,
             "__toString",
+            super::iterators::InterfaceDispatchMiss::DynamicToString(value),
         );
     }
     if object_class_has_tostring(ctx, normalized) {

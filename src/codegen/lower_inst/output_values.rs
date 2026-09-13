@@ -16,11 +16,14 @@ pub(super) fn lower_echo_value(ctx: &mut FunctionContext<'_>, inst: &Instruction
         PhpType::Object(class_name) => {
             let normalized = class_name.trim_start_matches('\\');
             if interface_has_tostring(ctx, normalized) {
-                super::method_intrinsics::lower_interface_method_call(
+                // See `lower_object_to_string`: an interpreter-built receiver matches no
+                // interface table, so the miss has to reach the runtime resolver.
+                super::method_intrinsics::lower_interface_method_call_with_miss(
                     ctx,
                     inst,
                     normalized,
                     "__toString",
+                    super::iterators::InterfaceDispatchMiss::DynamicToString(value),
                 )?;
                 return emit_loaded_value_to_stdout(ctx, &PhpType::Str);
             }

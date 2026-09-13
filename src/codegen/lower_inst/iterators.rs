@@ -1241,12 +1241,44 @@ fn emit_generator_interface_fast_path(
     done
 }
 
+/// What a receiver whose class implements no matching interface table falls back to.
+#[derive(Clone, Copy)]
+pub(super) enum InterfaceDispatchMiss {
+    /// Answer zero, the long-standing defensive fallback for invalid interface metadata.
+    ZeroResult,
+    /// Re-run the string coercion through the RUNTIME resolver for this receiver value.
+    ///
+    /// An object the INTERPRETER built carries the `stdClass` class id whatever class declared
+    /// it, so the scan below cannot find the interface it really implements. Answering zero there
+    /// hands the caller a null string pointer, which the next runtime helper then reads a length
+    /// out of -- Symfony's `RouteCollection::addResource()` casting an eval-declared resource
+    /// surfaced it as an 8 GiB allocation rather than as anything diagnosable.
+    DynamicToString(ValueId),
+}
+
 /// Emits the interface table scan and calls the resolved method slot.
 pub(super) fn emit_interface_dispatch_call(
     ctx: &mut FunctionContext<'_>,
     interface_name: &str,
     method_key: &str,
     external_done: Option<&str>,
+) -> Result<PhpType> {
+    emit_interface_dispatch_call_with_miss(
+        ctx,
+        interface_name,
+        method_key,
+        external_done,
+        InterfaceDispatchMiss::ZeroResult,
+    )
+}
+
+/// Emits the interface table scan with a chosen answer for a receiver no table matches.
+pub(super) fn emit_interface_dispatch_call_with_miss(
+    ctx: &mut FunctionContext<'_>,
+    interface_name: &str,
+    method_key: &str,
+    external_done: Option<&str>,
+    miss: InterfaceDispatchMiss,
 ) -> Result<PhpType> {
     let normalized = interface_name.trim_start_matches('\\');
     let interface_info = ctx
@@ -1297,7 +1329,11 @@ pub(super) fn emit_interface_dispatch_call(
             ctx.emitter.instruction("blr x11");                                 // call resolved interface method implementation
             ctx.emitter.instruction(&format!("b {}", local_done));              // skip defensive missing-interface fallback
             ctx.emitter.label(&missing);
-            ctx.emitter.instruction("mov x0, #0");                              // defensive fallback for invalid interface metadata
+            if let InterfaceDispatchMiss::DynamicToString(value) = miss {
+                super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
+            } else {
+                ctx.emitter.instruction("mov x0, #0");                          // defensive fallback for invalid interface metadata
+            }
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load receiver class id for interface metadata lookup
@@ -1327,7 +1363,11 @@ pub(super) fn emit_interface_dispatch_call(
             ctx.emitter.instruction("call r11");                                // call resolved interface method implementation
             ctx.emitter.instruction(&format!("jmp {}", local_done));            // skip defensive missing-interface fallback
             ctx.emitter.label(&missing);
-            ctx.emitter.instruction("xor eax, eax");                            // defensive fallback for invalid interface metadata
+            if let InterfaceDispatchMiss::DynamicToString(value) = miss {
+                super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
+            } else {
+                ctx.emitter.instruction("xor eax, eax");                        // defensive fallback for invalid interface metadata
+            }
         }
     }
     if external_done.is_none() {
