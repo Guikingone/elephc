@@ -122,8 +122,13 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
     emitter.label("__rt_preg_strip_flag_A");
     emitter.instruction("cmp w9, #65");                                         // check for PHP's 'A' anchored-at-offset modifier
-    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("b.ne __rt_preg_strip_flag_x");                         // try the extended-whitespace modifier
     emitter.instruction("orr x3, x3, #8192");                                   // request anchored execution from the managed regex shim
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
+    emitter.label("__rt_preg_strip_flag_x");
+    emitter.instruction("cmp w9, #120");                                        // check for PHP's 'x' extended modifier
+    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("orr x3, x3, #16384");                                  // request PCRE2_EXTENDED from the managed regex shim
     emitter.label("__rt_preg_strip_save_flag");
     emitter.instruction("str x3, [sp, #16]");                                   // save accumulated PCRE2 POSIX flags
     emitter.label("__rt_preg_strip_skip_flag");
@@ -234,8 +239,13 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
     emitter.label("__rt_preg_strip_flag_A_linux_x86_64");
     emitter.instruction("cmp r8d, 65");                                         // detect PHP's trailing 'A' anchored-at-offset modifier
-    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("jne __rt_preg_strip_flag_x_linux_x86_64");             // try the extended-whitespace modifier
     emitter.instruction("or rcx, 8192");                                        // request anchored execution from the managed regex shim
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
+    emitter.label("__rt_preg_strip_flag_x_linux_x86_64");
+    emitter.instruction("cmp r8d, 120");                                        // detect PHP's trailing 'x' extended modifier
+    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("or rcx, 16384");                                       // request PCRE2_EXTENDED from the managed regex shim
 
     emitter.label("__rt_preg_strip_skip_flag_linux_x86_64");
     emitter.instruction("sub r9, 1");                                           // move the reverse scan cursor one byte closer to the opening delimiter

@@ -518,14 +518,30 @@ impl Checker {
                             {
                                 PhpType::Array(Box::new(PhpType::Str))
                             } else {
-                                // A pattern that declares a named capture group makes PHP's
-                                // `$matches` an ordered hash rather than a list, and the runtime
-                                // only learns which one it is from the compiled pattern. The
-                                // gradual element type is the one that reads both key kinds back
-                                // out of whichever storage the match actually produced.
                                 PhpType::Mixed
                             };
-                            env.insert(name.clone(), PhpType::Array(Box::new(capture_type)));
+                            // A pattern that declares a named capture group makes PHP's
+                            // `$matches` an ordered HASH rather than a list, and the runtime
+                            // builds exactly that (`__rt_preg_match_capture_named`). Widening only
+                            // the ELEMENT type to Mixed does not describe it: the container stays
+                            // indexed, so the hash is read back as a dense vector and every read
+                            // renumbers -- `preg_match('/(?<w>[a-z]+)(?<n>[0-9]+)/', 'a1', $m)`
+                            // answered `[0,4,1,0,-1]` where PHP prints the five keyed entries.
+                            // A literal pattern says which storage the runtime will build, so type
+                            // the destination as the hash it really receives. A non-literal pattern
+                            // is left alone here; `store_matches_array` classifies at runtime for
+                            // the gradual destinations that reach it.
+                            let matches_ty = if pattern_declares_named_capture_group(
+                                expanded_args.first(),
+                            ) {
+                                PhpType::AssocArray {
+                                    key: Box::new(PhpType::Mixed),
+                                    value: Box::new(PhpType::Mixed),
+                                }
+                            } else {
+                                PhpType::Array(Box::new(capture_type))
+                            };
+                            env.insert(name.clone(), matches_ty);
                         }
                     }
                 }
@@ -1404,6 +1420,48 @@ fn by_ref_output_variable(arg: &Expr) -> Option<&String> {
         ExprKind::NamedArg { value, .. } => by_ref_output_variable(value),
         _ => None,
     }
+}
+
+/// Reports whether a LITERAL preg pattern declares a named capture group.
+///
+/// PCRE spells the same construct three ways -- `(?<name>`, `(?P<name>` and `(?'name'` -- and any
+/// one of them makes PHP hand back an ordered hash for `$matches`, keyed by each name immediately
+/// before its numeric twin. `(?<=` and `(?<!` are lookbehind, not a name, so they do not count.
+///
+/// Only a literal is inspected: a pattern built at runtime cannot be classified here, and the
+/// destination keeps the type it had.
+fn pattern_declares_named_capture_group(pattern: Option<&Expr>) -> bool {
+    let Some(Expr {
+        kind: ExprKind::StringLiteral(pattern),
+        ..
+    }) = pattern
+    else {
+        return false;
+    };
+    let bytes = pattern.as_bytes();
+    let mut index = 0usize;
+    while index + 2 < bytes.len() {
+        if bytes[index] == b'\\' {
+            index += 2;                                                 // an escaped byte cannot open a group
+            continue;
+        }
+        if bytes[index] != b'(' || bytes[index + 1] != b'?' {
+            index += 1;
+            continue;
+        }
+        let rest = &bytes[index + 2..];
+        let named = match rest.first() {
+            Some(b'<') => !matches!(rest.get(1), Some(b'=' | b'!')),     // `(?<=` and `(?<!` are lookbehind
+            Some(b'\'') => true,
+            Some(b'P') => matches!(rest.get(1), Some(b'<')),
+            _ => false,
+        };
+        if named {
+            return true;
+        }
+        index += 2;
+    }
+    false
 }
 
 /// Returns the variable name used by a builtin output argument.

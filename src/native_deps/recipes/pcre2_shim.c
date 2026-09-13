@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
 #include <pcre2posix.h>
@@ -125,27 +126,27 @@ int32_t elephc_pcre2_v1_exec(
     uint32_t eflags
 ) {
     elephc_pcre2_v1_handle *handle = (elephc_pcre2_v1_handle *)opaque_handle;
-    regmatch_t *matches = NULL;
+    pcre2_code *code;
+    pcre2_match_data *match_data;
+    PCRE2_SIZE *ovector;
+    PCRE2_SIZE subject_length;
+    PCRE2_SIZE match_offset;
+    uint32_t match_options;
     size_t slots;
-    size_t effective_slots;
+    size_t pair_count;
     size_t index;
     int use_startend;
     int64_t start_offset = -1;
     int64_t end_offset = -1;
-    int result;
+    int rc;
 
     if (handle == NULL || subject_z == NULL || (requested_slots != 0 && offset_pairs == NULL) || eflags > INT_MAX) {
         return (int32_t)REG_BADPAT;
     }
-    if (requested_slots > SIZE_MAX || requested_slots > SIZE_MAX / sizeof(regmatch_t)
-        || requested_slots > SIZE_MAX / (2 * sizeof(int64_t))) {
+    if (requested_slots > SIZE_MAX || requested_slots > SIZE_MAX / (2 * sizeof(int64_t))) {
         return (int32_t)REG_ESPACE;
     }
     slots = (size_t)requested_slots;
-    effective_slots = slots < handle->slot_count ? slots : handle->slot_count;
-    if (handle->anchored && effective_slots == 0) {
-        effective_slots = 1;
-    }
     use_startend = (eflags & REG_STARTEND) != 0 && slots != 0;
     if (use_startend) {
         start_offset = offset_pairs[0];
@@ -159,33 +160,59 @@ int32_t elephc_pcre2_v1_exec(
         offset_pairs[index * 2] = -1;
         offset_pairs[index * 2 + 1] = -1;
     }
-    if (effective_slots != 0) {
-        matches = (regmatch_t *)malloc(effective_slots * sizeof(*matches));
-        if (matches == NULL) {
-            return (int32_t)REG_ESPACE;
-        }
-        for (index = 0; index < effective_slots; ++index) {
-            matches[index].rm_so = -1;
-            matches[index].rm_eo = -1;
-        }
-        if (use_startend) {
-            matches[0].rm_so = (regoff_t)start_offset;
-            matches[0].rm_eo = (regoff_t)end_offset;
-        }
+
+    /* Match through native pcre2_match() rather than pcre2_regexec(). The POSIX wrapper
+       implements REG_STARTEND by ADVANCING the subject pointer -- `pcre2_match(re, string + so,
+       eo - so, 0, ...)` -- so every continuation of a global match saw its own start offset as
+       the start of the subject, and `^` under the `m` modifier matched THERE. php's own preg
+       passes the whole subject with a start offset instead, which is the only way `^` keeps
+       meaning "line start". Measured: `preg_replace('/^./m', '    $0', "a\nb\n")` indented every
+       character rather than the first of each line, which is exactly how Symfony's
+       `CompiledUrlMatcherDumper` writes its routing cache -- the dumped file was unparsable PHP.
+       pcre2_match() also reports offsets relative to the whole subject already, which is what
+       this ABI's callers expect and what the POSIX wrapper had to re-add by hand. */
+    code = (pcre2_code *)handle->regex.re_pcre2_code;
+    match_data = (pcre2_match_data *)handle->regex.re_match_data;
+    if (code == NULL || match_data == NULL) {
+        return (int32_t)REG_BADPAT;
     }
-    result = pcre2_regexec(&handle->regex, subject_z, effective_slots, matches, (int)eflags);
-    if (result == 0 && handle->anchored
-        && matches[0].rm_so != (regoff_t)(use_startend ? start_offset : 0)) {
-        result = REG_NOMATCH;
+    if (use_startend) {
+        subject_length = (PCRE2_SIZE)end_offset;
+        match_offset = (PCRE2_SIZE)start_offset;
+    } else {
+        subject_length = (PCRE2_SIZE)strlen(subject_z);
+        match_offset = 0;
     }
-    if (result == 0) {
-        for (index = 0; index < effective_slots && index < slots; ++index) {
-            offset_pairs[index * 2] = (int64_t)matches[index].rm_so;
-            offset_pairs[index * 2 + 1] = (int64_t)matches[index].rm_eo;
+    match_options = 0;
+    if ((eflags & REG_NOTBOL) != 0) match_options |= PCRE2_NOTBOL;
+    if ((eflags & REG_NOTEOL) != 0) match_options |= PCRE2_NOTEOL;
+    if ((eflags & REG_NOTEMPTY) != 0) match_options |= PCRE2_NOTEMPTY;
+    rc = pcre2_match(code, (PCRE2_SPTR)subject_z, subject_length, match_offset, match_options,
+                     match_data, NULL);
+    if (rc == PCRE2_ERROR_NOMATCH) {
+        return (int32_t)REG_NOMATCH;
+    }
+    if (rc < 0) {
+        return (int32_t)REG_BADPAT;
+    }
+    ovector = pcre2_get_ovector_pointer(match_data);
+    if (ovector == NULL) {
+        return (int32_t)REG_BADPAT;
+    }
+    /* rc == 0 means the ovector was too small to report every capture; the pairs it did fill
+       are still valid, and the pattern's own slot count bounds them. */
+    pair_count = (rc == 0) ? handle->slot_count : (size_t)rc;
+    if (handle->anchored && ovector[0] != match_offset) {
+        return (int32_t)REG_NOMATCH;
+    }
+    for (index = 0; index < slots && index < pair_count; ++index) {
+        if (ovector[index * 2] == PCRE2_UNSET) {
+            continue;
         }
+        offset_pairs[index * 2] = (int64_t)ovector[index * 2];
+        offset_pairs[index * 2 + 1] = (int64_t)ovector[index * 2 + 1];
     }
-    free(matches);
-    return (int32_t)result;
+    return 0;
 }
 
 void elephc_pcre2_v1_free(void *opaque_handle) {

@@ -141,6 +141,14 @@ mod test_provider {
     const PCRE2_INFO_NAMEENTRYSIZE: u32 = 18;
     const PCRE2_INFO_NAMETABLE: u32 = 19;
     const PCRE2_ZERO_TERMINATED: size_t = usize::MAX;
+    const PCRE2_UNSET: size_t = usize::MAX;
+    const PCRE2_ERROR_NOMATCH: c_int = -1;
+    const PCRE2_NOTBOL: u32 = 0x0000_0001;
+    const PCRE2_NOTEOL: u32 = 0x0000_0002;
+    const PCRE2_NOTEMPTY: u32 = 0x0000_0004;
+    const REG_NOTBOL: u32 = 0x0004;
+    const REG_NOTEOL: u32 = 0x0008;
+    const REG_NOTEMPTY: u32 = 0x0100;
 
     /// PCRE2 POSIX `regex_t` layout for the supported host wrapper ABI.
     #[repr(C)]
@@ -212,6 +220,20 @@ mod test_provider {
         /// Reads compile-time metadata (capture count, name table) off a compiled pattern.
         #[link_name = "pcre2_pattern_info_8"]
         fn pcre2_pattern_info(code: *const c_void, what: u32, where_: *mut c_void) -> c_int;
+        /// Matches a compiled pattern against the WHOLE subject from a start offset.
+        #[link_name = "pcre2_match_8"]
+        fn pcre2_match(
+            code: *const c_void,
+            subject: *const c_char,
+            length: size_t,
+            start_offset: size_t,
+            options: u32,
+            match_data: *mut c_void,
+            mcontext: *const c_void,
+        ) -> c_int;
+        /// Returns the ovector of a match-data block filled by `pcre2_match`.
+        #[link_name = "pcre2_get_ovector_pointer_8"]
+        fn pcre2_get_ovector_pointer(match_data: *mut c_void) -> *mut size_t;
     }
 
     /// Returns the test-only provider callback table.
@@ -368,7 +390,6 @@ mod test_provider {
             return REG_ESPACE;
         }
         let handle = unsafe { &mut *opaque_handle.cast::<TestRegexHandle>() };
-        let effective_slots = requested_slots.min(handle.slots).max(usize::from(handle.anchored));
         let input_range = if flags & REG_STARTEND != 0 && requested_slots > 0 {
             Some(unsafe { (*offset_pairs, *offset_pairs.add(1)) })
         } else {
@@ -377,45 +398,73 @@ mod test_provider {
         for index in 0..requested_slots.saturating_mul(2) {
             unsafe { *offset_pairs.add(index) = -1 };
         }
-        let mut matches = vec![
-            Pcre2Regmatch {
-                rm_so: -1,
-                rm_eo: -1,
-            };
-            effective_slots
-        ];
-        if let (Some((start, end)), Some(full_match)) = (input_range, matches.first_mut()) {
-            let (Ok(start), Ok(end)) = (c_int::try_from(start), c_int::try_from(end)) else {
-                return REG_BADPAT;
-            };
-            full_match.rm_so = start;
-            full_match.rm_eo = end;
+        // Match through `pcre2_match` on the WHOLE subject, mirroring `elephc_pcre2_v1_exec`:
+        // `pcre2_regexec`'s REG_STARTEND advances the subject POINTER, which makes `^` under the
+        // `m` modifier match at every continuation of a global match rather than at line starts.
+        let (subject_length, match_offset) = match input_range {
+            Some((start, end)) => {
+                if start < 0 || end < start {
+                    return REG_BADPAT;
+                }
+                let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {
+                    return REG_BADPAT;
+                };
+                (end, start)
+            }
+            None => (unsafe { std::ffi::CStr::from_ptr(subject) }.to_bytes().len(), 0),
+        };
+        let mut match_options = 0u32;
+        if flags & REG_NOTBOL != 0 {
+            match_options |= PCRE2_NOTBOL;
         }
-        let mut status = unsafe {
-            pcre2_regexec(
-                &handle.regex,
+        if flags & REG_NOTEOL != 0 {
+            match_options |= PCRE2_NOTEOL;
+        }
+        if flags & REG_NOTEMPTY != 0 {
+            match_options |= PCRE2_NOTEMPTY;
+        }
+        if handle.regex.re_pcre2_code.is_null() || handle.regex.re_match_data.is_null() {
+            return REG_BADPAT;
+        }
+        let status = unsafe {
+            pcre2_match(
+                handle.regex.re_pcre2_code,
                 subject,
-                effective_slots,
-                matches.as_mut_ptr(),
-                flags as c_int,
+                subject_length,
+                match_offset,
+                match_options,
+                handle.regex.re_match_data,
+                std::ptr::null(),
             )
         };
-        let expected_start = input_range.map_or(0, |(start, _)| start);
-        if status == 0
-            && handle.anchored
-            && matches.first().is_some_and(|matched| i64::from(matched.rm_so) != expected_start)
-        {
-            status = REG_NOMATCH;
+        if status == PCRE2_ERROR_NOMATCH {
+            return REG_NOMATCH;
         }
-        if status == 0 {
-            for (index, matched) in matches.into_iter().take(requested_slots).enumerate() {
-                unsafe {
-                    *offset_pairs.add(index * 2) = i64::from(matched.rm_so);
-                    *offset_pairs.add(index * 2 + 1) = i64::from(matched.rm_eo);
-                }
+        if status < 0 {
+            return REG_BADPAT;
+        }
+        let ovector = unsafe { pcre2_get_ovector_pointer(handle.regex.re_match_data) };
+        if ovector.is_null() {
+            return REG_BADPAT;
+        }
+        // `0` means the ovector could not hold every capture; the pairs it did fill are valid and
+        // the pattern's own slot count bounds them.
+        let pair_count = if status == 0 { handle.slots } else { status as usize };
+        if handle.anchored && unsafe { *ovector } != match_offset {
+            return REG_NOMATCH;
+        }
+        for index in 0..requested_slots.min(pair_count) {
+            let start = unsafe { *ovector.add(index * 2) };
+            if start == PCRE2_UNSET {
+                continue;
+            }
+            let end = unsafe { *ovector.add(index * 2 + 1) };
+            unsafe {
+                *offset_pairs.add(index * 2) = start as i64;
+                *offset_pairs.add(index * 2 + 1) = end as i64;
             }
         }
-        status
+        0
     }
 
     /// Releases one test regex handle and its PCRE2 allocation.

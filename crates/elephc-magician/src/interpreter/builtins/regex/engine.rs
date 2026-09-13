@@ -177,10 +177,14 @@ impl Regex {
             let end = full_match.end();
             let start = full_match.start();
             captures.push(next);
-            if end > cursor {
+            // Advance past THIS match, not past the cursor it was searched from. An anchored
+            // empty match (`/^/m`) lands on the next line start, which is ahead of the cursor:
+            // moving the cursor only up to `end` left it sitting on that same empty match and
+            // reported every line start twice.
+            if end > start {
                 cursor = end;
-            } else if start < subject.len() {
-                cursor = start + 1;
+            } else if end < subject.len() {
+                cursor = end + 1;
             } else {
                 break;
             }
