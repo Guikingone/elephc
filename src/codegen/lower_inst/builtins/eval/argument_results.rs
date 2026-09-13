@@ -251,33 +251,26 @@ pub(super) fn emit_release_eval_boxed_operands_keeping_int_answer(
 
 /// Releases boxed operand cells on a path where the bridge published a result cell.
 ///
-/// An interpreted body may hand back the very cell it was passed (`return $a;`), in which case
-/// the published result is that operand's cell and its reference has moved to the result rather
-/// than being this frame's to drop.
+/// This used to SKIP the release when the published result cell was the very cell an operand was
+/// boxed into (`function f($a) { return $a; }`), on the reasoning that the operand's reference had
+/// moved to the result. That reasoning held only while the interpreter returned a BORROWED cell in
+/// that case. It no longer does: `statements::dispatch` now retains a returned value whose
+/// activation scope does not own one -- a by-value parameter is bound `Borrowed` on purpose, and
+/// without the retain a discarded `f($x);` released the CALLER's `$x`.
+///
+/// So the interpreter now guarantees every result carries a reference of its own, and this frame's
+/// box is always still this frame's to drop. Skipping it left the object with one reference too
+/// many: `$back = echo_back($local);` never ran `$local`'s destructor
+/// (`codegen::destructors::test_eval_call_returning_its_argument_keeps_the_returned_cell`).
+///
+/// The two compensations are the same pair the `$this` exclusion in `statements::dispatch` already
+/// avoids -- retaining on the return side AND holding on the call side double-counts. Exactly one
+/// side compensates, and it is the interpreter.
 pub(super) fn emit_release_eval_boxed_operands_keeping_result(
     ctx: &mut FunctionContext<'_>,
     boxed: &[usize],
 ) {
-    for offset in boxed {
-        let keep_label = ctx.next_label("eval_boxed_operand_is_result");
-        let cell_reg = abi::int_result_reg(ctx.emitter);
-        let result_cell_reg = abi::symbol_scratch_reg(ctx.emitter);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, cell_reg, *offset);
-        abi::emit_load_temporary_stack_slot(
-            ctx.emitter,
-            result_cell_reg,
-            EVAL_RESULT_VALUE_CELL_OFFSET,
-        );
-        let compare = format!("cmp {}, {}", cell_reg, result_cell_reg);
-        let branch_if_equal = match ctx.emitter.target.arch {
-            Arch::AArch64 => format!("b.eq {}", keep_label),
-            Arch::X86_64 => format!("je {}", keep_label),
-        };
-        ctx.emitter.instruction(&compare);                                      // compare the boxed operand cell with the cell the bridge published
-        ctx.emitter.instruction(&branch_if_equal);                              // ownership moved to the result, so this cell is not ours to drop
-        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed"); // release the Mixed cell this call boxed for the eval bridge
-        ctx.emitter.label(&keep_label);
-    }
+    emit_release_eval_boxed_operands(ctx, boxed);
 }
 
 /// Probes whether eval has a late-static called-class override for an AOT frame.

@@ -693,6 +693,50 @@ echo "end\n";
     assert_eq!(out, "back is local\nscope end\ndestruct local\nend\n");
 }
 
+/// Exactly one side compensates when an interpreted body returns the cell it was passed.
+///
+/// `statements::dispatch` retains a returned value whose activation scope owns nothing to
+/// transfer -- a by-value parameter is bound `Borrowed` on purpose, so without the retain a
+/// discarded `f($x);` released the CALLER's `$x`. The AOT frame therefore always releases the
+/// cell it boxed: skipping that release when the published result happened to BE the operand
+/// (which the bridge used to do, comparing the two pointers at runtime) counted the same
+/// reference twice and left the object one reference above zero.
+///
+/// Both halves are pinned here because fixing either one alone breaks the other: `$kept` is
+/// passed through a discarded call AND a used one, and `$other` through a call whose result does
+/// not alias it. Each destructor must run exactly once, at scope exit.
+///
+/// Oracle: `php -n` 8.5.10 prints the asserted lines.
+#[test]
+fn test_eval_call_returning_its_argument_compensates_on_exactly_one_side() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct {$this->n}\n"; }
+}
+function run(): void {
+    eval('function echo_back($v) { return $v; }
+function ignore_it($v) { return "plain"; }');
+    $kept = new T('kept');
+    echo_back($kept);
+    echo "after discarded\n";
+    $used = echo_back($kept);
+    echo "used is " . $used->n . "\n";
+    $other = new T('other');
+    echo ignore_it($other), "\n";
+    echo "scope end\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "after discarded\nused is kept\nplain\nscope end\ndestruct kept\ndestruct other\nend\n",
+    );
+}
+
 /// A `static::` call inside an eval-context function releases the operands its override probe boxed.
 ///
 /// The late-bound static path runs the same borrow-and-drop probe as instance dispatch, so a
