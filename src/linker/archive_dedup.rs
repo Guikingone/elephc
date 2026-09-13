@@ -10,7 +10,6 @@
 //! - Only whole-archived bridge inputs participate; managed native archives are untouched.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -242,13 +241,18 @@ fn dedup_macos_archive(
     // outright if anything already sits at the destination — unlike `fs::copy`, which
     // happily truncates whatever a symlink points at. The private scratch directory already
     // makes a pre-placed symlink unreachable; this is the second lock on the same door.
-    let bytes = std::fs::read(archive).ok()?;
+    //
+    // `io::copy` rather than `fs::read` + `write_all`: a whole-archived bridge can be tens
+    // of megabytes and several are deduplicated in one link, so reading each one entirely
+    // into memory first would add a spike proportional to the archive set for no reason.
+    // The streaming copy is what `fs::copy` would do, minus the symlink-following open.
+    let mut source = std::fs::File::open(archive).ok()?;
     let mut destination = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&copy)
         .ok()?;
-    destination.write_all(&bytes).ok()?;
+    std::io::copy(&mut source, &mut destination).ok()?;
     drop(destination);
     let strip: Vec<&String> = strip.iter().collect();
     for chunk in strip.chunks(256) {
