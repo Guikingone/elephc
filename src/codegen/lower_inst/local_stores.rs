@@ -471,6 +471,12 @@ fn emit_mixed_local_slot_retirement(ctx: &mut FunctionContext<'_>, done: &str) {
     let result = abi::int_result_reg(ctx.emitter);
     let tag = abi::secondary_scratch_reg(ctx.emitter);
     let scalar = ctx.next_label("release_local_slot_scalar_mixed");
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result,
+        tag,
+        done,
+    );
     abi::emit_load_from_address(ctx.emitter, tag, result, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
