@@ -1,0 +1,42 @@
+# cargo-audit configuration for the RustSec advisory gate (`.github/workflows/ci.yml`,
+# job `security-audit`).
+#
+# EVERY ENTRY IN `ignore` IS AN EXCEPTION THAT HAD TO BE ARGUED. The gate exists so a NEW
+# advisory fails the build; an exception is a statement that the advisory is either not
+# reachable in this tree or has no available fix, with the evidence recorded next to it.
+# Removing an entry is always preferable to keeping it.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0235 — rkyv 0.7.46, out-of-bounds reads validating archived Rc/Arc.
+    #
+    # NOT REACHABLE. `rkyv` is an UNSELECTED OPTIONAL dependency of `rust_decimal`, which
+    # `elephc-pdo` takes with `features = ["db-postgres"]` only. It appears in `Cargo.lock`
+    # because the resolver records optional dependencies, not because anything builds it:
+    #
+    #   $ cargo tree -i rkyv                 # nothing to print
+    #   $ cargo tree -i rkyv --target all    # nothing to print
+    #   $ ls target/debug/deps | grep rkyv   # no artifact
+    #
+    # It cannot simply be upgraded either: `rust_decimal 1.42` requires `rkyv = "^0.7.46"`,
+    # so `cargo update -p rkyv --precise 0.8.17` is refused by the resolver. The entry
+    # leaves `Cargo.lock` when `rust_decimal` drops or bumps that optional dependency.
+    "RUSTSEC-2026-0235",
+
+    # RUSTSEC-2023-0071 — rsa 0.9.10, Marvin timing side-channel on private-key operations.
+    #
+    # NO FIXED RELEASE EXISTS (RustSec lists none), so this cannot be resolved by an
+    # upgrade. The affected operation IS present: `elephc-phar`'s `rsa_sha1_sign` performs
+    # PKCS#1 v1.5 RSA-SHA1 signing, reproducing PHP's
+    # `openssl_sign(..., OPENSSL_ALGO_SHA1)` for `Phar::setSignatureAlgorithm(Phar::OPENSSL,
+    # $privateKey)`.
+    #
+    # SCOPE OF THE EXPOSURE. Marvin needs an attacker who can submit many chosen inputs to a
+    # private-key operation and measure its timing. The only path here is a program signing
+    # ITS OWN archive with a key it supplies itself — an authoring-time operation, not a
+    # service. elephc exposes no remote signing or decryption oracle of its own, and no RSA
+    # DECRYPTION path exists in this tree at all. A PHP program that chose to expose PHAR
+    # signing as a timed remote service would be exposed; that is a property of that
+    # program, and it is documented in docs/php/phar.md.
+    "RUSTSEC-2023-0071",
+]

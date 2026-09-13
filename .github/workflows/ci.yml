@@ -1450,6 +1450,27 @@ jobs:
         # use the symbol fail to link.
         run: python3 crates/elephc-image/tools/check_extern_exports.py
 
+  security-audit:
+    name: RustSec advisory audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit Cargo.lock against the RustSec database
+        # Fails on any advisory that is not listed in `.cargo/audit.toml`, so a NEW
+        # vulnerability entering the dependency graph breaks the build instead of being
+        # noticed in a periodic manual sweep. Every ignored advisory carries its
+        # justification and its removal condition next to it in that file; unmaintained,
+        # unsound and yanked notices stay warnings rather than failures, because they have
+        # no fixed version to move to and would otherwise make the gate unactionable.
+        run: cargo audit
+
   builtins-docs-sync:
     name: Builtins docs in sync
     runs-on: ubuntu-latest
