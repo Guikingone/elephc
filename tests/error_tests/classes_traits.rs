@@ -632,6 +632,68 @@ fn test_error_private_grandparent_constructor_names_its_declaring_class() {
     );
 }
 
+/// Issue #870: the ARITY diagnostic names the declaring class too, not the one being
+/// instantiated. php-src reports `Too few arguments to function Owner::__construct()` for a
+/// descendant of a class with a private constructor; elephc said `Child::__construct`, so the
+/// message pointed at a class whose source has no constructor to look at.
+#[test]
+fn test_error_inherited_private_constructor_arity_names_the_declaring_class() {
+    expect_error(
+        "<?php class Owner { private function __construct(int $n) {} public static function makeChild(): Owner { return new Child(); } } class Child extends Owner {} Owner::makeChild();",
+        "Constructor 'Owner::__construct' expects 1 arguments, got 0",
+    );
+}
+
+/// The same for TOO MANY arguments, which reaches the arity check by the other side.
+#[test]
+fn test_error_inherited_private_constructor_excess_arity_names_the_declaring_class() {
+    expect_error(
+        "<?php class Owner { private function __construct(int $n) {} public static function makeChild(): Owner { return new Child(1, 2, 3); } } class Child extends Owner {} Owner::makeChild();",
+        "Constructor 'Owner::__construct' expects 1 arguments, got 3",
+    );
+}
+
+/// A NAMED argument that matches no parameter is normalized against the same signature, so its
+/// diagnostic must name the declaring class as well.
+#[test]
+fn test_error_inherited_private_constructor_unknown_named_arg_names_the_declaring_class() {
+    expect_error(
+        "<?php class Owner { private function __construct(int $n) {} public static function makeChild(): Owner { return new Child(nope: 1); } } class Child extends Owner {} Owner::makeChild();",
+        "Constructor 'Owner::__construct'",
+    );
+}
+
+/// The declaring class is reported from further up the chain here too, matching the visibility
+/// half's `test_error_private_grandparent_constructor_names_its_declaring_class`.
+#[test]
+fn test_error_inherited_private_grandparent_constructor_arity_names_its_declaring_class() {
+    expect_error(
+        "<?php class Root { private function __construct(int $n) {} public static function makeLeaf(): Root { return new Leaf(); } } class Middle extends Root {} class Leaf extends Middle {} Root::makeLeaf();",
+        "Constructor 'Root::__construct' expects 1 arguments, got 0",
+    );
+}
+
+/// A class that declares its OWN constructor is unchanged: the declaring class and the
+/// instantiated class are the same, so the message reads exactly as before.
+#[test]
+fn test_error_own_constructor_arity_still_names_the_instantiated_class() {
+    expect_error(
+        "<?php class Owner { public function __construct(int $n) {} } $o = new Owner();",
+        "Constructor 'Owner::__construct' expects 1 arguments, got 0",
+    );
+}
+
+/// An inherited PUBLIC constructor names the class that DECLARES it, which is what php-src
+/// reports (`Too few arguments to function Base::__construct()`) — the descendant inherits the
+/// entry, so this path was already correct and stays so.
+#[test]
+fn test_error_inherited_public_constructor_arity_names_the_declaring_class() {
+    expect_error(
+        "<?php class Base { public function __construct(int $n) {} } class Sub extends Base {} $o = new Sub();",
+        "Constructor 'Base::__construct' expects 1 arguments, got 0",
+    );
+}
+
 /// Verifies that `new ReflectionParameter()` rejects unknown parameter names.
 #[test]
 fn test_error_reflection_parameter_constructor_unknown_name() {
