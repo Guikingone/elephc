@@ -841,6 +841,14 @@ fn test_error_core_parity_builtin_arity_contracts() {
             "get_defined_vars() takes no arguments",
         ),
         (
+            "<?php get_error_handler(1);",
+            "get_error_handler() takes no arguments",
+        ),
+        (
+            "<?php get_exception_handler(null);",
+            "get_exception_handler() takes no arguments",
+        ),
+        (
             "<?php get_extension_funcs();",
             "get_extension_funcs() takes exactly 1 argument",
         ),

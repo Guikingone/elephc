@@ -1,5 +1,5 @@
 //! Purpose:
-//! Defines the PHP 8.4 Core extension function surface used by compatibility introspection.
+//! Defines the PHP 8.5 Core extension function surface used by compatibility introspection.
 //!
 //! Called from:
 //! - AOT and Magician implementations of `get_extension_funcs("Core")`.
@@ -41,6 +41,8 @@ pub const CORE_FUNCTION_NAMES: &[&str] = &[
     "get_defined_constants",
     "get_defined_functions",
     "get_defined_vars",
+    "get_error_handler",
+    "get_exception_handler",
     "get_extension_funcs",
     "get_included_files",
     "get_loaded_extensions",

@@ -377,6 +377,8 @@ pub enum CoreBuiltinOp {
     GetIncludedFiles = 12,
     GetMangledObjectVars = 13,
     GetResources = 14,
+    GetErrorHandler = 15,
+    GetExceptionHandler = 16,
 }
 
 impl CoreBuiltinOp {
@@ -393,7 +395,9 @@ impl CoreBuiltinOp {
             | Self::GetExtensionFuncs
             | Self::GetIncludedFiles
             | Self::GetMangledObjectVars
-            | Self::GetResources => BuiltinResultOwnership::Fresh,
+            | Self::GetResources
+            | Self::GetErrorHandler
+            | Self::GetExceptionHandler => BuiltinResultOwnership::Fresh,
             Self::DebugPrintBacktrace
             | Self::ErrorReporting
             | Self::RestoreErrorHandler
@@ -425,6 +429,8 @@ impl CoreBuiltinOp {
             12 => Some(Self::GetIncludedFiles),
             13 => Some(Self::GetMangledObjectVars),
             14 => Some(Self::GetResources),
+            15 => Some(Self::GetErrorHandler),
+            16 => Some(Self::GetExceptionHandler),
             _ => None,
         }
     }
@@ -444,7 +450,9 @@ impl CoreBuiltinOp {
             Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::GetDefinedVars
-            | Self::GetIncludedFiles => 0,
+            | Self::GetIncludedFiles
+            | Self::GetErrorHandler
+            | Self::GetExceptionHandler => 0,
             Self::GetDefinedFunctions => 1,
         }
     }
@@ -473,6 +481,14 @@ impl CoreBuiltinOp {
             Self::ErrorReporting => {
                 Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
             }
+            // Getters only read the active registration; boxing null or retaining the
+            // stored callback allocates and touches refcounts but never runs PHP code.
+            Self::GetErrorHandler | Self::GetExceptionHandler => Effects::from_bits_retain(
+                E::READS_GLOBAL.bits()
+                    | E::READS_HEAP.bits()
+                    | E::ALLOC_HEAP.bits()
+                    | E::REFCOUNT_OP.bits(),
+            ),
             Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::SetErrorHandler

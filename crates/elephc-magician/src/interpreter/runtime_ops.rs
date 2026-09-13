@@ -132,6 +132,14 @@ pub trait RuntimeValueOps {
         Err(EvalStatus::UnsupportedConstruct)
     }
 
+    /// Returns an independently owned copy of the process-wide user error handler callback.
+    ///
+    /// `Ok(None)` means no handler is active. Pure interpreter implementations return
+    /// `UnsupportedConstruct` so the eval context can read its local handler stack.
+    fn runtime_error_handler_get(&mut self) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
     /// Invokes the active process-wide user error handler with borrowed callback arguments.
     ///
     /// Returns `Ok(None)` when no handler covers `level`, otherwise returns the
@@ -157,6 +165,14 @@ pub trait RuntimeValueOps {
 
     /// Restores the prior process-wide exception handler through the generated runtime.
     fn runtime_exception_handler_restore(&mut self) -> Result<(), EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Returns an independently owned copy of the process-wide exception handler callback.
+    ///
+    /// `Ok(None)` means no handler is active. Pure interpreter implementations return
+    /// `UnsupportedConstruct` so the eval context can read its local handler stack.
+    fn runtime_exception_handler_get(&mut self) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         Err(EvalStatus::UnsupportedConstruct)
     }
 

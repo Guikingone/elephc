@@ -368,7 +368,7 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 613 + curl_surface);
+        assert_eq!(eval_registry, 615 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
         assert_eq!(eval_internal, 99);
@@ -379,8 +379,9 @@ mod tests {
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
         // internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
-        // builtins (`xml_parse_into_struct` plus the nine handler setters), and `sizeof`.
-        assert_eq!(aot_registry, 656);
+        // builtins (`xml_parse_into_struct` plus the nine handler setters), and the two
+        // PHP 8.5 Core handler getters, plus `sizeof`.
+        assert_eq!(aot_registry, 658);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 409 + curl_surface);
@@ -430,7 +431,7 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 592 + curl_surface);
+        assert_eq!(interpreter_adapter, 594 + curl_surface);
         assert_eq!(unsupported, 452);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),

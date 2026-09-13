@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Registrations retain callbacks independently; preparation temporaries must not retain them forever.
+//! - Handler getters hand out one extra owner per call and never touch the descriptor owner.
 
 use crate::support::*;
 
@@ -84,5 +85,52 @@ echo "done";
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "called|drop|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Getter results are independent owners: they keep a captured object alive past restoration
+/// and release it exactly once, while the registration's own descriptor stays untouched.
+#[test]
+fn test_core_handler_getters_return_independent_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class GetterCaptureOwner {
+    public function __destruct() { echo "drop|"; }
+}
+echo is_null(get_error_handler()) && is_null(get_exception_handler()) ? "null|" : "bad|";
+$owner = new GetterCaptureOwner();
+set_error_handler(function(int $level, string $message) use ($owner): bool { echo "handled|"; return true; });
+unset($owner);
+$first = get_error_handler();
+$second = get_error_handler();
+echo $first === $second ? "same|" : "bad|";
+unset($second);
+restore_error_handler();
+echo is_null(get_error_handler()) ? "cleared|" : "bad|";
+$first(E_USER_WARNING, "manual");
+unset($first);
+echo "released|";
+$owner = new GetterCaptureOwner();
+set_exception_handler(function(Throwable $error) use ($owner): void { echo "exception|"; });
+unset($owner);
+for ($i = 0; $i < 3; $i++) {
+    $copy = get_exception_handler();
+    unset($copy);
+}
+$kept = get_exception_handler();
+set_exception_handler(null);
+echo is_null(get_exception_handler()) ? "none|" : "bad|";
+restore_exception_handler();
+restore_exception_handler();
+$kept(new Exception("manual"));
+unset($kept);
+echo "done";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "null|same|cleared|handled|drop|released|none|exception|drop|done",
+        "{}",
+        out.stderr
+    );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

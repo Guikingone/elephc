@@ -12,7 +12,8 @@
 //! - Backend support is joined separately and must not be inferred from this file.
 
 use crate::{
-    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, TypeSpec,
+    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, PhpVersion,
+    TypeSpec,
 };
 
 macro_rules! param {
@@ -38,14 +39,14 @@ macro_rules! surface {
     (
         $name:literal, $area:ident, $module:ident, $kind:ident,
         [$($param:expr),* $(,)?], $variadic:expr, $returns:ident,
-        $summary:literal $(, extension: $extension:expr)?
+        $summary:literal $(, since: $since:ident)? $(, extension: $extension:expr)?
     ) => {
         BuiltinContract {
             id: BuiltinId::from_canonical_name($name),
             name: $name,
             area: Area::$area,
             module: PhpModule::$module,
-            since: None,
+            since: surface!(@since $($since)?),
             kind: BuiltinKind::$kind,
             params: &[$($param),*],
             variadic: $variadic,
@@ -66,6 +67,8 @@ macro_rules! surface {
     };
     (@bool $value:expr) => { $value };
     (@bool) => { false };
+    (@since $version:ident) => { Some(PhpVersion::$version) };
+    (@since) => { None };
 }
 
 pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
@@ -215,6 +218,28 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         None,
         Mixed,
         "Returns variables visible in the current scope."
+    ),
+    surface!(
+        "get_error_handler",
+        System,
+        Core,
+        Function,
+        [],
+        None,
+        Mixed,
+        "Returns the currently active user error handler, or null when none is installed.",
+        since: Php85
+    ),
+    surface!(
+        "get_exception_handler",
+        System,
+        Core,
+        Function,
+        [],
+        None,
+        Mixed,
+        "Returns the currently active uncaught-exception handler, or null when none is installed.",
+        since: Php85
     ),
     surface!(
         "get_extension_funcs",

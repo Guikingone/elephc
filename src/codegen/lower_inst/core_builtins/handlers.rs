@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Handler registrations own retained callback cells and callable descriptors.
+//! - Handler getters expose only a freshly retained callback cell, never the descriptor.
 //! - Previous registrations live in heap-backed linked nodes, without a fixed nesting limit.
 //! - A handler return value suppresses PHP's default diagnostic unless it is exactly `false`.
 
@@ -139,6 +140,34 @@ pub(super) fn lower_set_exception_handler(
     );
     restore_previous_callback_result(ctx);
     Ok(())
+}
+
+/// Returns an independently retained copy of the active user error handler, or PHP null.
+pub(super) fn lower_get_error_handler(ctx: &mut FunctionContext<'_>) {
+    lower_get_handler_value(ctx, "_php_error_handler_value");
+}
+
+/// Returns an independently retained copy of the active exception handler, or PHP null.
+pub(super) fn lower_get_exception_handler(ctx: &mut FunctionContext<'_>) {
+    lower_get_handler_value(ctx, "_php_exception_handler_value");
+}
+
+/// Loads the PHP-visible callback cell of one handler kind and gives the caller its own owner.
+///
+/// Only the retained callback value is exposed; the normalized descriptor, eval context,
+/// and mask stay private to the runtime. A suspended registration (the handler is
+/// currently executing) reads as PHP null, matching PHP's own unset-during-call rule.
+fn lower_get_handler_value(ctx: &mut FunctionContext<'_>, value_symbol: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let done = ctx.next_label("handler_get_done");
+    let empty = ctx.next_label("handler_get_empty");
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, value_symbol, 0);
+    emit_branch_if_zero(ctx, result_reg, &empty);
+    callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
+    ctx.emitter.instruction(&branch_instruction(ctx, &done));                   // the retained callback cell is the PHP-visible result
+    ctx.emitter.label(&empty);
+    emit_null_mixed_result(ctx);
+    ctx.emitter.label(&done);
 }
 
 /// Restores the preceding AOT user error handler, if one was registered.

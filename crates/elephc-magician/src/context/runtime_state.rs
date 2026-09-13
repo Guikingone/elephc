@@ -264,6 +264,11 @@ impl ElephcEvalContext {
         discarded
     }
 
+    /// Returns the currently active eval uncaught-exception handler without transferring ownership.
+    pub(crate) const fn exception_handler_state(&self) -> Option<RuntimeCellHandle> {
+        self.exception_handler
+    }
+
     /// Returns active eval call frames from the current frame to the outermost frame.
     pub(crate) fn backtrace_frames(&self) -> Vec<EvalBacktraceFrame> {
         let mut frames = Vec::new();

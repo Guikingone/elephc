@@ -36,6 +36,8 @@ mod gc_status;
 mod get_defined_constants;
 mod get_defined_functions;
 mod get_defined_vars;
+mod get_error_handler;
+mod get_exception_handler;
 mod get_extension_funcs;
 mod get_included_files;
 mod get_mangled_object_vars;
@@ -110,6 +112,7 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         "defined" => eval_builtin_defined(args, context, scope, values),
         "debug_backtrace" | "debug_print_backtrace" | "error_reporting"
         | "get_defined_constants" | "get_defined_functions" | "get_defined_vars"
+        | "get_error_handler" | "get_exception_handler"
         | "get_extension_funcs" | "get_included_files" | "get_mangled_object_vars"
         | "get_required_files" | "get_resources" | "restore_error_handler"
         | "restore_exception_handler" | "set_error_handler" | "set_exception_handler"
@@ -163,6 +166,7 @@ pub(in crate::interpreter) fn eval_core_values_result(
         "defined" => eval_defined_result(evaluated_args, context, values),
         "debug_backtrace" | "debug_print_backtrace" | "error_reporting"
         | "get_defined_constants" | "get_defined_functions" | "get_defined_vars"
+        | "get_error_handler" | "get_exception_handler"
         | "get_extension_funcs" | "get_included_files" | "get_mangled_object_vars"
         | "get_required_files" | "get_resources" | "restore_error_handler"
         | "restore_exception_handler" | "set_error_handler" | "set_exception_handler"

@@ -64,6 +64,8 @@ fn eval_runtime_introspection_result(
         "restore_exception_handler" => eval_restore_exception_handler(args, context, values),
         "set_error_handler" => eval_set_error_handler(args, context, scope, values),
         "set_exception_handler" => eval_set_exception_handler(args, context, scope, values),
+        "get_error_handler" => eval_get_error_handler(args, context, values),
+        "get_exception_handler" => eval_get_exception_handler(args, context, values),
         "trigger_error" | "user_error" => eval_trigger_error(args, context, values),
         "get_defined_constants" => eval_get_defined_constants(args, context, values),
         "get_defined_functions" => eval_get_defined_functions(args, context, values),
@@ -213,6 +215,48 @@ fn eval_restore_exception_handler(
         Err(status) => return Err(status),
     }
     values.bool_value(true)
+}
+
+/// Returns an independent copy of the active user error handler callback, or PHP null.
+///
+/// Hosted eval asks the shared native runtime so AOT and eval registrations agree; a pure
+/// interpreter reads its local stack, where a suspended (currently running) handler is null.
+fn eval_get_error_handler(
+    args: &[RuntimeCellHandle],
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    match values.runtime_error_handler_get() {
+        Ok(Some(active)) => Ok(active),
+        Ok(None) => values.null(),
+        Err(EvalStatus::UnsupportedConstruct) => {
+            return_previous_error_handler(context.error_handler_state(), values)
+        }
+        Err(status) => Err(status),
+    }
+}
+
+/// Returns an independent copy of the active uncaught-exception handler callback, or PHP null.
+fn eval_get_exception_handler(
+    args: &[RuntimeCellHandle],
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    match values.runtime_exception_handler_get() {
+        Ok(Some(active)) => Ok(active),
+        Ok(None) => values.null(),
+        Err(EvalStatus::UnsupportedConstruct) => match context.exception_handler_state() {
+            Some(active) => values.retain(active),
+            None => values.null(),
+        },
+        Err(status) => Err(status),
+    }
 }
 
 /// Validates one handler callback using the direct call's lexical scope when available.

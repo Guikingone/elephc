@@ -247,6 +247,48 @@ boxedHandler(function(int $level, string $message): bool { return true; });
     }
 }
 
+/// Handler getters lower to operand-free Core operations with fresh boxed results on every target.
+#[test]
+fn handler_getters_lower_to_fresh_boxed_core_operations_on_all_targets() {
+    let source = r#"<?php
+function readHandlers(): void {
+    $error = get_error_handler();
+    $exception = get_exception_handler();
+    echo is_null($error) ? "n" : "h", is_null($exception) ? "n" : "h";
+}
+readHandlers();
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let mut getters = Vec::new();
+        for function in &module.functions {
+            for inst in &function.instructions {
+                if inst.op != Op::CoreBuiltin { continue; }
+                let Some(crate::ir::Immediate::I64(selector)) = inst.immediate else { continue; };
+                let Some(operation) = crate::ir::CoreBuiltinOp::from_i64(selector) else { continue; };
+                if !matches!(operation, crate::ir::CoreBuiltinOp::GetErrorHandler
+                    | crate::ir::CoreBuiltinOp::GetExceptionHandler) { continue; }
+                assert!(inst.operands.is_empty(), "{target}: getters take no operands");
+                let result = inst.result.expect("handler getters produce a value");
+                let metadata = function.value(result).unwrap();
+                assert_eq!(metadata.php_type, crate::types::PhpType::Mixed, "{target}");
+                assert_eq!(metadata.ownership, Ownership::Owned, "{target}");
+                assert_eq!(
+                    operation.result_ownership(),
+                    crate::builtins::semantics::BuiltinResultOwnership::Fresh,
+                    "{target}"
+                );
+                getters.push(operation);
+            }
+        }
+        assert_eq!(getters.len(), 2, "{target}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Both forms of direct boxed calls use the existing tag-checked descriptor ABI on every target.
 #[test]
 fn boxed_array_read_direct_calls_lower_through_descriptors_on_all_targets() {

@@ -128,6 +128,12 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         }
     }
 
+    /// Reads the active native user error handler as a retained PHP-visible callback cell.
+    fn runtime_error_handler_get(&mut self) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let cell = unsafe { __elephc_eval_error_handler_get() };
+        Ok((!cell.is_null()).then(|| RuntimeCellHandle::from_raw(cell)))
+    }
+
     /// Invokes the native user error handler through its uniform descriptor ABI.
     fn runtime_error_handler_dispatch(
         &mut self,
@@ -187,6 +193,12 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         } else {
             Err(EvalStatus::RuntimeFatal)
         }
+    }
+
+    /// Reads the active native exception handler as a retained PHP-visible callback cell.
+    fn runtime_exception_handler_get(&mut self) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let cell = unsafe { __elephc_eval_exception_handler_get() };
+        Ok((!cell.is_null()).then(|| RuntimeCellHandle::from_raw(cell)))
     }
 
     impl_collection_call_ops!();

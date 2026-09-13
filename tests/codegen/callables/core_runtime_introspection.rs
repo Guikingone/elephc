@@ -457,6 +457,132 @@ fn test_core_error_handler_crosses_aot_eval_boundary() {
     assert_eq!(out, "P|E512:outside|R|A512:inside|r");
 }
 
+/// Verifies `get_error_handler()` follows registration, replacement, `null`, and restoration.
+#[test]
+fn test_core_get_error_handler_aot_tracks_registration_stack() {
+    let out = compile_and_run(
+        r#"<?php
+        class GetHandlerHost {
+            public function onError(int $level, string $message): bool { return true; }
+        }
+        function named_get_error_handler(int $level, string $message): bool { return true; }
+        echo is_null(get_error_handler()) ? "N|" : "bad|";
+        set_error_handler("named_get_error_handler");
+        echo get_error_handler() === "named_get_error_handler" ? "S|" : "bad|";
+        $closure = function(int $level, string $message): bool { return true; };
+        set_error_handler($closure);
+        echo get_error_handler() === $closure ? "C|" : "bad|";
+        $host = new GetHandlerHost();
+        set_error_handler([$host, "onError"]);
+        $active = get_error_handler();
+        echo is_array($active) && $active[0] === $host && $active[1] === "onError" ? "A|" : "bad|";
+        set_error_handler(null);
+        echo is_null(get_error_handler()) ? "n|" : "bad|";
+        restore_error_handler();
+        echo is_array(get_error_handler()) ? "a|" : "bad|";
+        restore_error_handler();
+        echo get_error_handler() === $closure ? "c|" : "bad|";
+        restore_error_handler();
+        echo get_error_handler() === "named_get_error_handler" ? "s|" : "bad|";
+        restore_error_handler();
+        echo is_null(get_error_handler()) ? "N" : "bad";
+        "#,
+    );
+    assert_eq!(out, "N|S|C|A|n|a|c|s|N");
+}
+
+/// Verifies the getter result is a callable copy and reads as null while its handler runs.
+#[test]
+fn test_core_get_error_handler_aot_result_is_callable_and_null_during_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+        function probing_error_handler(int $level, string $message): bool {
+            echo is_null(get_error_handler()) ? "inner-null|" : "bad|";
+            return true;
+        }
+        set_error_handler("probing_error_handler", E_USER_WARNING);
+        trigger_error("probe", E_USER_WARNING);
+        $copy = get_error_handler();
+        restore_error_handler();
+        echo is_null(get_error_handler()) ? "outer-null|" : "bad|";
+        echo $copy(E_USER_NOTICE, "direct") ? "called" : "bad";
+        "#,
+    );
+    assert_eq!(out, "inner-null|outer-null|inner-null|called");
+}
+
+/// Verifies `get_exception_handler()` through direct, dynamic, first-class, and CUF forms.
+#[test]
+fn test_core_get_exception_handler_aot_registrations_and_call_forms() {
+    let out = compile_and_run(
+        r#"<?php
+        function named_get_exception_handler(Throwable $error): void {}
+        echo is_null(get_exception_handler()) ? "N|" : "bad|";
+        set_exception_handler("named_get_exception_handler");
+        echo GeT_ExCePtIoN_HaNdLeR() === "named_get_exception_handler" ? "S|" : "bad|";
+        echo \get_exception_handler() === "named_get_exception_handler" ? "q|" : "bad|";
+        $name = "get_exception_handler";
+        echo $name() === "named_get_exception_handler" ? "d|" : "bad|";
+        $first_class = get_exception_handler(...);
+        echo $first_class() === "named_get_exception_handler" ? "f|" : "bad|";
+        echo call_user_func("get_exception_handler") === "named_get_exception_handler" ? "u|" : "bad|";
+        echo call_user_func_array("get_exception_handler", []) === "named_get_exception_handler" ? "U|" : "bad|";
+        $closure = function(Throwable $error): void { echo "closure|"; };
+        set_exception_handler($closure);
+        echo get_exception_handler() === $closure ? "C|" : "bad|";
+        set_exception_handler(null);
+        echo is_null(get_exception_handler()) ? "n|" : "bad|";
+        restore_exception_handler();
+        $copy = get_exception_handler();
+        $copy(new Exception("manual"));
+        restore_exception_handler();
+        echo get_exception_handler() === "named_get_exception_handler" ? "s|" : "bad|";
+        restore_exception_handler();
+        echo is_null(get_exception_handler()) ? "N" : "bad";
+        "#,
+    );
+    assert_eq!(out, "N|S|q|d|f|u|U|C|n|closure|s|N");
+}
+
+/// Verifies AOT and dynamic eval read one process-wide handler state in both directions.
+#[test]
+fn test_core_get_handlers_cross_aot_eval_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+        function aot_boundary_error_handler(int $level, string $message): bool { return true; }
+        function aot_boundary_exception_handler(Throwable $error): void {}
+        set_error_handler("aot_boundary_error_handler");
+        set_exception_handler("aot_boundary_exception_handler");
+        $inspect = 'echo get_error_handler() === "aot_boundary_error_handler" ? "E|" : "bad|";'
+            . ' echo get_exception_handler() === "aot_boundary_exception_handler" ? "X|" : "bad|";'
+            . ' function eval_boundary_error_handler($level, $message) { return true; }'
+            . ' set_error_handler("eval_boundary_error_handler", E_USER_WARNING);'
+            . ' $closure = function($error) {};'
+            . ' set_exception_handler($closure);'
+            . ' echo get_error_handler() === "eval_boundary_error_handler" ? "e|" : "bad|";'
+            . ' echo get_exception_handler() === $closure ? "x|" : "bad|";'
+            . ' $runtime = ' . $argc . ';';
+        eval($inspect);
+        echo get_error_handler() === "eval_boundary_error_handler" ? "A|" : "bad|";
+        echo is_object(get_exception_handler()) ? "O|" : "bad|";
+        restore_error_handler();
+        restore_exception_handler();
+        echo get_error_handler() === "aot_boundary_error_handler" ? "a|" : "bad|";
+        echo get_exception_handler() === "aot_boundary_exception_handler" ? "o|" : "bad|";
+        $cleared = 'set_error_handler(null); set_exception_handler(null);'
+            . ' echo is_null(get_error_handler()) && is_null(get_exception_handler()) ? "z|" : "bad|";'
+            . ' restore_error_handler(); restore_exception_handler();'
+            . ' echo get_error_handler() === "aot_boundary_error_handler" ? "r|" : "bad|";'
+            . ' $runtime = ' . $argc . ';';
+        eval($cleared);
+        restore_error_handler();
+        restore_exception_handler();
+        echo is_null(get_error_handler()) && is_null(get_exception_handler()) ? "N" : "bad";
+        "#,
+    );
+    assert_eq!(out, "E|X|e|x|A|O|a|o|z|r|N");
+}
+
 /// Verifies flat and categorized constant inventories contain builtin and user values.
 #[test]
 fn test_core_get_defined_constants_aot_values_and_categories() {
@@ -543,7 +669,7 @@ fn test_core_get_extension_funcs_aot_dynamic_core_name() {
         echo get_extension_funcs("not-loaded") === false ? "F" : "f";
         "#,
     );
-    assert_eq!(out, "59:DF");
+    assert_eq!(out, "61:DF");
 }
 
 /// Verifies both include-introspection aliases expose the resolved canonical script manifest.

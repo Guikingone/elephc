@@ -8,6 +8,7 @@
 //! Key details:
 //! - Eval callbacks become runtime callable descriptors with retained context ownership.
 //! - AOT and eval calls observe one reporting mask, handler stack, and dispatch path.
+//! - The getter wrapper hands eval a retained callback cell without exposing the descriptor.
 
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 use crate::codegen::abi;
@@ -46,6 +47,7 @@ pub(super) fn emit_eval_error_handler_helpers(
             emit_dispatch_error_handler_x86_64(module, emitter);
         }
     }
+    emit_get_error_handler(module, emitter);
 }
 
 /// Returns the byte offset for one capture in an eval dynamic callable descriptor.
@@ -271,6 +273,27 @@ fn emit_restore_error_handler(module: &Module, emitter: &mut Emitter) {
     abi::emit_return(emitter);
 }
 
+
+/// Emits the target-aware C wrapper that reads the active native error handler for eval.
+///
+/// Returns the retained PHP-visible callback cell, or a null pointer when no handler is
+/// active. The normalized descriptor and its context owner are never exposed.
+fn emit_get_error_handler(module: &Module, emitter: &mut Emitter) {
+    let done = "__elephc_eval_error_handler_get_done";
+    label_c_global(module, emitter, "__elephc_eval_error_handler_get");
+    abi::emit_frame_prologue(emitter, 16);
+    abi::emit_load_symbol_to_reg(
+        emitter,
+        abi::int_result_reg(emitter),
+        "_php_error_handler_value",
+        0,
+    );
+    abi::emit_branch_if_int_result_zero(emitter, done);
+    callable_descriptor::emit_retain_current_descriptor(emitter);
+    emitter.label(done);
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
+}
 
 /// Emits the ARM64 C wrapper for invoking the active native user error handler.
 fn emit_dispatch_error_handler_aarch64(module: &Module, emitter: &mut Emitter) {

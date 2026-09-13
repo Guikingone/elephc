@@ -9,6 +9,7 @@
 //! - Eval callbacks become runtime callable descriptors that retain their boxed value.
 //! - The native stack remains authoritative, so outer AOT catches run before the
 //!   terminal user exception handler.
+//! - The getter wrapper hands eval a retained callback cell without exposing the descriptor.
 
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 use crate::codegen::callable_descriptor;
@@ -43,6 +44,7 @@ pub(super) fn emit_eval_exception_handler_helpers(
             emit_restore_exception_handler(module, emitter);
         }
     }
+    emit_get_exception_handler(module, emitter);
 }
 
 /// Returns the byte offset for one capture in an eval dynamic callable descriptor.
@@ -268,6 +270,27 @@ fn emit_restore_exception_handler(module: &Module, emitter: &mut Emitter) {
     abi::emit_return(emitter);
 }
 
+
+/// Emits the target-aware C wrapper that reads the active native exception handler for eval.
+///
+/// Returns the retained PHP-visible callback cell, or a null pointer when no handler is
+/// active. The normalized descriptor and its context owner are never exposed.
+fn emit_get_exception_handler(module: &Module, emitter: &mut Emitter) {
+    let done = "__elephc_eval_exception_handler_get_done";
+    label_c_global(module, emitter, "__elephc_eval_exception_handler_get");
+    abi::emit_frame_prologue(emitter, 16);
+    abi::emit_load_symbol_to_reg(
+        emitter,
+        abi::int_result_reg(emitter),
+        "_php_exception_handler_value",
+        0,
+    );
+    abi::emit_branch_if_int_result_zero(emitter, done);
+    callable_descriptor::emit_retain_current_descriptor(emitter);
+    emitter.label(done);
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
+}
 
 /// Emits a platform-C global label for one generated eval wrapper.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {

@@ -87,6 +87,81 @@ return true;
     assert!(values.warnings.is_empty());
 }
 
+/// The pure interpreter reads its local error-handler stack through `get_error_handler()`.
+#[test]
+fn execute_program_get_error_handler_reads_local_handler_stack() {
+    let program = parse_fragment(br#"
+function first_getter_handler($level, $message) { return true; }
+function probing_getter_handler($level, $message) {
+    echo is_null(get_error_handler()) ? "inner-null|" : "bad|";
+    return true;
+}
+error_reporting(0);
+echo is_null(get_error_handler()) ? "N|" : "bad|";
+set_error_handler("first_getter_handler");
+echo get_error_handler() === "first_getter_handler" ? "S|" : "bad|";
+$closure = function($level, $message) { return true; };
+set_error_handler($closure);
+echo get_error_handler() === $closure ? "C|" : "bad|";
+set_error_handler(null);
+echo is_null(get_error_handler()) ? "n|" : "bad|";
+restore_error_handler();
+echo get_error_handler() === $closure ? "c|" : "bad|";
+restore_error_handler();
+echo get_error_handler() === "first_getter_handler" ? "s|" : "bad|";
+set_error_handler("probing_getter_handler", E_USER_WARNING);
+trigger_error("probe", E_USER_WARNING);
+$copy = get_error_handler();
+restore_error_handler();
+restore_error_handler();
+echo is_null(get_error_handler()) ? "N|" : "bad|";
+echo $copy(E_USER_NOTICE, "direct") ? "called|" : "bad|";
+echo call_user_func("get_error_handler") === null ? "u|" : "bad|";
+$name = "get_error_handler";
+echo $name() === null ? "d" : "bad";
+return true;
+"#).expect("parse getter fixture");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute getter fixture");
+    assert_eq!(values.output, "N|S|C|n|c|s|inner-null|N|inner-null|called|u|d");
+    assert!(values.warnings.is_empty());
+}
+
+/// The pure interpreter reads its local exception-handler stack through `get_exception_handler()`.
+#[test]
+fn execute_program_get_exception_handler_reads_local_handler_stack() {
+    let program = parse_fragment(br#"
+function first_getter_exception_handler($exception) {}
+echo is_null(get_exception_handler()) ? "N|" : "bad|";
+set_exception_handler("first_getter_exception_handler");
+echo get_exception_handler() === "first_getter_exception_handler" ? "S|" : "bad|";
+$closure = function($exception) { echo "closure|"; };
+set_exception_handler($closure);
+echo get_exception_handler() === $closure ? "C|" : "bad|";
+$copy = get_exception_handler(...);
+$kept = $copy();
+set_exception_handler(null);
+echo is_null(get_exception_handler()) ? "n|" : "bad|";
+restore_exception_handler();
+restore_exception_handler();
+echo get_exception_handler() === "first_getter_exception_handler" ? "s|" : "bad|";
+restore_exception_handler();
+echo is_null(call_user_func_array("get_exception_handler", [])) ? "N|" : "bad|";
+$kept(new Exception("manual"));
+return true;
+"#).expect("parse exception getter fixture");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute exception getter fixture");
+    assert_eq!(values.output, "N|S|C|n|s|N|closure|");
+    assert!(values.warnings.is_empty());
+}
+
 /// Verifies eval error masks, nested handlers, callback arguments, and restoration.
 #[test]
 fn execute_program_dispatches_error_reporting_and_user_handlers() {
@@ -385,7 +460,7 @@ return get_extension_funcs("missing");"#,
 
     assert_eq!(
         values.output,
-        "7:7:7:9:8:float:catalog:function:flag:59:1:2:3:files"
+        "7:7:7:9:8:float:catalog:function:flag:61:1:2:3:files"
     );
     assert_eq!(values.get(result), FakeValue::Bool(false));
 }

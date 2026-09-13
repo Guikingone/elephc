@@ -36,6 +36,8 @@ unsafe extern "C" {
     ) -> i32;
     /// Restores the prior native user-error-handler stack entry.
     pub(super) fn __elephc_eval_error_handler_restore() -> i32;
+    /// Returns the retained active native user error handler callback, or null.
+    pub(super) fn __elephc_eval_error_handler_get() -> *mut RuntimeCell;
     /// Invokes the native user error handler with a boxed argument array.
     pub(super) fn __elephc_eval_error_handler_dispatch(
         level: i64,
@@ -51,6 +53,8 @@ unsafe extern "C" {
     ) -> i32;
     /// Restores the prior native exception-handler stack entry.
     pub(super) fn __elephc_eval_exception_handler_restore() -> i32;
+    /// Returns the retained active native exception handler callback, or null.
+    pub(super) fn __elephc_eval_exception_handler_get() -> *mut RuntimeCell;
     /// Calls one typed generated-runtime builtin over borrowed boxed arguments.
     pub(super) fn __elephc_runtime_builtin_call_v1(
         runtime_builtin_id: u32,

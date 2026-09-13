@@ -60,6 +60,8 @@ pub mod gc_status;
 pub mod get_defined_constants;
 pub mod get_defined_functions;
 pub mod get_defined_vars;
+pub mod get_error_handler;
+pub mod get_exception_handler;
 pub mod get_extension_funcs;
 pub mod get_included_files;
 pub mod get_loaded_extensions;
