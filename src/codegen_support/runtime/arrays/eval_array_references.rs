@@ -2,7 +2,7 @@
 //! Emits the optional callback that retires eval reference metadata before a boxed cell is freed.
 //!
 //! Called from:
-//! - `super::heap_free::emit_heap_free()` after validating the dying allocation.
+//! - `super::heap_free::emit_heap_free()` when the eval bridge is enabled.
 //!
 //! Key details:
 //! - The callback receives a live payload address and preserves it for the allocator.
@@ -54,7 +54,7 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
-            super::super::heap_free::emit_heap_free(&mut emitter);
+            super::super::heap_free::emit_heap_free(&mut emitter, true);
             let output = emitter.output();
             assert_eq!(output.matches("__rt_heap_free_eval_references_done:").count(), 1, "{name}");
             assert!(output.contains("_elephc_eval_array_reference_retire_fn"), "{name}");
@@ -69,6 +69,19 @@ mod tests {
                 Arch::X86_64 => "mov QWORD PTR [r9 + 8], 0",
             };
             assert!(retirement < output.find(clear_kind).unwrap(), "{name}");
+        }
+    }
+
+    /// Plain AOT runtimes do not pay the callback probe on every heap release.
+    #[test]
+    fn heap_free_omits_eval_array_reference_retirement_without_eval_bridge() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            super::super::heap_free::emit_heap_free(&mut emitter, false);
+            let output = emitter.output();
+            assert!(!output.contains("__rt_heap_free_eval_references_done"), "{name}");
+            assert!(!output.contains("_elephc_eval_array_reference_retire_fn"), "{name}");
         }
     }
 }
