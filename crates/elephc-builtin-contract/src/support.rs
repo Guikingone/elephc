@@ -312,7 +312,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_uintersect",
     "array_walk_recursive",
     "bindec",
-    "clone",
     "decbin",
     "dechex",
     "decoct",
@@ -369,13 +368,13 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 615 + curl_surface);
+        assert_eq!(eval_registry, 616 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
         assert_eq!(eval_internal, 99);
-        // 29 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
+        // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 354);
+        assert_eq!(eval_pending, 353);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
@@ -432,8 +431,8 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 594 + curl_surface);
-        assert_eq!(unsupported, 453);
+        assert_eq!(interpreter_adapter, 595 + curl_surface);
+        assert_eq!(unsupported, 452);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

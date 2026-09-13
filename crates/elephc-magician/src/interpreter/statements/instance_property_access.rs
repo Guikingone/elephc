@@ -229,7 +229,14 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 values,
             );
         }
-        if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
+        if validate_eval_readonly_property_write(
+            &declaring_class,
+            &property,
+            Some(identity),
+            context,
+        )
+        .is_err()
+        {
             return eval_throw_readonly_property_modification_error(
                 &declaring_class,
                 property.name(),

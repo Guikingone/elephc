@@ -394,6 +394,21 @@ impl ElephcEvalContext {
         self.class_stack.last().map(String::as_str)
     }
 
+    /// Marks one newly cloned object as eligible for readonly reinitialization.
+    pub(crate) fn begin_clone_initialization(&mut self, identity: u64) {
+        self.clone_initializing_objects.insert(identity);
+    }
+
+    /// Ends readonly reinitialization for one cloned object.
+    pub(crate) fn end_clone_initialization(&mut self, identity: u64) {
+        self.clone_initializing_objects.remove(&identity);
+    }
+
+    /// Returns whether a property write targets the clone currently being initialized.
+    pub(crate) fn is_clone_initializing(&self, identity: u64) -> bool {
+        self.clone_initializing_objects.contains(&identity)
+    }
+
     /// Pushes the class name used to dispatch the current eval method call.
     pub fn push_called_class_scope(&mut self, name: impl Into<String>) {
         self.called_class_stack.push(name.into());

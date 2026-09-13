@@ -100,6 +100,107 @@ return $first->name . ":" . $second->name;"#,
     assert_eq!(values.get(result), FakeValue::String("A:B".to_string()));
 }
 
+/// Verifies PHP 8.5 clone calls run the hook before applying property overrides.
+#[test]
+fn execute_program_clone_function_applies_properties_after_hook() {
+    let program = parse_fragment(
+        br#"class EvalCloneWithBox {
+    public string $name;
+    public function __construct($name) { $this->name = $name; }
+    public function __clone() { echo "hook:"; $this->name = "hooked"; }
+}
+$first = new EvalCloneWithBox("A");
+$second = clone($first, ["name" => "B"]);
+echo $first->name; echo ":"; echo $second->name;
+return $second->name;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "hook:A:B");
+    assert_eq!(values.get(result), FakeValue::String("B".to_string()));
+}
+
+/// Verifies every eval callable surface reaches the clone function implementation.
+#[test]
+fn execute_program_clone_function_supports_callable_surfaces() {
+    let program = parse_fragment(
+        br#"class EvalCloneCallableBox {
+    public string $name;
+    public function __construct($name) { $this->name = $name; }
+}
+$source = new EvalCloneCallableBox("A");
+$via_cuf = call_user_func("clone", $source, ["name" => "B"]);
+$callable = clone(...);
+$via_fcc = $callable($source, ["name" => "C"]);
+$via_array = call_user_func_array("clone", [$source, ["name" => "D"]]);
+return $source->name . ":" . $via_cuf->name . ":" . $via_fcc->name . ":" . $via_array->name;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("A:B:C:D".to_string())
+    );
+}
+
+/// Verifies clone property overrides may reinitialize readonly slots on the active clone only.
+#[test]
+fn execute_program_clone_function_reinitializes_readonly_clone_slot() {
+    let program = parse_fragment(
+        br#"class EvalCloneReadonlyBox {
+    public readonly int $id;
+    public function __construct($id) { $this->id = $id; }
+    public function copyWith($id) { return clone($this, ["id" => $id]); }
+}
+$source = new EvalCloneReadonlyBox(1);
+$copy = $source->copyWith(2);
+return $source->id . ":" . $copy->id;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("1:2".to_string()));
+}
+
+/// Verifies a clone whose hook throws is released before the original error is caught.
+#[test]
+fn execute_program_clone_function_releases_clone_when_hook_throws() {
+    let program = parse_fragment(
+        br#"class EvalCloneThrowBox {
+    public string $name;
+    public function __construct($name) { $this->name = $name; }
+    public function __clone() { $this->name = "clone"; throw new RuntimeException("boom"); }
+    public function __destruct() { echo $this->name . ":"; }
+}
+$source = new EvalCloneThrowBox("source");
+try {
+    clone($source);
+} catch (RuntimeException $error) {
+    echo $error->getMessage() . ":";
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "clone:boom:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies native clone dispatch keeps the declaring class as the generated frame scope.
 #[test]
 fn execute_program_forwards_aot_clone_declaring_and_called_class_scopes() {

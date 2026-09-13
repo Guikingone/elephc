@@ -23,9 +23,13 @@ pub(in crate::interpreter) fn property_hook_set_method(property_name: &str) -> S
 pub(super) fn validate_eval_readonly_property_write(
     declaring_class: &str,
     property: &EvalClassProperty,
+    object_identity: Option<u64>,
     context: &ElephcEvalContext,
 ) -> Result<(), EvalStatus> {
     if !property.is_readonly() {
+        return Ok(());
+    }
+    if object_identity.is_some_and(|identity| context.is_clone_initializing(identity)) {
         return Ok(());
     }
     current_eval_method_is_declaring_constructor(declaring_class, context)

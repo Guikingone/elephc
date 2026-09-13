@@ -526,7 +526,7 @@ pub(super) fn eval_static_property_reference_bind_result(
                 values,
             );
         }
-        if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
+        if validate_eval_readonly_property_write(&declaring_class, &property, None, context).is_err() {
             return eval_throw_readonly_property_modification_error(
                 &declaring_class,
                 property.name(),
@@ -729,7 +729,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 values,
             );
         }
-        if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
+        if validate_eval_readonly_property_write(&declaring_class, &property, None, context).is_err() {
             return eval_throw_readonly_property_modification_error(
                 &declaring_class,
                 property.name(),

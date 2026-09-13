@@ -243,6 +243,16 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_object_clone_with_properties_result(object, None, context, values)
+}
+
+/// Creates a shallow clone, invokes `__clone()`, then applies PHP 8.5 property overrides.
+pub(in crate::interpreter) fn eval_object_clone_with_properties_result(
+    object: RuntimeCellHandle,
+    with_properties: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let identity = values.object_identity(object)?;
     let dynamic_class_name = context
         .dynamic_object_class(identity)
@@ -276,22 +286,43 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     };
 
     let clone = values.object_clone_shallow(object)?;
-    if let Some(class_name) = dynamic_class_name {
-        let clone_identity = values.object_identity(clone)?;
-        context.register_dynamic_object(clone_identity, &class_name);
-        context.clone_dynamic_property_aliases(identity, clone_identity);
-        if let Some((declaring_class, method)) = clone_method {
-            let result = eval_dynamic_method_with_values(
-                &declaring_class,
-                &class_name,
-                &method,
-                clone,
-                Vec::new(),
-                context,
-                values,
-            )?;
-            eval_release_value(context, values, result)?;
-        } else if let Some(hook) = dynamic_native_clone_hook {
+    let clone_identity = match values.object_identity(clone) {
+        Ok(identity) => identity,
+        Err(status) => {
+            let _ = eval_release_value(context, values, clone);
+            return Err(status);
+        }
+    };
+    context.begin_clone_initialization(clone_identity);
+    let initialization = (|| {
+        if let Some(class_name) = dynamic_class_name {
+            context.register_dynamic_object(clone_identity, &class_name);
+            context.clone_dynamic_property_aliases(identity, clone_identity);
+            if let Some((declaring_class, method)) = clone_method {
+                let result = eval_dynamic_method_with_values(
+                    &declaring_class,
+                    &class_name,
+                    &method,
+                    clone,
+                    Vec::new(),
+                    context,
+                    values,
+                )?;
+                eval_release_value(context, values, result)?;
+            } else if let Some(hook) = dynamic_native_clone_hook {
+                let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
+                    clone,
+                    &hook.called_class,
+                    "__clone",
+                    Vec::new(),
+                    Some(&hook.declaring_class),
+                    Some(&hook.called_class),
+                    context,
+                    values,
+                )?;
+                values.release(result)?;
+            }
+        } else if let Some(hook) = aot_clone_hook {
             let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
                 clone,
                 &hook.called_class,
@@ -304,20 +335,40 @@ pub(in crate::interpreter) fn eval_object_clone_result(
             )?;
             values.release(result)?;
         }
-    } else if let Some(hook) = aot_clone_hook {
-        let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
-            clone,
-            &hook.called_class,
-            "__clone",
-            Vec::new(),
-            Some(&hook.declaring_class),
-            Some(&hook.called_class),
-            context,
-            values,
-        )?;
-        values.release(result)?;
+
+        if let Some(properties) = with_properties {
+            eval_apply_clone_properties(clone, properties, context, values)?;
+        }
+        Ok(())
+    })();
+    context.end_clone_initialization(clone_identity);
+    if let Err(status) = initialization {
+        let _ = eval_release_value(context, values, clone);
+        return Err(status);
     }
     Ok(clone)
+}
+
+/// Applies clone property overrides in PHP array iteration order.
+fn eval_apply_clone_properties(
+    clone: RuntimeCellHandle,
+    properties: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let len = values.array_len(properties)?;
+    for position in 0..len {
+        let key = values.array_iter_key(properties, position)?;
+        let value = values.array_get(properties, key)?;
+        let key_string = values.cast_string(key)?;
+        let key_bytes = values.string_bytes(key_string);
+        let release = values.release(key_string);
+        let key_bytes = key_bytes?;
+        release?;
+        let property_name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+        eval_property_set_result(clone, &property_name, value, context, values)?;
+    }
+    Ok(())
 }
 
 /// Generated clone-hook scopes needed by native method dispatch.
