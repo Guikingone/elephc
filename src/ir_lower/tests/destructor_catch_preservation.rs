@@ -138,6 +138,20 @@ try {
 }
 "#;
 
+/// A hot scalar loop whose checked accumulator uses boxed Mixed storage.
+const SCALAR_MIXED_LOOP_SOURCE: &str = r#"<?php
+function accumulateScalars(int $limit): mixed {
+    $sum = 0;
+    $index = 0;
+    while ($index < $limit) {
+        $sum += $index;
+        $index += 1;
+    }
+    return $sum;
+}
+echo accumulateScalars(200000);
+"#;
+
 /// A quiet destructor over the same shape, which must still lose its unreachable handler.
 const QUIET_DESTRUCTOR_SOURCE: &str = r#"<?php
 class ResultPayload {
@@ -308,6 +322,33 @@ fn pending_finally_overwrite_bypasses_local_retirement_rethrow_on_every_target()
         );
         let body = function_assembly(&module, "rebindDuringPendingFinally", target);
         assert_local_retirement_exception_gate(&body, target);
+    }
+}
+
+/// Verifies a statically scalar Mixed slot omits the destructor boundary on every target.
+#[test]
+fn scalar_mixed_loop_uses_only_direct_retirement_on_every_target() {
+    for target in TARGETS {
+        let (module, function) =
+            lower_function(SCALAR_MIXED_LOOP_SOURCE, target, "accumulateScalars");
+        assert!(
+            function.instructions.iter().any(|inst| inst.op == Op::ReleaseLocalSlot),
+            "{target}: the boxed accumulator must retire its previous owner",
+        );
+        let body = function_assembly(&module, "accumulateScalars", target);
+        assert!(
+            !body.contains("_php_diagnostic_line"),
+            "{target}: scalar cleanup must not republish a destructor-only diagnostic site:\n{body}",
+        );
+        assert!(
+            !body.contains("__rt_cleanup_preserve_exception")
+                && !body.contains("release_local_slot_scalar_mixed"),
+            "{target}: a scalar-only slot needs no runtime destructor classification:\n{body}",
+        );
+        assert!(
+            body.contains("__rt_decref_mixed"),
+            "{target}: the scalar-only slot must still release its Mixed box:\n{body}",
+        );
     }
 }
 

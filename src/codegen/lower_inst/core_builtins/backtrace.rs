@@ -41,7 +41,12 @@ pub(super) fn prepare_call_site(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    if instruction_may_enter_php_frame(inst) || inst.effects.contains(crate::ir::Effects::MAY_WARN) {
+    // Local retirement cannot emit its own PHP warning. A nested destructor publishes its
+    // source location from its own frame, so eagerly updating diagnostics here only burdens
+    // scalar Mixed rebinds whose fast path cannot invoke PHP code.
+    let warns_at_call_site = inst.effects.contains(crate::ir::Effects::MAY_WARN)
+        && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot);
+    if instruction_may_enter_php_frame(inst) || warns_at_call_site {
         let scratch = abi::int_result_reg(ctx.emitter);
         abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);

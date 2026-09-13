@@ -353,9 +353,9 @@ pub(super) fn lower_release_local_slot(
         // Owned strings are freed through the validating helper, which skips
         // null/uninitialized slots and non-heap (.rodata) literal pointers.
         PhpType::Str => super::super::frame::emit_main_string_cleanup(ctx, offset),
-        PhpType::Callable => emit_refcounted_local_slot_retirement(ctx, offset, &ty),
+        PhpType::Callable => emit_refcounted_local_slot_retirement(ctx, slot, offset, &ty)?,
         other if other.is_refcounted() => {
-            emit_refcounted_local_slot_retirement(ctx, offset, &other)
+            emit_refcounted_local_slot_retirement(ctx, slot, offset, &other)?
         }
         // The slot never widened to refcounted storage: nothing can be owned.
         // Lowering normally prunes these, so this arm is only a safety net.
@@ -367,17 +367,131 @@ pub(super) fn lower_release_local_slot(
 /// Clears one local owner, completes its deep release, then propagates only a new destructor throw.
 fn emit_refcounted_local_slot_retirement(
     ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
     offset: usize,
     ty: &PhpType,
-) {
+) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter);
     let done = ctx.next_label("release_local_slot_done");
     abi::load_at_offset(ctx.emitter, result, offset);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
     abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        if mixed_local_slot_is_statically_destructor_free(ctx, slot)? {
+            abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            ctx.emitter.label(&done);
+            return Ok(());
+        }
+        emit_mixed_local_slot_retirement(ctx, &done);
+        return Ok(());
+    }
     abi::emit_decref_preserving_exception(ctx.emitter, ty);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
     ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Returns true when every value stored in a Mixed slot is statically destructor-free.
+fn mixed_local_slot_is_statically_destructor_free(
+    ctx: &FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<bool> {
+    if ctx.module.required_runtime_features.eval_bridge {
+        return Ok(false);
+    }
+    let mut saw_store = false;
+    for inst in &ctx.function.instructions {
+        if inst.op != Op::StoreLocal || inst.immediate != Some(Immediate::LocalSlot(slot)) {
+            continue;
+        }
+        saw_store = true;
+        let Some(value) = inst.operands.first().copied() else {
+            return Ok(false);
+        };
+        if !mixed_value_is_statically_destructor_free(ctx, value, &mut std::collections::HashSet::new())? {
+            return Ok(false);
+        }
+    }
+    Ok(saw_store)
+}
+
+/// Classifies only proven scalar-producing SSA chains, defaulting every opaque Mixed value to unsafe.
+fn mixed_value_is_statically_destructor_free(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    visited: &mut std::collections::HashSet<ValueId>,
+) -> Result<bool> {
+    if !visited.insert(value) {
+        return Ok(false);
+    }
+    let metadata = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    if matches!(
+        metadata.php_type.codegen_repr(),
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::TaggedScalar
+            | PhpType::Pointer(_)
+            | PhpType::Resource(_)
+    ) {
+        return Ok(true);
+    }
+    if !matches!(metadata.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(false);
+    }
+    let Some(inst) = instruction_for_value(ctx, value)? else {
+        return Ok(false);
+    };
+    if matches!(inst.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow) {
+        return Ok(true);
+    }
+    if matches!(inst.op, Op::Acquire | Op::Borrow | Op::Move | Op::Cast | Op::MixedBox) {
+        let Some(source) = inst.operands.first().copied() else {
+            return Ok(false);
+        };
+        return mixed_value_is_statically_destructor_free(ctx, source, visited);
+    }
+    Ok(false)
+}
+
+/// Releases scalar Mixed payloads directly while preserving a bounded destructor path.
+///
+/// Tags 0 through 3 and tag 8 are int, string, float, bool, and null. Their deep release
+/// cannot invoke PHP code, so installing a `setjmp` cleanup boundary on every scalar rebind
+/// only penalizes hot numeric and string loops. Every aggregate, object, nested Mixed,
+/// resource, callable, and future tag keeps the exception-preserving path.
+fn emit_mixed_local_slot_retirement(ctx: &mut FunctionContext<'_>, done: &str) {
+    let result = abi::int_result_reg(ctx.emitter);
+    let tag = abi::secondary_scratch_reg(ctx.emitter);
+    let scalar = ctx.next_label("release_local_slot_scalar_mixed");
+    abi::emit_load_from_address(ctx.emitter, tag, result, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {tag}, #3"));                 // classify int, string, float, and bool Mixed payloads
+            ctx.emitter.instruction(&format!("b.ls {scalar}"));                 // bypass the throwing-cleanup boundary for scalar tags 0 through 3
+            ctx.emitter.instruction(&format!("cmp {tag}, #8"));                 // classify the canonical null Mixed payload
+            ctx.emitter.instruction(&format!("b.eq {scalar}"));                 // null owns no destructor-capable child
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {tag}, 3"));                  // classify int, string, float, and bool Mixed payloads
+            ctx.emitter.instruction(&format!("jbe {scalar}"));                  // bypass the throwing-cleanup boundary for scalar tags 0 through 3
+            ctx.emitter.instruction(&format!("cmp {tag}, 8"));                  // classify the canonical null Mixed payload
+            ctx.emitter.instruction(&format!("je {scalar}"));                   // null owns no destructor-capable child
+        }
+    }
+    abi::emit_decref_preserving_exception(ctx.emitter, &PhpType::Mixed);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&scalar);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(done);
 }
 
 /// Lowers `unset($local)` by breaking any promoted alias and writing PHP null locally.
