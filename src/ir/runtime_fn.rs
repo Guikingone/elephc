@@ -1679,6 +1679,18 @@ impl RuntimeFnId {
         }
     }
 
+    /// Returns whether this operation can add an owned OS handle to the resource inventory.
+    pub const fn produces_resource_inventory_entry(self) -> bool {
+        matches!(
+            self,
+            RuntimeFnId::Fopen
+                | RuntimeFnId::Fsockopen
+                | RuntimeFnId::Opendir
+                | RuntimeFnId::Popen
+                | RuntimeFnId::Tmpfile
+        )
+    }
+
     /// Returns whether this operation can publish PHAR bridge helper symbols.
     pub const fn publishes_phar_symbols(self) -> bool {
         matches!(

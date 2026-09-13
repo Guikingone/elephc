@@ -13,6 +13,70 @@ use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{Builder, FunctionParam, IrType, Module, Terminator};
 use crate::types::FunctionSig;
 
+/// Plain programs skip the clock read, while timing metrics and eval keep it enabled.
+#[test]
+fn gc_request_timing_initialization_is_pay_for_use() {
+    let target = Target::new(Platform::Linux, Arch::X86_64);
+    let mut module = Module::new(target);
+    assert!(!module_uses_gc_timing(&module));
+
+    let mut function = Function::new("gc_timing".into(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.emit(
+            Op::GcControl,
+            Vec::new(),
+            Some(Immediate::I64(GcControlOp::ApplicationTime.as_i64())),
+            IrType::F64,
+            PhpType::Float,
+            crate::ir::Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    module.add_function(function);
+    assert!(module_uses_gc_timing(&module));
+
+    module.functions.clear();
+    module.required_runtime_features.eval_bridge = true;
+    assert!(module_uses_gc_timing(&module));
+}
+
+/// Process-exit inventory cleanup is emitted only when a program can own an OS resource.
+#[test]
+fn resource_inventory_cleanup_is_pay_for_use() {
+    let target = Target::new(Platform::Linux, Arch::X86_64);
+    let mut module = Module::new(target);
+    assert!(!module_uses_resource_inventory_cleanup(&module));
+
+    let mut function = Function::new("opens_stream".into(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.emit(
+            Op::RuntimeCall,
+            Vec::new(),
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::Fopen,
+            ))),
+            IrType::I64,
+            PhpType::stream_resource(),
+            crate::ir::Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    module.add_function(function);
+    assert!(module_uses_resource_inventory_cleanup(&module));
+
+    module.functions.clear();
+    module.required_runtime_features.eval_bridge = true;
+    assert!(module_uses_resource_inventory_cleanup(&module));
+}
+
 /// Descriptor-only backtrace reachability is carried by the frontend's hidden frame snapshot.
 #[test]
 fn hidden_argument_snapshot_enables_backtrace_activations_without_a_core_instruction() {

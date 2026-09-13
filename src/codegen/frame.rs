@@ -23,7 +23,10 @@ use crate::codegen::{
 };
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
-use crate::ir::{CoreBuiltinOp, Function, Immediate, LocalKind, LocalSlotId, Module, Op, ValueDef, ValueId};
+use crate::ir::{
+    CoreBuiltinOp, Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
+    RuntimeCallTarget, ValueDef, ValueId,
+};
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
 use crate::types::PhpType;
@@ -192,6 +195,67 @@ pub(super) fn module_uses_backtrace(module: &Module) -> bool {
         })
 }
 
+/// Returns whether an emitted body can observe per-request GC timing metrics.
+fn module_uses_gc_timing(module: &Module) -> bool {
+    if module.required_runtime_features.eval_bridge {
+        return true;
+    }
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .flat_map(|function| function.instructions.iter())
+        .any(|inst| {
+            inst.op == Op::GcControl
+                && matches!(
+                    inst.immediate,
+                    Some(Immediate::I64(selector))
+                        if matches!(
+                            GcControlOp::from_i64(selector),
+                            Some(
+                                GcControlOp::ApplicationTime
+                                    | GcControlOp::CollectorTime
+                                    | GcControlOp::DestructorTime
+                                    | GcControlOp::FreeTime
+                            )
+                        )
+                )
+        })
+}
+
+/// Returns whether process shutdown can own an OS resource that needs explicit release.
+fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
+    if module.required_runtime_features.eval_bridge {
+        return true;
+    }
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .flat_map(|function| function.instructions.iter())
+        .any(|inst| {
+            let id = match inst.immediate {
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(id)))
+                | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                    target: id,
+                    ..
+                })) => id,
+                _ => return false,
+            };
+            id.produces_resource_inventory_entry()
+        })
+}
+
 /// Returns true when the frontend retained one frame's arguments for a dynamic backtrace.
 ///
 /// Descriptor-only calls to `debug_backtrace()` and `debug_print_backtrace()` do not leave a
@@ -326,7 +390,9 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     // ordinary call and clobbers the C-ABI argument registers they arrive in. `main` itself
     // is never guarded — it is the root of every call chain and runs before the floor exists.
     stack_guard::emit_stack_limit_init_call(ctx.emitter);
-    abi::emit_call_label(ctx.emitter, "__rt_gc_request_start");
+    if module_uses_gc_timing(ctx.module) {
+        abi::emit_call_label(ctx.emitter, "__rt_gc_request_start");
+    }
     emit_probe_init(ctx);
     register_main_instr(ctx);
     emit_instr_init(ctx);
@@ -547,8 +613,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
     emit_main_static_property_cleanup(ctx);
-    abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
-    abi::emit_call_label(ctx.emitter, "__rt_diag_reset");
+    if module_uses_resource_inventory_cleanup(ctx.module) {
+        abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
+    }
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and
