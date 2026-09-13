@@ -331,9 +331,24 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) -> Option<RuntimeCellHandle> {
-        self.dynamic_property_values
+        if let Some(value) = self
+            .dynamic_property_values
             .get(&(identity, storage_property_name.to_string()))
             .copied()
+        {
+            return Some(value);
+        }
+        #[cfg(not(test))]
+        {
+            dynamic_object_foreign_owner(self, identity)?
+                .dynamic_property_values
+                .get(&(identity, storage_property_name.to_string()))
+                .copied()
+        }
+        #[cfg(test)]
+        {
+            None
+        }
     }
 
     /// Stores one owned overlay value and returns any replaced distinct cell.
@@ -399,10 +414,19 @@ impl ElephcEvalContext {
     /// The order is the order the properties were first written, which is the order PHP
     /// reports them in, so a caller can present these to a program as they come.
     pub fn dynamic_property_storage_names(&self, identity: u64) -> Vec<String> {
-        self.dynamic_property_order
-            .get(&identity)
-            .map(|order| order.clone())
-            .unwrap_or_default()
+        if let Some(order) = self.dynamic_property_order.get(&identity) {
+            return order.clone();
+        }
+        #[cfg(not(test))]
+        {
+            dynamic_object_foreign_owner(self, identity)
+                .and_then(|owner| owner.dynamic_property_order.get(&identity).cloned())
+                .unwrap_or_default()
+        }
+        #[cfg(test)]
+        {
+            Vec::new()
+        }
     }
 
     /// Removes this context from the process-local dynamic object destructor registry.
@@ -658,8 +682,24 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) -> bool {
-        self.dynamic_initialized_properties
+        if self
+            .dynamic_initialized_properties
             .contains(&(identity, storage_property_name.to_string()))
+        {
+            return true;
+        }
+        #[cfg(not(test))]
+        {
+            dynamic_object_foreign_owner(self, identity).is_some_and(|owner| {
+                owner
+                    .dynamic_initialized_properties
+                    .contains(&(identity, storage_property_name.to_string()))
+            })
+        }
+        #[cfg(test)]
+        {
+            false
+        }
     }
 
     /// Copies persistent property aliases from a source object identity to a clone identity.
@@ -731,4 +771,29 @@ pub fn eval_array_iterator_class_is_a(target_class: &str) -> bool {
     ]
     .iter()
     .any(|name| name.eq_ignore_ascii_case(target))
+}
+
+/// Borrows the eval context that built one dynamic object, when it is not the asking context.
+///
+/// An object outlives the context that created it, and the creator is not always the context
+/// that later reads it. `unserialize` is the sharpest case: the generated decoder has no context
+/// at all, so its eval-object hook hydrates into the shared null-handle context, and the request
+/// context that then calls a method on the result finds none of its per-object state.
+/// `dynamic_object_class` has answered across contexts since eval generators landed; the
+/// property overlay has to answer the same way or the object arrives with its class intact and
+/// every slot empty.
+///
+/// Returns `None` for the asking context itself, so a caller can consult its own tables first and
+/// reach here only for an object it did not build.
+#[cfg(not(test))]
+pub(super) fn dynamic_object_foreign_owner<'asking>(
+    asking: &'asking ElephcEvalContext,
+    identity: u64,
+) -> Option<&'asking ElephcEvalContext> {
+    let owner = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)?;
+    if std::ptr::eq(owner.cast_const(), std::ptr::from_ref(asking)) {
+        return None;
+    }
+    let owner = unsafe { owner.as_ref()? };
+    (owner.abi_version() == ABI_VERSION).then_some(owner)
 }

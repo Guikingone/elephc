@@ -17,9 +17,52 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
     let source = expect_operand(inst, 0)?;
     let class_name = class_name_immediate(ctx, inst)?.to_string();
     if !ctx.module.class_infos.contains_key(&class_name) {
-        return lower_runtime_class_object_clone(ctx, inst, source, &class_name);
+        return lower_runtime_class_object_clone(ctx, inst, source, &class_name, CloneMiss::Fatal);
+    }
+    // PHP's `clone` copies the object's RUNTIME class, and a method that clones `$this` is
+    // routinely inherited. Symfony's `ServiceLocator::withContext()` is exactly that shape, and
+    // it is reached on an `Argument\ServiceLocator`, whose `get()` override is the whole reason
+    // the subclass exists: cloning through the declaring class's layout answered a base object,
+    // so the override was lost -- and with it every property the subclass declares.
+    if class_has_compiled_subclass(ctx, &class_name)
+        && !is_builtin_stdclass(&class_name)
+        && !is_runtime_managed_object_clone_class(&class_name)
+    {
+        return lower_runtime_class_object_clone(
+            ctx,
+            inst,
+            source,
+            &class_name,
+            CloneMiss::StaticLayout,
+        );
     }
     lower_known_class_object_clone(ctx, inst, source, &class_name)
+}
+
+/// What a runtime-dispatched clone does for a source object no compiled class id matches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CloneMiss {
+    /// The static type names no concrete layout to fall back on, so the program cannot continue.
+    Fatal,
+    /// The static type IS a concrete class: clone through its layout, exactly as this lowering
+    /// behaved before the dispatch existed. An eval-declared subclass reaching an inherited
+    /// `clone $this` carries no compiled class id to match, and answering its compiled base is
+    /// the same answer as before rather than a new abort.
+    StaticLayout,
+}
+
+/// Returns true when another compiled class names this one as its direct parent.
+///
+/// Direct parentage is the whole question: a class with any descendant at all has a direct child,
+/// so this settles "is this class subclassed" without walking an ancestry chain per candidate.
+fn class_has_compiled_subclass(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    let key = php_symbol_key(class_name.trim_start_matches('\\'));
+    ctx.module.class_infos.values().any(|class_info| {
+        class_info
+            .parent
+            .as_deref()
+            .is_some_and(|parent| php_symbol_key(parent.trim_start_matches('\\')) == key)
+    })
 }
 
 /// Lowers a clone whose static receiver is an interface or generic object type.
@@ -28,8 +71,18 @@ fn lower_runtime_class_object_clone(
     inst: &Instruction,
     source: ValueId,
     static_type: &str,
+    miss: CloneMiss,
 ) -> Result<()> {
     let normalized_static_type = static_type.trim_start_matches('\\');
+    let static_type_resolves_clone_hook = ctx
+        .module
+        .class_infos
+        .get(static_type)
+        .is_some_and(|class_info| {
+            let clone_key = php_symbol_key("__clone");
+            class_info.methods.contains_key(&clone_key)
+                || class_info.method_impl_classes.contains_key(&clone_key)
+        });
     let mut candidates = ctx
         .module
         .class_infos
@@ -45,7 +98,12 @@ fn lower_runtime_class_object_clone(
         })
         .map(|(class_name, class_info)| {
             let clone_key = php_symbol_key("__clone");
-            let clone_impl = class_info.method_impl_classes.get(&clone_key).cloned();
+            // A `__clone()` the STATIC type already resolves was emitted as an ordinary method
+            // call by the IR lowering, which dispatches on the cloned object. Emitting the hook
+            // again here would run it twice.
+            let clone_impl = (!static_type_resolves_clone_hook)
+                .then(|| class_info.method_impl_classes.get(&clone_key).cloned())
+                .flatten();
             (class_name.clone(), class_info.class_id, clone_impl)
         })
         .collect::<Vec<_>>();
@@ -73,11 +131,18 @@ fn lower_runtime_class_object_clone(
     }
 
     ctx.emitter.label(&miss_label);
-    let message = format!(
-        "Fatal error: Cannot clone runtime class through static type {}\n",
-        normalized_static_type
-    );
-    emit_fatal_message(ctx, message.as_bytes());
+    match miss {
+        CloneMiss::Fatal => {
+            let message = format!(
+                "Fatal error: Cannot clone runtime class through static type {}\n",
+                normalized_static_type
+            );
+            emit_fatal_message(ctx, message.as_bytes());
+        }
+        CloneMiss::StaticLayout => {
+            lower_known_class_object_clone(ctx, inst, source, static_type)?;
+        }
+    }
     ctx.emitter.label(&done_label);
     Ok(())
 }

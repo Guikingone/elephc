@@ -17,8 +17,50 @@ use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::ffi::dynamic_destructors::install_dynamic_object_destructor_hook;
 #[cfg(not(test))]
+use crate::ffi::class_autoload::install_class_autoload_hook;
+#[cfg(not(test))]
+use crate::ffi::object_relation::install_object_relation_hook;
+#[cfg(not(test))]
+use crate::ffi::serialize_objects::install_serialize_object_hook;
+#[cfg(not(test))]
+use crate::ffi::unserialize_objects::install_unserialize_object_hook;
+#[cfg(not(test))]
+use crate::ffi::generator_protocol::install_generator_protocol_hook;
+#[cfg(not(test))]
 use crate::ffi::ob_handlers::install_ob_handler_hook;
 use std::ptr;
+
+/// Returns the process-wide context every NULL-handle bridge call shares.
+///
+/// A bridge entry reached with a null `ctx` used to MINT a context and drop it when the call
+/// returned, so every piece of per-context interpreter state died with the call that created
+/// it. `hash_init()` registered its hash context in one throwaway resource table and
+/// `hash_final()` looked it up in another, empty one — reported as a bare
+/// `Fatal error: eval() runtime failed`, with nothing to say that the two calls had not shared
+/// a world. These tables are REQUEST state in PHP, not call state, so one context per process
+/// is the faithful shape; `--web` forks a worker per request, which keeps that scope right.
+///
+/// The context is leaked on purpose: its address is handed to generated code and to the
+/// process-global owner registries, which outlive any single call.
+#[cfg(not(test))]
+pub(crate) fn shared_null_handle_context() -> &'static mut ElephcEvalContext {
+    use std::sync::OnceLock;
+
+    static SHARED: OnceLock<usize> = OnceLock::new();
+    let address = *SHARED.get_or_init(|| {
+        let context = Box::new(ElephcEvalContext::new());
+        Box::into_raw(context) as usize
+    });
+    // SAFETY: the box above is leaked for the life of the process and this is the only
+    // function that hands out the pointer, so the borrow cannot outlive the allocation.
+    let context = unsafe { &mut *(address as *mut ElephcEvalContext) };
+    crate::context::sync_global_eval_aot_metadata(context);
+    // Class-like metadata is published separately from AOT metadata, and a context that has
+    // the second but not the first cannot decide `instanceof` for an autoloaded interface at
+    // all -- it refuses the parameter binding as a runtime fatal rather than as a TypeError.
+    context.sync_global_eval_classes();
+    context
+}
 
 /// Registers the module's paired global transfer routines before publishing AOT
 /// metadata. Missing halves are rejected without replacing an existing pair.
@@ -91,6 +133,16 @@ pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
     install_dynamic_object_destructor_hook();
     #[cfg(not(test))]
     install_ob_handler_hook();
+    #[cfg(not(test))]
+    install_generator_protocol_hook();
+    #[cfg(not(test))]
+    install_class_autoload_hook();
+    #[cfg(not(test))]
+    install_unserialize_object_hook();
+    #[cfg(not(test))]
+    install_object_relation_hook();
+    #[cfg(not(test))]
+    install_serialize_object_hook();
     Box::into_raw(Box::new(ElephcEvalContext::new()))
 }
 

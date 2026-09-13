@@ -81,6 +81,11 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
 
     emit_x86_64_object_from_raw_wrapper(emitter);
     emit_x86_64_install_dynamic_object_destructor_hook(emitter);
+    emit_x86_64_install_generator_protocol_hook(emitter);
+    emit_x86_64_install_class_autoload_hook(emitter);
+    emit_x86_64_install_unserialize_object_hook(emitter);
+    emit_x86_64_install_object_relation_hook(emitter);
+    emit_x86_64_install_serialize_object_hook(emitter);
     emit_x86_64_object_clone_shallow_wrapper(emitter);
 
     label_c_global(emitter, "__elephc_eval_class_exists");
@@ -167,13 +172,15 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_is_a");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime match helpers
     emitter.instruction("mov rbp, rsp");                                        // establish a stable is-a relation frame pointer
-    emitter.instruction("sub rsp, 48");                                         // reserve slots for value pointer, flags, and target metadata
+    emitter.instruction("sub rsp, 64");                                         // reserve slots for value pointer, flags, and target metadata
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed eval object-or-class cell
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save whether exact class matches should be rejected
+    emitter.instruction("mov QWORD PTR [rbp - 48], rsi");                       // keep the target name for the interpreter fallback below
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // keep the target name length for the interpreter fallback
     emitter.instruction("mov rax, rsi");                                        // move the target string pointer into the lookup ABI register
     emitter.instruction("call __rt_instanceof_lookup");                         // resolve the target class/interface string to matcher metadata
     emitter.instruction("test rax, rax");                                       // did the target string resolve to emitted metadata?
-    emitter.instruction("je __elephc_eval_value_is_a_false_x86");               // unresolved targets cannot match eval object values
+    emitter.instruction("je __elephc_eval_value_is_a_eval_x86");                // a class only the INTERPRETER declared has no AOT metadata to match
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the target class/interface id
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the target kind: 0 class, 1 interface
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the boxed eval value for unboxing
@@ -219,7 +226,28 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the target class/interface id
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // pass the target kind: 0 class, 1 interface
     emitter.instruction("call __rt_exception_matches");                         // test inheritance or implemented-interface metadata
+    emitter.instruction("test rax, rax");                                       // did the AOT metadata find the relation?
+    emitter.instruction("je __elephc_eval_value_is_a_eval_x86");                // AOT metadata said no; the interpreter may still own this object
     emitter.instruction("jmp __elephc_eval_value_is_a_done_x86");               // keep the matcher result and restore the wrapper frame
+    // An object the INTERPRETER built carries the `stdClass` runtime class id whatever class
+    // declared it, so the metadata matcher above can only ever answer false for one. Asking the
+    // interpreter is the only way to learn that an eval-declared class implements the interface
+    // an AOT method's parameter is typed with -- the shape every Symfony request hits when the
+    // compiled kernel is handed a loader the DI container declared.
+    emitter.label("__elephc_eval_value_is_a_eval_x86");
+    abi::emit_symbol_address(emitter, "r10", "_elephc_eval_object_relation_fn");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the interpreter class-relation callback, if one is installed
+    emitter.instruction("test r10, r10");                                       // without the bridge there is no interpreter to ask
+    emitter.instruction("je __elephc_eval_value_is_a_false_x86");               // keep the metadata-only answer when no callback is installed
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the boxed eval object-or-class cell
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // pass the target class/interface name
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // pass the target name length
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // pass the exact-self exclusion flag
+    emitter.instruction("call r10");                                            // ask the interpreter whether the relation holds
+    emitter.instruction("test eax, eax");                                       // the callback answers with a C int
+    emitter.instruction("setne al");                                            // normalize it to the 0/1 this helper returns
+    emitter.instruction("movzx eax, al");                                       // widen the normalized flag to the full result register
+    emitter.instruction("jmp __elephc_eval_value_is_a_done_x86");               // keep the interpreter's answer
     emitter.label("__elephc_eval_value_is_a_false_x86");
     emitter.instruction("xor eax, eax");                                        // return false for unresolved, scalar, or exact-self subclass cases
     emitter.label("__elephc_eval_value_is_a_done_x86");

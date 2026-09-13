@@ -445,6 +445,16 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Installs the optional eval dynamic object destructor callback.
     pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
+    /// Installs the optional eval `Generator` protocol callback.
+    pub(super) fn __elephc_eval_install_generator_protocol_hook(callback: usize);
+    /// Installs the optional eval class-autoload callback.
+    pub(super) fn __elephc_eval_install_class_autoload_hook(callback: usize);
+    /// Installs the optional eval unserialize-object callback.
+    pub(super) fn __elephc_eval_install_unserialize_object_hook(callback: usize);
+    /// Installs the optional eval object class-relation callback.
+    pub(super) fn __elephc_eval_install_object_relation_hook(callback: usize);
+    /// Installs the optional eval serialize-object callback.
+    pub(super) fn __elephc_eval_install_serialize_object_hook(callback: usize);
 }
 
 /// Forwards one installed eval ob-handler callback address to the generated runtime.

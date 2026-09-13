@@ -281,6 +281,38 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_stack_limit", 8, target));
     out.push_str(&comm_directive("_stack_limit_main", 8, target));
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
+    // _elephc_eval_generator_protocol_fn: filled by the interpreter at context creation.
+    // The `__rt_gen_*` helpers read it before touching a receiver's fiber fields, because a
+    // generator the INTERPRETER created is a `Generator` object with no fiber state at all.
+    // Zero (the .comm default) in a program that never links the bridge, where every
+    // generator is native and the helpers keep their pre-hook behavior.
+    out.push_str(&comm_directive("_elephc_eval_generator_protocol_fn", 8, target));
+    // _elephc_eval_class_autoload_fn: filled by the interpreter at context creation. The
+    // unserialize decoder reads it when `__rt_new_by_name` does not know a class, because PHP
+    // gives the AUTOLOADER a chance there (`unserialize_callback_func`) before a value degrades
+    // to `__PHP_Incomplete_Class`. Zero in a program that never links the bridge, where there
+    // is no autoloader to ask and the decoder keeps its pre-hook behavior.
+    out.push_str(&comm_directive("_elephc_eval_class_autoload_fn", 8, target));
+    // _elephc_eval_unserialize_object_fn: filled by the interpreter at context creation. The
+    // unserialize decoder calls it for a class the AOT table has no LAYOUT for, handing over the
+    // parsed property hash so the INTERPRETER builds the object instead of the decoder's
+    // `__PHP_Incomplete_Class` stand-in. Zero without the bridge, where no such class can exist.
+    out.push_str(&comm_directive("_elephc_eval_unserialize_object_fn", 8, target));
+    // _elephc_eval_object_relation_fn: filled by the interpreter at context creation.
+    // `__elephc_eval_value_is_a` decides class relations from AOT metadata alone, and an object
+    // the INTERPRETER built carries the `stdClass` runtime class id no matter what class declared
+    // it -- so every eval object failed the object type hint on an AOT method's parameter, which
+    // is how a Symfony request reaches a compiled kernel method with an eval-declared loader.
+    // Zero in a program that never links the bridge, where no such object exists and the helper
+    // keeps its metadata-only answer.
+    out.push_str(&comm_directive("_elephc_eval_object_relation_fn", 8, target));
+    // _elephc_eval_serialize_object_fn: filled by the interpreter at context creation.
+    // `__rt_serialize_object` reads an object's class from its header and its properties from the
+    // runtime hash; an object the INTERPRETER built carries `stdClass` in the first and nothing in
+    // the second, so it serialized as `O:8:"stdClass":0:{}`. Symfony's `ConfigCache::write()` is
+    // AOT-compiled, so that is what went into its routing cache metadata. Zero without the bridge,
+    // where no such object exists and the serializer keeps its own rendering.
+    out.push_str(&comm_directive("_elephc_eval_serialize_object_fn", 8, target));
     // elephc_probe_route_fn: a function-pointer slot the sampling probe fills at init
     // (with elephc_probe_set_route) and the --web bridge reads to tag samples by route.
     // Zero unless --probe linked the probe, so route tagging is pay-for-use with no

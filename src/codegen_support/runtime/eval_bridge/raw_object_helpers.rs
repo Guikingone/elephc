@@ -32,6 +32,46 @@ pub(super) fn emit_aarch64_install_dynamic_object_destructor_hook(emitter: &mut 
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
 }
 
+/// Emits the ARM64 wrapper that installs the eval `Generator` protocol callback.
+pub(super) fn emit_aarch64_install_generator_protocol_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_generator_protocol_hook");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_eval_generator_protocol_fn");
+    emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for interpreted generators
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the ARM64 wrapper that installs the eval class-autoload callback.
+pub(super) fn emit_aarch64_install_class_autoload_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_class_autoload_hook");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_eval_class_autoload_fn");
+    emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for class autoloading
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the ARM64 wrapper that installs the eval unserialize-object callback.
+pub(super) fn emit_aarch64_install_unserialize_object_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_unserialize_object_hook");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_eval_unserialize_object_fn");
+    emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for eval-declared hydration
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the ARM64 wrapper that installs the eval object class-relation callback.
+pub(super) fn emit_aarch64_install_object_relation_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_object_relation_hook");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_eval_object_relation_fn");
+    emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for eval class relations
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the ARM64 wrapper that installs the eval serialize-object callback.
+pub(super) fn emit_aarch64_install_serialize_object_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_serialize_object_hook");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_eval_serialize_object_fn");
+    emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for eval object rendering
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
 /// Emits the x86_64 wrapper that boxes a borrowed raw object pointer for Rust eval.
 pub(super) fn emit_x86_64_object_from_raw_wrapper(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_object_from_raw");
@@ -52,5 +92,45 @@ pub(super) fn emit_x86_64_install_dynamic_object_destructor_hook(emitter: &mut E
     label_c_global(emitter, "__elephc_eval_install_dynamic_object_destructor_hook");
     abi::emit_symbol_address(emitter, "r10", "_elephc_eval_dynamic_object_destruct_fn");
     emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for object destruction
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the x86_64 wrapper that installs the eval `Generator` protocol callback.
+pub(super) fn emit_x86_64_install_generator_protocol_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_generator_protocol_hook");
+    abi::emit_symbol_address(emitter, "r10", "_elephc_eval_generator_protocol_fn");
+    emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for interpreted generators
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the x86_64 wrapper that installs the eval class-autoload callback.
+pub(super) fn emit_x86_64_install_class_autoload_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_class_autoload_hook");
+    abi::emit_symbol_address(emitter, "r10", "_elephc_eval_class_autoload_fn");
+    emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for class autoloading
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the x86_64 wrapper that installs the eval unserialize-object callback.
+pub(super) fn emit_x86_64_install_unserialize_object_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_unserialize_object_hook");
+    abi::emit_symbol_address(emitter, "r10", "_elephc_eval_unserialize_object_fn");
+    emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for eval-declared hydration
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the x86_64 wrapper that installs the eval object class-relation callback.
+pub(super) fn emit_x86_64_install_object_relation_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_object_relation_hook");
+    abi::emit_symbol_address(emitter, "r10", "_elephc_eval_object_relation_fn");
+    emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for eval class relations
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the x86_64 wrapper that installs the eval serialize-object callback.
+pub(super) fn emit_x86_64_install_serialize_object_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_serialize_object_hook");
+    abi::emit_symbol_address(emitter, "r10", "_elephc_eval_serialize_object_fn");
+    emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for eval object rendering
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
 }

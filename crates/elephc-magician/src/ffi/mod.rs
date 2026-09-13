@@ -14,6 +14,16 @@ pub mod callables;
 pub mod context;
 pub mod declared_symbols;
 pub(crate) mod dynamic_destructors;
+#[cfg(not(test))]
+pub(crate) mod class_autoload;
+#[cfg(not(test))]
+pub(crate) mod generator_protocol;
+#[cfg(not(test))]
+pub(crate) mod object_relation;
+#[cfg(not(test))]
+pub(crate) mod serialize_objects;
+#[cfg(not(test))]
+pub(crate) mod unserialize_objects;
 pub(crate) mod ob_handlers;
 pub mod execute;
 pub mod include;

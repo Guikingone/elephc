@@ -347,3 +347,132 @@ echo $b->name, "|", $a->name, "\n";
         out.stderr
     );
 }
+
+/// Verifies `clone $this` in an inherited method copies the RUNTIME class, not the declaring one.
+///
+/// This is Symfony's `ServiceLocator::withContext()` shape: the base declares the cloning method,
+/// the subclass overrides behaviour, and the clone must keep the subclass -- otherwise the
+/// override is silently lost and every property the subclass declares goes with it.
+#[test]
+fn test_clone_of_this_in_inherited_method_keeps_runtime_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseBox {
+    public string $tag = 'base';
+
+    public function copy(): static {
+        return clone $this;
+    }
+}
+
+class ChildBox extends BaseBox {
+    public string $extra = 'x';
+
+    public function label(): string {
+        return 'child:' . $this->extra;
+    }
+}
+
+$source = new ChildBox();
+$source->extra = 'kept';
+$copy = $source->copy();
+echo get_class($copy) . '|' . $copy->label() . '|' . $copy->tag;
+"#,
+    );
+    assert_eq!(out, "ChildBox|child:kept|base");
+}
+
+/// Verifies a subclass-only `__clone()` runs exactly once for a clone taken through the base.
+#[test]
+fn test_clone_through_base_runs_subclass_only_magic_clone_once() {
+    let out = compile_and_run(
+        r#"<?php
+class HookBase {
+    public int $n = 1;
+
+    public function copy(): static {
+        return clone $this;
+    }
+}
+
+class HookChild extends HookBase {
+    public function __clone(): void {
+        echo 'child-hook;';
+        $this->n += 10;
+    }
+}
+
+$source = new HookChild();
+$copy = $source->copy();
+echo get_class($copy) . '|' . $source->n . '|' . $copy->n;
+"#,
+    );
+    assert_eq!(out, "child-hook;HookChild|1|11");
+}
+
+/// Verifies an inherited `__clone()` runs exactly ONCE when the clone dispatches on the subclass.
+///
+/// The hook has two possible emitters -- the IR lowering's ordinary method call and the runtime
+/// clone dispatch's per-candidate call -- and running both would apply it twice.
+#[test]
+fn test_clone_through_base_runs_inherited_magic_clone_once() {
+    let out = compile_and_run(
+        r#"<?php
+class InhBase {
+    public int $n = 1;
+
+    public function __clone(): void {
+        echo 'base-hook;';
+        $this->n += 100;
+    }
+
+    public function copy(): static {
+        return clone $this;
+    }
+}
+
+class InhChild extends InhBase {}
+
+$source = new InhChild();
+$copy = $source->copy();
+echo get_class($copy) . '|' . $source->n . '|' . $copy->n;
+"#,
+    );
+    assert_eq!(out, "base-hook;InhChild|1|101");
+}
+
+/// Verifies an overridden `__clone()` runs the SUBCLASS hook, once, for a clone taken in the base.
+#[test]
+fn test_clone_through_base_runs_overridden_magic_clone_once() {
+    let out = compile_and_run(
+        r#"<?php
+class OvrBase {
+    public int $n = 1;
+
+    public function __clone(): void {
+        echo 'ovr-base;';
+        $this->n += 1;
+    }
+
+    public function copy(): static {
+        return clone $this;
+    }
+}
+
+class OvrChild extends OvrBase {
+    public function __clone(): void {
+        echo 'ovr-child;';
+        $this->n += 2;
+    }
+}
+
+$child = new OvrChild();
+$child_copy = $child->copy();
+$base = new OvrBase();
+$base_copy = $base->copy();
+echo get_class($child_copy) . '|' . $child_copy->n . '|'
+    . get_class($base_copy) . '|' . $base_copy->n;
+"#,
+    );
+    assert_eq!(out, "ovr-child;ovr-base;OvrChild|3|OvrBase|2");
+}

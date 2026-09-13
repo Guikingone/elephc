@@ -247,6 +247,32 @@ fn eval_class_like_name_matches(left: &str, right: &str) -> bool {
         .eq_ignore_ascii_case(right.trim_start_matches('\\'))
 }
 
+/// Returns whether one class-like NAME satisfies another by PHP's `instanceof` relation --
+/// self, subclass, or implemented interface -- with neither side an object instance.
+///
+/// Mirrors `is_a($name, $target, true)` exactly (verified against php -n: self, subclass, and
+/// interface implementation all return `true`; an unrelated or reversed pair returns `false`),
+/// which is also PHP's own semantics for `ReflectionAttribute::IS_INSTANCEOF`. Reused by
+/// `getAttributes()` filtering (`crate::interpreter::reflection::member_api`) where only the two
+/// class NAMES are known, not object instances.
+pub(in crate::interpreter) fn eval_class_like_name_is_instance_of(
+    source_class: &str,
+    target_class: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let source = values.string(source_class)?;
+    let target = values.string(target_class)?;
+    let allow_string = values.bool_value(true)?;
+    let result = eval_is_a_relation_result("is_a", &[source, target, allow_string], context, values)?;
+    let matches = values.truthy(result)?;
+    values.release(source)?;
+    values.release(target)?;
+    values.release(allow_string)?;
+    values.release(result)?;
+    Ok(matches)
+}
+
 /// Returns whether an eval-created object matches a dynamic class/interface target.
 pub(in crate::interpreter) fn dynamic_object_is_a(
     object: RuntimeCellHandle,

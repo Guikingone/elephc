@@ -86,6 +86,11 @@ pub(super) fn emit_aarch64_values_classes(emitter: &mut Emitter) {
 
     emit_aarch64_object_from_raw_wrapper(emitter);
     emit_aarch64_install_dynamic_object_destructor_hook(emitter);
+    emit_aarch64_install_generator_protocol_hook(emitter);
+    emit_aarch64_install_class_autoload_hook(emitter);
+    emit_aarch64_install_unserialize_object_hook(emitter);
+    emit_aarch64_install_object_relation_hook(emitter);
+    emit_aarch64_install_serialize_object_hook(emitter);
     emit_aarch64_object_clone_shallow_wrapper(emitter);
 
     label_c_global(emitter, "__elephc_eval_class_exists");
@@ -171,14 +176,16 @@ pub(super) fn emit_aarch64_values_classes(emitter: &mut Emitter) {
     emit_aarch64_eval_reflection_property_flags(emitter);
 
     label_c_global(emitter, "__elephc_eval_value_is_a");
-    emitter.instruction("sub sp, sp, #64");                                     // reserve relation lookup state and preserve the Rust return address
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address across runtime match helpers
-    emitter.instruction("add x29, sp, #48");                                    // establish a stable is-a relation frame pointer
+    emitter.instruction("sub sp, sp, #80");                                     // reserve relation lookup state and preserve the Rust return address
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address across runtime match helpers
+    emitter.instruction("add x29, sp, #64");                                    // establish a stable is-a relation frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the boxed eval object-or-class cell
     emitter.instruction("str x3, [sp, #8]");                                    // save whether exact class matches should be rejected
+    emitter.instruction("str x1, [sp, #40]");                                   // keep the target name for the interpreter fallback below
+    emitter.instruction("str x2, [sp, #48]");                                   // keep the target name length for the interpreter fallback
     emitter.instruction("bl __rt_instanceof_lookup");                           // resolve the target class/interface string to matcher metadata
     emitter.instruction("cmp x0, #0");                                          // did the target string resolve to emitted metadata?
-    emitter.instruction("b.eq __elephc_eval_value_is_a_false");                 // unresolved targets cannot match eval object values
+    emitter.instruction("b.eq __elephc_eval_value_is_a_eval");                  // a class only the INTERPRETER declared has no AOT metadata to match
     emitter.instruction("str x1, [sp, #16]");                                   // save the target class/interface id
     emitter.instruction("str x2, [sp, #24]");                                   // save the target kind: 0 class, 1 interface
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed eval value for unboxing
@@ -224,12 +231,30 @@ pub(super) fn emit_aarch64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass the target class/interface id
     emitter.instruction("ldr x2, [sp, #24]");                                   // pass the target kind: 0 class, 1 interface
     emitter.instruction("bl __rt_exception_matches");                           // test inheritance or implemented-interface metadata
+    emitter.instruction("cbz x0, __elephc_eval_value_is_a_eval");               // AOT metadata said no; the interpreter may still own this object
     emitter.instruction("b __elephc_eval_value_is_a_done");                     // keep the matcher result and restore the wrapper frame
+    // An object the INTERPRETER built carries the `stdClass` runtime class id whatever class
+    // declared it, so the metadata matcher above can only ever answer false for one. Asking the
+    // interpreter is the only way to learn that an eval-declared class implements the interface
+    // an AOT method's parameter is typed with -- the shape every Symfony request hits when the
+    // compiled kernel is handed a loader the DI container declared.
+    emitter.label("__elephc_eval_value_is_a_eval");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_eval_object_relation_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the interpreter class-relation callback, if one is installed
+    emitter.instruction("cbz x9, __elephc_eval_value_is_a_false");              // without the bridge there is no interpreter to ask
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the boxed eval object-or-class cell
+    emitter.instruction("ldr x1, [sp, #40]");                                   // pass the target class/interface name
+    emitter.instruction("ldr x2, [sp, #48]");                                   // pass the target name length
+    emitter.instruction("ldr x3, [sp, #8]");                                    // pass the exact-self exclusion flag
+    emitter.instruction("blr x9");                                              // ask the interpreter whether the relation holds
+    emitter.instruction("cmp w0, #0");                                          // the callback answers with a C int
+    emitter.instruction("cset x0, ne");                                         // normalize it to the 0/1 this helper returns
+    emitter.instruction("b __elephc_eval_value_is_a_done");                     // keep the interpreter's answer
     emitter.label("__elephc_eval_value_is_a_false");
     emitter.instruction("mov x0, #0");                                          // return false for unresolved, scalar, or exact-self subclass cases
     emitter.label("__elephc_eval_value_is_a_done");
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the relation lookup frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the relation lookup frame
     emitter.instruction("ret");                                                 // return the boolean class-relation result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_class_name");

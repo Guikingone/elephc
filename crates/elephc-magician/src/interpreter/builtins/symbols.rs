@@ -63,7 +63,7 @@ pub(in crate::interpreter) use function_exists::{
 pub(in crate::interpreter) use get_class::eval_get_class_result;
 pub(in crate::interpreter) use get_object_vars::eval_get_object_vars_result;
 pub(in crate::interpreter) use get_parent_class::eval_get_parent_class_result;
-pub(in crate::interpreter) use is_a::dynamic_object_is_a;
+pub(in crate::interpreter) use is_a::{dynamic_object_is_a, eval_class_like_name_is_instance_of};
 pub(in crate::interpreter) use is_callable::{
     eval_builtin_is_callable_call, eval_is_callable_call_with_evaluated_args,
     eval_is_callable_value,

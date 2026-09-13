@@ -16,7 +16,11 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     let class_name = class_name_immediate(ctx, inst)?.to_string();
     if !matches!(
         value_ty,
-        PhpType::Callable | PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        PhpType::Callable
+            | PhpType::Object(_)
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Iterable
     ) {
         emit_false(ctx);
         return store_if_result(ctx, inst);
@@ -73,7 +77,16 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
             emit_callable_object_capture_or_null(ctx, value)?;
             emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
         }
-        PhpType::Object(_) => {
+        // `Iterable` joins `Object`, not `Mixed`: an `iterable` slot holds the UNBOXED payload
+        // (coercing a gradual value to `iterable` emits `Op::MixedUnbox`, see
+        // src/ir_lower/gradual_coercions.rs:104), so the raw pointer is already what the object
+        // matcher wants -- routing it to `__rt_mixed_instanceof` double-unboxes and answers
+        // false. Its array half stays safe because the matcher range-checks the class id against
+        // the emitted table; empty, list, assoc and nested arrays all answer false, matching
+        // php -n 8.5.10. Omitting `Iterable` made every `instanceof` on an `iterable` operand a
+        // hardcoded false -- a WRONG answer, not a conservative one, which is what sent Symfony's
+        // `ResourceCheckerConfigCache::isFresh()` past its `iterator_to_array()` conversion.
+        PhpType::Object(_) | PhpType::Iterable => {
             ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
             emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
         }

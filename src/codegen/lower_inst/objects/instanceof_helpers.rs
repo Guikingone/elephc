@@ -63,7 +63,9 @@ pub(super) fn emit_normalized_dynamic_instanceof_value(
     value_ty: &PhpType,
 ) -> Result<()> {
     match value_ty {
-        PhpType::Object(_) => {
+        // `Iterable` joins `Object` for the same reason as the named path: the slot holds the
+        // unboxed payload, so the raw pointer is already the matcher's input.
+        PhpType::Object(_) | PhpType::Iterable => {
             ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
         }
         PhpType::Callable => {

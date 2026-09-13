@@ -26,7 +26,12 @@ use crate::abi::ElephcEvalContext;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 #[cfg(not(test))]
 use externs::{
-    __elephc_eval_install_dynamic_object_destructor_hook, __elephc_eval_value_array_new,
+    __elephc_eval_install_dynamic_object_destructor_hook,
+    __elephc_eval_install_class_autoload_hook,
+    __elephc_eval_install_generator_protocol_hook,
+    __elephc_eval_install_object_relation_hook, __elephc_eval_install_serialize_object_hook,
+    __elephc_eval_install_unserialize_object_hook,
+    __elephc_eval_value_array_new,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
     __elephc_eval_value_release,
 };
@@ -113,6 +118,71 @@ impl ElephcRuntimeOps {
 pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
     unsafe {
         __elephc_eval_install_dynamic_object_destructor_hook(callback);
+    }
+}
+
+/// Installs the eval `Generator` protocol callback into runtime data.
+///
+/// # Safety
+/// `callback` must be the address of a
+/// `extern "C" fn(*mut RuntimeCell, u64, *mut RuntimeCell, *mut u64) -> u64` following the
+/// generator-protocol ABI; the `__rt_gen_*` helpers call through it before touching the
+/// receiver's fiber fields.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_generator_protocol_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_generator_protocol_hook(callback);
+    }
+}
+
+/// Installs the eval class-autoload callback into runtime data.
+///
+/// # Safety
+/// `callback` must be the address of an `extern "C" fn(*const u8, u64) -> u64` following the
+/// class-autoload ABI; the unserialize decoder calls through it for an unknown class name.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_class_autoload_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_class_autoload_hook(callback);
+    }
+}
+
+/// Installs the eval unserialize-object callback into runtime data.
+///
+/// # Safety
+/// `callback` must be the address of an
+/// `extern "C" fn(*const u8, u64, u64) -> *mut RuntimeCell` following the unserialize-object
+/// ABI; the decoder calls through it for a class with no compiled layout.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_unserialize_object_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_unserialize_object_hook(callback);
+    }
+}
+
+/// Installs the eval object class-relation callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of an
+/// `extern "C" fn(*mut RuntimeCell, *const u8, u64, u64) -> u64` following the object-relation
+/// ABI; `__elephc_eval_value_is_a` calls through it when its AOT metadata answers false.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_object_relation_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_object_relation_hook(callback);
+    }
+}
+
+/// Installs the eval serialize-object callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of an `extern "C" fn(*mut c_void) -> *mut RuntimeCell`
+/// following the serialize-object ABI; `__rt_serialize_object` calls through it before reading a
+/// class id the interpreter's own objects do not carry.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_serialize_object_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_serialize_object_hook(callback);
     }
 }
 
