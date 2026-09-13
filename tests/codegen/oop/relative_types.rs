@@ -202,16 +202,10 @@ echo OwnerMixed::makeChild()->sum();
     assert_eq!(out, "92");
 }
 
-/// A CONTROL for the reflection half of the same lookup, not a regression test.
-///
-/// `reflection_new_instance::constructor_signature_for_class_name` read the descendant's own
-/// map too and was changed with `object_construction::constructor_signature`, but no valid PHP
-/// program can tell the two lookups apart there: they differ only for a class whose own map
-/// lacks `__construct`, which is exactly the inherited-PRIVATE-constructor shape, and PHP
-/// rejects `ReflectionClass::newInstance()` on a non-public constructor outright
-/// (`Call to private Owner::__construct()`). The change is therefore consistency — it keeps
-/// the site from becoming wrong the moment reflection can reach such a class — and this
-/// fixture pins that the public path it CAN reach still resolves and still pads its defaults.
+/// A CONTROL for the reflection half of the same lookup: an inherited PUBLIC constructor IS
+/// copied into the descendant's own `methods` map, so the direct lookup found it too and this
+/// fixture passes either way. The regression test for the changed helper is the
+/// private-ancestor one below.
 #[test]
 fn test_reflection_new_instance_pads_inherited_constructor_defaults() {
     let out = compile_and_run(
@@ -225,6 +219,37 @@ echo $reflected->newInstance()->n;
 "#,
     );
     assert_eq!(out, "5");
+}
+
+/// The REGRESSION test for `reflection_new_instance::constructor_signature_for_class_name`: a
+/// descendant of a class with a PRIVATE constructor, which is the only shape where the changed
+/// lookup differs from the direct one, because it is the only shape whose own `methods` map
+/// lacks the entry.
+///
+/// Measured both ways on this fixture: with the owner walk it prints `6` (the default is padded
+/// and the ancestor's constructor runs); reading the descendant's own map it prints `0` — no
+/// signature, so no padding and no constructor call at all, leaving the promoted property at
+/// its zero value.
+///
+/// NOTE ON THE SHAPE: php-src rejects this program outright with
+/// `Error: Call to private PrivOwner::__construct()`, because `newInstance()` enforces
+/// constructor visibility and elephc does not yet. That separate gap is what makes the shape
+/// reachable here at all. When it is closed this fixture should become a REJECTION test rather
+/// than being deleted — the lookup it pins is still the one doing the work, and it is what
+/// decides which class's constructor the visibility check will then be asked about.
+#[test]
+fn test_reflection_new_instance_resolves_an_inherited_private_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class PrivReflOwner {
+    private function __construct(public int $n = 6) {}
+}
+class PrivReflChild extends PrivReflOwner {}
+$reflected = new ReflectionClass('PrivReflChild');
+echo $reflected->newInstance()->n;
+"#,
+    );
+    assert_eq!(out, "6");
 }
 
 /// An inherited PUBLIC constructor with defaults is unaffected — the owner walk stops at the
