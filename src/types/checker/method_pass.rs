@@ -421,10 +421,13 @@ impl Checker {
                             }
                         }
                     }
-                    if Self::is_generic_array_hint(&declared)
-                        && matches!(inferred_return, PhpType::Array(_) | PhpType::AssocArray { .. })
-                    {
-                        inferred_return
+                    if Self::is_generic_array_hint(&declared) {
+                        // Resolved from the individual returns, not from `inferred_return`:
+                        // `wider_type` collapses an indexed return joined with a hash one to
+                        // `Mixed`, which this guard used to reject, leaving the declared INDEXED
+                        // hint to describe a container that is a hash at runtime.
+                        Self::generic_array_return_contract(&return_infos)
+                        .unwrap_or(declared)
                     } else {
                         declared
                     }

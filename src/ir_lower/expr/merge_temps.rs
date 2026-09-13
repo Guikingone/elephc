@@ -275,6 +275,40 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
                 },
             )
         }
+        (PhpType::Array(source_elem), PhpType::AssocArray { .. }) => {
+            // An INDEXED argument bound to a hash contract. A bare `array` hint resolves to the
+            // hash whenever some call site passes one (`respecialized_param_types_for_call`), so
+            // the packed vector is CONVERTED here -- restamping it would hand the callee a
+            // pointer to the wrong layout. `Op::ArrayToHash` carries the element type across
+            // unchanged, so raw slots are boxed first to reach the contract's Mixed payload.
+            let source = if source_elem.codegen_repr() == PhpType::Mixed {
+                value
+            } else {
+                let borrowed = if ctx.value_is_owning_temporary(value)
+                    && !ctx.value_is_owned_unboxed_local_load(value.value)
+                {
+                    value
+                } else {
+                    crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, span)
+                };
+                ctx.emit_value(
+                    Op::ArrayToMixed,
+                    vec![borrowed.value],
+                    None,
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                    Op::ArrayToMixed.default_effects(),
+                    span,
+                )
+            };
+            return ctx.emit_value(
+                Op::ArrayToHash,
+                vec![source.value],
+                None,
+                target_ty.clone(),
+                Op::ArrayToHash.default_effects(),
+                span,
+            );
+        }
         (PhpType::Mixed | PhpType::Union(_), _)
             if value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
         {

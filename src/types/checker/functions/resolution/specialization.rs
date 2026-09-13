@@ -245,6 +245,25 @@ impl Checker {
                 .get(seen_idx)
                 .copied()
                 .unwrap_or(false);
+            // A hash argument decides the STORAGE of a bare `array` hint, declared or not. The hint
+            // resolves to `Array(Mixed)` -- the indexed repr -- and a hash bound to it is restamped
+            // rather than converted, so every consumer reading the static type misreads the
+            // container (`json_encode` prints raw slot words, `in_array` faults). The join of an
+            // indexed contract with a hash argument is the HASH, as in
+            // `types::array_storage::join_array_storage_conversion`: a hash represents any PHP
+            // array, a packed vector cannot. Only the SHAPE is decided here -- the key and value
+            // stay `Mixed`, so this never narrows an element type the way specialization does.
+            if seen_idx < regular_param_count
+                && declared
+                && Self::is_generic_array_hint(&param_types[seen_idx].1)
+                && matches!(actual_ty, PhpType::AssocArray { .. })
+            {
+                param_types[seen_idx].1 = PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                };
+                changed = true;
+            }
             if seen_idx < regular_param_count
                 && !declared
                 && !matches!(actual_ty, PhpType::Never | PhpType::Callable)

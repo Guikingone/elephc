@@ -1272,7 +1272,12 @@ mod throw_access_site_tests {
     #[test]
     fn an_unlocatable_violation_never_becomes_a_key() {
         let mut sites = HashMap::new();
-        record_throw_access_site(&mut sites, Span::dummy(), readonly_violation(Span::dummy()));
+        record_throw_access_site(
+            &mut sites,
+            String::new(),
+            Span::dummy(),
+            readonly_violation(Span::dummy()),
+        );
         assert!(sites.is_empty());
     }
 }

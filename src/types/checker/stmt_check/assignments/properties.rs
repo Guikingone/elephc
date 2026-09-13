@@ -659,9 +659,16 @@ pub(super) fn refined_untyped_property_assignment_type(
 /// Widens incompatible array shapes written to one untyped property without inventing a PHP type.
 ///
 /// Untyped properties frequently start as a precise associative shape after keyed writes and are
-/// later replaced by a bare `array` parameter. A raw associative slot cannot safely receive an
-/// indexed pointer, so that cross-shape assignment becomes the runtime-dispatched `array<mixed>`
-/// representation. Two associative shapes keep hash storage and widen only their key/value facts.
+/// later replaced by a bare `array` parameter. Two associative shapes keep hash storage and widen
+/// only their key/value facts; two indexed shapes widen to `array<mixed>`.
+///
+/// A cross-shape assignment resolves to the HASH, for the reason
+/// `types::array_storage::join_array_storage_conversion` gives: a hash represents any PHP array,
+/// a packed vector cannot. `array<mixed>` is NOT a runtime-dispatched "either" -- consumers read
+/// the static type, so a hash parked in an `array<mixed>` slot is read as packed storage and
+/// misreported (`json_encode` prints raw slot words, `in_array` faults). A list parked in a hash
+/// costs nothing observable: measured against `php -n` 8.5.10, a hash holding sequential integer
+/// keys encodes as `["a","b"]` and serializes as `a:2:{i:0;s:1:"a";i:1;s:1:"b";}`.
 fn merge_untyped_property_array_storage(
     current: &PhpType,
     assigned: &PhpType,
@@ -700,7 +707,10 @@ fn merge_untyped_property_array_storage(
         (
             PhpType::Array(_) | PhpType::AssocArray { .. },
             PhpType::Array(_) | PhpType::AssocArray { .. },
-        ) => Some(PhpType::Array(Box::new(PhpType::Mixed))),
+        ) => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        }),
         _ => None,
     }
 }

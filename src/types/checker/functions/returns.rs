@@ -53,6 +53,70 @@ fn nullable_return_type(other: &PhpType) -> PhpType {
 }
 
 impl Checker {
+    /// Resolves the array contract a declared bare `array` hint must carry, from what the body
+    /// actually returns, or `None` to keep the declared hint.
+    ///
+    /// PHP has ONE array type; elephc splits it into an indexed vector (`Array`) and a hash
+    /// (`AssocArray`). A bare `array` hint resolves to `Array(Mixed)` -- the INDEXED repr -- so when a
+    /// body returns a hash on one path and an indexed array on another, the contract has to say which
+    /// storage the caller will read. Answering indexed is not an option: `coerce_container_to_return_type`
+    /// then retypes the hash as indexed WITHOUT converting it (converting would discard string keys),
+    /// and every consumer that trusts the static type misreads the container -- `json_encode` prints raw
+    /// slot words, `serialize` writes integer keys, `in_array` faults. Measured on a 36-consumer survey,
+    /// 18 diverged from `php -n` 8.5.10 and 5 of those segfaulted.
+    ///
+    /// So the join of an indexed target and a hash target is the HASH, for the same reason
+    /// `types::array_storage::join_array_storage_conversion` gives: a hash represents any PHP array, a
+    /// packed vector cannot. It costs nothing in observable behavior -- a hash holding sequential
+    /// integer keys is indistinguishable from a list to every consumer, measured against `php -n`:
+    /// `json_encode` prints `["a","b"]`, `serialize` writes `a:2:{i:0;s:1:"a";i:1;s:1:"b";}`.
+    ///
+    /// Returning `None` leaves the declared hint in place, which is right when no return says otherwise
+    /// (an empty body, or a path returning something that is not an array at all -- that disagreement
+    /// is a return-type error the compatibility check reports, not something to widen here).
+    pub(crate) fn generic_array_return_contract(return_infos: &[ReturnInfo]) -> Option<PhpType> {
+        let mut specific: Option<PhpType> = None;
+        let mut empty_array: Option<PhpType> = None;
+        let mut saw_hash = false;
+        let mut saw_unshaped = false;
+        let mut disagreed = false;
+        for return_info in return_infos {
+            let return_ty = &return_info.ty;
+            if matches!(return_ty, PhpType::Void) {
+                continue;                                   // a `return null` path says nothing about storage
+            }
+            if !matches!(return_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                // A `Mixed` return -- `$this->h[$k] ?? []` boxes into one -- names no storage. It
+                // cannot argue AGAINST the hash, though: whatever it holds is unboxed into the
+                // contract, while a hash handed to an indexed contract is misread outright.
+                saw_unshaped = true;
+                continue;
+            }
+            if matches!(return_ty, PhpType::AssocArray { .. }) {
+                saw_hash = true;
+            } else if matches!(return_ty, PhpType::Array(elem) if elem.as_ref() == &PhpType::Never) {
+                // `return []` commits to no storage at all: it fits whichever shape the others pick.
+                empty_array = Some(return_ty.clone());
+                continue;
+            }
+            match &specific {
+                None => specific = Some(return_ty.clone()),
+                Some(existing) if existing == return_ty => {}
+                _ => disagreed = true,
+            }
+        }
+        if saw_hash && (disagreed || saw_unshaped) {
+            return Some(PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            });
+        }
+        if disagreed || saw_unshaped {
+            return None;                                    // no shape to prefer over the declared hint
+        }
+        specific.or(empty_array)
+    }
+
     /// Recursively collects ReturnInfo from all return statements in `stmt` and its
     /// nested blocks (if/while/try/etc.), appending each to `returns`. Untyped or unresolvable
     /// expressions are skipped silently — only well-typed returns contribute to the vector.

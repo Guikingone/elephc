@@ -273,6 +273,41 @@ pub(super) fn coerce_container_to_return_type(
             ));
         }
     }
+    // A bare `array` contract resolves to the HASH whenever some return path yields one
+    // (`Checker::generic_array_return_contract`), so an INDEXED return on another path must be
+    // CONVERTED here rather than restamped. `Op::ArrayToHash` carries the element type across
+    // unchanged, so a packed vector of raw slots is boxed first when the contract stores Mixed.
+    if let (
+        PhpType::Array(source_elem),
+        PhpType::AssocArray {
+            value: return_value,
+            ..
+        },
+    ) = (&source_ty, &return_ty)
+    {
+        let source_elem = source_elem.codegen_repr();
+        if source_elem != PhpType::Never
+            && source_elem != return_value.codegen_repr()
+            && return_value.codegen_repr() == PhpType::Mixed
+        {
+            let boxed = ctx.emit_value(
+                Op::ArrayToMixed,
+                vec![value.value],
+                None,
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                Op::ArrayToMixed.default_effects(),
+                span,
+            );
+            return Some(ctx.emit_value(
+                Op::ArrayToHash,
+                vec![boxed.value],
+                None,
+                return_ty,
+                Op::ArrayToHash.default_effects(),
+                span,
+            ));
+        }
+    }
     let op = match (source_ty, return_ty.clone()) {
         (PhpType::Array(source_elem), PhpType::Array(return_elem))
             if source_elem.codegen_repr() != PhpType::Mixed
@@ -294,8 +329,14 @@ pub(super) fn coerce_container_to_return_type(
         {
             Op::HashToMixed
         }
-        (PhpType::Array(source_elem), PhpType::AssocArray { .. })
-            if source_elem.as_ref() == &PhpType::Never =>
+        (
+            PhpType::Array(source_elem),
+            PhpType::AssocArray {
+                value: return_value,
+                ..
+            },
+        ) if source_elem.as_ref() == &PhpType::Never
+            || source_elem.codegen_repr() == return_value.codegen_repr() =>
         {
             Op::ArrayToHash
         }

@@ -29,3 +29,4 @@ mod mixed_append_autovivify;
 mod assoc_set_ops;
 mod widened_signatures;
 mod write_evaluation_order;
+mod generic_array_contract;
