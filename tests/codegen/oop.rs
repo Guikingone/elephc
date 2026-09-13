@@ -25,6 +25,8 @@ mod callables;
 mod union_types;
 #[path = "oop/relative_types.rs"]
 mod relative_types;
+#[path = "oop/constructor_owner.rs"]
+mod constructor_owner;
 #[path = "oop/anonymous_classes.rs"]
 mod anonymous_classes;
 #[path = "oop/intersection_types.rs"]

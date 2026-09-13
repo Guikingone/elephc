@@ -804,3 +804,28 @@ fn test_error_pdo_exception_internal_factory_is_private() {
         "Cannot access private method: PDOException::__elephcFromErrorInfo",
     );
 }
+
+/// Issue #871: a descendant that declares its OWN private constructor HIDES the ancestor's, so
+/// the owner walk stops at the descendant and `new static()` from the ancestor's scope names
+/// the DESCENDANT's constructor.
+///
+/// php-src raises `Error: Call to private HideChild::__construct() from scope HideOwner` for the
+/// same program, so the class named here is the class PHP names. The test guards the direction
+/// the walk must NOT take: resolving to the ancestor would have accepted the call, because the
+/// ancestor's constructor is public and the call site is its own scope.
+#[test]
+fn test_error_a_descendants_own_private_constructor_hides_the_ancestors() {
+    expect_error(
+        "<?php class HideOwner { public function __construct() {} public static function make(): static { return new static(); } } class HideChild extends HideOwner { private function __construct() {} } HideChild::make();",
+        "Cannot access private constructor: HideChild::__construct",
+    );
+}
+
+/// The same hiding rule through the NAMED form rather than late static binding.
+#[test]
+fn test_error_a_descendants_own_private_constructor_hides_the_ancestors_for_a_named_new() {
+    expect_error(
+        "<?php class NamedHideOwner { public function __construct() {} } class NamedHideChild extends NamedHideOwner { private function __construct() {} } $o = new NamedHideChild();",
+        "Cannot access private constructor: NamedHideChild::__construct",
+    );
+}
