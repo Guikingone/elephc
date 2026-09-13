@@ -127,6 +127,24 @@ pub(crate) fn skip_without_curl_native(test_name: &str) -> bool {
     true
 }
 
+/// The managed native cache ROOT — the directory that holds `artifacts/` — for a fixture
+/// that compiles through the CLI instead of this harness's own linker.
+///
+/// `elephc_cli_command` points the child's `XDG_CACHE_HOME` at an isolated per-test
+/// directory, which is right for every fixture that must not see a developer's state but
+/// wrong for one that needs the managed curl archives: there is nothing in that isolated
+/// cache. Such a fixture hands the child `ELEPHC_NATIVE_CACHE` explicitly, and this is the
+/// path to hand it — the same root `native_cache_artifacts_root` resolved, un-suffixed,
+/// because the resolver appends `artifacts/` itself.
+///
+/// The child then resolves through the PRODUCTION resolver, which keys artifacts on the
+/// toolchain fingerprint as well; [`available`]'s structural discovery does not. A cache
+/// built by a different compiler therefore satisfies the skip gate and still fails the
+/// compile, with `elephc`'s own `native install` recovery command in the diagnostic.
+pub(crate) fn managed_native_cache_root() -> Option<PathBuf> {
+    Some(native_cache_artifacts_root()?.parent()?.to_path_buf())
+}
+
 /// Discovers every package, returning `None` unless all of them are present.
 fn discover_packages() -> Option<Vec<CurlNativePackage>> {
     let artifacts = native_cache_artifacts_root()?;

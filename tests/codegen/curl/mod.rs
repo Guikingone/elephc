@@ -20,6 +20,7 @@ mod easy_options;
 mod easy_tls;
 mod eval;
 mod http_fixture;
+mod monitoring;
 mod multi;
 mod multipart;
 mod share;
