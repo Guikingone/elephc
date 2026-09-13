@@ -1652,7 +1652,12 @@ pub(super) fn runtime_instance_method_descriptor_template(
     let captures = vec![("receiver".to_string(), receiver_ty, false)];
     let entry_label =
         emit_instance_method_descriptor_entry_wrapper(ctx, impl_class, method_key, sig)?;
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, sig, &captures);
+    // Bounded: an instance-method first-class callable (`$obj->method(...)`) is routinely handed
+    // to interpreted code, which then calls it inside a PHP `try`. Without the boundary a
+    // Throwable raised in the callee unwinds natively past that `try`.
+    let invoker_label = super::runtime_wrappers::emit_runtime_callable_invoker_inline_with_boundary(
+        ctx, sig, &captures, true,
+    );
     let php_name = format!("{}::{}", class_name, method_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,

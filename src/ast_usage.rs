@@ -122,6 +122,26 @@ fn record_static_receiver(usage: &mut Usage, receiver: &StaticReceiver) {
     usage.uses_late_static |= matches!(receiver, StaticReceiver::Static);
 }
 
+/// Records literal string callbacks passed to a builtin's declared callback parameters.
+///
+/// The positions come from the shared contract catalog rather than a list repeated here, so a
+/// builtin that gains a callback parameter is covered the day its contract says so.
+fn record_literal_builtin_callback_arguments(usage: &mut Usage, name: &str, args: &[Expr]) {
+    let Some(contract) = elephc_builtin_contract::lookup(name) else {
+        return;
+    };
+    let callbacks = contract.callback_parameter_names();
+    if callbacks.is_empty() {
+        return;
+    }
+    for (position, parameter) in contract.params.iter().enumerate() {
+        if !callbacks.contains(&parameter.name) {
+            continue;
+        }
+        record_literal_function(usage, args.get(position));
+    }
+}
+
 /// Records a literal callback/probe target when it denotes a free function.
 fn record_literal_function(usage: &mut Usage, expr: Option<&Expr>) {
     let Some(Expr {
@@ -454,7 +474,13 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                     }
                 }
                 "eval" => usage.dynamic_function_call = true,
-                _ => {}
+                // Every OTHER builtin that takes a callback names its callback parameters in
+                // the shared contract catalog, so a literal callback reaches the same
+                // "this function is referenced" record as `call_user_func('f')` does. Without
+                // it `uksort($paths, 'strnatcmp')` was not a reference to `strnatcmp` at all:
+                // the backend-gap prelude that implements it was never injected, and the
+                // native sort then jumped through an unresolved callable.
+                _ => record_literal_builtin_callback_arguments(usage, &name, args),
             }
             for arg in args {
                 scan_expr(arg, usage);

@@ -423,6 +423,35 @@ impl Checker {
         )
     }
 
+    /// `check_known_callable_call` for a callback the ENGINE invokes rather than the source.
+    ///
+    /// `usort()`, `uksort()`, `array_map()` and the rest do not call their callback from the
+    /// calling file; the engine calls it, under PHP's COERCIVE parameter binding whatever
+    /// `strict_types` that file declared — which is why the callback checks already run inside
+    /// `with_internal_callback_binding`. The argument types the checker synthesizes for such a
+    /// call are the container's element or KEY types, and an array key is `int|string` at
+    /// runtime however the array was inferred, so a comparator declared with `string`
+    /// parameters has to accept the `Int` key type an indexed array reports. PHP binds it; the
+    /// runtime callable invoker performs the matching adaptation.
+    pub(crate) fn check_engine_invoked_callback_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            true,
+        )
+    }
+
     /// Validates a direct call to a method or constructor of `owner_class`, applying PHP's
     /// coercive parameter binding when that class is declared in user source.
     ///

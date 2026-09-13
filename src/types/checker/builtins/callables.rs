@@ -909,7 +909,7 @@ fn check_callback_builtin_call_in_engine_frame(
 
     if let ExprKind::FirstClassCallable(target) = &callback.kind {
         let sig = checker.specialize_first_class_callable_target(target, callback_args, span, env)?;
-        return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+        return checker.check_engine_invoked_callback_call(&sig, callback_args, span, env, label);
     }
 
     if let ExprKind::Variable(var_name) = &callback.kind {
@@ -920,13 +920,13 @@ fn check_callback_builtin_call_in_engine_frame(
             checker
                 .closure_return_types
                 .insert(var_name.clone(), sig.return_type.clone());
-            return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+            return checker.check_engine_invoked_callback_call(&sig, callback_args, span, env, label);
         }
     }
 
     if let ExprKind::StringLiteral(cb_name) = &callback.kind {
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
-            return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+            return checker.check_engine_invoked_callback_call(&sig, callback_args, span, env, label);
         }
         if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
             let effective_arg_count = callback_args.len();
@@ -967,7 +967,7 @@ fn check_callback_builtin_call_in_engine_frame(
     }
 
     if let Some(sig) = checker.resolve_expr_callable_sig(callback, env)? {
-        return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+        return checker.check_engine_invoked_callback_call(&sig, callback_args, span, env, label);
     }
 
     if let Some(ret_ty) =

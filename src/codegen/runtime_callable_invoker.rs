@@ -2278,7 +2278,21 @@ fn coerce_result_to_type(
             PhpType::Str => {
                 abi::emit_call_label(emitter, "__rt_mixed_cast_string");
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            // `Iterable` UNBOXES like the container types, it does not pass through like
+            // `Mixed`. An `iterable` ABI slot holds the raw payload -- coercing a gradual value
+            // to `iterable` emits `Op::MixedUnbox` (src/ir_lower/gradual_coercions.rs:104) and
+            // model.rs calls it a "type-erased pointer (array|Traversable)". Landing in the
+            // catch-all below instead handed the AOT callee the BOXED CELL, so an eval-created
+            // Generator passed to an `iterable` parameter arrived as an `array`
+            // (`get_debug_type` said so, with no crash), and every consumer then misbehaved:
+            // instanceof answered false or dereferenced an array pointer, `iterator_to_array`
+            // segfaulted and `foreach` hung. That is the Symfony `--web` SIGSEGV, whose
+            // `ResourceCheckerConfigCache::isFresh()` reads a container-built RewindableGenerator
+            // out of a promoted `private iterable` property.
+            PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+            | PhpType::Iterable => {
                 abi::emit_call_label(emitter, "__rt_mixed_unbox");
                 match emitter.target.arch {
                     Arch::AArch64 => emitter.instruction("mov x0, x1"),         // move the unboxed container pointer into the integer result
@@ -2321,6 +2335,7 @@ fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
+                | PhpType::Iterable
                 | PhpType::Mixed
                 | PhpType::Union(_)
         );

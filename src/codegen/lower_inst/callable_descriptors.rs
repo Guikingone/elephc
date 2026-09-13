@@ -33,7 +33,7 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
         let invoker_label = descriptor
             .sig
             .as_ref()
-            .map(|sig| emit_runtime_callable_invoker_inline(ctx, sig, &[]));
+            .map(|sig| super::runtime_wrappers::emit_runtime_callable_invoker_inline_with_boundary(ctx, sig, &[], true));
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &descriptor.entry_label,
@@ -108,7 +108,7 @@ pub(super) fn emit_static_late_bound_first_class_callable(
         &wrapper_sig,
         dynamic_slot,
     )?;
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &wrapper_sig, &captures);
+    let invoker_label = super::runtime_wrappers::emit_runtime_callable_invoker_inline_with_boundary(ctx, &wrapper_sig, &captures, true);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,
@@ -196,7 +196,7 @@ pub(super) fn emit_instance_method_first_class_callable(
             let invoker_label = descriptor
                 .sig
                 .as_ref()
-                .map(|sig| emit_runtime_callable_invoker_inline(ctx, sig, &[]));
+                .map(|sig| super::runtime_wrappers::emit_runtime_callable_invoker_inline_with_boundary(ctx, sig, &[], true));
             let descriptor_label =
                 callable_descriptor::static_descriptor_with_optional_invoker_meta(
                     ctx.data,
@@ -236,7 +236,7 @@ pub(super) fn emit_instance_method_first_class_callable(
     let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
     let entry_label =
         emit_instance_method_descriptor_entry_wrapper(ctx, &impl_class, &method_key, &sig)?;
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &sig, &captures);
+    let invoker_label = super::runtime_wrappers::emit_runtime_callable_invoker_inline_with_boundary(ctx, &sig, &captures, true);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,
