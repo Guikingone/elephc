@@ -23,7 +23,7 @@ use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::Module;
-use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
+use crate::names::{join_php_symbol, method_symbol, php_symbol_key, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
@@ -99,6 +99,37 @@ const BUILTIN_THROWABLE_SCALAR_GETTERS: &[(&str, &str, usize, bool)] = &[
     ("getfile", "__elephc_eval_builtin_throwable_getfile", crate::codegen_support::throwable_layout::FILE_OFFSET, true),
     ("getline", "__elephc_eval_builtin_throwable_getline", crate::codegen_support::throwable_layout::LINE_OFFSET, false),
 ];
+/// Builtin `Throwable` methods the bridge answers WITHOUT reading a payload field.
+///
+/// Both are synthetic on the compiled side too: elephc keeps no call stack, so
+/// `lower_inst::throwable_methods` answers an empty array and an empty string. The bridge has to
+/// answer the SAME rather than refuse the call, because a builtin Throwable has no emitted method
+/// body to dispatch to -- `nm` on a compiled Symfony shows `gettraceasstring` only for the one
+/// userland class that declares it. An eval-declared subclass reading either accessor therefore
+/// failed outright, and Symfony's `ErrorListener::logKernelException` reads both while flattening
+/// an exception. That listener runs at priority 0, ahead of the `RouterListener` at -64 that
+/// renders the 404 welcome page, so the failure hid the page the request was meant to produce.
+const BUILTIN_THROWABLE_SYNTHETIC_GETTERS: &[(&str, &str)] = &[
+    ("gettrace", "__elephc_eval_builtin_throwable_gettrace"),
+    (
+        "gettraceasstring",
+        "__elephc_eval_builtin_throwable_gettraceasstring",
+    ),
+];
+/// `Throwable::getPrevious()`, whose slot two producers write with DIFFERENT shapes.
+///
+/// It gets its own entry rather than a row in either table above because neither shape fits:
+/// the value is not a scalar field to re-box, and it is not synthetic either. The compiled
+/// `Exception::__construct` assigns `$this->previous`, a declared `?Throwable`, so the slot holds
+/// a BOXED Mixed cell; the eval/native bridge instead materializes a raw object pointer there.
+/// `lower_inst::throwable_methods::lower_throwable_get_previous` tells them apart by heap kind 5
+/// and this bridge body mirrors it exactly -- reading every slot as raw answers non-null for an
+/// exception that has no previous, which is what turns Symfony's
+/// `do { ... } while ($prev = $prev->getPrevious());` into a walk off the end.
+const BUILTIN_THROWABLE_GET_PREVIOUS: (&str, &str) = (
+    "getprevious",
+    "__elephc_eval_builtin_throwable_getprevious",
+);
 const METHOD_HELPER_BASE_FRAME_SIZE: usize = 80;
 const METHOD_HELPER_HANDLER_OFFSET: usize = METHOD_HELPER_BASE_FRAME_SIZE;
 const METHOD_HELPER_FRAME_SIZE: usize = METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
@@ -158,12 +189,51 @@ fn collect_eval_static_method_slots(module: &Module) -> Vec<EvalStaticMethodSlot
 }
 
 /// Collects compact builtin Throwable class ids that eval can inspect directly.
+///
+/// THE INHERITING SUBCLASSES BELONG HERE TOO, for the same reason they do in
+/// `eval_constructor_helpers::collect_builtin_throwable_constructor_class_ids`: a builtin
+/// Throwable's getters have no EIR body to build a slot from, so a class that INHERITS
+/// them matches neither this dispatch (its own id is not a builtin id) nor the slot table,
+/// and the bridge reports `unsupported MethodCall expression` where PHP returns the value.
+///
+/// SHADOWING IS NOT A RISK HERE, and that is what makes routing by class id sound: this
+/// dispatch runs BEFORE the slot dispatch, so it would hide a subclass override — but the
+/// only methods it answers are getMessage, getCode, getFile, getLine, getTrace,
+/// getTraceAsString and getPrevious, and php-src declares every one of them `final` on
+/// `Exception` and `Error`. No subclass can override them, so the builtin body is always the
+/// right one. Adding a non-final method to any of those tables would break this argument and
+/// must be reconsidered here -- `__toString()`, notably, is NOT final and does not belong.
+///
+/// Measured against `php -n` 8.5.10: with the constructor half fixed but this one not, the
+/// same `AotEx extends InvalidArgumentException` probe constructed correctly and then died
+/// on `$e->getMessage()` with `unsupported MethodCall expression`, where PHP printed the
+/// message. It is also the mechanism recorded as deferred for `getPrevious()`.
 fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
     let mut class_ids = BUILTIN_THROWABLE_METHOD_CLASSES
         .iter()
         .filter_map(|class_name| module.class_infos.get(*class_name))
         .map(|class_info| class_info.class_id)
         .collect::<Vec<_>>();
+    for class_info in module.class_infos.values() {
+        let inherits_builtin_getter = BUILTIN_THROWABLE_SCALAR_GETTERS
+            .iter()
+            .map(|(name, ..)| *name)
+            .chain(BUILTIN_THROWABLE_SYNTHETIC_GETTERS.iter().map(|(name, _)| *name))
+            .chain(std::iter::once(BUILTIN_THROWABLE_GET_PREVIOUS.0))
+            .any(|name| {
+                class_info
+                    .method_impl_classes
+                    .get(&php_symbol_key(name))
+                    .is_some_and(|impl_class| {
+                        BUILTIN_THROWABLE_METHOD_CLASSES
+                            .iter()
+                            .any(|builtin| *builtin == impl_class.trim_start_matches('\\'))
+                    })
+            });
+        if inherits_builtin_getter {
+            class_ids.push(class_info.class_id);
+        }
+    }
     class_ids.sort_unstable();
     class_ids.dedup();
     class_ids
@@ -641,7 +711,7 @@ fn emit_method_call_aarch64(
     );
     emit_aarch64_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported method matched the request
-    emit_aarch64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
+    emit_aarch64_builtin_throwable_method_bodies(module, emitter, data, done_label, fail_label);
     emit_aarch64_method_bodies(
         module,
         emitter,
@@ -699,7 +769,7 @@ fn emit_method_call_x86_64(
     );
     emit_x86_64_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported method matched the request
-    emit_x86_64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
+    emit_x86_64_builtin_throwable_method_bodies(module, emitter, data, done_label, fail_label);
     emit_x86_64_method_bodies(
         module,
         emitter,
@@ -956,6 +1026,17 @@ fn emit_aarch64_builtin_throwable_method_dispatch(
         for (method, label, _, _) in BUILTIN_THROWABLE_SCALAR_GETTERS {
             emit_aarch64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
         }
+        for (method, label) in BUILTIN_THROWABLE_SYNTHETIC_GETTERS {
+            emit_aarch64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
+        let (previous_method, previous_label) = BUILTIN_THROWABLE_GET_PREVIOUS;
+        emit_aarch64_builtin_throwable_method_name_branch(
+            module,
+            emitter,
+            data,
+            previous_method,
+            previous_label,
+        );
         emitter.label(&next_label);
     }
 }
@@ -977,6 +1058,17 @@ fn emit_x86_64_builtin_throwable_method_dispatch(
         for (method, label, _, _) in BUILTIN_THROWABLE_SCALAR_GETTERS {
             emit_x86_64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
         }
+        for (method, label) in BUILTIN_THROWABLE_SYNTHETIC_GETTERS {
+            emit_x86_64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
+        let (previous_method, previous_label) = BUILTIN_THROWABLE_GET_PREVIOUS;
+        emit_x86_64_builtin_throwable_method_name_branch(
+            module,
+            emitter,
+            data,
+            previous_method,
+            previous_label,
+        );
         emitter.label(&next_label);
     }
 }
@@ -1224,6 +1316,7 @@ fn x86_64_method_scope_offsets(is_static: bool) -> (usize, usize) {
 fn emit_aarch64_builtin_throwable_method_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     done_label: &str,
     fail_label: &str,
 ) {
@@ -1241,12 +1334,88 @@ fn emit_aarch64_builtin_throwable_method_bodies(
         abi::emit_call_label(emitter, "__rt_mixed_from_value");
         abi::emit_jump(emitter, done_label);
     }
+    for (method, label) in BUILTIN_THROWABLE_SYNTHETIC_GETTERS {
+        emitter.label(label);
+        emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+        if *method == "gettrace" {
+            // The same empty indexed array `lower_throwable_empty_trace_array` builds: runtime
+            // tag 4, capacity 8, value type Mixed.
+            abi::emit_load_int_immediate(emitter, "x0", 4);
+            abi::emit_load_int_immediate(emitter, "x1", 8);
+            abi::emit_call_label(emitter, "__rt_array_new");
+            crate::codegen::emit_array_value_type_stamp(
+                emitter,
+                abi::int_result_reg(emitter),
+                &PhpType::Mixed,
+            );
+            emitter.instruction("mov x1, x0");                                  // move the fresh array into the Mixed payload word
+            abi::emit_load_int_immediate(emitter, "x0", 4);
+            abi::emit_load_int_immediate(emitter, "x2", 0);
+        } else {
+            let (string_label, string_len) = data.add_string(b"");
+            abi::emit_symbol_address(emitter, "x1", &string_label);
+            abi::emit_load_int_immediate(emitter, "x2", string_len as i64);
+            abi::emit_load_int_immediate(emitter, "x0", 1);
+        }
+        abi::emit_call_label(emitter, "__rt_mixed_from_value");
+        abi::emit_jump(emitter, done_label);
+    }
+    emit_aarch64_builtin_throwable_get_previous_body(module, emitter, done_label, fail_label);
+}
+
+/// Emits the ARM64 `Throwable::getPrevious()` bridge body.
+///
+/// Mirrors `lower_inst::throwable_methods::lower_throwable_get_previous`: an empty slot answers
+/// null, heap kind 5 means the compiled constructor already boxed the previous and the cell is
+/// handed back retained, and anything else is the raw object pointer the eval bridge stores.
+fn emit_aarch64_builtin_throwable_get_previous_body(
+    module: &Module,
+    emitter: &mut Emitter,
+    done_label: &str,
+    fail_label: &str,
+) {
+    let (_, label) = BUILTIN_THROWABLE_GET_PREVIOUS;
+    let boxed_label = format!("{}_boxed", label);
+    let null_label = format!("{}_null", label);
+    emitter.label(label);
+    emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the Throwable receiver before reading its previous slot
+    abi::emit_load_from_address(
+        emitter,
+        "x0",
+        "x9",
+        crate::codegen_support::throwable_layout::PREVIOUS_OFFSET,
+    );
+    emitter.instruction(&format!("cbz x0, {}", null_label));                    // an empty slot is a missing previous
+    emitter.instruction("str x0, [sp, #-16]!");                                 // preserve the slot across the kind probe
+    abi::emit_call_label(emitter, "__rt_heap_kind");
+    emitter.instruction("mov x11, x0");                                         // heap kind of the stored value
+    emitter.instruction("ldr x0, [sp], #16");                                   // restore the stored value
+    emitter.instruction("cmp x11, #5");                                         // kind 5 = boxed Mixed cell
+    emitter.instruction(&format!("b.eq {}", boxed_label));
+    emitter.instruction("mov x1, x0");                                          // raw object pointer becomes the Mixed payload word
+    abi::emit_load_int_immediate(emitter, "x2", 0);
+    abi::emit_load_int_immediate(emitter, "x0", 6);                             // runtime tag 6 = object; the helper retains the payload
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");
+    abi::emit_jump(emitter, done_label);
+
+    emitter.label(&boxed_label);
+    abi::emit_call_label(emitter, "__rt_incref");                               // boxed cell: retain and hand the same cell back
+    abi::emit_jump(emitter, done_label);
+
+    emitter.label(&null_label);
+    abi::emit_load_int_immediate(emitter, "x1", 0);
+    abi::emit_load_int_immediate(emitter, "x2", 0);
+    abi::emit_load_int_immediate(emitter, "x0", 8);                             // runtime tag 8 = null
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");
+    abi::emit_jump(emitter, done_label);
 }
 
 /// Emits x86_64 bodies for compact Throwable methods used by eval.
 fn emit_x86_64_builtin_throwable_method_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     done_label: &str,
     fail_label: &str,
 ) {
@@ -1264,6 +1433,79 @@ fn emit_x86_64_builtin_throwable_method_bodies(
         abi::emit_call_label(emitter, "__rt_mixed_from_value");
         abi::emit_jump(emitter, done_label);
     }
+    for (method, label) in BUILTIN_THROWABLE_SYNTHETIC_GETTERS {
+        emitter.label(label);
+        emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+        if *method == "gettrace" {
+            // See the ARM64 body: the same empty indexed array the compiled intrinsic builds.
+            abi::emit_load_int_immediate(emitter, "rdi", 4);
+            abi::emit_load_int_immediate(emitter, "rsi", 8);
+            abi::emit_call_label(emitter, "__rt_array_new");
+            crate::codegen::emit_array_value_type_stamp(
+                emitter,
+                abi::int_result_reg(emitter),
+                &PhpType::Mixed,
+            );
+            emitter.instruction("mov rdi, rax");                                // move the fresh array into the Mixed payload word
+            abi::emit_load_int_immediate(emitter, "rsi", 0);
+            abi::emit_load_int_immediate(emitter, "rax", 4);
+        } else {
+            let (string_label, string_len) = data.add_string(b"");
+            abi::emit_symbol_address(emitter, "rdi", &string_label);
+            abi::emit_load_int_immediate(emitter, "rsi", string_len as i64);
+            abi::emit_load_int_immediate(emitter, "rax", 1);
+        }
+        abi::emit_call_label(emitter, "__rt_mixed_from_value");
+        abi::emit_jump(emitter, done_label);
+    }
+    emit_x86_64_builtin_throwable_get_previous_body(module, emitter, done_label, fail_label);
+}
+
+/// Emits the x86_64 `Throwable::getPrevious()` bridge body. See the ARM64 body for the shapes.
+fn emit_x86_64_builtin_throwable_get_previous_body(
+    module: &Module,
+    emitter: &mut Emitter,
+    done_label: &str,
+    fail_label: &str,
+) {
+    let (_, label) = BUILTIN_THROWABLE_GET_PREVIOUS;
+    let boxed_label = format!("{}_boxed_x", label);
+    let null_label = format!("{}_null_x", label);
+    emitter.label(label);
+    emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the Throwable receiver before reading its previous slot
+    abi::emit_load_from_address(
+        emitter,
+        "rax",
+        "r10",
+        crate::codegen_support::throwable_layout::PREVIOUS_OFFSET,
+    );
+    emitter.instruction("test rax, rax");                                       // an empty slot is a missing previous
+    emitter.instruction(&format!("jz {}", null_label));
+    emitter.instruction("push rax");                                            // preserve the slot across the kind probe
+    emitter.instruction("sub rsp, 8");                                          // keep the stack 16-byte aligned for the call
+    abi::emit_call_label(emitter, "__rt_heap_kind");
+    emitter.instruction("mov r11, rax");                                        // heap kind of the stored value
+    emitter.instruction("add rsp, 8");                                          // undo the alignment padding
+    emitter.instruction("pop rax");                                             // restore the stored value
+    emitter.instruction("cmp r11, 5");                                          // kind 5 = boxed Mixed cell
+    emitter.instruction(&format!("je {}", boxed_label));
+    emitter.instruction("mov rdi, rax");                                        // raw object pointer becomes the Mixed payload word
+    abi::emit_load_int_immediate(emitter, "rsi", 0);
+    abi::emit_load_int_immediate(emitter, "rax", 6);                            // runtime tag 6 = object; the helper retains the payload
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");
+    abi::emit_jump(emitter, done_label);
+
+    emitter.label(&boxed_label);
+    abi::emit_call_label(emitter, "__rt_incref");                               // boxed cell: retain and hand the same cell back
+    abi::emit_jump(emitter, done_label);
+
+    emitter.label(&null_label);
+    abi::emit_load_int_immediate(emitter, "rdi", 0);
+    abi::emit_load_int_immediate(emitter, "rsi", 0);
+    abi::emit_load_int_immediate(emitter, "rax", 8);                            // runtime tag 8 = null
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");
+    abi::emit_jump(emitter, done_label);
 }
 
 /// Emits ARM64 zero-argument validation for compact Throwable eval methods.

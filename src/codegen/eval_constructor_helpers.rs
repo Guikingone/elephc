@@ -129,12 +129,44 @@ fn collect_eval_constructor_slots(module: &Module) -> Vec<EvalConstructorSlot> {
 }
 
 /// Collects compact builtin Throwable class ids that eval can initialize directly.
+///
+/// THE INHERITING SUBCLASSES BELONG HERE TOO, and leaving them out is a fatal, not a
+/// missing optimization. A builtin Throwable's `__construct` has no EIR body — AOT
+/// `new Exception(...)` lowers to a runtime helper, never to an `Exception::__construct`
+/// function — so `collect_class_constructor_slot` can never build a slot for a class that
+/// INHERITS that constructor. Such a class then matches neither dispatch: not this one
+/// (its own id is not a builtin id) and not the slot table (it has no slot). The
+/// interpreter has meanwhile resolved the declaring class, so the trailing
+/// "resolved target matched no slot" branch reports failure and the bridge raises
+/// `EvalStatus::RuntimeFatal` where PHP constructs the object.
+///
+/// Measured against `php -n` 8.5.10: an AOT class `AotEx extends InvalidArgumentException`
+/// declaring no constructor, instantiated from a runtime-included file, printed
+/// `Fatal error: eval() runtime failed: unsupported NewObject expression` and exited 1,
+/// where PHP printed `caught:AotEx:boom`. This is Symfony's `EnvNotFoundException`, which
+/// blocked the `--web` request at `EnvVarProcessor.php:224`.
+///
+/// Running the builtin initializer for them is correct, not a fallback: PHP resolves
+/// `new AotEx($m)` to `Exception::__construct`, and the object carries the inherited
+/// throwable fields at the same offsets because it descends from the builtin.
 fn collect_builtin_throwable_constructor_class_ids(module: &Module) -> Vec<u64> {
     let mut class_ids = BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES
         .iter()
         .filter_map(|class_name| module.class_infos.get(*class_name))
         .map(|class_info| class_info.class_id)
         .collect::<Vec<_>>();
+    let constructor_key = php_symbol_key("__construct");
+    for class_info in module.class_infos.values() {
+        let Some(impl_class) = class_info.method_impl_classes.get(&constructor_key) else {
+            continue;
+        };
+        if BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES
+            .iter()
+            .any(|builtin| *builtin == impl_class.trim_start_matches('\\'))
+        {
+            class_ids.push(class_info.class_id);
+        }
+    }
     class_ids.sort_unstable();
     class_ids.dedup();
     class_ids
