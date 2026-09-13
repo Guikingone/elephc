@@ -1364,3 +1364,38 @@ var_dump((array) $r);
         )
     );
 }
+
+/// Verifies an EVAL-DECLARED class unserializes into a real instance whose properties survive
+/// being read from a DIFFERENT eval context than the one that hydrated it.
+///
+/// The generated decoder can only build classes with a compiled layout, so a class the
+/// interpreter declared is hydrated by the eval bridge instead -- in the process-wide
+/// null-handle context, because the decoder has no context of its own. The read that follows
+/// routinely happens somewhere else: on a Symfony request the compiled DI container is
+/// interpreted, so every class it names is eval-declared and every method call on one runs in
+/// that file's own context. Without a cross-context answer the object arrived with its class
+/// intact and every slot empty, reported as "must not be accessed before initialization".
+#[test]
+fn test_unserialize_eval_declared_object_reads_back_in_another_context() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalHydrated {
+    private array $parameters;
+    private string $note = "none";
+    public function getParameters(): array { return $this->parameters; }
+    public function getNote(): string { return $this->note; }
+}');
+
+$payload = 'O:12:"EvalHydrated":2:{s:24:"' . "\0" . 'EvalHydrated' . "\0"
+    . 'parameters";a:2:{s:1:"a";i:1;s:1:"b";i:2;}s:18:"' . "\0" . 'EvalHydrated' . "\0"
+    . 'note";s:4:"kept";}';
+
+$GLOBALS['hydrated'] = unserialize($payload);
+echo get_class($GLOBALS['hydrated']), '|';
+eval('$parameters = $GLOBALS["hydrated"]->getParameters();
+echo count($parameters), ":", $parameters["a"], ":", $parameters["b"], "|",
+    $GLOBALS["hydrated"]->getNote();');
+"#,
+    );
+    assert_eq!(out, "EvalHydrated|2:1:2|kept");
+}

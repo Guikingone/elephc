@@ -13,21 +13,55 @@ use crate::codegen_support::sentinels::PROP_DESC_TAG_TAGGED_SCALAR;
 /// Emits AArch64 object-property storage and parsed-hash conversion helpers.
 pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // -- __rt_obj_store_prop(x0=obj, x1=key_ptr, x2=key_len, x3=valbox): inject a property --
-    // Matches the (mangled) key against the class's serialize property-info table and
-    // stores the parsed value into the matching object slot per the property's tag.
+    // Matches the key against the class's serialize property-info table and stores the parsed
+    // value into the matching object slot per the property's tag.
+    //
+    // TWO PASSES, because a serialized key is not always mangled. `serialize()` writes a
+    // private property as "\0Class\0name" and a protected one as "\0*\0name", but a class with
+    // a `__serialize()` chooses its own keys, and the natural spelling there is the DECLARED
+    // name: Symfony's `FileResource::__serialize()` returns `['resource' => …]` for a
+    // `private string $resource`. PHP resolves such a key against the class's declared
+    // properties, so it lands in the private slot; matching only the mangled row left the
+    // typed property uninitialized and every later read raised "must not be accessed before
+    // initialization". Exact keys are matched FIRST across all rows so an explicit mangled key
+    // still wins over an unmangled alias when a class has both spellings.
     emitter.label_global("__rt_obj_store_prop");
     emitter.instruction("ldr x9, [x0]");                                        // class id from the object header
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_serprop_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // property-info table for this class
     emitter.instruction("ldr x11, [x10]");                                      // property count
     emitter.instruction("add x12, x10, #8");                                    // rows start (skip the count word)
+    emitter.instruction("mov x15, #0");                                         // pass 0 = key as stored, pass 1 = unmangled tail
+    emitter.label("__rt_obj_store_prop_pass");
     emitter.instruction("mov x13, #0");                                         // row index
     emitter.label("__rt_obj_store_prop_loop");
     emitter.instruction("cmp x13, x11");                                        // scanned every row?
-    emitter.instruction("b.ge __rt_obj_store_prop_done");                       // unknown key is ignored
+    emitter.instruction("b.ge __rt_obj_store_prop_pass_end");                   // this pass found nothing
     emitter.instruction("add x14, x12, x13, lsl #5");                           // row = rows + index*32
     emitter.instruction("ldr x4, [x14]");                                       // row mangled key pointer
     emitter.instruction("ldr x5, [x14, #8]");                                   // row mangled key length
+    emitter.instruction("cbz x15, __rt_obj_store_prop_have_key");               // pass 0 compares the row key verbatim
+    // Narrow the row key to whatever follows its LAST NUL, which is the declared property
+    // name. A row with no NUL is a public property whose key is already the declared name and
+    // was compared verbatim in pass 0, so it is skipped rather than compared twice.
+    emitter.instruction("mov x6, #0");                                          // scan cursor
+    emitter.instruction("mov x7, #-1");                                         // index of the last NUL seen
+    emitter.label("__rt_obj_store_prop_tail_scan");
+    emitter.instruction("cmp x6, x5");                                          // scanned the whole row key?
+    emitter.instruction("b.ge __rt_obj_store_prop_tail_done");                  // stop at the end of the key
+    emitter.instruction("ldrb w8, [x4, x6]");                                   // row key byte
+    emitter.instruction("cbnz w8, __rt_obj_store_prop_tail_next");              // only NUL separators matter
+    emitter.instruction("mov x7, x6");                                          // remember this separator
+    emitter.label("__rt_obj_store_prop_tail_next");
+    emitter.instruction("add x6, x6, #1");                                      // next byte
+    emitter.instruction("b __rt_obj_store_prop_tail_scan");                     // continue scanning
+    emitter.label("__rt_obj_store_prop_tail_done");
+    emitter.instruction("cmn x7, #1");                                          // was any separator found?
+    emitter.instruction("b.eq __rt_obj_store_prop_next");                       // an unmangled row has no alias to try
+    emitter.instruction("add x7, x7, #1");                                      // the name starts after the separator
+    emitter.instruction("add x4, x4, x7");                                      // declared-name pointer
+    emitter.instruction("sub x5, x5, x7");                                      // declared-name length
+    emitter.label("__rt_obj_store_prop_have_key");
     emitter.instruction("cmp x5, x2");                                          // same length as the parsed key?
     emitter.instruction("b.ne __rt_obj_store_prop_next");                       // lengths differ, skip
     emitter.instruction("mov x6, #0");                                          // byte compare cursor
@@ -96,6 +130,10 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.label("__rt_obj_store_prop_next");
     emitter.instruction("add x13, x13, #1");                                    // advance to the next row
     emitter.instruction("b __rt_obj_store_prop_loop");                          // continue scanning
+    emitter.label("__rt_obj_store_prop_pass_end");
+    emitter.instruction("cbnz x15, __rt_obj_store_prop_done");                  // both passes are spent
+    emitter.instruction("mov x15, #1");                                         // retry against declared names
+    emitter.instruction("b __rt_obj_store_prop_pass");                          // rescan the rows unmangled
     emitter.label("__rt_obj_store_prop_done");
     emitter.instruction("ret");                                                 // no matching property, ignore the value
 

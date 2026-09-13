@@ -261,7 +261,11 @@ pub(in crate::interpreter) fn eval_debug_object_class_name(
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     if let Some(identity) = identity {
-        if let Some(class) = context.dynamic_object_class(identity) {
+        // The DECLARING context, not this one: an object that crossed contexts has no class of
+        // its name in the asker's own table, and naming it from the runtime header instead
+        // answered `stdClass` -- which is how an interpreted `serialize()` of a DI-container
+        // resource wrote `O:8:"stdClass":0:{}` into Symfony's routing cache metadata.
+        if let Some((_, class)) = context.dynamic_object_declaring_class(identity) {
             return Ok(class.name().trim_start_matches('\\').to_string());
         }
     }
@@ -281,11 +285,27 @@ pub(in crate::interpreter) fn eval_debug_object_properties(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
     if let Some(identity) = identity {
-        if context.dynamic_object_class(identity).is_some() {
+        if context.dynamic_object_declaring_class(identity).is_some() {
             return eval_debug_dynamic_object_properties(object, identity, class_name, context, values);
         }
     }
     eval_debug_public_object_properties(object, values)
+}
+
+/// Returns the class ancestry one dynamic object's declared properties must be read from.
+///
+/// The chain has to come from the context that DECLARED the object. A context that has not
+/// declared a class of that name finds no chain at all, and every declared property disappears
+/// with it -- the object then renders, and SERIALIZES, as if it had none.
+fn eval_debug_object_class_chain(
+    identity: u64,
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<EvalClass> {
+    match context.dynamic_object_declaring_class(identity) {
+        Some((declaring, _)) => declaring.class_chain(class_name),
+        None => context.class_chain(class_name),
+    }
 }
 
 /// Collects eval-declared object properties plus public dynamic properties.
@@ -300,7 +320,7 @@ fn eval_debug_dynamic_object_properties(
     let mut storage_keys = HashSet::new();
     let mut emitted_public_names = HashSet::new();
 
-    for class in context.class_chain(class_name) {
+    for class in eval_debug_object_class_chain(identity, class_name, context) {
         for property in class.properties() {
             if property.is_static() {
                 continue;

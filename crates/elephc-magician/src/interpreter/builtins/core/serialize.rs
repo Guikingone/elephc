@@ -69,6 +69,22 @@ pub(in crate::interpreter) fn eval_serialize_declared_values_result(
     eval_serialize_result(*value, context, values)
 }
 
+/// Serializes ONE eval-owned object into its `O:len:"Class":n:{…}` fragment.
+///
+/// The generated serializer reads an object's class from its header, which for every object the
+/// interpreter builds says `stdClass`, and its properties from the runtime hash, which is empty
+/// because the overlay lives in the eval context. It wrote `O:8:"stdClass":0:{}` for a resource
+/// Symfony's `ConfigCache::write()` handed it, and the next request read that back as a bare
+/// stdClass. This renders the fragment the object really has.
+#[cfg(not(test))]
+pub(crate) fn eval_serialize_object_fragment(
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_serialize_result(object, context, values)
+}
+
 /// Serializes one eval value into php's storable-representation byte string.
 fn eval_serialize_result(
     value: RuntimeCellHandle,

@@ -13,10 +13,20 @@ use crate::codegen_support::sentinels::PROP_DESC_TAG_TAGGED_SCALAR;
 /// Emits x86_64 object-property storage and parsed-hash conversion helpers.
 pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // -- __rt_obj_store_prop(rdi=obj, rsi=key_ptr, rdx=key_len, rcx=valbox): inject a property --
+    //
+    // TWO PASSES, because a serialized key is not always mangled. `serialize()` writes a
+    // private property as "\0Class\0name" and a protected one as "\0*\0name", but a class with
+    // a `__serialize()` chooses its own keys, and the natural spelling there is the DECLARED
+    // name: Symfony's `FileResource::__serialize()` returns `['resource' => …]` for a
+    // `private string $resource`. PHP resolves such a key against the class's declared
+    // properties, so it lands in the private slot; matching only the mangled row left the
+    // typed property uninitialized and every later read raised "must not be accessed before
+    // initialization". Exact keys are matched FIRST across all rows so an explicit mangled key
+    // still wins over an unmangled alias when a class has both spellings.
     emitter.label_global("__rt_obj_store_prop");
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the store frame
-    emitter.instruction("sub rsp, 64");                                         // reserve frame slots
+    emitter.instruction("sub rsp, 80");                                         // reserve frame slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the key pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key length
@@ -29,11 +39,13 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the property-info table
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // property count
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the property count
+    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // pass 0 = key as stored, pass 1 = unmangled tail
+    emitter.label("__rt_obj_store_prop_pass");
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // row index = 0
     emitter.label("__rt_obj_store_prop_loop");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the row index
     emitter.instruction("cmp rax, QWORD PTR [rbp - 48]");                       // scanned every row?
-    emitter.instruction("jge __rt_obj_store_prop_done");                        // unknown key is ignored
+    emitter.instruction("jge __rt_obj_store_prop_pass_end");                    // this pass found nothing
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // property-info table
     emitter.instruction("shl rax, 5");                                          // index * 32 (row stride)
     emitter.instruction("add rax, r10");                                        // table + index*32
@@ -41,6 +53,30 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the row pointer
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // row mangled key pointer
     emitter.instruction("mov rdx, QWORD PTR [rax + 8]");                        // row mangled key length
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // which pass is this?
+    emitter.instruction("je __rt_obj_store_prop_have_key");                     // pass 0 compares the row key verbatim
+    // Narrow the row key to whatever follows its LAST NUL, which is the declared property
+    // name. A row with no NUL is a public property whose key is already the declared name and
+    // was compared verbatim in pass 0, so it is skipped rather than compared twice.
+    emitter.instruction("xor r8, r8");                                          // scan cursor
+    emitter.instruction("mov r11, -1");                                         // index of the last NUL seen
+    emitter.label("__rt_obj_store_prop_tail_scan");
+    emitter.instruction("cmp r8, rdx");                                         // scanned the whole row key?
+    emitter.instruction("jge __rt_obj_store_prop_tail_done");                   // stop at the end of the key
+    emitter.instruction("mov al, BYTE PTR [r9 + r8]");                          // row key byte
+    emitter.instruction("test al, al");                                         // only NUL separators matter
+    emitter.instruction("jne __rt_obj_store_prop_tail_next");                   // keep scanning past ordinary bytes
+    emitter.instruction("mov r11, r8");                                         // remember this separator
+    emitter.label("__rt_obj_store_prop_tail_next");
+    emitter.instruction("add r8, 1");                                           // next byte
+    emitter.instruction("jmp __rt_obj_store_prop_tail_scan");                   // continue scanning
+    emitter.label("__rt_obj_store_prop_tail_done");
+    emitter.instruction("cmp r11, -1");                                         // was any separator found?
+    emitter.instruction("je __rt_obj_store_prop_next");                         // an unmangled row has no alias to try
+    emitter.instruction("add r11, 1");                                          // the name starts after the separator
+    emitter.instruction("add r9, r11");                                         // declared-name pointer
+    emitter.instruction("sub rdx, r11");                                        // declared-name length
+    emitter.label("__rt_obj_store_prop_have_key");
     emitter.instruction("cmp rdx, QWORD PTR [rbp - 24]");                       // same length as the parsed key?
     emitter.instruction("jne __rt_obj_store_prop_next");                        // lengths differ, skip
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // parsed key pointer
@@ -116,9 +152,14 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("add rax, 1");                                          // advance to the next row
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // persist the row index
     emitter.instruction("jmp __rt_obj_store_prop_loop");                        // continue scanning
+    emitter.label("__rt_obj_store_prop_pass_end");
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // was that the verbatim pass?
+    emitter.instruction("jne __rt_obj_store_prop_done");                        // both passes are spent
+    emitter.instruction("mov QWORD PTR [rbp - 72], 1");                         // retry against declared names
+    emitter.instruction("jmp __rt_obj_store_prop_pass");                        // rescan the rows unmangled
     emitter.label("__rt_obj_store_prop_done");
     emitter.label("__rt_obj_store_prop_ret");
-    emitter.instruction("add rsp, 64");                                         // deallocate the store frame
+    emitter.instruction("add rsp, 80");                                         // deallocate the store frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
 

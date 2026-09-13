@@ -394,6 +394,22 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x2, x11");                                         // class-name length (new_by_name arg)
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the class by name (0 on unknown class)
     emitter.instruction("cbnz x0, __rt_unser_obj_allocated");                   // known classes use their declared layout
+    // PHP does not degrade an unknown class on sight: `unserialize_callback_func` gets a turn
+    // first, and its whole purpose is to let the AUTOLOADER declare the class. Symfony points
+    // that ini at its own autoloader, which is what makes its `.meta` files deserialize into
+    // real resources instead of class-less stand-ins. Ask the bridge once, then retry.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_class_autoload_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // x9 = optional eval class-autoload callback
+    emitter.instruction("cbz x9, __rt_unser_obj_unknown");                      // no interpreter linked → no autoloader to ask
+    emitter.instruction("ldr x0, [sp, #40]");                                   // class-name pointer
+    emitter.instruction("ldr x1, [sp, #72]");                                   // class-name length
+    emitter.instruction("blr x9");                                              // run the registered autoloaders for this name
+    emitter.instruction("cbz x0, __rt_unser_obj_unknown");                      // still undeclared → the incomplete fallback
+    emitter.instruction("ldr x1, [sp, #40]");                                   // class-name pointer (new_by_name arg)
+    emitter.instruction("ldr x2, [sp, #72]");                                   // class-name length (new_by_name arg)
+    emitter.instruction("bl __rt_new_by_name");                                 // retry now that the class is declared
+    emitter.instruction("cbnz x0, __rt_unser_obj_allocated");                   // the autoloader supplied a declared layout
+    emitter.label("__rt_unser_obj_unknown");
     emitter.instruction("str xzr, [sp, #80]");                                  // unknown classes suppress hooks and use opaque properties
     emitter.instruction("b __rt_unser_obj_incomplete");                         // match PHP's __PHP_Incomplete_Class fallback
     emitter.label("__rt_unser_obj_incomplete");
@@ -555,9 +571,52 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #40]");                                   // persist the property index
     emitter.instruction("b __rt_unser_at_obj_loop");                            // continue with the next property
     emitter.label("__rt_unser_at_obj_close");
+    // -- eval-declared classes: hand the parsed payload to the interpreter --
+    // `__rt_new_by_name` resolves against the AOT class table, so a class the AUTOLOADER
+    // declared at run time has no layout here and the stand-in above is all this decoder can
+    // build. That is not an edge case on a Symfony request: the compiled DI container lives in
+    // `var/cache` behind a computed `require`, so it is interpreted, and every class it names is
+    // eval-declared. The whole property list is already parsed into the stand-in's hash by now,
+    // which is exactly what the interpreter needs to build the real object.
+    emitter.instruction("ldr x9, [sp, #80]");                                   // did this object get a declared layout?
+    emitter.instruction("cbnz x9, __rt_unser_obj_wakeup");                      // a hydrated object keeps the ordinary path
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_unserialize_object_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // x9 = optional eval hydration callback
+    emitter.instruction("cbz x9, __rt_unser_at_obj_box");                       // no interpreter linked → keep the stand-in
+    emitter.instruction("ldr x10, [sp, #24]");                                  // stand-in object payload
+    emitter.instruction("ldr x11, [x10]");                                      // its class id
+    emitter.instruction("cmn x11, #2");                                         // is it the __PHP_Incomplete_Class sentinel (-2)?
+    emitter.instruction("b.ne __rt_unser_at_obj_box");                          // anything else is not ours to replace
+    // The policy is re-asked rather than remembered: `[sp, #80]` is cleared both for a BLOCKED
+    // class and for one with no layout, and a blocked class must stay incomplete.
+    emitter.instruction("ldr x0, [x10, #8]");                                   // persisted original class-name pointer
+    emitter.instruction("ldr x1, [x10, #16]");                                  // persisted original class-name length
+    emitter.instruction("bl __rt_unserialize_class_allowed");                   // allowed_classes still permits this name?
+    emitter.instruction("cbz x0, __rt_unser_at_obj_box");                       // blocked classes keep the stand-in
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the stand-in after the call
+    emitter.instruction("ldr x0, [x10, #8]");                                   // class-name pointer
+    emitter.instruction("ldr x1, [x10, #16]");                                  // class-name length
+    emitter.instruction("ldr x2, [x10, #24]");                                  // parsed opaque property hash (borrowed)
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_unserialize_object_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // reload the callback after the policy call
+    emitter.instruction("blr x9");                                              // x0 = boxed Mixed object, or 0 when undeclared
+    emitter.instruction("cbz x0, __rt_unser_at_obj_box");                       // interpreter declined → keep the stand-in
+    // The donor box owns the new object. Move the object into the result box this decoder
+    // already published, then neutralise the donor so releasing it frees only its own shell.
+    emitter.instruction("ldr x11, [x0, #8]");                                   // hydrated object payload
+    emitter.instruction("mov x12, #8");                                         // runtime tag 8 = null
+    emitter.instruction("str x12, [x0]");                                       // retag the donor as null
+    emitter.instruction("str xzr, [x0, #8]");                                   // drop the donor's claim on the object
+    emitter.instruction("ldr x13, [sp, #96]");                                  // this object's stable result box
+    emitter.instruction("ldr x14, [x13, #8]");                                  // the stand-in it currently holds
+    emitter.instruction("str x11, [x13, #8]");                                  // publish the hydrated object instead
+    emitter.instruction("str x11, [sp, #24]");                                  // and make it the current object payload
+    emitter.instruction("str x14, [sp, #-16]!");                                // park the stand-in across the donor release
+    emitter.instruction("bl __rt_decref_mixed");                                // free the donor shell only
+    emitter.instruction("ldr x0, [sp], #16");                                   // reclaim the stand-in pointer
+    emitter.instruction("bl __rt_object_free_deep");                            // free its name and its now-copied property hash
+    emitter.instruction("b __rt_unser_at_obj_box");                             // the interpreter already ran the class hooks
     // -- __wakeup magic: after default property injection, call __wakeup($this) --
-    emitter.instruction("ldr x9, [sp, #80]");                                   // blocked classes cannot run __wakeup
-    emitter.instruction("cbz x9, __rt_unser_at_obj_box");                       // incomplete objects never run class hooks
     emitter.label("__rt_unser_obj_wakeup");
     emitter.instruction("ldr x9, [sp, #24]");                                   // object pointer
     emitter.instruction("ldr x9, [x9]");                                        // class id from the object header

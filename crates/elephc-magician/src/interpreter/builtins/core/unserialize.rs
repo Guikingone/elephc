@@ -483,6 +483,56 @@ fn eval_unserialize_parse_object(
         .map_err(|_| EvalUnserializeFailure::Generic)
 }
 
+/// Hydrates one EVAL-DECLARED class from a property hash the COMPILED decoder already parsed.
+///
+/// The native `unserialize` decoder builds objects from the AOT class table, and an
+/// eval-declared class has no entry there: `__rt_new_by_name` answers 0 and the decoder falls
+/// through to its `__PHP_Incomplete_Class` stand-in (class id -2). Symfony reaches that on every
+/// request, because its compiled DI container lives in `var/cache` behind a computed `require`
+/// and is therefore interpreted — so every class the container names is eval-declared.
+///
+/// OWNERSHIP: `payload` values arrive OWNED (`array_get` hands back a fresh cell) and
+/// `eval_unserialize_hydrate_object` moves them into the object, which is the same contract the
+/// interpreter's own parser uses. The decoder's hash keeps its own references and is freed with
+/// the stand-in object it belongs to, so nothing is shared between the two.
+///
+/// The allow-list has already been applied by the decoder before it got this far, so this asks
+/// only whether the class is one the INTERPRETER declared.
+#[cfg(not(test))]
+pub(crate) fn eval_unserialize_declared_object_from_hash(
+    class_name: &str,
+    payload_hash: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if context.class(class_name).is_none() {
+        return Ok(None);
+    }
+    let mut payload = Vec::new();
+    if !payload_hash.is_null() {
+        let len = values.array_len(payload_hash)?;
+        for position in 0..len {
+            let key = values.array_iter_key(payload_hash, position)?;
+            let name = values.string_bytes(key)?;
+            let value = values.array_get(payload_hash, key);
+            values.release(key)?;
+            let value = value?;
+            match String::from_utf8(name) {
+                Ok(name) => payload.push((name, value)),
+                Err(_) => values.release(value)?,
+            }
+        }
+    }
+    eval_unserialize_hydrate_object(
+        class_name,
+        payload,
+        &EvalUnserializeAllowedClasses::All,
+        context,
+        values,
+    )
+    .map(Some)
+}
+
 /// Builds the actual object once a class name and its property payload have been parsed --
 /// separated from the byte-cursor parser above so its error type is the ordinary `EvalStatus`
 /// every other object-construction helper in this crate already uses.
@@ -493,7 +543,22 @@ fn eval_unserialize_hydrate_object(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let class_is_known = context.class(class_name).is_some() || values.class_exists(class_name)?;
+    // PHP resolves an unknown class here through `unserialize_callback_func`, whose whole point
+    // is to give the autoloader a chance before the value degrades to
+    // `__PHP_Incomplete_Class` — Symfony points it at its own autoloader, so its `.meta` files
+    // deserialize into real `FileResource`/`GlobResource` objects. Without that chance the
+    // stand-in object's class cannot be resolved at all, and the first typed parameter it
+    // reaches refuses to bind: traced as `arg_tags=["6:<id>:<unresolved>"]` against a
+    // `ResourceInterface` parameter. Only classes the allow-list already permits are offered to
+    // the autoloader, so `unserialize($s, ['allowed_classes' => false])` still loads nothing.
+    let mut class_is_known =
+        context.class(class_name).is_some() || values.class_exists(class_name)?;
+    if !class_is_known && allowed_classes.allows(class_name) {
+        class_is_known = crate::interpreter::eval_spl_autoload_class_bridge(
+            class_name, context, values,
+        )
+        .unwrap_or(false);
+    }
     if !class_is_known || !allowed_classes.allows(class_name) {
         return eval_unserialize_incomplete_class(class_name, payload, values);
     }
@@ -506,7 +571,10 @@ fn eval_unserialize_hydrate_object(
         // (which would also carry every default `eval_dynamic_class_allocate_object` just
         // seeded for a property the payload never mentioned).
         for &(ref name, value) in &payload {
-            if let Some((declaring_class, property)) = context.class_property(class.name(), name) {
+            let declared_name = eval_unserialize_declared_property_name(name);
+            if let Some((declaring_class, property)) =
+                context.class_property(class.name(), declared_name)
+            {
                 let storage_name = eval_instance_property_storage_name(&declaring_class, &property);
                 if property.visibility() == EvalVisibility::Public {
                     let _ = values.property_set(object, &storage_name, value);
@@ -552,6 +620,22 @@ fn eval_unserialize_hydrate_object(
         let _ = values.property_set(object, &name, value);
     }
     Ok(object)
+}
+
+/// Returns the DECLARED property name a serialized payload key stands for.
+///
+/// `serialize()` mangles a private property as `"\0ClassName\0name"` and a protected one as
+/// `"\0*\0name"`, and PHP resolves both back onto the declared property. A class with a
+/// `__serialize()` picks its own keys instead, which are normally the declared names already —
+/// so the rule is simply "whatever follows the last NUL", which leaves an ordinary public key
+/// untouched. Without this, a payload written by real PHP (every Symfony `.meta` file) set a
+/// dynamic property beside a still-uninitialized typed one, and the first read of it raised
+/// `must not be accessed before initialization`.
+fn eval_unserialize_declared_property_name(name: &str) -> &str {
+    match name.rfind('\0') {
+        Some(separator) => &name[separator + 1..],
+        None => name,
+    }
 }
 
 /// Builds a `__PHP_Incomplete_Class` object for a disallowed or unresolvable class name, with

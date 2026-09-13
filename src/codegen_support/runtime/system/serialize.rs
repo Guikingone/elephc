@@ -558,6 +558,32 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // set the frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
+    // An object the INTERPRETER built carries the `stdClass` class id and an empty property hash,
+    // because its declared properties live in the eval context's overlay. Rendering it from the
+    // header below produced `O:8:"stdClass":0:{}`, which is what Symfony's AOT-compiled
+    // `ConfigCache::write()` wrote into its routing cache metadata. The hook answers null for
+    // every object the interpreter does NOT own, so a native object costs one registry probe.
+    emit_symbol_address(emitter, "x9", "_elephc_eval_serialize_object_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the eval object-rendering callback, if one is installed
+    emitter.instruction("cbz x9, __rt_serialize_object_native");                // without the bridge every object is a native one
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the raw object pointer, which is its eval identity
+    emitter.instruction("blr x9");                                              // ask the interpreter to render this object
+    emitter.instruction("cbz x0, __rt_serialize_object_native");                // not eval-owned: keep the header-driven rendering
+    emitter.instruction("str x0, [sp, #56]");                                   // save the boxed fragment while unboxing it
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the fragment's tag and payload words
+    emitter.instruction("cmp x0, #1");                                          // runtime tag 1 is a string payload
+    emitter.instruction("b.ne __rt_serialize_object_eval_release");             // anything else is not a fragment to append
+    emitter.instruction("mov x0, x1");                                          // string bytes pointer
+    emitter.instruction("mov x1, x2");                                          // string byte length
+    emitter.instruction("bl __rt_concat_append");                               // copy the rendered fragment into the output
+    emitter.label("__rt_serialize_object_eval_release");
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the boxed fragment to give it back
+    emitter.instruction("bl __rt_decref_mixed");                                // release the fragment the callback handed over
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the object frame
+    emitter.instruction("ret");                                                 // return with the interpreter's rendering appended
+    emitter.label("__rt_serialize_object_native");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer for the header-driven path
     emitter.instruction("ldr x1, [x0]");                                        // load the class id from the object header
     emitter.instruction("str x1, [sp, #8]");                                    // save the class id
     emitter.instruction("mov x10, #-2");                                        // synthetic __PHP_Incomplete_Class id
@@ -1429,6 +1455,31 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the object frame
     emitter.instruction("sub rsp, 64");                                         // reserve frame slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
+    // See the ARM64 body: an object the INTERPRETER built carries `stdClass` in its header and
+    // nothing in its property hash, so rendering it from the header produced
+    // `O:8:"stdClass":0:{}`. The hook answers null for every object it does not own.
+    emit_symbol_address(emitter, "r10", "_elephc_eval_serialize_object_fn");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the eval object-rendering callback, if one is installed
+    emitter.instruction("test r10, r10");                                       // without the bridge every object is a native one
+    emitter.instruction("jz __rt_serialize_object_native_x");                   // keep the header-driven rendering
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the raw object pointer, which is its eval identity
+    emitter.instruction("call r10");                                            // ask the interpreter to render this object
+    emitter.instruction("test rax, rax");                                       // did the interpreter own this object?
+    emitter.instruction("jz __rt_serialize_object_native_x");                   // not eval-owned: keep the header-driven rendering
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the boxed fragment while unboxing it
+    emitter.instruction("mov rdi, rax");                                        // pass the boxed fragment for unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = concrete tag, rdi = value_lo, rsi = value_hi
+    emitter.instruction("cmp rax, 1");                                          // runtime tag 1 is a string payload
+    emitter.instruction("jne __rt_serialize_object_eval_release_x");            // anything else is not a fragment to append
+    emitter.instruction("call __rt_concat_append");                             // copy the rendered fragment into the output
+    emitter.label("__rt_serialize_object_eval_release_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the boxed fragment to give it back
+    emitter.instruction("call __rt_decref_mixed");                              // release the fragment the callback handed over
+    emitter.instruction("mov rsp, rbp");                                        // release the object frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return with the interpreter's rendering appended
+    emitter.label("__rt_serialize_object_native_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer for the header-driven path
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the class id from the object header
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the class id
     emitter.instruction("cmp rax, -2");                                         // synthetic __PHP_Incomplete_Class id
