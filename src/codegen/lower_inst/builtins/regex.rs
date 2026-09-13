@@ -897,6 +897,11 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
         {
             false
         }
+        // A pattern that declares a capture NAME makes the runtime build hash storage, and the
+        // checker types the destination for it. The pointer the runtime returns is already that
+        // hash, so it is stored as-is -- the classification below exists for destinations whose
+        // storage only the runtime knows.
+        PhpType::AssocArray { .. } => false,
         PhpType::Mixed | PhpType::Union(_) => true,
         other => {
             return Err(CodegenIrError::unsupported(format!(

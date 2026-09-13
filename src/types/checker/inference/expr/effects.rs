@@ -531,9 +531,12 @@ impl Checker {
                             // the destination as the hash it really receives. A non-literal pattern
                             // is left alone here; `store_matches_array` classifies at runtime for
                             // the gradual destinations that reach it.
-                            let matches_ty = if pattern_declares_named_capture_group(
-                                expanded_args.first(),
-                            ) {
+                            // `preg_match` ONLY: the AOT `preg_match_all` runtime materializes
+                            // capture group zero and nothing else, so it never builds the hash
+                            // and typing its destination as one hands it the wrong layout.
+                            let matches_ty = if builtin_name.eq_ignore_ascii_case("preg_match")
+                                && pattern_declares_named_capture_group(expanded_args.first())
+                            {
                                 PhpType::AssocArray {
                                     key: Box::new(PhpType::Mixed),
                                     value: Box::new(PhpType::Mixed),

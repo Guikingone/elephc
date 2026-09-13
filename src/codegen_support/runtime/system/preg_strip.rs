@@ -47,6 +47,28 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     // Symfony's Yaml component writes every pattern as `#...#`. Hardcoding '/' made every
     // other delimiter fall through as an UNDELIMITED pattern, so PCRE2 received the
     // delimiters and modifiers as pattern bytes and simply never matched — silently.
+    // -- php-src skips leading whitespace before the delimiter, so elephc must too --
+    // `php_pcre_get_compiled_regex_cache` advances past isspace() bytes before reading the
+    // delimiter. Symfony's `HeaderUtils::split()` writes its pattern as a heredoc-style literal
+    // that OPENS with a newline, so without this the first byte is `\n`, the pattern is treated
+    // as undelimited, and PCRE2 receives the delimiters and modifiers as pattern text -- it
+    // simply never matches, silently.
+    emitter.label("__rt_preg_strip_lead_ws");
+    emitter.instruction("cbz x2, __rt_preg_strip_done");                        // an all-whitespace pattern has no delimiter to find
+    emitter.instruction("ldrb w9, [x1]");                                       // inspect the next leading byte
+    emitter.instruction("cmp w9, #32");                                         // space
+    emitter.instruction("b.eq __rt_preg_strip_lead_ws_skip");                   // consume it
+    emitter.instruction("sub w12, w9, #9");                                     // shift HT..CR (9..13) to the bottom of the range
+    emitter.instruction("cmp w12, #5");                                         // tab, newline, vertical tab, form feed, carriage return
+    emitter.instruction("b.hs __rt_preg_strip_lead_ws_done");                   // anything else opens the pattern
+    emitter.label("__rt_preg_strip_lead_ws_skip");
+    emitter.instruction("add x1, x1, #1");                                      // advance past the whitespace byte
+    emitter.instruction("sub x2, x2, #1");                                      // and shorten the pattern to match
+    emitter.instruction("b __rt_preg_strip_lead_ws");                           // keep skipping
+    emitter.label("__rt_preg_strip_lead_ws_done");
+    emitter.instruction("str x1, [sp, #0]");                                    // re-save the advanced pattern pointer
+    emitter.instruction("str x2, [sp, #8]");                                    // re-save the shortened pattern length
+
     emitter.instruction("ldrb w9, [x1]");                                       // load the opening delimiter candidate
     emitter.instruction("cmp w9, #92");                                         // a backslash can never be a delimiter
     emitter.instruction("b.eq __rt_preg_strip_done");                           // treat it as an undelimited payload
@@ -165,6 +187,23 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_preg_strip_done_linux_x86_64");                // empty patterns already behave like raw undelimited regex payloads
     // -- the delimiter is whatever non-alphanumeric byte opens the pattern (see the
     // AArch64 path for why hardcoding '/' silently broke every `#...#` pattern) --
+    // -- php-src skips leading whitespace before the delimiter; see the AArch64 path --
+    emitter.label("__rt_preg_strip_lead_ws_linux_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // an all-whitespace pattern has no delimiter to find
+    emitter.instruction("jz __rt_preg_strip_done_linux_x86_64");                // treat it as an undelimited payload
+    emitter.instruction("movzx r8d, BYTE PTR [rax]");                           // inspect the next leading byte
+    emitter.instruction("cmp r8d, 32");                                         // space
+    emitter.instruction("je __rt_preg_strip_lead_ws_skip_linux_x86_64");        // consume it
+    emitter.instruction("mov r10d, r8d");                                       // shift HT..CR (9..13) to the bottom of the range
+    emitter.instruction("sub r10d, 9");                                         //
+    emitter.instruction("cmp r10d, 5");                                         // tab, newline, vertical tab, form feed, carriage return
+    emitter.instruction("jae __rt_preg_strip_lead_ws_done_linux_x86_64");       // anything else opens the pattern
+    emitter.label("__rt_preg_strip_lead_ws_skip_linux_x86_64");
+    emitter.instruction("add rax, 1");                                          // advance past the whitespace byte
+    emitter.instruction("sub rdx, 1");                                          // and shorten the pattern to match
+    emitter.instruction("jmp __rt_preg_strip_lead_ws_linux_x86_64");            // keep skipping
+    emitter.label("__rt_preg_strip_lead_ws_done_linux_x86_64");
+
     emitter.instruction("movzx r8d, BYTE PTR [rax]");                           // load the opening delimiter candidate
     emitter.instruction("cmp r8d, 92");                                         // a backslash can never be a delimiter
     emitter.instruction("je __rt_preg_strip_done_linux_x86_64");                // treat it as an undelimited payload

@@ -294,3 +294,100 @@ fn test_mb_ereg_match_options_case_insensitive() {
     );
     assert_eq!(out, "010");
 }
+
+
+/// Verifies the `/x` (extended) modifier drops literal whitespace and `#` comments from the
+/// pattern instead of matching them.
+///
+/// `__rt_preg_strip` scanned trailing modifiers for `i`, `m`, `s`, `u`, `U` and `A` and silently
+/// ignored everything else, so an extended pattern was compiled with its layout as pattern text
+/// and simply never matched -- `preg_match('/ a b /x', 'ab')` answered 0 where PHP answers 1. The
+/// shim already mapped `ELEPHC_PCRE2_CFLAG_EXTENDED`; only the modifier byte was missing.
+///
+/// Symfony's `HeaderUtils::split()` writes its whole pattern in extended form, which is why the
+/// compiled `--web` response answered `Cache-Control: , private`.
+///
+/// Oracle: `php -n` 8.5.10 prints the asserted line.
+#[test]
+fn test_extended_modifier_ignores_pattern_layout() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match('/ a b /x', 'ab'), '|';
+echo preg_match('/a # trailing comment
+b/x', 'ab'), '|';
+echo preg_match('/[ab ]+/x', 'a b'), '|';
+echo preg_match('/ a b /', ' a b '), '|';
+echo preg_replace('/\s+/x', '-', 'p q'), '|';
+echo preg_match('/x(?<=x)y/x', 'xy');
+"#,
+    );
+    assert_eq!(out, "1|1|1|1|p-q|1");
+}
+
+/// Verifies `preg_match()` fills `$matches` with PHP's ordered hash when the pattern declares a
+/// capture name: each name immediately before its numeric twin.
+///
+/// The runtime already built exactly that (`__rt_preg_match_capture_named`). The CHECKER typed the
+/// destination as an indexed array with a `Mixed` element, on the belief that `Array(Mixed)` reads
+/// both key kinds back out. It does not -- consumers read the static type -- so the hash was read
+/// as a packed vector and `preg_match('/(?<word>[a-z]+)(?<num>[0-9]+)/', 'a1', $n)` answered
+/// `[0,4,1,0,-1]`, raw slot words rather than captures.
+///
+/// All three PCRE spellings are covered, plus the two that must NOT count: `(?<=` is lookbehind,
+/// not a name, and an unmatched named group still gets both keys with an empty string.
+///
+/// Oracle: `php -n` 8.5.10 prints the asserted line.
+#[test]
+fn test_preg_match_named_groups_fill_an_ordered_hash() {
+    let out = compile_and_run(
+        r#"<?php
+preg_match('/(?<word>[a-z]+)(?<num>[0-9]+)/', 'a1', $n);
+echo json_encode($n), '|';
+preg_match("/(?P<host>[a-z]+)\.(?P<tld>[a-z]+)/", 'site.dev', $p);
+echo json_encode($p), '|';
+preg_match("/(?'k'[a-z]+)/", 'zz', $q);
+echo json_encode($q), '|';
+preg_match('/(?<=a)(b)/', 'ab', $look);
+echo json_encode($look), '|';
+echo preg_match('/(?<miss>z)|(y)/', 'y', $partial), ' ', json_encode($partial);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            r#"{"0":"a1","word":"a","1":"a","num":"1","2":"1"}|"#,
+            r#"{"0":"site.dev","host":"site","1":"site","tld":"dev","2":"dev"}|"#,
+            r#"{"0":"zz","k":"zz","1":"zz"}|["b","b"]|1 "#,
+            r#"{"0":"y","miss":"","1":"","2":"y"}"#,
+        ),
+    );
+}
+
+
+/// Verifies leading whitespace in front of the pattern delimiter is skipped, as php-src does.
+///
+/// `php_pcre_get_compiled_regex_cache` advances past isspace() bytes before reading the delimiter.
+/// `__rt_preg_strip` read the first byte directly, so a pattern OPENING with a newline looked
+/// undelimited: PCRE2 then received the delimiters and modifiers as pattern text and never
+/// matched, silently. Symfony's `HeaderUtils::split()` writes exactly that shape -- an extended
+/// pattern laid out across lines -- which is how a `Cache-Control` header stopped parsing.
+///
+/// The last case pins that the skip does not assume '/': `#...#` still delimits after whitespace.
+///
+/// Oracle: `php -n` 8.5.10 prints the asserted line.
+#[test]
+fn test_leading_whitespace_before_the_pattern_delimiter_is_skipped() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match("\n  /ab/", 'xaby'), '|';
+echo preg_match("\t/ab/i", 'xABy'), '|';
+echo preg_replace("\n/a/", 'Z', 'aaa'), '|';
+echo preg_match('
+    /
+        a b   # a comment
+    /x', 'ab'), '|';
+echo preg_match(" \n\t\r#ab#", 'zaby');
+"#,
+    );
+    assert_eq!(out, "1|1|ZZZ|1|1");
+}
