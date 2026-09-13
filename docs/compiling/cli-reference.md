@@ -393,7 +393,7 @@ runtime arguments (not elephc compiler flags):
 | `--max-execution-time N` | No | `0` (no limit) | Kill/respawn the web worker in `worker`; kill only the handler process in `pool`/`request`. |
 | `--handler-concurrency N` | No | `1` | Handler processes per web worker; `pool`/`request` only. |
 | `--max-handler-requests N` | No | `1000` | Replace a persistent handler after N requests (`0` = never); `pool` only. |
-| `--body-read-timeout N` | No | `30` | Request-body receive deadline in seconds (`0` = unlimited); `pool`/`request` only. |
+| `--body-read-timeout N` | No | `30` | Request-body receive deadline in seconds (`0` = unlimited). Enforced in every isolation mode. |
 | `--response-write-timeout N` | No | `30` | Client-backpressure deadline in seconds (`0` = unlimited); `pool`/`request` only. |
 | `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |

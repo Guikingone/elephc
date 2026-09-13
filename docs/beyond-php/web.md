@@ -52,7 +52,7 @@ The produced binary accepts these arguments at runtime:
 | `--max-execution-time N` | No | `0` (none) | In `worker`, terminate and respawn the worker. In `pool`/`request`, terminate only the timed-out handler process. |
 | `--handler-concurrency N` | No | `1` | Handler processes per web worker. Available only in `pool` and `request`. |
 | `--max-handler-requests N` | No | `1000` | Requests served by one persistent handler before replacement; `0` disables recycling. Available only in `pool`. |
-| `--body-read-timeout N` | No | `30` | Seconds allowed to receive a request body; `0` means unlimited. Available only in `pool` and `request`. |
+| `--body-read-timeout N` | No | `30` | Seconds allowed to receive a request body; `0` means unlimited. Enforced in every isolation mode, including the default `worker`. Expiry answers `408 Request Timeout` and closes the connection. |
 | `--response-write-timeout N` | No | `30` | Seconds an isolated response may remain blocked by client backpressure; `0` means unlimited. Available only in `pool` and `request`. |
 | `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--help`, `--version` | No | — | Print usage / version and exit 0. |

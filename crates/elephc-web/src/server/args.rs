@@ -27,6 +27,7 @@ Options:
   --listen HOST:PORT     Address to bind (required), e.g. 127.0.0.1:8080
   --workers N            Number of prefork worker processes (default: CPU count)
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
+  --body-read-timeout N  Max seconds to receive a request body; 0 = unlimited (default: 30)
   --max-requests N       Drain and recycle after N completed requests; 0 = never (default: 0)
   --access-log           Log one line per request to stderr
   --max-execution-time N Kill and respawn a worker when its handler runs > N seconds; 0 = no limit
@@ -98,6 +99,7 @@ impl ServerArgs {
             access_log: self.access_log,
             max_exec_secs: self.max_exec_secs,
             gzip: self.gzip,
+            body_read_secs: self.body_read_secs,
         }
     }
 
@@ -161,10 +163,13 @@ pub(super) fn parse_args(
         println!("elephc-web {}", env!("CARGO_PKG_VERSION"));
         return ParsedArgs::Exit(0);
     }
+    // `--body-read-timeout` IS ACCEPTED IN WORKER MODE. It used to be listed here, so the
+    // default isolation had no deadline for receiving a body at all and the flag that would
+    // have set one was refused (issue #887). The in-process worker now enforces it on every
+    // body path, exactly as the isolated one does.
     let isolated_only = [
         "--handler-concurrency",
         "--max-handler-requests",
-        "--body-read-timeout",
         "--response-write-timeout",
     ];
     if isolation == IsolationMode::Worker {
@@ -367,5 +372,47 @@ mod tests {
             ),
             ParsedArgs::Run(_)
         ));
+    }
+
+    /// Issue #887: `--body-read-timeout` is accepted in WORKER isolation, and the parsed
+    /// value reaches the in-process worker's config.
+    ///
+    /// It used to be on the isolated-only reject list, so the default isolation had no body
+    /// deadline at all AND refused the flag that would have set one.
+    #[test]
+    fn worker_isolation_accepts_and_threads_the_body_read_timeout() {
+        let parsed = parse_test_args_for(
+            &["app", "--listen", "127.0.0.1:0", "--body-read-timeout", "7"],
+            IsolationMode::Worker,
+        );
+        let ParsedArgs::Run(args) = parsed else {
+            panic!("--body-read-timeout must be accepted in worker isolation");
+        };
+        assert_eq!(args.body_read_secs, 7);
+        assert_eq!(args.worker_config().body_read_secs, 7);
+    }
+
+    /// The default is a SAFE NONZERO value, so a binary that sets no flag is still bounded,
+    /// and `0` stays available as the explicit unlimited setting.
+    #[test]
+    fn worker_isolation_body_read_timeout_defaults_nonzero_and_allows_explicit_zero() {
+        let parsed = parse_test_args_for(
+            &["app", "--listen", "127.0.0.1:0"],
+            IsolationMode::Worker,
+        );
+        let ParsedArgs::Run(args) = parsed else {
+            panic!("default worker args must parse");
+        };
+        assert_eq!(args.worker_config().body_read_secs, DEFAULT_BODY_READ_SECS);
+        assert!(DEFAULT_BODY_READ_SECS > 0, "the default must bound the body read");
+
+        let parsed = parse_test_args_for(
+            &["app", "--listen", "127.0.0.1:0", "--body-read-timeout", "0"],
+            IsolationMode::Worker,
+        );
+        let ParsedArgs::Run(args) = parsed else {
+            panic!("an explicit 0 must parse");
+        };
+        assert_eq!(args.worker_config().body_read_secs, 0);
     }
 }
