@@ -559,6 +559,60 @@ pub(in crate::interpreter) fn eval_method_parameter_scalar_coercion(
     }
 }
 
+/// Returns whether an OBJECT cell can be converted to a string, i.e. whether it has a usable
+/// `__toString()`.
+///
+/// The question a TYPED `string` PARAMETER asks, which is not the one
+/// [`eval_string_context_value`] answers. A string context that cannot convert throws
+/// `Object of class X could not be converted to string`; a typed parameter that cannot accept
+/// the value throws `f(): Argument #N ($p) must be of type string, X given` INSTEAD, and the
+/// caller has to know which before attempting the conversion. php-src draws the same line:
+/// `curl_escape($ch, new stdClass())` is a `TypeError`, while `(string) new stdClass()` is an
+/// `Error`.
+///
+/// Mirrors the two dispatch branches below exactly — an eval-declared class is asked for a
+/// public, non-static, non-abstract, zero-parameter `__toString`, and a runtime object is asked
+/// for eval's own synthetic implementations plus the AOT dispatch metadata — so a value this
+/// reports `true` for is one those branches will convert.
+///
+/// Non-object cells answer `false`: they never take the `__toString` path at all, and a caller
+/// deciding whether to reject them is asking a different question (`null`, `int`, `float` and
+/// `bool` all coerce to `string` under PHP's coercive typing).
+///
+/// Feature-gated for the same reason as `throwables::eval_throw_runtime_exception`: today's
+/// only caller is `builtins::curl::handle::eval_curl_string_argument`, which exists only under
+/// the `curl` feature. The gate comes off as soon as the sibling typed-string builtins named in
+/// issue #872 (`urlencode`, `date`) get the same guard.
+#[cfg(feature = "curl")]
+pub(in crate::interpreter) fn eval_object_has_to_string(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_OBJECT {
+        return Ok(false);
+    }
+    let identity = values.object_identity(value)?;
+    if let Some(class) = context.dynamic_object_class(identity) {
+        let called_class_name = class.name().to_string();
+        let Some((_, method)) = context.class_method(&called_class_name, "__toString") else {
+            return Ok(false);
+        };
+        return Ok(method.visibility() == EvalVisibility::Public
+            && !method.is_static()
+            && !method.is_abstract()
+            && method.params().is_empty());
+    }
+    let class_name = runtime_object_class_name(value, values)?;
+    if eval_runtime_object_has_interpreter_tostring(identity, &class_name, context) {
+        return Ok(true);
+    }
+    Ok(
+        eval_aot_method_dispatch_metadata_in_hierarchy(&class_name, "__toString", context, values)?
+            .is_some(),
+    )
+}
+
 /// Converts objects in string contexts through the applicable `__toString()` dispatch path.
 pub(in crate::interpreter) fn eval_string_context_value(
     value: RuntimeCellHandle,

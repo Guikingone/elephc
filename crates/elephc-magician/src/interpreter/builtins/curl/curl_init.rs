@@ -70,7 +70,8 @@ fn eval_curl_init_result(
     };
     if let Some(url) = url {
         if values.type_tag(url)? != EVAL_TAG_NULL {
-            let url = values.cast_string(url)?;
+            let url =
+                eval_curl_string_argument("curl_init", 1, "url", "?string", url, context, values)?;
             let bytes = values.string_bytes(url)?;
             // Ignored, matching `curl_init()`'s own AOT wrapper: a bad URL surfaces
             // later, at `curl_exec()`, not here.

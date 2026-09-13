@@ -1561,6 +1561,102 @@ fn eval_curl_nesting_preserves_refusals_and_restores_the_outer_frame() {
     assert_eq!(out, "43|hello-curl|headers-ran");
 }
 
+/// Issue #872: `curl_escape()`, `curl_unescape()` and `curl_init()` take their string argument
+/// through an unguarded `cast_string()` in eval, so an object or an array became `""` and the
+/// call SUCCEEDED. php-src throws a catchable `\TypeError` for both.
+///
+/// The wording is php-src's own, verified against the real interpreter
+/// (`curl_escape($ch, new stdClass())` -> `TypeError: curl_escape(): Argument #2 ($string) must
+/// be of type string, stdClass given`). Unlike the `$handle` guards above, the "given" name
+/// needs no AOT-divergence caveat: `eval_curl_given_type_name` answers `get_class()` for an
+/// object and `gettype()`'s `"array"` for an array, which is exactly what php-src prints here.
+///
+/// AOT rejects these at COMPILE time from the declared signature, so there is no AOT runtime
+/// message to mirror — this is the eval half catching up to a check the compiled side already
+/// performs statically.
+#[test]
+fn eval_curl_string_arguments_throw_a_catchable_type_error_for_a_non_stringable_value() {
+    if skip_without_curl_native(
+        "eval_curl_string_arguments_throw_a_catchable_type_error_for_a_non_stringable_value",
+    ) {
+        return;
+    }
+    let output = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $out = [];
+            $ch = curl_init();
+            try {
+                $out[] = "escaped:" . curl_escape($ch, new stdClass());
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                $out[] = "escaped:" . curl_escape($ch, [1, 2]);
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                $out[] = "unescaped:" . curl_unescape($ch, new stdClass());
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                curl_init(new stdClass());
+                $out[] = "init:ok";
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            $out[] = "alive";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(
+        output,
+        "curl_escape(): Argument #2 ($string) must be of type string, stdClass given\
+        |curl_escape(): Argument #2 ($string) must be of type string, array given\
+        |curl_unescape(): Argument #2 ($string) must be of type string, stdClass given\
+        |curl_init(): Argument #1 ($url) must be of type ?string, stdClass given\
+        |alive"
+    );
+}
+
+/// The guard must not become a blanket object/scalar rejection: PHP's COERCIVE typing still
+/// converts `int`, `float`, `bool` and `null` to string, and still accepts an object that has
+/// `__toString()`.
+///
+/// Measured against the real interpreter for the same values: `5`, `1.5`, `true` and a
+/// `__toString()` object are all escaped normally, and `null` escapes to the empty string
+/// (with a deprecation php-src emits and elephc does not).
+#[test]
+fn eval_curl_string_arguments_still_coerce_every_value_php_coerces() {
+    if skip_without_curl_native("eval_curl_string_arguments_still_coerce_every_value_php_coerces") {
+        return;
+    }
+    let output = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            class EvalCurlStringable { public function __toString(): string { return "a b"; } }
+            $ch = curl_init();
+            $out = [];
+            $out[] = curl_escape($ch, 5);
+            $out[] = curl_escape($ch, 1.5);
+            $out[] = curl_escape($ch, true);
+            $out[] = curl_escape($ch, "a b");
+            $out[] = curl_escape($ch, new EvalCurlStringable());
+            $out[] = "[" . curl_escape($ch, null) . "]";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(output, "5|1.5|1|a%20b|a%20b|[]");
+}
+
 // FIX ROUND 1, MINOR 5 — COVERAGE NOTE, deliberately a note rather than a fixture here.
 //
 // The two PHP 8.5-only curl names (`curl_multi_get_handles`, `curl_share_init_persistent`)
