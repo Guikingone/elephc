@@ -202,9 +202,16 @@ echo OwnerMixed::makeChild()->sum();
     assert_eq!(out, "92");
 }
 
-/// The reflection half of the same lookup:
+/// A CONTROL for the reflection half of the same lookup, not a regression test.
+///
 /// `reflection_new_instance::constructor_signature_for_class_name` read the descendant's own
-/// map too, so `ReflectionClass::newInstance()` on it saw no constructor.
+/// map too and was changed with `object_construction::constructor_signature`, but no valid PHP
+/// program can tell the two lookups apart there: they differ only for a class whose own map
+/// lacks `__construct`, which is exactly the inherited-PRIVATE-constructor shape, and PHP
+/// rejects `ReflectionClass::newInstance()` on a non-public constructor outright
+/// (`Call to private Owner::__construct()`). The change is therefore consistency — it keeps
+/// the site from becoming wrong the moment reflection can reach such a class — and this
+/// fixture pins that the public path it CAN reach still resolves and still pads its defaults.
 #[test]
 fn test_reflection_new_instance_pads_inherited_constructor_defaults() {
     let out = compile_and_run(
@@ -221,7 +228,8 @@ echo $reflected->newInstance()->n;
 }
 
 /// An inherited PUBLIC constructor with defaults is unaffected — the owner walk stops at the
-/// instantiated class only when its own map lacks the entry, so this path is unchanged.
+/// instantiated class whenever its own map HAS the entry, which a public inherited constructor
+/// does, so this path resolves exactly as before.
 #[test]
 fn test_fixed_new_of_descendant_with_an_inherited_public_constructor_still_pads() {
     let out = compile_and_run(
