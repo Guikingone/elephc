@@ -17,10 +17,15 @@
 //!   handler's persistent `state::SESSION_FD`, so the short lock is never held
 //!   across the whole upload. The handler runs after the drain, so all progress
 //!   writes are flushed and unlocked before `session_start` locks the file.
-//! - The tracker re-parses the bytes-received-so-far on each freq threshold
-//!   (re-parse-on-threshold), boundary-aware for the trailing in-flight part, so
-//!   it degrades gracefully on a truncated/adversarial body instead of relying
-//!   on a fragile hand-rolled byte-at-a-time state machine. It never panics.
+//! - The tracker parses INCREMENTALLY: a cursor at the last consumed boundary means each
+//!   completed part is parsed exactly once, and the trailing in-flight part's header block
+//!   is parsed once per part, after which only its byte count moves. Total work over an
+//!   upload is linear in the body size however many frames it arrives in — re-parsing the
+//!   whole accumulated buffer after every frame cost frames x body, which an unauthenticated
+//!   client could drive with many small frames (issue #885). Boundary and part-header
+//!   lengths are bounded, and byte searches use `memchr::memmem` so an attacker-chosen
+//!   repeated-prefix boundary cannot force a quadratic scan. It never panics, and it still
+//!   degrades gracefully on a truncated or adversarial body.
 //! - The RMW preserves unrelated entries under all three registered session
 //!   serializers and accepts Cookie, GET, or multipart POST session IDs.
 
@@ -33,7 +38,22 @@ use super::file_io::{
     configured_session_file_path, lock_exclusive, open_session_file, parse_save_path,
 };
 
+/// Longest multipart boundary this tracker will follow, in bytes.
+///
+/// RFC 2046 caps a boundary at 70 characters; the value is attacker-controlled and every
+/// delimiter search pays its length, so anything longer is refused outright rather than
+/// tracked. A refused boundary only turns progress tracking off for that request.
+const MAX_BOUNDARY_BYTES: usize = 70;
+
+/// Longest part header block this tracker will scan for its `\r\n\r\n` terminator.
+///
+/// A body that never sends one would otherwise have its whole growing tail re-scanned on
+/// every frame. 8 KiB is far above any real `Content-Disposition`/`Content-Type` pair and
+/// matches the order of the header limits the server itself applies.
+const MAX_PART_HEADER_BYTES: usize = 8 * 1024;
+
 /// Per-file progress snapshot mirroring one entry of PHP's `files` sub-array.
+#[derive(Clone)]
 struct FileProgress {
     /// The multipart `name="…"` of the file field.
     field_name: Vec<u8>,
@@ -91,6 +111,41 @@ pub(crate) struct Tracker {
     last_write_time: Instant,
     /// The progress key (value of the trigger field), once its part is parsed.
     key: Option<Vec<u8>>,
+    /// Absolute offset of the LAST boundary delimiter already consumed, or `None`
+    /// before the first one is seen.
+    ///
+    /// THE CURSOR THAT MAKES THE SCAN INCREMENTAL. `update()` is handed the whole
+    /// accumulated body after every received frame, and the body is append-only, so a
+    /// byte offset stays valid across calls. Re-parsing from zero each time made total
+    /// work grow with frames x body — an unauthenticated remote client could send a large
+    /// body as many small frames and spend the worker's CPU quadratically (issue #885).
+    last_delim: Option<usize>,
+    /// Completed-part file entries accumulated so far, one per boundary-delimited part.
+    completed: Vec<FileProgress>,
+    /// The in-flight part after `last_delim`, once its header block has been parsed.
+    ///
+    /// Parsed ONCE per part rather than on every frame: only `bytes_processed` changes as
+    /// the body grows, and that is arithmetic on the header end offset.
+    inflight: Option<Inflight>,
+    /// Set when the in-flight part's header block exceeded [`MAX_PART_HEADER_BYTES`]
+    /// without a terminator, so the tail is not re-scanned on every later frame.
+    inflight_unparsable: bool,
+    /// Whether `key` came from a trigger field that was still STREAMING.
+    ///
+    /// Such a key is a prefix of the real one — possibly the empty prefix — so it must be
+    /// replaced when the part completes. Latching it permanently is what made a body fed one
+    /// byte at a time settle on an empty progress key.
+    key_provisional: bool,
+}
+
+/// The in-flight part's parsed header block, held across frames.
+struct Inflight {
+    /// Absolute offset one past the part's `\r\n\r\n` header terminator.
+    content_start: usize,
+    /// `Content-Disposition` field name.
+    field_name: Vec<u8>,
+    /// `Content-Disposition` filename, when the part is a file part.
+    filename: Option<Vec<u8>>,
 }
 
 impl Tracker {
@@ -109,22 +164,27 @@ impl Tracker {
     /// the freq/min_freq thresholds are crossed. Never writes before the key is
     /// known (PHP requires the trigger field before the file parts).
     pub(crate) fn update(&mut self, body: &[u8]) {
-        let (key, sid, files) = self.snapshot(body);
-        if self.key.is_none() {
-            self.key = key;
+        let bytes = body.len();
+        let enough_bytes = bytes.saturating_sub(self.last_write_bytes) >= self.freq_bytes;
+        let enough_time = self.last_write_time.elapsed().as_secs_f64() >= self.min_freq;
+        // THE THROTTLE IS CHECKED FIRST once the trigger field and session id are known, so
+        // a frame that cannot produce an observable update does no parsing work at all
+        // (issue #885). Before they are known the advance still has to run — that is what
+        // finds them — but it is incremental, so those frames are linear too.
+        if self.sid.is_some()
+            && self.key.is_some()
+            && !self.key_provisional
+            && !(enough_bytes && enough_time)
+        {
+            return;
         }
-        if self.sid.is_none() {
-            self.sid = sid.filter(|value| valid_sid(value));
-        }
+        let files = self.snapshot(body);
         if self.sid.is_none() {
             return;
         }
         let Some(full_key) = self.full_key() else {
             return; // No trigger field yet: nothing to write.
         };
-        let bytes = body.len();
-        let enough_bytes = bytes.saturating_sub(self.last_write_bytes) >= self.freq_bytes;
-        let enough_time = self.last_write_time.elapsed().as_secs_f64() >= self.min_freq;
         if !(enough_bytes && enough_time) {
             return;
         }
@@ -139,13 +199,7 @@ impl Tracker {
     /// the whole upload `done`, then does one last write — removing the entry
     /// when `cleanup` is on, or persisting the `done => true` snapshot otherwise.
     pub(crate) fn complete(&mut self, body: &[u8]) {
-        let (key, sid, mut files) = self.snapshot(body);
-        if self.key.is_none() {
-            self.key = key;
-        }
-        if self.sid.is_none() {
-            self.sid = sid.filter(|value| valid_sid(value));
-        }
+        let mut files = self.snapshot(body);
         if self.sid.is_none() {
             return;
         }
@@ -163,62 +217,139 @@ impl Tracker {
         }
     }
 
-    /// Re-parses the received bytes into the progress key, optional earlier
-    /// multipart session ID, and per-file snapshot. Completed parts (between
-    /// two boundaries) are parsed fully; the trailing in-flight part (after the
-    /// last boundary, header block complete but no closing boundary yet)
-    /// contributes a `done=false` file with its partial `bytes_processed`.
+    /// Advances the incremental parse over whatever bytes are new since the last call,
+    /// then returns the per-file snapshot (completed parts plus the in-flight one).
+    ///
+    /// INCREMENTAL BY CONSTRUCTION. Completed parts are parsed exactly once, when the
+    /// boundary that closes them arrives, and their results accumulate in `completed`. The
+    /// trailing in-flight part's header block is parsed once too; afterwards only its byte
+    /// count moves. Total work over a whole upload is therefore linear in the body size no
+    /// matter how many frames it arrives in — the property issue #885 asks for, where
+    /// re-parsing the whole accumulated buffer after every frame cost frames x body.
+    ///
+    /// The progress key and session id land in `self.key`/`self.sid` as their parts are
+    /// consumed, rather than being returned: they are set once and must survive the
+    /// incremental advance.
+    ///
     /// Tolerant of truncation — never panics.
-    fn snapshot(&self, body: &[u8]) -> (Option<Vec<u8>>, Option<String>, Vec<FileProgress>) {
-        let mut files = Vec::new();
-        let mut key: Option<Vec<u8>> = None;
-        let mut sid: Option<String> = None;
-        let positions = find_all(body, &self.delim);
-        // Completed parts sit between consecutive boundary delimiters.
-        for pair in positions.windows(2) {
-            let seg = &body[pair[0] + self.delim.len()..pair[1]];
-            let seg = strip_prefix(seg, b"\r\n");
-            let seg = strip_suffix(seg, b"\r\n");
-            if let Some((name, filename, content)) = parse_part(seg) {
-                if let Some(fname) = filename {
-                    files.push(FileProgress {
-                        field_name: name,
-                        name: fname,
-                        bytes_processed: content.len(),
-                        done: true,
-                    });
-                } else if key.is_none() && name == self.name_field {
-                    key = Some(content.to_vec());
-                } else if sid.is_none() && name == self.sid_field {
-                    sid = Some(String::from_utf8_lossy(content).into_owned());
-                }
+    fn snapshot(&mut self, body: &[u8]) -> Vec<FileProgress> {
+        self.advance_completed_parts(body);
+        self.advance_inflight_part(body);
+        let mut files = self.completed.clone();
+        if let Some(inflight) = &self.inflight {
+            if let Some(name) = &inflight.filename {
+                files.push(FileProgress {
+                    field_name: inflight.field_name.clone(),
+                    name: name.clone(),
+                    bytes_processed: body.len().saturating_sub(inflight.content_start),
+                    done: false,
+                });
+            } else if (self.key.is_none() || self.key_provisional)
+                && inflight.field_name == self.name_field
+            {
+                // Rare: trigger field still streaming — take what we have, and remember that
+                // it is a PREFIX so the completed part replaces it.
+                self.key = Some(body[inflight.content_start.min(body.len())..].to_vec());
+                self.key_provisional = true;
             }
         }
-        // Trailing in-flight part after the final boundary, if any.
-        if let Some(&last) = positions.last() {
-            let tail = &body[last + self.delim.len()..];
-            let tail = strip_prefix(tail, b"\r\n");
-            // A closing boundary marker ("--") means the upload has ended.
-            if !tail.starts_with(b"--") {
-                if let Some(hdr_end) = find(tail, b"\r\n\r\n") {
-                    if let Some((name, filename, _)) = parse_part(tail) {
-                        let content = &tail[hdr_end + 4..];
-                        if let Some(fname) = filename {
-                            files.push(FileProgress {
-                                field_name: name,
-                                name: fname,
-                                bytes_processed: content.len(),
-                                done: false,
-                            });
-                        } else if key.is_none() && name == self.name_field {
-                            // Rare: trigger field still streaming — take what we have.
-                            key = Some(content.to_vec());
-                        }
-                    }
-                }
+        files
+    }
+
+    /// Consumes every boundary-delimited part that has become complete since the last call.
+    ///
+    /// The cursor only ever moves forward, and each new delimiter is found with
+    /// `memchr::memmem` — a two-way search whose cost is linear in the bytes scanned,
+    /// unlike the sliding comparison this replaced, which an adversarial repeated-prefix
+    /// boundary drove to `O(body x boundary)`.
+    fn advance_completed_parts(&mut self, body: &[u8]) {
+        let mut cursor = match self.last_delim {
+            Some(previous) => previous + self.delim.len(),
+            None => 0,
+        };
+        while cursor <= body.len() {
+            let Some(relative) = memchr::memmem::find(&body[cursor..], &self.delim) else {
+                break;
+            };
+            let position = cursor + relative;
+            if let Some(previous) = self.last_delim {
+                let segment = &body[previous + self.delim.len()..position];
+                let segment = strip_prefix(segment, b"\r\n");
+                let segment = strip_suffix(segment, b"\r\n");
+                self.absorb_completed_part(segment);
+            }
+            self.last_delim = Some(position);
+            // A new part begins: whatever was in flight is now complete or gone.
+            self.inflight = None;
+            self.inflight_unparsable = false;
+            cursor = position + self.delim.len();
+        }
+    }
+
+    /// Records one completed part: a file entry, the progress key, or the session id.
+    fn absorb_completed_part(&mut self, segment: &[u8]) {
+        let Some((name, filename, content)) = parse_part(segment) else {
+            return;
+        };
+        if let Some(file_name) = filename {
+            self.completed.push(FileProgress {
+                field_name: name,
+                name: file_name,
+                bytes_processed: content.len(),
+                done: true,
+            });
+        } else if (self.key.is_none() || self.key_provisional) && name == self.name_field {
+            self.key = Some(content.to_vec());
+            self.key_provisional = false;
+        } else if self.sid.is_none() && name == self.sid_field {
+            let value = String::from_utf8_lossy(content).into_owned();
+            if valid_sid(&value) {
+                self.sid = Some(value);
             }
         }
-        (key, sid, files)
+    }
+
+    /// Parses the trailing in-flight part's header block, ONCE per part.
+    ///
+    /// Gives up past [`MAX_PART_HEADER_BYTES`] rather than re-scanning a growing tail on
+    /// every frame: a body that never sends a header terminator would otherwise re-scan
+    /// everything received so far each time, which is the same quadratic shape the
+    /// completed-part cursor removes.
+    fn advance_inflight_part(&mut self, body: &[u8]) {
+        if self.inflight.is_some() || self.inflight_unparsable {
+            return;
+        }
+        let Some(last) = self.last_delim else {
+            return;
+        };
+        let after_delim = last + self.delim.len();
+        if after_delim > body.len() {
+            return;
+        }
+        let raw_tail = &body[after_delim..];
+        let tail = strip_prefix(raw_tail, b"\r\n");
+        let tail_start = after_delim + (raw_tail.len() - tail.len());
+        // A closing boundary marker ("--") means the upload has ended.
+        if tail.starts_with(b"--") {
+            self.inflight_unparsable = true;
+            return;
+        }
+        let window = tail.len().min(MAX_PART_HEADER_BYTES);
+        let Some(header_end) = memchr::memmem::find(&tail[..window], b"\r\n\r\n") else {
+            if tail.len() >= MAX_PART_HEADER_BYTES {
+                self.inflight_unparsable = true;
+            }
+            return;
+        };
+        let Some((name, filename, _)) = parse_part(tail) else {
+            self.inflight_unparsable = true;
+            return;
+        };
+        self.inflight = Some(Inflight {
+            content_start: tail_start + header_end + 4,
+            field_name: name,
+            filename,
+        });
     }
 
     /// Serializes the progress array in the active handler's value grammar
@@ -435,6 +566,11 @@ pub(crate) fn begin(headers: &[(String, String)], query: &str) -> Option<Tracker
         // known by backdating the throttle baseline.
         last_write_time: Instant::now() - std::time::Duration::from_secs(3600),
         key: None,
+        last_delim: None,
+        completed: Vec::new(),
+        inflight: None,
+        inflight_unparsable: false,
+        key_provisional: false,
     })
 }
 
@@ -562,6 +698,11 @@ fn parse_freq(freq: &str, content_length: i64) -> usize {
 }
 
 /// Extracts and unquotes the `boundary=…` value from a multipart Content-Type.
+///
+/// A boundary longer than [`MAX_BOUNDARY_BYTES`] is REFUSED rather than tracked: the value
+/// is attacker-controlled, and every delimiter search pays its length. RFC 2046 caps a
+/// boundary at 70 characters, so nothing a real client sends is turned away — refusing here
+/// only drops progress tracking for that request, never the upload itself.
 fn extract_boundary(content_type: &str) -> Option<String> {
     if !content_type
         .to_ascii_lowercase()
@@ -576,7 +717,7 @@ fn extract_boundary(content_type: &str) -> Option<String> {
             .or_else(|| attr.strip_prefix("boundary ="))
         {
             let v = rest.trim().trim_matches('"');
-            if !v.is_empty() {
+            if !v.is_empty() && v.len() <= MAX_BOUNDARY_BYTES {
                 return Some(v.to_string());
             }
         }
@@ -1095,30 +1236,17 @@ fn skip_custom(data: &[u8], pos: usize) -> usize {
 
 // ── Byte-search helpers ──
 
-/// Returns the byte offsets of every non-overlapping occurrence of `needle`.
-fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
-    let mut out = Vec::new();
-    if needle.is_empty() {
-        return out;
-    }
-    let mut i = 0;
-    while i + needle.len() <= haystack.len() {
-        if &haystack[i..i + needle.len()] == needle {
-            out.push(i);
-            i += needle.len();
-        } else {
-            i += 1;
-        }
-    }
-    out
-}
-
 /// Returns the offset of the first occurrence of `needle` in `haystack`.
+///
+/// `memchr::memmem` rather than a sliding comparison, matching `crate::multipart`'s own
+/// search: the needles here (the boundary delimiter, a header terminator) are
+/// attacker-controlled, and the naive form this replaced degraded to `O(haystack x needle)`
+/// on a repeated-prefix boundary (issue #885).
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
         return None;
     }
-    (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
+    memchr::memmem::find(haystack, needle)
 }
 
 /// Removes a leading `prefix` from `data` if present.
@@ -1162,6 +1290,11 @@ mod tests {
             last_write_bytes: 0,
             last_write_time: Instant::now(),
             key: None,
+            last_delim: None,
+            completed: Vec::new(),
+            inflight: None,
+            inflight_unparsable: false,
+            key_provisional: false,
         };
         let out = t.serialize_progress(&files, 453489, false);
         let expected = b"a:5:{s:10:\"start_time\";i:1234567890;s:14:\"content_length\";i:57343257;s:15:\"bytes_processed\";i:453489;s:4:\"done\";b:0;s:5:\"files\";a:1:{i:0;a:7:{s:10:\"field_name\";s:5:\"file1\";s:4:\"name\";s:7:\"foo.avi\";s:8:\"tmp_name\";s:0:\"\";s:5:\"error\";i:0;s:4:\"done\";b:0;s:10:\"start_time\";i:1234567890;s:15:\"bytes_processed\";i:68767;}}}";
@@ -1267,7 +1400,7 @@ mod tests {
     fn snapshot_key_and_inflight_file() {
         let mut delim = b"--".to_vec();
         delim.extend_from_slice(b"BOUND");
-        let t = Tracker {
+        let mut t = Tracker {
             save_path: String::new(),
             sid: None,
             sid_field: b"PHPSESSID".to_vec(),
@@ -1283,13 +1416,18 @@ mod tests {
             last_write_bytes: 0,
             last_write_time: Instant::now(),
             key: None,
+            last_delim: None,
+            completed: Vec::new(),
+            inflight: None,
+            inflight_unparsable: false,
+            key_provisional: false,
         };
         // Completed trigger field, then a file part still streaming (no closing
         // boundary yet).
         let body = b"--BOUND\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\nmykey\r\n--BOUND\r\nContent-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\r\nContent-Type: application/octet-stream\r\n\r\nPARTIAL";
-        let (key, sid, files) = t.snapshot(body);
-        assert_eq!(key.as_deref(), Some(&b"mykey"[..]));
-        assert_eq!(sid, None);
+        let files = t.snapshot(body);
+        assert_eq!(t.key.as_deref(), Some(&b"mykey"[..]));
+        assert_eq!(t.sid, None);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].field_name, b"f");
         assert_eq!(files[0].name, b"x.bin");
@@ -1302,7 +1440,7 @@ mod tests {
     fn snapshot_extracts_multipart_session_id() {
         let mut delim = b"--".to_vec();
         delim.extend_from_slice(b"BOUND");
-        let tracker = Tracker {
+        let mut tracker = Tracker {
             save_path: String::new(),
             sid: None,
             sid_field: b"PHPSESSID".to_vec(),
@@ -1318,11 +1456,137 @@ mod tests {
             last_write_bytes: 0,
             last_write_time: Instant::now(),
             key: None,
+            last_delim: None,
+            completed: Vec::new(),
+            inflight: None,
+            inflight_unparsable: false,
+            key_provisional: false,
         };
         let body = b"--BOUND\r\nContent-Disposition: form-data; name=\"PHPSESSID\"\r\n\r\nsid123\r\n--BOUND\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\nkey\r\n--BOUND--\r\n";
-        let (key, sid, files) = tracker.snapshot(body);
-        assert_eq!(key.as_deref(), Some(&b"key"[..]));
-        assert_eq!(sid.as_deref(), Some("sid123"));
+        let files = tracker.snapshot(body);
+        assert_eq!(tracker.key.as_deref(), Some(&b"key"[..]));
+        assert_eq!(tracker.sid.as_deref(), Some("sid123"));
         assert!(files.is_empty());
+    }
+
+    /// Builds a tracker over the `--BOUND` delimiter for the incremental tests below.
+    fn incremental_tracker() -> Tracker {
+        let mut delim = b"--".to_vec();
+        delim.extend_from_slice(b"BOUND");
+        Tracker {
+            save_path: String::new(),
+            sid: None,
+            sid_field: b"PHPSESSID".to_vec(),
+            prefix: "up_".to_string(),
+            name_field: b"PHP_SESSION_UPLOAD_PROGRESS".to_vec(),
+            delim,
+            handler: Handler::Php,
+            cleanup: false,
+            content_length: 100,
+            start_time: 0,
+            freq_bytes: 1,
+            min_freq: 0.0,
+            last_write_bytes: 0,
+            last_write_time: Instant::now(),
+            key: None,
+            last_delim: None,
+            completed: Vec::new(),
+            inflight: None,
+            inflight_unparsable: false,
+            key_provisional: false,
+        }
+    }
+
+    /// Issue #885: feeding the body one byte at a time must produce the SAME snapshot as
+    /// feeding it whole.
+    ///
+    /// The tracker is handed the growing accumulated buffer after every frame, so the
+    /// incremental cursor has to reach exactly the state a single full parse would. This is
+    /// the correctness half of making the scan incremental; the cost half is below.
+    #[test]
+    fn incremental_feeding_matches_a_single_full_parse() {
+        let body: &[u8] = b"--BOUND\r\nContent-Disposition: form-data; name=\"PHPSESSID\"\r\n\r\nsid123\r\n--BOUND\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\nmykey\r\n--BOUND\r\nContent-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\r\n\r\nPARTIAL";
+
+        let mut whole = incremental_tracker();
+        let whole_files = whole.snapshot(body);
+
+        let mut streamed = incremental_tracker();
+        let mut streamed_files = Vec::new();
+        for end in 1..=body.len() {
+            streamed_files = streamed.snapshot(&body[..end]);
+        }
+
+        assert_eq!(streamed.key, whole.key);
+        assert_eq!(streamed.sid, whole.sid);
+        assert_eq!(streamed_files.len(), whole_files.len());
+        for (streamed, whole) in streamed_files.iter().zip(whole_files.iter()) {
+            assert_eq!(streamed.field_name, whole.field_name);
+            assert_eq!(streamed.name, whole.name);
+            assert_eq!(streamed.bytes_processed, whole.bytes_processed);
+            assert_eq!(streamed.done, whole.done);
+        }
+    }
+
+    /// Issue #885: a completed part is parsed EXACTLY ONCE, no matter how many frames arrive
+    /// after it.
+    ///
+    /// The accumulated `completed` list is the observable proof: re-parsing the whole buffer
+    /// on every frame would push the same file entry again for each one. Before the fix this
+    /// list did not exist and the quadratic re-parse was invisible to any assertion — which
+    /// is why the issue asks for a regression test in this module rather than relying on the
+    /// `multipart.rs` guard.
+    #[test]
+    fn a_completed_part_is_absorbed_once_across_many_frames() {
+        let head: &[u8] = b"--BOUND\r\nContent-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\r\n\r\nDATA\r\n--BOUND\r\nContent-Disposition: form-data; name=\"g\"; filename=\"y.bin\"\r\n\r\n";
+        let mut tracker = incremental_tracker();
+        let mut body = head.to_vec();
+        tracker.snapshot(&body);
+        assert_eq!(tracker.completed.len(), 1, "first part absorbed once");
+        for _ in 0..200 {
+            body.extend_from_slice(b"0123456789");
+            tracker.snapshot(&body);
+        }
+        assert_eq!(
+            tracker.completed.len(),
+            1,
+            "the completed part must not be re-absorbed by later frames"
+        );
+        let files = tracker.snapshot(&body);
+        assert_eq!(files.len(), 2, "one completed file plus the in-flight one");
+        assert!(files[0].done);
+        assert!(!files[1].done);
+        assert_eq!(files[1].bytes_processed, 2000);
+    }
+
+    /// Issue #885: the header block of the in-flight part is parsed once, and an unbounded
+    /// header is abandoned rather than re-scanned on every frame.
+    #[test]
+    fn an_unbounded_part_header_is_abandoned_instead_of_rescanned() {
+        let mut tracker = incremental_tracker();
+        let mut body = b"--BOUND\r\n".to_vec();
+        // A header block that never terminates: no CRLFCRLF, ever.
+        body.extend_from_slice(&vec![b'A'; MAX_PART_HEADER_BYTES + 1]);
+        let files = tracker.snapshot(&body);
+        assert!(files.is_empty());
+        assert!(
+            tracker.inflight_unparsable,
+            "an over-long header block must be abandoned, not retried per frame"
+        );
+    }
+
+    /// Issue #885: a boundary longer than RFC 2046's 70-character cap is refused, so no
+    /// delimiter search ever pays an attacker-chosen length.
+    #[test]
+    fn an_over_long_boundary_is_refused() {
+        let short = "x".repeat(MAX_BOUNDARY_BYTES);
+        let long = "x".repeat(MAX_BOUNDARY_BYTES + 1);
+        assert_eq!(
+            extract_boundary(&format!("multipart/form-data; boundary={short}")),
+            Some(short)
+        );
+        assert_eq!(
+            extract_boundary(&format!("multipart/form-data; boundary={long}")),
+            None
+        );
     }
 }
