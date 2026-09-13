@@ -10,8 +10,9 @@
 //! - Only whole-archived bridge inputs participate; managed native archives are untouched.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::process::Command;
 
 use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan};
 
@@ -52,7 +53,16 @@ pub(super) fn prepare(plan: &LinkPlan) -> PreparedArchives {
         };
     }
 
-    let scratch = std::env::temp_dir().join(format!("elephc-link-dedup-{}", process::id()));
+    // FAIL CLOSED: without a private scratch directory there is nowhere safe to write the
+    // deduplicated copies, so the plan is returned unchanged and the link proceeds with the
+    // original archives. Deduplication is an optimization; a predictable scratch path is not
+    // an acceptable price for it.
+    let Some(scratch) = create_private_scratch() else {
+        return PreparedArchives {
+            plan: plan.clone(),
+            scratch: None,
+        };
+    };
     let mut provider_names = HashSet::new();
     let mut provider_symbols = HashSet::new();
     let mut replacements = HashMap::new();
@@ -101,6 +111,37 @@ fn replace_archive(item: LinkItem, replacements: &HashMap<PathBuf, PathBuf>) -> 
         },
         other => other,
     }
+}
+
+/// Creates an unpredictable, owner-only scratch directory for the deduplicated copies.
+///
+/// `mkdtemp(3)` in one step: the name carries six characters of kernel-chosen randomness, the
+/// directory is created EXCLUSIVELY (so an attacker-planted directory cannot be adopted), and
+/// the mode is `0700` from the moment it exists, with no window between creation and
+/// permission fixup.
+///
+/// The path used to be `<tmp>/elephc-link-dedup-<pid>`, created with `create_dir_all` — which
+/// SUCCEEDS on a directory that already exists. On a multi-user machine another local user
+/// could predict or race the compiler's pid, pre-create that directory with permissive
+/// access, and plant a symlink named after a bridge archive; the copy would then truncate and
+/// overwrite the symlink's target with the compiler user's permissions (issue #889).
+fn create_private_scratch() -> Option<PathBuf> {
+    use std::ffi::{CString, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut template = std::env::temp_dir();
+    template.push("elephc-link-dedup-XXXXXX");
+    let template = CString::new(template.as_os_str().as_bytes()).ok()?;
+    let mut buffer = template.into_bytes_with_nul();
+    // SAFETY: `buffer` is a NUL-terminated, writable C string ending in the six `X`
+    // characters `mkdtemp` requires; it stays alive and unaliased for the call, and
+    // `mkdtemp` only rewrites those six bytes in place.
+    let created = unsafe { libc::mkdtemp(buffer.as_mut_ptr() as *mut libc::c_char) };
+    if created.is_null() {
+        return None;
+    }
+    let path_bytes = &buffer[..buffer.len() - 1];
+    Some(PathBuf::from(OsStr::from_bytes(path_bytes)))
 }
 
 /// Lists object member names in an archive through `ar t`.
@@ -197,8 +238,18 @@ fn dedup_macos_archive(
     }
 
     let copy = scratch.join(archive.file_name()?);
-    std::fs::create_dir_all(scratch).ok()?;
-    std::fs::copy(archive, &copy).ok()?;
+    // `create_new` is `O_CREAT | O_EXCL`, which refuses to follow a symlink and fails
+    // outright if anything already sits at the destination — unlike `fs::copy`, which
+    // happily truncates whatever a symlink points at. The private scratch directory already
+    // makes a pre-placed symlink unreachable; this is the second lock on the same door.
+    let bytes = std::fs::read(archive).ok()?;
+    let mut destination = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&copy)
+        .ok()?;
+    destination.write_all(&bytes).ok()?;
+    drop(destination);
     let strip: Vec<&String> = strip.iter().collect();
     for chunk in strip.chunks(256) {
         let success = Command::new("ar")
@@ -221,4 +272,74 @@ fn dedup_macos_archive(
         return None;
     }
     Some(copy)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #889: the scratch directory is unpredictable, owner-only, and freshly created.
+    ///
+    /// The old path was `<tmp>/elephc-link-dedup-<pid>` created with `create_dir_all`, which
+    /// succeeds on a directory that already exists — so another local user could pre-create
+    /// it with permissive access and plant symlinks inside.
+    #[test]
+    fn scratch_is_unpredictable_private_and_fresh() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let first = create_private_scratch().expect("scratch must be creatable");
+        let second = create_private_scratch().expect("scratch must be creatable");
+
+        assert_ne!(first, second, "two scratch paths must not collide");
+        assert!(
+            !first.to_string_lossy().contains(&std::process::id().to_string()),
+            "the name must not be derived from the pid: {first:?}"
+        );
+
+        for path in [&first, &second] {
+            let metadata = std::fs::metadata(path).expect("scratch must exist");
+            assert!(metadata.is_dir());
+            assert_eq!(
+                metadata.permissions().mode() & 0o777,
+                0o700,
+                "scratch must be owner-only: {path:?}"
+            );
+            assert_eq!(
+                std::fs::read_dir(path).expect("scratch must be readable").count(),
+                0,
+                "scratch must be fresh and empty: {path:?}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
+    }
+
+    /// A destination that already exists — a planted symlink among them — is REFUSED rather
+    /// than followed and truncated.
+    #[test]
+    fn an_existing_destination_is_refused_not_followed() {
+        let scratch = create_private_scratch().expect("scratch must be creatable");
+        let victim = scratch.join("victim.txt");
+        std::fs::write(&victim, b"original").expect("victim must be writable");
+
+        let planted = scratch.join("libbridge.a");
+        std::os::unix::fs::symlink(&victim, &planted).expect("symlink must be creatable");
+
+        let opened = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&planted);
+        assert!(
+            opened.is_err(),
+            "create_new must refuse a pre-existing destination"
+        );
+        assert_eq!(
+            std::fs::read(&victim).expect("victim must still be readable"),
+            b"original",
+            "the symlink target must be untouched"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
 }
