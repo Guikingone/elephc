@@ -158,6 +158,18 @@ pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<Strin
         "restore_exception_handler",
         "ini_get",
         "ini_set",
+        "get_cfg_var",
+        "gc_enabled",
+        "gc_enable",
+        "gc_disable",
+        "gc_collect_cycles",
+        "flush",
+        "strnatcmp",
+        "strnatcasecmp",
+        "hash_init",
+        "hash_update",
+        "hash_final",
+        "hash_copy",
     ];
     let bare = name.trim_start_matches('\\');
     FUNCTIONS

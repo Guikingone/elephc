@@ -62,6 +62,7 @@ pub mod fclose;
 pub mod fdatasync;
 pub mod feof;
 pub mod fflush;
+pub mod flush;
 pub mod fgetc;
 pub mod fgetcsv;
 pub mod fgets;

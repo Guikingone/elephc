@@ -82,6 +82,12 @@ use scope_cells::*;
 #[cfg(not(test))]
 pub(crate) use statements::eval_dynamic_destructor_for_object_cell;
 #[cfg(not(test))]
+pub(crate) use generators::eval_generator_protocol_result;
+#[cfg(not(test))]
+pub(crate) use builtins::eval_unserialize_declared_object_from_hash;
+#[cfg(not(test))]
+pub(crate) use builtins::eval_serialize_object_fragment;
+#[cfg(not(test))]
 pub(crate) use output_handlers::eval_ob_handler_callback;
 use statements::*;
 use throwables::*;

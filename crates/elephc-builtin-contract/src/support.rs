@@ -324,15 +324,23 @@ mod tests {
         // `serialize`/`unserialize`/`error_log` wired up the same way (LOT C: all three already
         // had a contract and an AOT `builtin!`; this only deleted them from
         // `EVAL_IMPLEMENTATION_PENDING` and added interpreter home files).
-        assert_eq!(eval_registry, 501);
+        // 501 + the six contracts this branch added before `var_export` (`get_cfg_var`, the four
+        // cycle-collector controls, and `flush` -- each wired into the interpreter, none
+        // eval-pending) + `var_export` itself, another `PreludeProvided` contract with an
+        // interpreter home file and no AOT registry binding.
+        assert_eq!(eval_registry, 508);
         assert_eq!(eval_internal, 39);
         assert_eq!(eval_pending, 32);
         // Unchanged: `parse_str` raises `aot_unsupported` (it joined
         // `AOT_IMPLEMENTATION_PENDING`), and `levenshtein` raises `aot_external` (it is
         // `PreludeProvided`) -- neither is a `Registry` binding.
-        assert_eq!(aot_registry, 555);
-        // 10 + `levenshtein` (`PreludeProvided` -> `BackendImplementation::Prelude`).
-        assert_eq!(aot_external, 11);
+        // 555 + the six `Function` contracts this branch added before `var_export`, each with an
+        // AOT `builtin!` registry binding. `var_export` is NOT among them: it is
+        // `PreludeProvided`, so it lands in `aot_external` below.
+        assert_eq!(aot_registry, 561);
+        // 10 + `levenshtein` + `var_export`, both `PreludeProvided` ->
+        // `BackendImplementation::Prelude`.
+        assert_eq!(aot_external, 12);
         // 5 + `parse_str`.
         assert_eq!(aot_unsupported, 6);
     }
@@ -387,7 +395,9 @@ mod tests {
         // `RuntimeBuiltinId` -- lands in `interpreter_adapter` like every other Array builtin) +
         // serialize/unserialize/error_log (LOT C wire-up, `Area::Core`, no by-ref param, no
         // `RuntimeBuiltinId` -- same `interpreter_adapter` bucket).
-        assert_eq!(interpreter_adapter, 480);
+        // 480 + the same seven: every one is `Area::Core`/`Area::Io` with no by-ref parameter and
+        // no `RuntimeBuiltinId`, which is the `interpreter_adapter` bucket.
+        assert_eq!(interpreter_adapter, 487);
         // eval_internal (39) + eval_pending (32) above.
         assert_eq!(unsupported, 71);
         assert_eq!(

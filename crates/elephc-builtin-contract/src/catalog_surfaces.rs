@@ -205,6 +205,24 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Int,
         "Computes the Levenshtein edit distance between two strings."
     ),
+    // `PreludeProvided` for the same asymmetry as `levenshtein` above: the AOT side serves
+    // `var_export` as a conditionally injected PHP-source prelude (`src/var_export_prelude.rs`),
+    // not a `builtin!` registry binding, so a `Function` contract would wrongly demand one. The
+    // INTERPRETER has a real implementation
+    // (`interpreter::builtins::core::var_export`) because interpreted code cannot reach that
+    // prelude at all -- Symfony's routing dumper is interpreted and called it.
+    surface!(
+        "var_export",
+        Io,
+        PreludeProvided,
+        [
+            param!("value", Mixed),
+            param!("return", Bool = DefaultSpec::Bool(false)),
+        ],
+        None,
+        Mixed,
+        "Renders a parsable string representation of a variable."
+    ),
     surface!(
         "unset",
         Types,

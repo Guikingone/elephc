@@ -52,6 +52,10 @@ pub(super) use registry::*;
 pub(super) use scalars::*;
 pub(super) use string::*;
 pub(super) use symbols::*;
+#[cfg(not(test))]
+pub(crate) use core::eval_unserialize_declared_object_from_hash;
+#[cfg(not(test))]
+pub(crate) use core::eval_serialize_object_fragment;
 pub(crate) use symbols::eval_spl_autoload_class;
 pub(crate) use symbols::eval_spl_autoload_classlike_definition;
 pub(super) use time::*;

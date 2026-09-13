@@ -14,6 +14,8 @@ use super::super::*;
 
 mod exec;
 mod extension_loaded;
+mod gc;
+mod get_cfg_var;
 mod get_loaded_extensions;
 mod getenv;
 mod gethostbyaddr;
@@ -40,6 +42,8 @@ mod system;
 
 pub(in crate::interpreter) use exec::*;
 pub(in crate::interpreter) use extension_loaded::*;
+pub(in crate::interpreter) use gc::*;
+pub(in crate::interpreter) use get_cfg_var::*;
 pub(in crate::interpreter) use get_loaded_extensions::*;
 pub(in crate::interpreter) use getenv::*;
 pub(in crate::interpreter) use gethostbyaddr::*;
@@ -78,6 +82,10 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "system" => eval_builtin_system(args, context, scope, values),
         "passthru" => eval_builtin_passthru(args, context, scope, values),
         "extension_loaded" => eval_builtin_extension_loaded(args, context, scope, values),
+        "gc_collect_cycles" => eval_builtin_gc_collect_cycles(args, values),
+        "gc_disable" | "gc_enable" => eval_builtin_gc_switch(args, values),
+        "gc_enabled" => eval_builtin_gc_enabled(args, values),
+        "get_cfg_var" => eval_builtin_get_cfg_var(args, context, scope, values),
         "get_loaded_extensions" => {
             eval_builtin_get_loaded_extensions(args, context, scope, values)
         }
@@ -107,6 +115,24 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
+        "gc_collect_cycles" => match evaluated_args {
+            [] => eval_gc_collect_cycles_result(values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "gc_disable" | "gc_enable" => match evaluated_args {
+            [] => eval_gc_switch_result(values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "gc_enabled" => match evaluated_args {
+            [] => eval_gc_enabled_result(values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "get_cfg_var" => {
+            let [option] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_get_cfg_var_result(*option, values)
+        }
         "php_uname" => match evaluated_args {
             [] => eval_php_uname_result(None, values),
             [mode] => eval_php_uname_result(Some(*mode), values),

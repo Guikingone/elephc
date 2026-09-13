@@ -23,6 +23,7 @@ mod error_log;
 mod exit;
 mod ob_clean;
 mod ob_end_clean;
+mod flush;
 mod ob_end_flush;
 mod ob_flush;
 mod ob_get_clean;
@@ -35,6 +36,7 @@ mod ob_implicit_flush;
 mod ob_list_handlers;
 mod ob_start;
 mod print_r;
+mod var_export;
 mod func_args;
 mod serialize;
 mod tick_functions;
@@ -56,14 +58,20 @@ pub(in crate::interpreter) use func_args::*;
 pub(in crate::interpreter) use serialize::*;
 pub(in crate::interpreter) use tick_functions::*;
 pub(in crate::interpreter) use ob_get_contents::*;
+pub(in crate::interpreter) use flush::*;
 pub(in crate::interpreter) use ob_get_flush::*;
 pub(in crate::interpreter) use ob_get_status::*;
 pub(in crate::interpreter) use ob_implicit_flush::*;
 pub(in crate::interpreter) use ob_list_handlers::*;
 pub(in crate::interpreter) use ob_start::*;
 pub(in crate::interpreter) use print_r::*;
+pub(in crate::interpreter) use var_export::*;
 pub(in crate::interpreter) use trigger_error::*;
 pub(in crate::interpreter) use unserialize::*;
+#[cfg(not(test))]
+pub(crate) use unserialize::eval_unserialize_declared_object_from_hash;
+#[cfg(not(test))]
+pub(crate) use serialize::eval_serialize_object_fragment;
 pub(in crate::interpreter) use var_dump::*;
 
 /// Dispatches direct expression-level calls for core builtins.
@@ -79,6 +87,7 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "constant" => eval_builtin_constant(args, context, scope, values),
         "define" => eval_builtin_define(args, context, scope, values),
+        "flush" => eval_builtin_flush(args, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "die" => eval_builtin_die(args, context, scope, values),
         "error_log" => eval_builtin_error_log(args, context, scope, values),
@@ -100,6 +109,7 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         }
         "unserialize" => eval_builtin_unserialize(args, context, scope, values),
         "var_dump" => eval_builtin_var_dump(args, context, scope, values),
+        "var_export" => eval_builtin_var_export(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -112,6 +122,10 @@ pub(in crate::interpreter) fn eval_core_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
+        "flush" => match evaluated_args {
+            [] => eval_flush_result(values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
         "call_user_func" => {
             eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)
         }
@@ -144,6 +158,7 @@ pub(in crate::interpreter) fn eval_core_values_result(
         }
         "unserialize" => eval_unserialize_declared_values_result(evaluated_args, context, values),
         "var_dump" => eval_var_dump_result(evaluated_args, context, values),
+        "var_export" => eval_var_export_result(evaluated_args, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

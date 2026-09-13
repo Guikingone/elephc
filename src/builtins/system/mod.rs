@@ -49,6 +49,8 @@ pub mod error_log;
 pub mod exec;
 pub mod extension_loaded;
 pub mod filter_var;
+pub mod gc;
+pub mod get_cfg_var;
 pub mod get_loaded_extensions;
 pub mod getdate;
 pub mod getenv;
