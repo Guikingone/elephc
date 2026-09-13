@@ -35,6 +35,7 @@ use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
+use crate::codegen_support::data_section::comm_directive_aligned;
 use crate::codegen_support::platform::Target;
 use crate::php_version::PhpVersion;
 use crate::types::checker::builtins::{
@@ -430,7 +431,9 @@ pub(crate) fn emit_runtime_data_fixed(
         8,
         target,
     ));
-    out.push_str(&comm_directive("_heap_buf", heap_size, target));
+    // Heap headers and object-handle side-table indices use 16-byte granules.
+    // Keep payload alignment stable when preceding runtime symbols change.
+    out.push_str(&comm_directive_aligned("_heap_buf", heap_size, 16, target));
     out.push_str(&comm_directive("_heap_off", 8, target));
     out.push_str(&comm_directive("_heap_free_list", 8, target));
     out.push_str(&comm_directive("_heap_small_bins", 32, target));
@@ -1665,8 +1668,8 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform};
 
-    /// Every common symbol the runtime data section declares must carry an alignment operand
-    /// the target's own assembler reads as 8 bytes.
+    /// Every common symbol carries at least 8-byte alignment, while the heap keeps its
+    /// allocator-wide 16-byte granule alignment.
     ///
     /// This is a whole-section sweep rather than a spot check because the failure is silent at
     /// assembly time and only shows up at link time, once per program rather than once per
@@ -1677,10 +1680,10 @@ mod tests {
     /// that is not 8-byte aligned. `_stack_limit` took out every linux-aarch64 link this way.
     #[test]
     fn test_runtime_common_symbols_are_aligned_for_each_object_format() {
-        for (platform, arch, expected) in [
-            (Platform::MacOS, Arch::AArch64, "3"),
-            (Platform::Linux, Arch::AArch64, "8"),
-            (Platform::Linux, Arch::X86_64, "8"),
+        for (platform, arch, expected, heap_expected) in [
+            (Platform::MacOS, Arch::AArch64, "3", "4"),
+            (Platform::Linux, Arch::AArch64, "8", "16"),
+            (Platform::Linux, Arch::X86_64, "8", "16"),
         ] {
             let target = Target::new(platform, arch);
             let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
@@ -1689,10 +1692,14 @@ mod tests {
             for line in asm.lines().filter(|line| line.starts_with(".comm ")) {
                 seen += 1;
                 let alignment = line.rsplit(',').next().unwrap().trim();
+                let expected = if line.starts_with(".comm _heap_buf,") {
+                    heap_expected
+                } else {
+                    expected
+                };
                 assert_eq!(
                     alignment, expected,
-                    "{:?}/{:?} emitted `{}`, whose alignment operand is not the {}-spelling \
-                     that this object format's assembler reads as 8 bytes",
+                    "{:?}/{:?} emitted `{}`, whose alignment operand is not the expected {}",
                     platform, arch, line, expected
                 );
             }
