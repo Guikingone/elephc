@@ -523,23 +523,38 @@ fn lower_array_reverse_preserve_keys(
     inst: &Instruction,
     array: ValueId,
 ) -> Result<()> {
-    let PhpType::Array(_) = ctx.value_php_type(array)?.codegen_repr() else {
-        return Err(CodegenIrError::unsupported(format!(
-            "array_reverse preserve_keys for PHP type {:?}",
-            ctx.value_php_type(array)?
-        )));
-    };
     let PhpType::AssocArray { .. } = inst.result_php_type.codegen_repr() else {
         return Err(CodegenIrError::unsupported(format!(
             "array_reverse preserve_keys result PHP type {:?}",
             inst.result_php_type
         )));
     };
+    // A source that is ALREADY a hash takes its own helper, for the reason `array_unique` does:
+    // `__rt_array_to_hash_reverse` walks fixed-size payload slots and a hash has none. PHP accepts
+    // `array_reverse($assoc, true)` as ordinary code, and it became reachable everywhere the bare
+    // `array` contract started resolving to the hash.
+    let source_is_hash = matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    );
+    if !source_is_hash && !matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Array(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_reverse preserve_keys for PHP type {:?}",
+            ctx.value_php_type(array)?
+        )));
+    }
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the key-preserving reverse helper argument
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the source container pointer as the key-preserving reverse helper argument
     }
-    abi::emit_call_label(ctx.emitter, "__rt_array_to_hash_reverse");
+    abi::emit_call_label(
+        ctx.emitter,
+        if source_is_hash {
+            "__rt_hash_to_hash_reverse"
+        } else {
+            "__rt_array_to_hash_reverse"
+        },
+    );
     store_if_result(ctx, inst)
 }
 

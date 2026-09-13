@@ -95,6 +95,7 @@ mod array_sum_mixed;
 mod array_to_hash;
 mod array_to_hash_reverse;
 mod array_to_hash_unique;
+mod hash_to_hash_reverse;
 mod hash_to_hash_unique;
 mod array_to_mixed;
 mod array_udiff_uintersect;
@@ -376,6 +377,7 @@ pub use array_to_hash::emit_array_to_hash;
 pub use array_to_hash_reverse::emit_array_to_hash_reverse;
 /// Emit key-preserving reversed indexed-array-to-hash converter helper (array_reverse preserve_keys).
 pub use array_to_hash_unique::emit_array_to_hash_unique;
+pub use hash_to_hash_reverse::emit_hash_to_hash_reverse;
 pub use hash_to_hash_unique::emit_hash_to_hash_unique;
 /// Emit key-preserving deduplicating indexed-array-to-hash converter helper (array_unique).
 pub use array_to_mixed::emit_array_to_mixed;
