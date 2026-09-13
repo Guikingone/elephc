@@ -44,7 +44,7 @@
 
 use crate::names::Name;
 use crate::parser::ast::{
-    CallableTarget, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
+    CallableTarget, CastType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     InstanceOfTarget, PackedField, Stmt, StmtKind, TraitUse, TypeExpr,
 };
 use crate::span::Span;
@@ -91,6 +91,12 @@ pub(crate) enum SymbolKind {
     AsymmetricVisibility,
     /// A TYPED CLASS CONSTANT (`const string N = 'v'`), a PHP 8.3 form.
     TypedClassConst,
+    /// The OBJECT CAST (`(object) $value`), matched as a syntactic form rather than by name.
+    ///
+    /// `object_cast_prelude` injects the PHP helper the cast lowers to, and it must be
+    /// injected exactly when the program spells the cast anywhere — including inside a
+    /// function body, a class member initializer, or a closure.
+    ObjectCast,
 }
 
 /// How a call's first argument narrows a FUNCTION match.
@@ -273,7 +279,8 @@ fn name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::PipeOperator
         | SymbolKind::PropertyHooks
         | SymbolKind::AsymmetricVisibility
-        | SymbolKind::TypedClassConst => false,
+        | SymbolKind::TypedClassConst
+        | SymbolKind::ObjectCast => false,
     }
 }
 
@@ -294,7 +301,8 @@ fn const_name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::PipeOperator
         | SymbolKind::PropertyHooks
         | SymbolKind::AsymmetricVisibility
-        | SymbolKind::TypedClassConst => false,
+        | SymbolKind::TypedClassConst
+        | SymbolKind::ObjectCast => false,
     }
 }
 
@@ -509,7 +517,13 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         } => expr_refs(condition, target)
             .or_else(|| expr_refs(then_expr, target))
             .or_else(|| expr_refs(else_expr, target)),
-        ExprKind::Cast { expr, .. } | ExprKind::PtrCast { expr, .. } => expr_refs(expr, target),
+        ExprKind::Cast {
+            target: cast_target,
+            expr: inner,
+        } => (target.kind == SymbolKind::ObjectCast && *cast_target == CastType::Object)
+            .then_some(expr.span)
+            .or_else(|| expr_refs(inner, target)),
+        ExprKind::PtrCast { expr, .. } => expr_refs(expr, target),
         ExprKind::Closure { params, body, .. } => params_ref(params, target)
             .or_else(|| body.iter().find_map(|stmt| stmt_refs(stmt, target))),
         ExprKind::NamedArg { value, .. } => expr_refs(value, target),

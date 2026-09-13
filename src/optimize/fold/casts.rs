@@ -34,6 +34,8 @@ pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> 
         CastType::Bool if value.is_nan_float() => None,
         CastType::Bool => Some(ExprKind::BoolLiteral(value.truthy())),
         CastType::Array => None,
+        // `(object)` always allocates a fresh stdClass, so there is no literal to fold to.
+        CastType::Object => None,
     }
 }
 

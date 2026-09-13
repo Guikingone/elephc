@@ -243,6 +243,15 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("var-export-prelude", phase_started);
 
+    // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program
+    // spells a `(object)` cast, so other binaries carry nothing. Runs after include
+    // resolution so a cast inside an include is detected, and before name resolution so the
+    // call `ir_lower` synthesizes for the cast resolves to the injected declaration.
+    crate::progress::phase("object-cast-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory);
+    timings.record_since("object-cast-prelude", phase_started);
+
     // Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
     // returns a compile-time array literal built from the version-keyed OPcache
     // directive matrix, and `opcache_reset()` returns the compile-time cache-enabled

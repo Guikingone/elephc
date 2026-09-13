@@ -403,6 +403,23 @@ impl Checker {
                             PhpType::Mixed | PhpType::Union(_)
                         ) => PhpType::Mixed,
                     CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+                    // `(object)` is the identity on an object, so the static class survives the
+                    // cast; a runtime-typed source may already hold an unrelated class, which
+                    // only `mixed` can describe. Every other source becomes a fresh stdClass.
+                    CastType::Object
+                        if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
+                    {
+                        source_ty.clone()
+                    }
+                    CastType::Object
+                        if matches!(
+                            source_ty.codegen_repr(),
+                            PhpType::Mixed | PhpType::Union(_)
+                        ) =>
+                    {
+                        PhpType::Mixed
+                    }
+                    CastType::Object => PhpType::Object("stdClass".to_string()),
                 })
             }
             _ => unreachable!("non-basic expression routed to basic inference"),

@@ -263,6 +263,7 @@ pub enum CastType {
     String,
     Bool,
     Array,
+    Object,
 }
 
 #[derive(Debug, Clone, PartialEq)]
