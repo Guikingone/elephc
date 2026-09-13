@@ -31,6 +31,7 @@ fn type_spec_str(ty: &TypeSpec) -> String {
         TypeSpec::Float => "float".to_string(),
         TypeSpec::Str => "string".to_string(),
         TypeSpec::Bool => "bool".to_string(),
+        TypeSpec::Object => "object".to_string(),
         TypeSpec::Mixed => "mixed".to_string(),
         TypeSpec::Void => "void".to_string(),
         // Not a PHP type: the `Area::Pointers` builtins are elephc extensions and this is the

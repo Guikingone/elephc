@@ -37,6 +37,7 @@ pub(crate) mod arrays;
 pub(crate) mod bcmath;
 pub(crate) mod buffers;
 pub(crate) mod class_relations;
+pub(crate) mod clone_with;
 pub(crate) mod ctype;
 pub(crate) mod curl;
 pub(crate) mod debug;

@@ -153,6 +153,7 @@ pub enum RuntimeFnId {
     Usort,
     CallUserFunc,
     CallUserFuncArray,
+    CloneWith,
     ClassAlias,
     ClassExists,
     ClassImplements,
@@ -914,6 +915,11 @@ impl RuntimeFnId {
         use crate::types::PhpType;
         match self {
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
+            RuntimeFnId::CloneWith => {
+                set_callable_param_type(sig, 0, PhpType::Mixed);
+                set_callable_param_type(sig, 1, PhpType::php_array());
+                sig.return_type = PhpType::Mixed;
+            }
             // `array_reverse()`'s `$preserve_keys` and `array_slice()`'s `$preserve_keys` pick
             // between an indexed array and an integer-keyed hash, so the backend needs them as
             // compile-time literals. A dynamic callable wrapper receives runtime parameters, so
@@ -953,6 +959,13 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            // Clone hooks and property hooks can execute arbitrary user code. I/O effects are
+            // attributed to the nested operation that performs them.
+            RuntimeFnId::CloneWith => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             RuntimeFnId::ArrayMultisort => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::WRITES_HEAP.bits()
@@ -1613,6 +1626,7 @@ impl RuntimeFnId {
             RuntimeFnId::Abs
                 | RuntimeFnId::ArraySum
                 | RuntimeFnId::ArrayProduct
+                | RuntimeFnId::CloneWith
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
@@ -1624,6 +1638,9 @@ impl RuntimeFnId {
         use crate::types::PhpType;
         let source = source.map(PhpType::codegen_repr);
         match self {
+            RuntimeFnId::CloneWith => source.is_none_or(|ty| {
+                matches!(ty, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_))
+            }),
             RuntimeFnId::Abs => source.is_none_or(|ty| {
                 matches!(
                     ty,
@@ -1998,6 +2015,7 @@ impl RuntimeFnId {
                 // bucket would keep an owned name temporary — and skip releasing the hash.
                 | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
+                | RuntimeFnId::CloneWith
                 // The join lowerer persists every result before retiring normalized
                 // input values, so destructor reentry cannot overwrite returned bytes.
                 | RuntimeFnId::Implode
@@ -2182,6 +2200,7 @@ impl RuntimeFnId {
             RuntimeFnId::Usort => "usort",
             RuntimeFnId::CallUserFunc => "call_user_func",
             RuntimeFnId::CallUserFuncArray => "call_user_func_array",
+            RuntimeFnId::CloneWith => "clone",
             RuntimeFnId::ClassAlias => "class_alias",
             RuntimeFnId::ClassExists => "class_exists",
             RuntimeFnId::ClassImplements => "class_implements",

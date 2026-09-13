@@ -263,6 +263,7 @@ fn type_name(ty: TypeSpec) -> String {
         TypeSpec::Float => "float".to_string(),
         TypeSpec::Str => "string".to_string(),
         TypeSpec::Bool => "bool".to_string(),
+        TypeSpec::Object => "object".to_string(),
         TypeSpec::Mixed => "mixed".to_string(),
         TypeSpec::Void => "void".to_string(),
         // elephc extensions to the neutral spelling. Without these the generated pages would

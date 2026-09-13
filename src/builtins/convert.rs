@@ -28,6 +28,9 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Float => PhpType::Float,
         TypeSpec::Str => PhpType::Str,
         TypeSpec::Bool => PhpType::Bool,
+        // The checker model records object types by concrete class name. A neutral `object`
+        // declaration therefore remains open until a builtin check hook can refine it.
+        TypeSpec::Object => PhpType::Mixed,
         TypeSpec::Mixed => PhpType::Mixed,
         TypeSpec::Void => PhpType::Void,
         TypeSpec::Ptr => PhpType::Pointer(None),
@@ -107,6 +110,7 @@ mod tests {
     fn all_scalar_type_specs_convert() {
         assert_eq!(type_spec_to_php(&TypeSpec::Float), PhpType::Float);
         assert_eq!(type_spec_to_php(&TypeSpec::Bool), PhpType::Bool);
+        assert_eq!(type_spec_to_php(&TypeSpec::Object), PhpType::Mixed);
         assert_eq!(type_spec_to_php(&TypeSpec::Mixed), PhpType::Mixed);
         assert_eq!(type_spec_to_php(&TypeSpec::Void), PhpType::Void);
     }
