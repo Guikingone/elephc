@@ -578,9 +578,11 @@ None of the three applies to a name whose storage this body does not own: a name
 this body binds with `global`, a `static` name, or a superglobal or seeded name
 (`$argc`, `$argv`, and the extern C globals, seeded into the top-level scope).
 A **declared type** always stays strict in both modes: a typed local
-(`int $x = 5;`), a type-hinted parameter, and a class property never retype or
-box to `Mixed` — reassigning one incompatibly is a compile error exactly as
-before.
+(`int $x = 5;`) and a class property never retype or box to `Mixed` —
+reassigning one incompatibly is a compile error exactly as before. A
+**parameter type hint** is not such a declaration: it constrains the incoming
+argument, not the local, so a type-hinted parameter is exactly as eligible as an
+untyped one (a by-REFERENCE parameter stays excluded, by the rule above).
 
 Beyond those shared exclusions the shapes are gated differently:
 

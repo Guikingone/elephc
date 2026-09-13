@@ -136,21 +136,6 @@ impl Checker {
             .cloned()
             .chain(decl.variadic.iter().cloned())
             .collect();
-        // A parameter with a declared type hint is a contract: it never becomes kill/retype
-        // eligible inside the body, in either mode.
-        let typed_param_names: Vec<String> = decl
-            .params
-            .iter()
-            .zip(decl.param_types.iter())
-            .filter(|(_, type_ann)| type_ann.is_some())
-            .map(|(name, _)| name.clone())
-            .chain(
-                decl.variadic
-                    .iter()
-                    .filter(|_| decl.variadic_type.is_some())
-                    .cloned(),
-            )
-            .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
         self.loop_storage_types
@@ -170,7 +155,6 @@ impl Checker {
         let body_check_result = self.with_local_storage_context(
             ref_param_names,
             param_names,
-            typed_param_names,
             pre_bound_own_storage,
             &decl.body,
             |checker| {

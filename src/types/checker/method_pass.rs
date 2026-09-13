@@ -158,21 +158,6 @@ impl Checker {
                         .map(|(name, _, _, _)| name.clone())
                         .chain(method.variadic.iter().cloned())
                         .collect();
-                    // A parameter with a declared type hint is a contract: never kill/retype
-                    // eligible inside the body, in either mode.
-                    let method_typed_params: Vec<String> = method
-                        .params
-                        .iter()
-                        .filter(|(_, type_ann, _, _)| type_ann.is_some())
-                        .map(|(name, _, _, _)| name.clone())
-                        .chain(
-                            method
-                                .variadic
-                                .iter()
-                                .filter(|_| method.variadic_type.is_some())
-                                .cloned(),
-                        )
-                        .collect();
                     let mut method_errors = Vec::new();
                     // The storage this frame already holds on entry: the parameters. `$this`,
                     // the superglobals and the seeded globals `method_env` also carries are not
@@ -187,7 +172,6 @@ impl Checker {
                     self.with_local_storage_context(
                         method_ref_params,
                         method_param_names,
-                        method_typed_params,
                         pre_bound_own_storage,
                         &method.body,
                         |checker| {

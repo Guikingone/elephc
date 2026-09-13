@@ -250,7 +250,7 @@ Narrowing applies to function and method parameters. A parameter whose call site
 
 ### Local retyping
 
-An **undeclared-type** local is monomorphic by default, but three shapes let it change type anyway. `unset($a)` ends the binding, and the next assignment re-binds `$a` at any type with no diagnostic. A plain straight-line reassignment (`$a = 0; $a = "ciao";`) re-binds `$a` to a fresh slot of the new type and warns. A branch-divergent assignment (`if (…) { $a = 0; } else { $a = "ciao"; }`) compiles the local as boxed `mixed` storage for the whole body and warns — a performance signal as much as a correctness one, since every read of it then goes through the box.
+A local is monomorphic by default, but three shapes let it change type anyway. `unset($a)` ends the binding, and the next assignment re-binds `$a` at any type with no diagnostic. A plain straight-line reassignment (`$a = 0; $a = "ciao";`) re-binds `$a` to a fresh slot of the new type and warns. A branch-divergent assignment (`if (…) { $a = 0; } else { $a = "ciao"; }`) compiles the local as boxed `mixed` storage for the whole body and warns — a performance signal as much as a correctness one, since every read of it then goes through the box.
 
 One behaviour differs from PHP: reading a variable after `unset()` is a compile error, where PHP warns and evaluates the read as `null`. Probe the name with `isset()` (or `empty()` / `??`), which stay legal on an unbound name:
 
@@ -261,7 +261,12 @@ echo $a;                            // Undefined variable: $a — compile error
 echo isset($a) ? "set" : "unset";   // fine: prints "unset"
 ```
 
-None of this touches a **declared** type: a typed local, a type-hinted parameter, and a class property stay strict in every mode. `--strict-locals` turns the two warning shapes back into hard errors; see [Strict locals mode](../compiling/cli-reference.md#strict-locals-mode) for the flag and for which names are eligible.
+A **type-hinted parameter** is retyped by the same three shapes. PHP's parameter type
+constrains the *incoming argument*, not the local afterwards, so
+`function format(float $v): string { $v = (string) $v; return $v; }` compiles with the ordinary
+retype warning. The hint still governs the call boundary; only the local's later type is free.
+
+None of this touches a **declared** type: a typed local (`int $x = 1;`) and a class property stay strict in every mode. `--strict-locals` turns the two warning shapes back into hard errors; see [Strict locals mode](../compiling/cli-reference.md#strict-locals-mode) for the flag and for which names are eligible.
 
 ### Parameter type coercion
 

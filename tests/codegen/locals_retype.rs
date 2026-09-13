@@ -2716,3 +2716,92 @@ fn test_by_ref_foreach_still_writes_through_and_unsets() {
         out.stderr
     );
 }
+
+/// Issue #857: a PHP parameter TYPE HINT constrains the incoming argument, not the local. A
+/// typed parameter reassigned to another PHP type takes the ordinary retype-to-fresh-slot
+/// path, exactly as an untyped local does; it used to be rejected outright with
+/// `cannot reassign $value from float to string`.
+#[test]
+fn test_typed_param_retypes_to_a_fresh_slot() {
+    let out = compile_and_run(
+        "<?php function format(float $value): string { $value = (string) $value; return $value; } echo format($argc + 0.5);",
+    );
+    assert_eq!(out, "1.5");
+}
+
+/// The retyped parameter's fresh slot owns its heap value alone: the entry-typed slot must be
+/// abandoned rather than widened, or the string allocation leaks once per call.
+#[test]
+fn test_typed_param_retype_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php function label(int $n): string { $n = \"n=\" . $n; return $n; } echo label($argc);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "n=1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The retype runs in the other direction too: an owned heap parameter released at the rebind,
+/// not leaked past the int store.
+#[test]
+fn test_typed_string_param_retyped_to_int_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php function len(string $s): int { $s = strlen($s); return $s; } echo len(\"ciao\" . $argc);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "5");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// `unset()` of a typed parameter followed by a rebind at another type behaves like any other
+/// killable local, and the abandoned entry slot is released.
+#[test]
+fn test_typed_param_unset_then_rebind_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php function f(string $a): string { unset($a); $a = 7; return \"v\" . $a; } echo f(\"x\" . $argc);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "v7");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A typed parameter of a METHOD takes the same path — `method_pass` seeds its own binding
+/// scope, so the parameter exclusion had to be lifted there too.
+#[test]
+fn test_typed_method_param_retypes() {
+    let out = compile_and_run(
+        "<?php class F { public function run(float $v): string { $v = (string) $v; return $v; } } echo (new F())->run($argc + 0.5);",
+    );
+    assert_eq!(out, "1.5");
+}
+
+/// A typed CLOSURE parameter likewise: closure bodies seed their scope through a third site.
+#[test]
+fn test_typed_closure_param_retypes() {
+    let out = compile_and_run(
+        "<?php $f = function (float $v): string { $v = (string) $v; return $v; }; echo $f($argc + 0.5);",
+    );
+    assert_eq!(out, "1.5");
+}
+
+/// A promoted constructor property is a parameter AND a property. Retyping the local must not
+/// disturb the property, which promotion assigned from the incoming argument on entry.
+#[test]
+fn test_promoted_param_retype_leaves_the_property_alone() {
+    let out = compile_and_run(
+        "<?php class B { public function __construct(public int $n) { $n = \"s\" . $n; } } echo (new B($argc))->n;",
+    );
+    assert_eq!(out, "1");
+}
