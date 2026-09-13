@@ -492,6 +492,15 @@ impl ElephcEvalContext {
         self.class_stack.last().map(String::as_str)
     }
 
+    /// Renders the whole class-scope stack, innermost last, for a diagnostic.
+    ///
+    /// A visibility refusal only ever prints the TOP of this stack, which says what the check
+    /// compared but not how execution got there. Kept off every hot path on purpose: this is
+    /// called from failure paths only, so it carries no `ELEPHC_EVAL_TRACE` lookup of its own.
+    pub fn debug_class_scope_stack(&self) -> String {
+        self.class_stack.join(" > ")
+    }
+
     /// Enters a class-like-member-default evaluation (constant initializer, property default,
     /// enum case value), where `static::` has no live call frame to bind late.
     pub fn push_compile_time_constant_context(&mut self) {

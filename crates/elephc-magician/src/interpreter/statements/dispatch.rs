@@ -248,13 +248,29 @@ pub(in crate::interpreter) fn execute_stmt(
                 return eval_by_ref_return(expr, context, scope, values);
             }
             let value = eval_expr(expr, context, scope, values)?;
-            // Returning a `static` hands back a cell the SLOT owns, not one the activation does.
-            // Every other return transfers ownership by `release_activation_scope` skipping the
-            // returned cell, but a static has no entry in that scope to skip -- so without a
-            // retain here the caller's release takes the slot's only reference, and a discarded
-            // `f();` destroys the value the next call is supposed to read.
+            // A return transfers ownership by `release_activation_scope` SKIPPING the returned
+            // cell -- which only gives the caller a reference when the activation scope actually
+            // owned one. Two named values in scope own nothing to transfer:
+            //
+            // - a `static`, whose cell belongs to the slot and has no scope entry to skip. A
+            //   discarded `f();` then destroyed the value the next call was supposed to read.
+            // - a by-value PARAMETER, which `bind_method_scope_args` binds `Borrowed` on
+            //   purpose. `return $param;` handed back a borrowed cell where every caller treats
+            //   a call result as owned (`eval_expr_result_aliases_storage` deliberately does not
+            //   list a call), so a discarded `f($x);` released the CALLER's `$x`. Symfony's
+            //   `HttpKernel::filterResponse` lost its `$event` to exactly that: it is
+            //   `$this->dispatcher->dispatch($event, ...)` as a statement, and `dispatch()`
+            //   returns its `$event` parameter.
             if let EvalExpr::LoadVar(name) = expr {
-                if scope.static_alias_slot(name).is_some() {
+                // `$this` is excluded: the receiver already has its own compensation on the
+                // CALL side (a method result that aliases the receiver is retained there), so
+                // retaining here too would hand back two references and a discarded
+                // `$obj->fluent();` would never run the object's destructor.
+                let activation_owns = name == "this"
+                    || scope.entry(name).is_some_and(|entry| {
+                        entry.flags().ownership == ScopeCellOwnership::Owned
+                    });
+                if !activation_owns || scope.static_alias_slot(name).is_some() {
                     return Ok(EvalControl::Return(values.retain(value)?));
                 }
             }

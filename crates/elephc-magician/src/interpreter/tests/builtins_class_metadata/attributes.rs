@@ -223,6 +223,173 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies `getAttributes($name)` actually filters instead of returning every attribute --
+/// the defect that let `ReflectionClass::getAttributes(RequiredBundle::class)` return an
+/// unrelated attribute and misdirected a fatal in `new $required->class()` downstream.
+/// Measured against php -n 8.5.6: `filtered:1` (not `2`), and a non-matching name returns `[]`.
+#[test]
+fn execute_program_reflection_class_get_attributes_filters_by_name() {
+    let program = parse_fragment(
+        br#"class EvalAttrA { public function __construct(public string $v = "x") {} }
+class EvalAttrB {}
+#[EvalAttrB]
+#[EvalAttrA("one")]
+class EvalAttrFilterTarget {}
+$r = new ReflectionClass("EvalAttrFilterTarget");
+echo count($r->getAttributes()); echo ":";
+$filtered = $r->getAttributes("EvalAttrA");
+echo count($filtered); echo ":"; echo $filtered[0]->getName(); echo ":";
+$empty = $r->getAttributes("NoSuchAttr");
+echo count($empty); echo ":"; echo is_array($empty) ? "Y" : "N";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "2:1:EvalAttrA:0:Y");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies `getAttributes($name, ReflectionAttribute::IS_INSTANCEOF)` matches a subclass and an
+/// implemented interface, not just an exact name -- php's own semantics for that flag.
+#[test]
+fn execute_program_reflection_class_get_attributes_filters_by_instanceof() {
+    let program = parse_fragment(
+        br#"class EvalAttrBase {}
+class EvalAttrSub extends EvalAttrBase {}
+interface EvalAttrIface {}
+class EvalAttrImpl implements EvalAttrIface {}
+class EvalAttrOther {}
+#[EvalAttrOther]
+#[EvalAttrSub]
+#[EvalAttrImpl]
+class EvalAttrInstanceofTarget {}
+$r = new ReflectionClass("EvalAttrInstanceofTarget");
+$bySub = $r->getAttributes("EvalAttrBase", ReflectionAttribute::IS_INSTANCEOF);
+echo count($bySub); echo ":"; echo $bySub[0]->getName(); echo ":";
+$byIface = $r->getAttributes("EvalAttrIface", ReflectionAttribute::IS_INSTANCEOF);
+echo count($byIface); echo ":"; echo $byIface[0]->getName();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:EvalAttrSub:1:EvalAttrImpl");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies a repeated attribute filtered by name returns EVERY instance, not just the first.
+#[test]
+fn execute_program_reflection_class_get_attributes_filters_repeated_attribute_by_name() {
+    let program = parse_fragment(
+        br#"class EvalAttrRep { public function __construct(public int $n = 0) {} }
+class EvalAttrRepOther {}
+#[EvalAttrRep(1)]
+#[EvalAttrRepOther]
+#[EvalAttrRep(2)]
+class EvalAttrRepTarget {}
+$r = new ReflectionClass("EvalAttrRepTarget");
+$attrs = $r->getAttributes("EvalAttrRep");
+echo count($attrs); echo ":";
+foreach ($attrs as $a) { echo $a->newInstance()->n; }
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "2:12");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies the name filter matches case-insensitively, and that `getName()`, `getArguments()`
+/// (including a NAMED argument), and `newInstance()` all still work on a filtered result.
+#[test]
+fn execute_program_reflection_get_attributes_matches_case_insensitively_with_named_args() {
+    let program = parse_fragment(
+        br#"class EvalAttrNamed {
+    public function __construct(public string $a = "d", public int $b = 0) {}
+}
+class EvalAttrDistractor {}
+#[EvalAttrDistractor]
+#[EvalAttrNamed(b: 5, a: "x")]
+class EvalAttrNamedTarget {}
+$r = new ReflectionClass("EvalAttrNamedTarget");
+$attrs = $r->getAttributes("evalattrnamed");
+echo count($attrs); echo ":"; echo $attrs[0]->getName(); echo ":";
+$args = $attrs[0]->getArguments();
+echo $args["b"]; echo ":"; echo $args["a"]; echo ":";
+$inst = $attrs[0]->newInstance();
+echo $inst->a; echo ":"; echo $inst->b;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:EvalAttrNamed:5:x:x:5");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies `getAttributes($name)` filters correctly on every reflector kind that exposes it:
+/// method, property, parameter, class constant, and enum case -- not only `ReflectionClass`,
+/// since all of them share the one synthetic AST body this fix intercepts.
+#[test]
+fn execute_program_reflection_get_attributes_filters_across_every_owner_kind() {
+    let program = parse_fragment(
+        br#"class EvalAttrOwnerMarker {}
+class EvalAttrOwnerOther {}
+class EvalAttrOwnerTarget {
+    #[EvalAttrOwnerOther]
+    #[EvalAttrOwnerMarker]
+    public function run(#[EvalAttrOwnerOther] #[EvalAttrOwnerMarker] $x) {}
+    #[EvalAttrOwnerOther]
+    #[EvalAttrOwnerMarker]
+    public $prop;
+    #[EvalAttrOwnerOther]
+    #[EvalAttrOwnerMarker]
+    const ANSWER = 1;
+}
+enum EvalAttrOwnerEnum {
+    #[EvalAttrOwnerOther]
+    #[EvalAttrOwnerMarker]
+    case Ready;
+}
+$m = (new ReflectionMethod("EvalAttrOwnerTarget", "run"))->getAttributes("EvalAttrOwnerMarker");
+echo count($m); echo ":"; echo $m[0]->getName(); echo ":";
+$prm = (new ReflectionMethod("EvalAttrOwnerTarget", "run"))->getParameters()[0]->getAttributes("EvalAttrOwnerMarker");
+echo count($prm); echo ":"; echo $prm[0]->getName(); echo ":";
+$p = (new ReflectionProperty("EvalAttrOwnerTarget", "prop"))->getAttributes("EvalAttrOwnerMarker");
+echo count($p); echo ":"; echo $p[0]->getName(); echo ":";
+$c = (new ReflectionClassConstant("EvalAttrOwnerTarget", "ANSWER"))->getAttributes("EvalAttrOwnerMarker");
+echo count($c); echo ":"; echo $c[0]->getName(); echo ":";
+$e = (new ReflectionEnumUnitCase("EvalAttrOwnerEnum", "Ready"))->getAttributes("EvalAttrOwnerMarker");
+echo count($e); echo ":"; echo $e[0]->getName();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "1:EvalAttrOwnerMarker:1:EvalAttrOwnerMarker:1:EvalAttrOwnerMarker:1:EvalAttrOwnerMarker:1:EvalAttrOwnerMarker"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies reflection owner origin metadata APIs report eval user-defined defaults.
 #[test]
 fn execute_program_reflection_owners_report_origin_metadata_defaults() {

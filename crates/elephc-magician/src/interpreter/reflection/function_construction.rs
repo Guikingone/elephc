@@ -145,6 +145,49 @@ pub(super) fn eval_reflection_function_new(
         })
         .map(Some);
     }
+    // A first-class callable built from a METHOD -- `$obj(...)`, `$obj->m(...)`, `Cls::m(...)`
+    // -- has no entry in any FUNCTION table, so all three lookups above miss it and the
+    // no-parameter fallback below used to claim it. PHP reflects such a Closure with the
+    // method's own parameters, and this object's `ReflectionParameter` list is materialized
+    // HERE, at construction: leaving it empty is what made Symfony's `ArgumentMetadataFactory`
+    // -- it reads `(new \ReflectionFunction($controller(...)))->getParameters()` -- resolve
+    // zero arguments for an invokable-object controller, so the controller call then bound
+    // nothing to a required parameter.
+    if let Some((declaring_class, method_name)) =
+        eval_reflection_closure_target_method(closure_target.as_ref(), context, values)
+    {
+        let method_metadata =
+            match eval_reflection_method_metadata(&declaring_class, &method_name, context) {
+                Some(method_metadata) => Some(method_metadata),
+                None => eval_reflection_aot_method_metadata_with_signature_if_exists(
+                    &declaring_class,
+                    &method_name,
+                    context,
+                    values,
+                )?,
+            };
+        if let Some(method) = method_metadata {
+            return eval_reflection_function_object_result(
+                &requested_name,
+                &method.attributes,
+                &method.parameters,
+                method.return_type_metadata.as_ref(),
+                method.required_parameter_count,
+                context,
+                values,
+            )
+            .and_then(|object| {
+                eval_reflection_attach_function_callable_target(
+                    object,
+                    closure_target,
+                    args[0],
+                    context,
+                    values,
+                )
+            })
+            .map(Some);
+        }
+    }
     if closure_target.is_some() {
         return eval_reflection_function_object_result(
             &requested_name,

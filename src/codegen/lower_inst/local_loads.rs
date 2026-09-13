@@ -253,5 +253,14 @@ pub(super) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &Ph
         ) | (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
             | (PhpType::Object(_), PhpType::Object(_))
+            // An `iterable` slot holds the UNBOXED payload (coercing a gradual value to
+            // `iterable` emits `Op::MixedUnbox`), so once `instanceof` has proven the value is
+            // the Traversable half, the pointer already IS the object pointer: the narrowed
+            // load is a move, not a conversion. This pairing only became reachable when
+            // `instanceof` on an `iterable` operand stopped folding to a constant false --
+            // before that the narrowed branch was dead code and never lowered, which is why
+            // `local load from PHP type Iterable as Object(..)` had never been hit.
+            | (PhpType::Iterable, PhpType::Object(_))
+            | (PhpType::Object(_), PhpType::Iterable)
     )
 }

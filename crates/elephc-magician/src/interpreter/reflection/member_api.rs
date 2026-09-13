@@ -575,11 +575,138 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
     Ok(None)
 }
 
+/// Handles `getAttributes(?string $name = null, int $flags = 0)` for every Reflection owner
+/// (`ReflectionClass`/`Object`/`Enum`/`Function`/`Method`/`Property`/`Parameter`/`ClassConstant`/
+/// `EnumUnitCase`/`EnumBackedCase`).
+///
+/// Every owner shares ONE synthetic AST body for this method
+/// (`builtin_reflection_owner_get_attributes_method` in
+/// `src/types/checker/builtin_types/reflection/owner_helpers.rs`), and that body's own doc comment
+/// says why it ignores `$name`/`$flags`: "Filtering is a runtime concern". This is that runtime.
+/// It intercepts the call before the compiled body runs, reads the same private `__attrs` slot
+/// `reflection_owner_new()` filled at construction time (every already-materialized
+/// `ReflectionAttribute` object, in declaration order), and -- only when a name filter was passed
+/// -- narrows it using each attribute's own registered eval metadata
+/// (`context.eval_reflection_attribute`), which every owner-materialization path attaches
+/// regardless of owner kind. `IS_INSTANCEOF` reuses `is_a($name, $target, true)`'s relation, which
+/// matches PHP's own semantics for that flag exactly (self, subclass, or implemented interface).
+pub(in crate::interpreter) fn eval_reflection_get_attributes_result(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getAttributes") {
+        return Ok(None);
+    }
+    let Ok(class_name) = runtime_object_class_name(object, values) else {
+        return Ok(None);
+    };
+    if reflection_owner_kind(&class_name).is_none() {
+        return Ok(None);
+    }
+    let (name_filter, flags) = eval_reflection_get_attributes_args(evaluated_args, values)?;
+    context.push_class_scope(class_name);
+    let attrs = values.property_get(object, "__attrs");
+    context.pop_class_scope();
+    let attrs = attrs?;
+    let Some(name_filter) = name_filter else {
+        return Ok(Some(attrs));
+    };
+    let len = values.array_len(attrs)?;
+    let mut result = values.array_new(len)?;
+    let mut out_index: i64 = 0;
+    for position in 0..len {
+        let key = values.int(position as i64)?;
+        let element = values.array_get(attrs, key)?;
+        if eval_reflection_attribute_matches_filter(element, &name_filter, flags, context, values)? {
+            let out_key = values.int(out_index)?;
+            result = values.array_set(result, out_key, element)?;
+            out_index += 1;
+        }
+    }
+    values.release(attrs)?;
+    Ok(Some(result))
+}
+
+/// Parses `getAttributes(?string $name = null, int $flags = 0)` arguments by position or name.
+fn eval_reflection_get_attributes_args(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(Option<String>, u64), EvalStatus> {
+    let mut name_arg = None;
+    let mut flags_arg = None;
+    let mut positional = 0u8;
+    for arg in evaluated_args {
+        let slot = match arg.name.as_deref() {
+            Some("name") => &mut name_arg,
+            Some("flags") => &mut flags_arg,
+            Some(_) => return Err(EvalStatus::RuntimeFatal),
+            None => {
+                let slot = match positional {
+                    0 => &mut name_arg,
+                    1 => &mut flags_arg,
+                    _ => return Err(EvalStatus::RuntimeFatal),
+                };
+                positional += 1;
+                slot
+            }
+        };
+        if slot.replace(arg.value).is_some() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    let name = match name_arg {
+        Some(value) if !values.is_null(value)? => Some(eval_reflection_string_arg(value, values)?),
+        _ => None,
+    };
+    let flags = match flags_arg {
+        Some(value) => {
+            let cast = values.cast_int(value)?;
+            let bytes = values.string_bytes(cast)?;
+            values.release(cast)?;
+            let text = std::str::from_utf8(&bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+            text.parse::<i64>().map_err(|_| EvalStatus::RuntimeFatal)? as u64
+        }
+        None => 0,
+    };
+    Ok((name, flags))
+}
+
+/// PHP's `ReflectionAttribute::IS_INSTANCEOF` bit, mirrored from the class-constant declared in
+/// `src/types/checker/builtin_types/reflection/injection.rs`.
+const EVAL_REFLECTION_ATTRIBUTE_IS_INSTANCEOF: u64 = 2;
+
+/// Returns whether one already-materialized `ReflectionAttribute` element satisfies a
+/// `getAttributes()` name filter, honoring `ReflectionAttribute::IS_INSTANCEOF`.
+fn eval_reflection_attribute_matches_filter(
+    element: RuntimeCellHandle,
+    name_filter: &str,
+    flags: u64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let identity = values.object_identity(element)?;
+    let Some(attribute_name) = context
+        .eval_reflection_attribute(identity)
+        .map(|metadata| metadata.attribute().name().to_string())
+    else {
+        return Ok(false);
+    };
+    if flags & EVAL_REFLECTION_ATTRIBUTE_IS_INSTANCEOF != 0 {
+        return eval_class_like_name_is_instance_of(&attribute_name, name_filter, context, values);
+    }
+    Ok(attribute_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case(name_filter.trim_start_matches('\\')))
+}
+
 /// Answers a reflection member that is nothing but a read of one slot on the reflected object.
 ///
 /// THIS IS THE FOUNDATION ECHELON 57 BUILDS ON. It closes the members that ARE slot reads; the
 /// ones that are not -- `getParameters()`, `getNumberOfParameters()`, `getReturnType()`,
-/// `getAttributes()`, and the four parameter methods -- are 57's work, answered from
+/// and the four parameter methods -- are 57's work, answered from
 /// `EvalReflectionFunctionMethodTarget` and the `EvalReflectionParameterMetadata` that
 /// `parameter_metadata.rs` already assembles. When those land, the body-keeping widening in
 /// `ir_lower::reflection` comes out and the branch stops paying 1,652,592 bytes for it.

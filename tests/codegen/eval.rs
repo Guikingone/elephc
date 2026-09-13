@@ -30655,6 +30655,51 @@ foreach (['RuntimeException', 'LogicException', 'InvalidArgumentException', 'Ref
     );
 }
 
+/// Verifies runtime-included code constructs an AOT class that INHERITS a builtin Throwable's
+/// constructor, and reads the inherited final getters back off it.
+///
+/// Oracle: `php -n` 8.5.10 prints the asserted line and exits 0. Before the fix the binary
+/// printed `Fatal error: eval() runtime failed: unsupported NewObject expression` and exited 1,
+/// and with only the constructor half fixed it got one step further and died on `getMessage()`
+/// with `unsupported MethodCall expression`.
+///
+/// The shape matters and a simpler one does NOT reproduce it: `AotEx` must be compiled AOT and
+/// must declare NO constructor of its own. A builtin Throwable's `__construct` and its four
+/// final getters have no EIR body — AOT `new Exception(...)` lowers to a runtime helper — so a
+/// class inheriting them can never get a constructor/method slot, and it matched neither the
+/// builtin-id dispatch (its own id is not a builtin id) nor the slot table. An eval-DECLARED
+/// subclass takes a different path entirely and passed throughout. This is Symfony's
+/// `EnvNotFoundException`, which blocked the `--web` request at `EnvVarProcessor.php:224`.
+#[test]
+fn test_runtime_included_code_constructs_an_aot_class_inheriting_a_builtin_throwable_constructor() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "loaded.php",
+                r#"<?php
+try {
+    throw new AotEx('boom');
+} catch (\Throwable $error) {
+    echo get_class($error), ':', $error->getMessage(), ':', $error->getCode(), ':', ($error->getLine() > 0 ? 'line' : 'noline'), '|';
+}
+"#,
+            ),
+            (
+                "main.php",
+                concat!(
+                    "<?php\n",
+                    "class AotEx extends InvalidArgumentException {}\n",
+                    "$path = __DIR__ . '/loaded.php';\n",
+                    "include $path;\n",
+                    "echo 'done';\n",
+                ),
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "AotEx:boom:0:line|done");
+}
+
 /// Verifies `class_exists()` runs an autoloader registered by runtime-included code.
 ///
 /// Oracle: `php -n` 8.5.6 prints `loader:MissingWithAutoload|no|no|done`. PHP's second parameter
@@ -32451,4 +32496,258 @@ echo $seen;
     assert_eq!(baseline, repeated_heap, "constructor calls accumulated live allocations");
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the bridge DROPS extra positional arguments instead of refusing the call.
+///
+/// PHP accepts extra positional arguments to a userland function; they bind to no parameter and
+/// are reachable only through `func_get_args()`. The bridge treated the overflow as a fatal,
+/// which is how Symfony's route loading died: `ObjectLoader::load()` invokes
+/// `$loaderObject->$method($this, $this->env)` against `MicroKernelTrait::loadRoutes()`, which
+/// declares one parameter.
+#[test]
+fn test_eval_call_into_native_method_drops_extra_positional_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class Target {
+    public function take(int $a): string { return 'got:' . $a; }
+    public function takeTwo(int $a, string $b = 'd'): string { return 'two:' . $a . ':' . $b; }
+}
+
+$GLOBALS['t'] = new Target();
+eval('echo $GLOBALS["t"]->take(1, 2, 3), "|",
+    $GLOBALS["t"]->takeTwo(4), "|",
+    $GLOBALS["t"]->takeTwo(5, "e", 6);');
+"#,
+    );
+    assert_eq!(out, "got:1|two:4:d|two:5:e");
+}
+
+/// Verifies an EVAL-DECLARED class satisfies an AOT method's interface-typed parameter, and that
+/// casting it to string there reaches the class's own `__toString()`.
+///
+/// Two separate answers had to come from the interpreter. The parameter's type check reads the
+/// object header's class id, which is `stdClass` for every object the interpreter builds, so the
+/// generated metadata alone can only refuse it. The `(string)` cast then dispatches through the
+/// interface's implementation table, which that same class id matches no row of -- and the
+/// table scan's defensive miss answered a null string pointer, read downstream as a length of
+/// its own choosing. Both are on the path of any Symfony request: the compiled DI container is
+/// interpreted, so the resources and loaders it hands to compiled Symfony code are eval objects.
+#[test]
+fn test_eval_object_satisfies_native_interface_parameter_and_string_cast() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public function label(Stringable $r): string { return (string) $r; }
+    public function echoLabel(Stringable $r): void { echo $r; }
+}
+
+class NativeRes implements Stringable {
+    public function __toString(): string { return 'native-res'; }
+}
+
+$GLOBALS['bag'] = new Bag();
+echo $GLOBALS['bag']->label(new NativeRes()), '|';
+
+eval('class EvalRes implements Stringable {
+    public function __toString(): string { return "eval-res"; }
+}
+echo $GLOBALS["bag"]->label(new EvalRes()), "|";
+$GLOBALS["bag"]->echoLabel(new EvalRes());');
+"#,
+    );
+    assert_eq!(out, "native-res|eval-res|eval-res");
+}
+
+/// Verifies INTERPRETED code reaches `var_export()`, byte for byte with `php -n`.
+///
+/// The compiled side serves `var_export` from a prelude injected only when the compiled program
+/// itself names the function, which interpreted code can never reach: Symfony's routing dumper
+/// (`CompiledUrlMatcherDumper::export`) is interpreted and the call arrived as
+/// `call to undefined function var_export()`. The expectations below were measured against
+/// `php -n` 8.5.10, including the float layout thresholds -- `1.0E+17` is scientific while the
+/// one-power-smaller `10000000000000000.0` is not.
+#[test]
+fn test_eval_var_export_matches_php_for_scalars_arrays_and_floats() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$cases = [
+    0, -5, PHP_INT_MAX,
+    true, false, null,
+    "", "plain", "a\'b", "back\\\\slash",
+    1.0, 1.5, 1/3, 1e17, 1e16, 1e-6, 0.1, 100.0, 1.5e-7,
+    [],
+    [1, 2, 3],
+    ["k" => "v", "n" => 1],
+    [1, "k" => ["x" => 1]],
+];
+foreach ($cases as $case) {
+    echo var_export($case, true), "|";
+}
+var_export("echoed");');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "0|-5|9223372036854775807|true|false|NULL|",
+            "''|'plain'|'a\\'b'|'back\\\\slash'|",
+            "1.0|1.5|0.3333333333333333|1.0E+17|10000000000000000.0|1.0E-6|0.1|100.0|1.5E-7|",
+            "array (\n)|",
+            "array (\n  0 => 1,\n  1 => 2,\n  2 => 3,\n)|",
+            "array (\n  'k' => 'v',\n  'n' => 1,\n)|",
+            "array (\n  0 => 1,\n  'k' => \n  array (\n    'x' => 1,\n  ),\n)|",
+            "'echoed'",
+        )
+    );
+}
+
+/// Verifies `^` under the `m` modifier anchors to LINE STARTS in interpreted code.
+///
+/// `pcre2_regexec`'s REG_STARTEND advances the subject POINTER, so every continuation of a global
+/// match saw its own start offset as the start of the subject and `^` matched there:
+/// `preg_replace('/^./m', ...)` rewrote every character rather than the first of each line. That
+/// is how Symfony's `CompiledUrlMatcherDumper` indents its dump, so the routing cache it wrote
+/// was unparsable PHP. The shim now calls `pcre2_match` on the whole subject with a start offset,
+/// which is what php's own preg does.
+///
+/// The empty-match case is the companion fix: an anchored zero-width match lands AHEAD of the
+/// cursor it was searched from, and advancing the cursor only up to the match end left it sitting
+/// on that same empty match, reporting every line start twice.
+#[test]
+fn test_eval_multiline_anchor_matches_line_starts_only() {
+    let out = compile_and_run(
+        r#"<?php
+$GLOBALS['code'] = "a1\nb2\nc3";
+eval('$c = $GLOBALS["code"];
+echo preg_replace("/^./m", "<$0>", $c), "|",
+    preg_replace("/^/m", ">", $c), "|",
+    preg_match_all("/^./m", $c), "|",
+    preg_replace("/.$/m", "!", $c);');
+"#,
+    );
+    assert_eq!(out, "<a>1\n<b>2\n<c>3|>a1\n>b2\n>c3|3|a!\nb!\nc!");
+}
+
+/// Verifies an eval-declared object serializes with its own class and properties from a DIFFERENT
+/// eval context than the one that built it.
+///
+/// The shared debug/serialize walk resolved the class through `dynamic_object_class`, which looks
+/// the OWNER's class name up in the ASKER's table and finds nothing when the asker never declared
+/// it. The object then serialized as `O:8:"stdClass":0:{}` -- which is what Symfony wrote into its
+/// routing cache metadata, and what came back as a bare `stdClass` on the next request.
+#[test]
+fn test_eval_serialize_reads_declaring_context_for_a_foreign_object() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class Box {
+    public int $n = 5;
+    private string $s = "p";
+}
+$GLOBALS["b"] = new Box();');
+
+eval('echo serialize($GLOBALS["b"]), "|", get_class(unserialize(serialize($GLOBALS["b"])));');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!("O:3:\"Box\":2:{s:1:\"n\";i:5;s:6:\"\0Box\0s\";s:1:\"p\";}", "|Box"),
+    );
+}
+
+
+/// Verifies an eval-declared subclass of a builtin Throwable answers the whole final accessor
+/// surface, including the three that have no payload field to read.
+///
+/// Oracle: `php -n` 8.5.10 prints `MyEx|boom|7|trace||noprev` for the same program, modulo
+/// `getTraceAsString()` -- elephc keeps no call stack, so it answers the empty string the
+/// compiled `lower_throwable_empty_string` intrinsic already answers, and `getTrace()` the empty
+/// array `lower_throwable_empty_trace_array` builds. The bridge has to answer the SAME rather
+/// than refuse the call: a builtin Throwable has no emitted method body to dispatch to, so before
+/// the fix each of the three died with `unsupported MethodCall expression`.
+///
+/// This is Symfony's `ErrorListener::logKernelException`, which reads all three while flattening
+/// an exception. It runs at priority 0, ahead of the `RouterListener` at -64 that renders the 404
+/// welcome page, so the refusal hid the page the request was meant to produce.
+#[test]
+fn test_eval_declared_throwable_subclass_answers_every_inherited_final_getter() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class MyEx extends RuntimeException {}
+try {
+    throw new MyEx("boom", 7);
+} catch (Throwable $e) {
+    echo get_class($e), "|", $e->getMessage(), "|", $e->getCode(), "|";
+    echo is_array($e->getTrace()) ? "trace" : "notrace", "|";
+    echo count($e->getTrace()), "|";
+    echo $e->getTraceAsString(), "|";
+    echo ($e->getPrevious() === null) ? "noprev" : "prev";
+}');
+"#,
+    );
+    assert_eq!(out, "MyEx|boom|7|trace|0||noprev");
+}
+
+/// Verifies `getPrevious()` walks a chain of eval-declared exceptions and stops at its end.
+///
+/// Two producers write the previous slot with DIFFERENT shapes and the read has to discriminate:
+/// the compiled `Exception::__construct` assigns `$this->previous`, a declared `?Throwable`, so
+/// the slot holds a BOXED Mixed cell -- never a raw pointer, and never null, since a boxed null is
+/// a live cell with tag 8. The eval/native bridge instead materializes a raw object pointer there.
+/// Reading every slot as raw answers non-null for an exception with no previous, which turns the
+/// `while ($cursor = $cursor->getPrevious())` below into a walk off the end.
+///
+/// This is what `RouterListener::onKernelException` does to decide whether to render the welcome
+/// page: it gates on `$e->getPrevious() instanceof NoConfigurationException`.
+#[test]
+fn test_eval_declared_throwable_previous_chain_walks_and_terminates() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class NoConfigEx extends RuntimeException {}
+class NotFoundEx extends RuntimeException {}
+
+$inner = new NoConfigEx("no routes");
+$outer = new NotFoundEx("not found", 0, $inner);
+
+$prev = $outer->getPrevious();
+echo ($prev === null) ? "noprev" : "prev", "|";
+echo get_class($prev), "|", $prev->getMessage(), "|";
+echo ($prev instanceof NoConfigEx) ? "isNoConfig" : "notNoConfig", "|";
+echo ($prev->getPrevious() === null) ? "endofchain" : "morechain", "|";
+
+$walked = 0;
+$cursor = $outer;
+while ($cursor = $cursor->getPrevious()) {
+    $walked++;
+    if ($walked > 5) { break; }
+}
+echo "walked=", $walked;');
+"#,
+    );
+    assert_eq!(
+        out,
+        "prev|NoConfigEx|no routes|isNoConfig|endofchain|walked=1",
+    );
+}
+
+/// Verifies the same accessors on a class compiled AOT that only INHERITS them, read from eval.
+///
+/// The dispatch routes by class id, and an inheriting subclass's id is not a builtin id, so it
+/// reaches the bridge only because `collect_builtin_throwable_method_class_ids` adds the ids of
+/// classes whose method table resolves these names to a builtin. `AotChainEx` must therefore
+/// declare no constructor and no getter of its own for this to cover that path.
+#[test]
+fn test_eval_reads_final_getters_off_an_aot_class_that_only_inherits_them() {
+    let out = compile_and_run(
+        r#"<?php
+class AotChainEx extends InvalidArgumentException {}
+eval('$root = new AotChainEx("root");
+$wrapped = new AotChainEx("wrapped", 3, $root);
+echo get_class($wrapped), "|", $wrapped->getCode(), "|";
+echo count($wrapped->getTrace()), "|", $wrapped->getTraceAsString(), "|";
+echo $wrapped->getPrevious()->getMessage(), "|";
+echo ($root->getPrevious() === null) ? "noprev" : "prev";');
+"#,
+    );
+    assert_eq!(out, "AotChainEx|3|0||root|noprev");
 }

@@ -24,6 +24,23 @@ pub(super) fn lower_interface_method_call(
     interface_name: &str,
     method_name: &str,
 ) -> Result<()> {
+    lower_interface_method_call_with_miss(
+        ctx,
+        inst,
+        interface_name,
+        method_name,
+        iterators::InterfaceDispatchMiss::ZeroResult,
+    )
+}
+
+/// Lowers one interface method call with a chosen answer for a receiver no table matches.
+pub(super) fn lower_interface_method_call_with_miss(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    interface_name: &str,
+    method_name: &str,
+    miss: iterators::InterfaceDispatchMiss,
+) -> Result<()> {
     // Builtin Throwable methods are compact-payload intrinsics. Their interface vtable
     // slots stay zero because no synthetic method bodies are emitted, so dispatch here
     // would `blr` to null. Use the same intrinsic path as a concrete Throwable receiver.
@@ -77,7 +94,13 @@ pub(super) fn lower_interface_method_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    let return_ty = iterators::emit_interface_dispatch_call(ctx, &normalized, &method_key, None)?;
+    let return_ty = iterators::emit_interface_dispatch_call_with_miss(
+        ctx,
+        &normalized,
+        &method_key,
+        None,
+        miss,
+    )?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;

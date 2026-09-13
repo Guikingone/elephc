@@ -103,16 +103,13 @@ unsafe fn call_eval_function_inner(
     // date aliases and every builtin the interpreter implements. Refusing null made those calls
     // a runtime fatal. The include, eval, symbol and object-construction entries all take a null
     // handle this way already.
-    let mut fallback_context;
     let context = if let Some(context) = ctx.as_mut() {
         if context.abi_version() != ABI_VERSION {
             return EvalStatus::AbiMismatch.code();
         }
         context
     } else {
-        fallback_context = ElephcEvalContext::new();
-        crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
-        &mut fallback_context
+        crate::ffi::context::shared_null_handle_context()
     };
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return EvalStatus::RuntimeFatal.code();
@@ -153,16 +150,13 @@ unsafe fn call_eval_function_array_inner(
     out: *mut ElephcEvalResult,
 ) -> i32 {
     // Same null-handle contract as the positional entry above.
-    let mut fallback_context;
     let context = if let Some(context) = ctx.as_mut() {
         if context.abi_version() != ABI_VERSION {
             return EvalStatus::AbiMismatch.code();
         }
         context
     } else {
-        fallback_context = ElephcEvalContext::new();
-        crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
-        &mut fallback_context
+        crate::ffi::context::shared_null_handle_context()
     };
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return EvalStatus::RuntimeFatal.code();
@@ -208,6 +202,34 @@ fn execute_context_function_with_namespace_fallback(
     values: &mut ElephcRuntimeOps,
 ) -> Result<interpreter::EvalOutcome, EvalStatus> {
     let name = name.to_ascii_lowercase();
+    // PHP resolves an UNQUALIFIED call inside a namespace to the namespaced function when one
+    // is declared, and to the GLOBAL one otherwise — it does not attempt the namespaced name
+    // first and recover from whatever that attempt reports. Attempting it first only worked
+    // while the failure happened to be `UnsupportedConstruct`: `hash_final($ctx)` inside
+    // `namespace Symfony\Component\Config\Resource` resolved the namespaced spelling far enough
+    // to fail as `RuntimeFatal`, which fell straight through with no fallback at all. Deciding
+    // by DECLARATION, the way PHP does, removes the dependence on which error came back.
+    if let Some((_, bare)) = name.rsplit_once('\\') {
+        if !context.has_function(&name) {
+            let bare = bare.to_string();
+            return match interpreter::execute_context_function_outcome(
+                context,
+                &bare,
+                args.clone(),
+                values,
+            ) {
+                Err(EvalStatus::UnsupportedConstruct) => {
+                    if let Some(result) = execute_global_eval_function_owner(&bare, args.clone()) {
+                        return result;
+                    }
+                    // The global name is not known either: report against the name the caller
+                    // actually wrote, so the diagnostic still names the namespaced spelling.
+                    interpreter::execute_context_function_outcome(context, &name, args, values)
+                }
+                result => result,
+            };
+        }
+    }
     match interpreter::execute_context_function_outcome(context, &name, args.clone(), values) {
         Err(EvalStatus::UnsupportedConstruct) => {
             if let Some(result) = execute_global_eval_function_owner(&name, args.clone()) {

@@ -116,7 +116,41 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.push_method_magic_scope(class_name, method);
     // PHP reports the bare method name in `function` and the declaring class in `class`; the
     // receiver makes the frame an instance call, so `type` becomes `->`.
-    let frame_args = evaluated_args.iter().map(|arg| arg.value).collect();
+    let frame_args: Vec<_> = evaluated_args.iter().map(|arg| arg.value).collect();
+    let frame_arg_count = frame_args.len();
+    // Captured BEFORE binding so a refusal can name what actually arrived: a bare parameter
+    // list says which type was wanted and never which one was offered.
+    let traced_arg_tags: Vec<String> = if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        frame_args
+            .iter()
+            .map(|value| {
+                let tag = values.type_tag(*value).unwrap_or(u64::MAX);
+                // An object argument is named by CLASS: a refusal that only says "tag 6" cannot
+                // distinguish "wrong class" from "class the context cannot resolve at all".
+                let identity = values.object_identity(*value).unwrap_or(0);
+                match crate::interpreter::runtime_object_class_name(*value, values) {
+                    Ok(class_name) => format!("{tag}:{identity}:{class_name}"),
+                    Err(_) => {
+                        // An object whose class cannot be named is either a live object of an
+                        // unregistered class or a FREED one whose storage was recycled. The
+                        // header tells them apart: a live object payload starts with its class
+                        // id and carries its refcount at -12.
+                        let payload = values.raw_value_word(*value).unwrap_or(0);
+                        let header = (tag == EVAL_TAG_OBJECT && payload >= 4096).then(|| unsafe {
+                            let base = payload as *const u8;
+                            (
+                                *(base as *const u64),
+                                *(base.sub(12) as *const u32),
+                            )
+                        });
+                        format!("{tag}:{identity}:<unresolved>:header={header:?}")
+                    }
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let frame = EvalCallFrame::method(
         class_name,
         method.name(),
@@ -138,6 +172,17 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     ) {
         Ok(args) => args,
         Err(status) => {
+            // Binding runs BEFORE the body, so a refusal here leaves no statement trace at all:
+            // the last thing the log shows is `dynamic_method_start`, and the caller's frame
+            // then reports a bare "unsupported <caller expression>". Naming the parameter list
+            // here is what separates a binding refusal from a body refusal in one pass.
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=dynamic_method_bind_error method={qualified_method_name:?} status={status:?} arg_count={frame_arg_count} arg_tags={traced_arg_tags:?} params={:?} types={:?}",
+                    method.params(),
+                    method.parameter_types(),
+                );
+            }
             context.pop_call_frame();
             context.pop_magic_scope();
             context.pop_called_class_scope();

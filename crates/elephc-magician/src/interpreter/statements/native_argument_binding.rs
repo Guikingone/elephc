@@ -169,19 +169,23 @@ pub(super) fn bind_native_signature_args(
                 by_ref_mode,
                 values,
             )?;
-        } else {
-            bind_native_positional_signature_arg(
-                signature,
-                &mut bound_args,
-                variadic_index,
-                &mut next_positional,
-                &mut next_variadic_index,
-                arg.value,
-                arg.ref_target,
-                arg.owned,
-                by_ref_mode,
-                values,
-            )?;
+        } else if let Some((overflow, owned)) = bind_native_positional_signature_arg(
+            signature,
+            &mut bound_args,
+            variadic_index,
+            &mut next_positional,
+            &mut next_variadic_index,
+            arg.value,
+            arg.ref_target,
+            arg.owned,
+            by_ref_mode,
+            values,
+        )? {
+            // The callable has no slot left for this one. It never joins `bound_args`, so the
+            // release that runs after the call will not see it and this is its only owner.
+            if owned {
+                eval_release_value(context, values, overflow)?;
+            }
         }
     }
 
@@ -317,6 +321,16 @@ pub(super) fn native_callable_variadic_index(signature: &NativeCallableSignature
 }
 
 /// Binds one positional native AOT argument to a fixed slot or variadic array.
+///
+/// Returns the argument BACK, with its ownership flag, when the callable has no slot left for it.
+/// PHP accepts extra positional arguments to a userland function -- they are simply not bound to
+/// a parameter, reachable only through `func_get_args()` -- and refusing them here turned an
+/// ordinary call into a runtime fatal. Symfony's route loading is exactly that call:
+/// `ObjectLoader::load()` invokes `$loaderObject->$method($this, $this->env)` against
+/// `MicroKernelTrait::loadRoutes(LoaderInterface $loader)`, which declares ONE parameter.
+///
+/// The extra value does not reach the compiled body's `func_get_args()`, which is fixed at
+/// compile time; dropping it is what the callee can actually observe.
 pub(super) fn bind_native_positional_signature_arg(
     signature: &NativeCallableSignature,
     bound_args: &mut [Option<BoundMethodArg>],
@@ -328,7 +342,7 @@ pub(super) fn bind_native_positional_signature_arg(
     owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
+) -> Result<Option<(RuntimeCellHandle, bool)>, EvalStatus> {
     if variadic_index.is_some_and(|index| *next_positional >= index) {
         let key = values.int(*next_variadic_index)?;
         *next_variadic_index = next_variadic_index
@@ -336,7 +350,7 @@ pub(super) fn bind_native_positional_signature_arg(
             .ok_or(EvalStatus::RuntimeFatal)?;
         let ref_target =
             native_parameter_ref_target(signature, variadic_index, ref_target, by_ref_mode, values)?;
-        return bind_native_variadic_arg(
+        bind_native_variadic_arg(
             bound_args,
             variadic_index,
             key,
@@ -344,10 +358,14 @@ pub(super) fn bind_native_positional_signature_arg(
             ref_target,
             owned,
             values,
-        );
+        )?;
+        return Ok(None);
     }
     let param_index = *next_positional;
-    if param_index >= bound_args.len() || bound_args[param_index].is_some() {
+    if param_index >= bound_args.len() {
+        return Ok(Some((value, owned)));
+    }
+    if bound_args[param_index].is_some() {
         return Err(EvalStatus::RuntimeFatal);
     }
     let ref_target =
@@ -359,7 +377,7 @@ pub(super) fn bind_native_positional_signature_arg(
         owned,
     });
     *next_positional += 1;
-    Ok(())
+    Ok(None)
 }
 
 /// Binds one named native AOT argument to a fixed non-variadic slot.

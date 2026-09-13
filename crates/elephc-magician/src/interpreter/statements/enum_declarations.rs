@@ -463,6 +463,15 @@ pub(super) fn initialize_eval_static_properties(
         } else {
             None
         };
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            eprintln!(
+                "[elephc-eval-trace] phase=static_property_seed class={:?} property={:?} has_default={} seeded={}",
+                class.name(),
+                property.name(),
+                property.default().is_some(),
+                value.is_some(),
+            );
+        }
         if let Some(value) = value {
             if let Some(replaced) =
                 context.set_static_property(class.name(), property.name(), value)

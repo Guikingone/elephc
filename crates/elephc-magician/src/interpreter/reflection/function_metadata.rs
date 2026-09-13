@@ -121,6 +121,65 @@ pub(super) fn eval_reflection_function_method_target(
                 return_type_metadata,
             }));
         }
+        // A first-class callable built from a METHOD -- `$obj(...)`, `$obj->m(...)`,
+        // `Cls::m(...)` -- is a Closure that PHP still reflects with the method's own
+        // parameters and return type. Neither lookup above can find one: both search the
+        // FUNCTION tables, and `eval_reflection_closure_target_lookup_name` deliberately
+        // answers only for the named-function targets. Without this branch every such
+        // callable fell through to the empty-parameter fallback below, which is what made
+        // Symfony's `ArgumentMetadataFactory` -- it builds its metadata from
+        // `(new \ReflectionFunction($controller(...)))->getParameters()` -- resolve zero
+        // arguments for an invokable-object controller, and the controller call then bound
+        // nothing to a required parameter.
+        if let Some((declaring_class, method_name)) =
+            eval_reflection_closure_target_method(closure_target.as_ref(), context, values)
+        {
+            let method_metadata = match eval_reflection_method_metadata(
+                &declaring_class,
+                &method_name,
+                context,
+            ) {
+                Some(method_metadata) => Some(method_metadata),
+                None => eval_reflection_aot_method_metadata_with_signature_if_exists(
+                    &declaring_class,
+                    &method_name,
+                    context,
+                    values,
+                )?,
+            };
+            if let Some(method) = method_metadata {
+                let is_variadic = method
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.is_variadic);
+                let is_deprecated =
+                    eval_reflection_attributes_include_deprecated(&method.attributes);
+                let static_method = eval_reflection_eval_method_static_target(
+                    &declaring_class,
+                    &method_name,
+                    context,
+                );
+                return Ok(Some(EvalReflectionFunctionMethodTarget::Function {
+                    name: name.to_string(),
+                    static_key: static_method.as_ref().map(|(declaring_class, method)| {
+                        eval_method_static_local_key(declaring_class, method.name())
+                    }),
+                    static_variables: static_method
+                        .as_ref()
+                        .map(|(_, method)| static_var_initializers(method.body()))
+                        .unwrap_or_default(),
+                    closure_captures: Vec::new(),
+                    parameters: method.parameters,
+                    source_location: method.source_location,
+                    closure_target: closure_target.clone(),
+                    is_variadic,
+                    is_static: method.is_static,
+                    is_closure: true,
+                    is_deprecated,
+                    return_type_metadata: method.return_type_metadata,
+                }));
+            }
+        }
         return Ok(Some(EvalReflectionFunctionMethodTarget::Function {
             name: name.to_string(),
             static_key: None,
@@ -224,6 +283,47 @@ pub(super) fn eval_reflection_function_method_target(
         is_deprecated,
         return_type_metadata,
     }))
+}
+
+/// Resolves the class and method a first-class-callable Closure target stands for.
+///
+/// Only the method-shaped targets answer. A `Named`/`BoundNamed` target is a plain function
+/// and is already resolved through the function tables; answering here too would send it
+/// through a class lookup that cannot find it.
+pub(super) fn eval_reflection_closure_target_method(
+    target: Option<&EvalClosureObjectTarget>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Option<(String, String)> {
+    match target? {
+        EvalClosureObjectTarget::InvokableObject { object } => {
+            let class_name = eval_closure_bound_object_class_name(*object, context, values).ok()?;
+            Some((class_name, "__invoke".to_string()))
+        }
+        EvalClosureObjectTarget::ObjectMethod {
+            object,
+            method,
+            native_class,
+            ..
+        } => {
+            // The receiver's own class wins over the recorded native class: a subclass may
+            // override the method with a different signature, which is the one PHP reflects.
+            let class_name = eval_closure_bound_object_class_name(*object, context, values)
+                .ok()
+                .or_else(|| native_class.clone())?;
+            Some((class_name, method.clone()))
+        }
+        EvalClosureObjectTarget::StaticMethod {
+            class_name,
+            method,
+            native_class,
+            ..
+        } => Some((
+            native_class.clone().unwrap_or_else(|| class_name.clone()),
+            method.clone(),
+        )),
+        EvalClosureObjectTarget::Named(_) | EvalClosureObjectTarget::BoundNamed { .. } => None,
+    }
 }
 
 /// Returns the registered callable lookup key retained by a named Closure target.

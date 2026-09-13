@@ -41,11 +41,20 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
         {
             return eval_reference_target_value(&target, context, values);
         }
-        if let Some(value) = context.static_property(&declaring_class, property.name()) {
+        if let Some(value) =
+            eval_static_property_value_or_default(&declaring_class, &property, context, values)?
+        {
             return Ok(value);
         }
         if property.property_type().is_none() {
             return values.null();
+        }
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            eprintln!(
+                "[elephc-eval-trace] phase=static_property_uninitialized class={:?} declaring={declaring_class:?} property={:?}",
+                class_name,
+                property.name(),
+            );
         }
         return eval_throw_uninitialized_static_property_error(
             &declaring_class,
@@ -157,6 +166,47 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
     }
 }
 
+/// Reads an eval-declared static property, materializing its declaration default on first use.
+///
+/// Class METADATA is process-global — `sync_global_eval_classes` imports a class another eval
+/// context declared — but static property VALUES are per-context, and only the context that
+/// executed the declaration seeded them. Every other context then finds the declaration, finds
+/// no cell, and reports PHP's "must not be accessed before initialization" for a property that
+/// HAS a default. That is what took Symfony's `LinkStub::$composerRoots` down: the class is
+/// declared by the autoloader's context and read from the constructor's, and `= []` never
+/// crossed. A declaration default is a constant expression, so evaluating it on first access
+/// here yields exactly what the declaring context stored, only later.
+///
+/// This does NOT make the two contexts share one static: a value one context has since written
+/// still stays invisible to the other. It makes an unwritten default visible, which is the half
+/// that was reporting an error instead of a value.
+fn eval_static_property_value_or_default(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if let Some(value) = context.static_property(declaring_class, property.name()) {
+        return Ok(Some(value));
+    }
+    let Some(default) = property.default() else {
+        return Ok(None);
+    };
+    let mut scope = ElephcEvalScope::new();
+    let value = eval_class_like_member_default(
+        declaring_class,
+        property.trait_origin(),
+        default,
+        context,
+        &mut scope,
+        values,
+    )?;
+    if let Some(replaced) = context.set_static_property(declaring_class, property.name(), value) {
+        values.release(replaced)?;
+    }
+    Ok(Some(value))
+}
+
 /// Returns whether a static property is PHP-`isset()` without throwing for missing properties.
 pub(in crate::interpreter) fn eval_static_property_isset_result(
     class_name: &str,
@@ -178,7 +228,9 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
         {
             eval_reference_target_value(&target, context, values)?
         } else {
-            let Some(value) = context.static_property(&declaring_class, property.name()) else {
+            let Some(value) =
+                eval_static_property_value_or_default(&declaring_class, &property, context, values)?
+            else {
                 return Ok(false);
             };
             value
@@ -401,6 +453,11 @@ pub(super) fn eval_builtin_reflection_class_constant(
             "IS_PROTECTED" => Some(2),
             "IS_PRIVATE" => Some(4),
             "IS_FINAL" => Some(32),
+            _ => None,
+        }
+    } else if class_name.eq_ignore_ascii_case("ReflectionAttribute") {
+        match constant_name {
+            "IS_INSTANCEOF" => Some(2),
             _ => None,
         }
     } else {

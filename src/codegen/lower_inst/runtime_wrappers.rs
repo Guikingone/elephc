@@ -15,8 +15,39 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
-    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
-        return label;
+    emit_runtime_callable_invoker_inline_with_boundary(ctx, sig, captures, false)
+}
+
+/// Emits a descriptor invoker inline, optionally bounded against native throws.
+///
+/// WHEN TO ASK FOR THE BOUNDARY. A descriptor the INTERPRETER calls needs one: a Throwable raised
+/// inside the invoker otherwise reaches `__rt_throw_current` and unwinds natively past the
+/// interpreted PHP `try` that wraps the call, which never gets to look at it. Symfony's
+/// `default:` env processor is exactly that shape -- `try { $getEnv($next); } catch
+/// (EnvNotFoundException) {}` where `$getEnv` is the first-class callable
+/// `$container->getEnv(...)` -- and every `%env(default:...)%` in the app died on it.
+///
+/// WHEN NOT TO. Do NOT bound a descriptor that AOT code dispatches, which is why this is opt-in
+/// per call site rather than the default: the boundary turns the native throw into a returned
+/// status for EVERY caller, and AOT dispatch needs it to keep propagating. Bounding the shared
+/// builtin/extern descriptors regressed
+/// `codegen::runtime_reachability::test_shared_mixed_callable_dispatch_preserves_results_and_exceptions`
+/// ("not-reached" where PHP prints "caught:boom:3"), because a callable that throws stopped
+/// reaching its `catch`.
+///
+/// The two variants are cached separately: one label per (sig, captures) is not enough once the
+/// same signature can be emitted both bounded and unbounded, so the bounded form takes a fresh
+/// label and is not shared with the unbounded cache.
+pub(in crate::codegen) fn emit_runtime_callable_invoker_inline_with_boundary(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    catch_native_throws: bool,
+) -> String {
+    if !catch_native_throws {
+        if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
+            return label;
+        }
     }
     let label = ctx.next_global_label("callable_invoker");
     let done_label = ctx.next_label("callable_invoker_done");
@@ -29,11 +60,21 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     // enclosing function back before continuing it, or its tail lands in there.
     let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
-    super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
+    if catch_native_throws {
+        super::super::runtime_callable_invoker::emit_runtime_callable_invoker_with_exception_boundary(
+            ctx.emitter,
+            ctx.data,
+            &invoker,
+        );
+    } else {
+        super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
+    }
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
-    ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, &label);
+    if !catch_native_throws {
+        ctx.shared
+            .cache_runtime_callable_invoker(sig, captures, &label);
+    }
     label
 }
 

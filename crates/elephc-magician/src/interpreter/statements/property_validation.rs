@@ -103,6 +103,20 @@ pub(super) fn eval_throw_property_access_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
+    // The refusal compares `current_class_scope()` against the declaring class, so the scope
+    // that was actually active is the only thing that explains it. Naming it here turns
+    // "Cannot access private property X::$y" from a verdict into a diagnosis.
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        eprintln!(
+            "[elephc-eval-trace] phase=property_access_error declaring={:?} property={:?} visibility={:?} current_class_scope={:?} current_function={:?} class_stack=[{}]",
+            declaring_class,
+            property_name,
+            visibility,
+            context.current_class_scope(),
+            context.current_function(),
+            context.debug_class_scope_stack(),
+        );
+    }
     eval_throw_error(
         &format!(
             "Cannot access {} property {}::${}",
