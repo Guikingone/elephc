@@ -4,8 +4,8 @@
 //! `__elephc_cast_object_dynamic` (a runtime-typed source that may already hold an object).
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` and the codegen test harness via `inject_if_used`, before
-//!   name resolution, so `ir_lower::expr::lower_cast` can lower a `(object)` cast to an
+//! - `crate::pipeline::compile()` and the codegen test harness via `inject_if_used`, AFTER
+//!   `autoload::run`, so `ir_lower::expr::lower_cast` can lower a `(object)` cast to an
 //!   ordinary call to the injected declaration.
 //!
 //! Key details:
@@ -26,12 +26,18 @@
 //! - Pay-for-use: injected only when the program spells an object cast anywhere, detected
 //!   through the shared exhaustive walk in `opcache_prelude::detect` rather than a second
 //!   traversal of its own.
+//! - Injection runs LATE, past the pipeline's own name-resolution pass, because the cast is
+//!   detected syntactically and an autoloaded class file is not part of the AST before
+//!   `autoload::run`. The declarations are name-resolved on the way in, the way `autoload::run`
+//!   resolves the files it splices.
 
+use crate::errors::CompileError;
 use crate::names::Name;
 use crate::parser::ast::{BinOp, CastType, Program, TypeExpr};
 use crate::opcache_prelude::detect::{self, Symbol, SymbolKind};
+use crate::span::Span;
 use crate::synthetic_class::{
-    e_assign, e_binop, e_call, e_cast, e_dyn_prop, e_null, e_var, function,
+    e_assign, e_binop, e_call, e_cast, e_dyn_prop, e_not, e_null, e_var, function,
     internal_declarations, s_assign, s_expr, s_foreach, s_if, s_prop_assign, s_return, t_mixed,
 };
 
@@ -90,18 +96,31 @@ fn cast_object_decl() -> crate::parser::ast::Stmt {
 /// `===` against the source still holds and a mutation through either name is visible
 /// through the other. That arm is why this helper returns `mixed` rather than `stdClass` —
 /// the instance it hands back can be of any class.
+///
+/// The body CONVERTS IN PLACE and returns `$value` once, rather than returning the parameter
+/// early from an `is_object()` arm and the converted object from a second `return`. The two
+/// spellings are equivalent PHP, but the early-return one is miscompiled today: a `mixed`
+/// function with a CONDITIONAL `return $param;` alongside another return corrupts the
+/// refcount of an object payload (`heap debug detected bad refcount`), where the same function
+/// with a single trailing `return $param;` is clean. That is a pre-existing return-alias hole
+/// reachable from ordinary user PHP — `function f(mixed $v): mixed { if (is_object($v)) {
+/// return $v; } return $v; }` reproduces it with no cast involved — and this shape is written
+/// to stay out of it rather than to work around it here.
 fn cast_object_dynamic_decl() -> crate::parser::ast::Stmt {
     function("__elephc_cast_object_dynamic")
         .param("value", t_mixed())
         .returns(t_mixed())
         .body(vec![
             s_if(
-                e_call("is_object", vec![e_var("value")]),
-                vec![s_return(e_var("value"))],
+                e_not(e_call("is_object", vec![e_var("value")])),
+                vec![s_assign(
+                    "value",
+                    e_call("__elephc_cast_object", vec![e_var("value")]),
+                )],
                 vec![],
                 None,
             ),
-            s_return(e_call("__elephc_cast_object", vec![e_var("value")])),
+            s_return(e_var("value")),
         ])
         .build()
 }
@@ -119,20 +138,51 @@ pub fn program_uses_object_cast(program: &[crate::parser::ast::Stmt]) -> bool {
     detect::first_reference(program, Symbol::syntactic(SymbolKind::ObjectCast)).is_some()
 }
 
+/// Returns the span of a user declaration of either helper name, if the program has one.
+fn declared_helper(program: &[crate::parser::ast::Stmt]) -> Option<(&'static str, Span)> {
+    for helper in [CAST_HELPER, DYNAMIC_CAST_HELPER] {
+        if let Some(span) = detect::first_declaration(program, helper) {
+            return Some((helper, span));
+        }
+    }
+    None
+}
+
 /// Prepends the object-cast helpers when the program contains an object cast; otherwise
 /// returns the program unchanged so unrelated binaries pay nothing. The prelude is hoisted
 /// function declarations only, so prepending does not change top-level execution order.
+///
+/// Injection runs AFTER the pipeline's name-resolution pass (see the call site in
+/// `pipeline::compile`, which is positioned there so a cast inside an autoloaded class file is
+/// detected at all), so the declarations are resolved here the way `autoload::run` resolves the
+/// files it splices in.
+///
+/// A program that declares either helper name itself is REJECTED rather than silently having
+/// its own definition win: `ir_lower` lowers every `(object)` cast to a call on that name, so a
+/// user definition would not merely shadow the prelude, it would become the cast's semantics.
+/// Prepending regardless was no better — the checker reported `Duplicate function declaration`
+/// at the user's own line with no hint of why.
 pub fn inject_if_used(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
-) -> Program {
+) -> Result<Program, CompileError> {
     if !program_uses_object_cast(&program) {
-        return program;
+        return Ok(program);
     }
-    let mut combined = object_cast_declarations();
+    if let Some((helper, span)) = declared_helper(&program) {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot declare {}(): the name is reserved for the compiler's `(object)` cast \
+                 helper, which this program's `(object)` cast is lowered to. Rename the function.",
+                helper
+            ),
+        ));
+    }
+    let mut combined = crate::name_resolver::resolve(object_cast_declarations())?;
     inventory.record_program("object_cast", &combined);
     combined.extend(program);
-    combined
+    Ok(combined)
 }
 
 /// The name of the helper `ir_lower` calls for a source that cannot be an object.

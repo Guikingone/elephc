@@ -243,15 +243,6 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("var-export-prelude", phase_started);
 
-    // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program
-    // spells a `(object)` cast, so other binaries carry nothing. Runs after include
-    // resolution so a cast inside an include is detected, and before name resolution so the
-    // call `ir_lower` synthesizes for the cast resolves to the injected declaration.
-    crate::progress::phase("object-cast-prelude");
-    let phase_started = Instant::now();
-    let ast = crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory);
-    timings.record_since("object-cast-prelude", phase_started);
-
     // Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
     // returns a compile-time array literal built from the version-keyed OPcache
     // directive matrix, and `opcache_reset()` returns the compile-time cache-enabled
@@ -442,6 +433,28 @@ pub(crate) fn compile(config: CliConfig) {
             }
         };
     timings.record_since("autoload-run", phase_started);
+
+    // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program
+    // spells a `(object)` cast, so other binaries carry nothing.
+    //
+    // Runs AFTER `autoload::run`, unlike every prelude above, because the cast is detected
+    // syntactically and an autoloaded class file is not part of the AST until here: a program
+    // whose only `(object)` cast lives in a PSR-4 class saw no injection, and the call
+    // `ir_lower` synthesizes for the cast then failed codegen with
+    // `unsupported EIR backend feature: language construct __elephc_cast_object`. The
+    // declarations are name-resolved on the way in, exactly as `autoload::run` resolves the
+    // files it splices, because the position is past the pipeline's own name-resolution pass.
+    crate::progress::phase("object-cast-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("object-cast-prelude", phase_started);
 
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden

@@ -264,6 +264,29 @@ pub(crate) fn program_declares(program: &[Stmt], target: &str) -> bool {
     program.iter().any(|stmt| stmt_declares(stmt, target))
 }
 
+/// Returns the span of the program's own declaration of `target`, if it has one.
+///
+/// [`program_declares`] answers the question a prelude that lets the USER definition win needs;
+/// this answers the one a prelude that must REJECT the collision needs, so the diagnostic can
+/// point at the offending declaration instead of at the start of the program.
+pub(crate) fn first_declaration(program: &[Stmt], target: &str) -> Option<Span> {
+    program.iter().find_map(|stmt| stmt_declaration_span(stmt, target))
+}
+
+/// Returns the span of one statement's declaration of `target`, recursing into the same
+/// declaration-carrying blocks [`stmt_declares`] walks.
+fn stmt_declaration_span(stmt: &Stmt, target: &str) -> Option<Span> {
+    match &stmt.kind {
+        StmtKind::FunctionDecl { name, .. } if name.eq_ignore_ascii_case(target) => Some(stmt.span),
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => body
+            .iter()
+            .find_map(|stmt| stmt_declaration_span(stmt, target)),
+        _ => None,
+    }
+}
+
 /// Returns whether a CALL position names `target`, compared case-insensitively on its
 /// unqualified last segment.
 ///

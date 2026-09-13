@@ -669,3 +669,46 @@ fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
         "Reference elements in array literals (`[&$x]`) are not supported",
     );
 }
+
+/// Verifies a `(object)` cast with no operand is rejected rather than silently accepted.
+///
+/// `(object)` is a PREFIX operator over the three-token `( identifier )` window, so a missing
+/// operand surfaces at whatever follows the cast.
+#[test]
+fn test_error_object_cast_without_an_operand() {
+    expect_error("<?php $v = (object);", "Unexpected token: Semicolon");
+    expect_error("<?php $v = (object) ;", "Unexpected token: Semicolon");
+}
+
+/// Verifies an unterminated cast window is reported as the missing parenthesis it is, rather
+/// than being mistaken for a cast over `object`.
+#[test]
+fn test_error_object_cast_without_a_closing_paren() {
+    expect_error("<?php $v = (object;", "Expected closing ')'");
+}
+
+/// Verifies a program that declares the compiler's object-cast helper is rejected with a named
+/// diagnostic, not with the checker's bare `Duplicate function declaration`.
+///
+/// `ir_lower` lowers every `(object)` cast to a call on this name, so a user definition would
+/// not merely shadow the prelude — it would BECOME the cast's semantics.
+#[test]
+fn test_error_declaring_the_object_cast_helper() {
+    expect_error(
+        "<?php function __elephc_cast_object(mixed $v): stdClass { return new stdClass(); } $o = (object) [1];",
+        "the name is reserved for the compiler's `(object)` cast helper",
+    );
+    expect_error(
+        "<?php function __elephc_cast_object_dynamic(mixed $v): mixed { return $v; } $o = (object) [1];",
+        "the name is reserved for the compiler's `(object)` cast helper",
+    );
+}
+
+/// A program that declares the helper name but spells NO object cast is left alone: the prelude
+/// is pay-for-use, so there is nothing to collide with and nothing to reject.
+#[test]
+fn test_declaring_the_object_cast_helper_without_a_cast_is_accepted() {
+    expect_no_error(
+        "<?php function __elephc_cast_object(mixed $v): int { return 1; } echo __elephc_cast_object(2);",
+    );
+}

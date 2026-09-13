@@ -188,6 +188,35 @@ echo wrap(['name' => 'Laravel'])->name;
     assert_eq!(out, "Laravel");
 }
 
+/// A `(object)` cast whose ONLY occurrence is inside a compile-time-autoloaded class file must
+/// still get the prelude helpers it is lowered to.
+///
+/// The prelude is detected syntactically, and an autoloaded class file is not part of the AST
+/// until `autoload::run`. Injecting before that pass — where every other prelude sits — left
+/// this program with a call to an undeclared helper and failed code generation with
+/// `unsupported EIR backend feature: language construct __elephc_cast_object`.
+#[test]
+fn test_object_cast_inside_an_autoloaded_class_gets_the_prelude() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Maker.php",
+                "<?php\nnamespace App;\nclass Maker {\n    public function make(array $values): \\stdClass { return (object) $values; }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$maker = new App\\Maker();\necho $maker->make([\"name\" => \"Laravel\"])->name;\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Laravel");
+}
+
 /// The cast spelling is case-insensitive, as every PHP cast is.
 #[test]
 fn test_object_cast_spelling_is_case_insensitive() {
