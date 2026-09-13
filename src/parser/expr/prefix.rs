@@ -16,8 +16,8 @@ use crate::span::Span;
 
 use super::calls::{parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
-    parse_arrow_closure, parse_attributed_closure, parse_closure, parse_match_expr,
-    parse_named_expr, parse_new_object,
+    parse_arrow_closure, parse_attributed_closure, parse_closure, parse_function_call_or_callable,
+    parse_match_expr, parse_named_expr, parse_new_object,
 };
 use super::pratt::parse_expr_bp;
 use super::{parse_args, parse_expr};
@@ -47,7 +47,7 @@ pub(super) fn parse_prefix(
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
         Token::Print => parse_unary(tokens, pos, span, ExprKind::Print, 7),
         Token::Throw => parse_unary(tokens, pos, span, ExprKind::Throw, 0),
-        Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 35),
+        Token::Clone => parse_clone(tokens, pos, span),
         Token::True => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(true)),
         Token::False => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(false)),
         Token::Null => parse_simple(tokens, pos, span, ExprKind::Null),
@@ -341,6 +341,22 @@ fn parse_unary(
     *pos += 1;
     let inner = parse_expr_bp(tokens, pos, bp)?;
     Ok(Expr::new(ctor(Box::new(inner)), span))
+}
+
+/// Parses a `clone` expression. PHP 8.5 makes `clone` a regular function, so a `(` right
+/// after the keyword starts an ordinary call on the function named `clone` (`clone($o)`,
+/// `clone($o, [...])`) or its first-class callable form (`clone(...)`), sharing the general
+/// argument parser. Any other operand keeps the historical unary construct, its binding
+/// power, and its `ExprKind::Clone` AST shape.
+fn parse_clone(tokens: &[SpannedToken], pos: &mut usize, span: Span) -> Result<Expr, CompileError> {
+    if matches!(
+        tokens.get(*pos + 1).map(|(token, _)| token),
+        Some(Token::LParen)
+    ) {
+        *pos += 2;
+        return parse_function_call_or_callable(tokens, pos, span, Name::unqualified("clone"));
+    }
+    parse_unary(tokens, pos, span, ExprKind::Clone, 35)
 }
 
 /// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,

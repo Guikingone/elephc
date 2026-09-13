@@ -12,6 +12,7 @@ use std::collections::HashSet;
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
+use crate::names::Name;
 use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
 };
@@ -618,6 +619,28 @@ fn parse_closure_params(
     Ok((params, variadic, variadic_by_ref, variadic_type))
 }
 
+/// Parses the tail of a function-style call once the name and its opening `(` have been
+/// consumed: `...)` yields the first-class callable for `name`, anything else goes through
+/// the shared argument parser and becomes a `FunctionCall`. Shared by plain named calls and
+/// the PHP 8.5 `clone(...)` function form.
+pub(super) fn parse_function_call_or_callable(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    name: Name,
+) -> Result<Expr, CompileError> {
+    if parse_first_class_callable_parens(tokens, pos)? {
+        Ok(Expr::new(
+            ExprKind::FirstClassCallable(CallableTarget::Function(name)),
+            span,
+        ))
+    } else {
+        let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+        Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
+    }
+}
+
 /// Parses a named expression that could be a constant reference, function call, buffer_new<T>, ptr_cast<T>, or static/class method access.
 /// Disambiguates based on the token that follows the name: `(` for calls, `<T>` for buffer_new/ptr_cast, `::` for static access.
 /// On `new` after a name, delegates to `parse_new_object`; otherwise returns a `ConstRef` if no suffix matches.
@@ -724,16 +747,7 @@ pub(super) fn parse_named_expr(
     }
     if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
         *pos += 1;
-        if parse_first_class_callable_parens(tokens, pos)? {
-            Ok(Expr::new(
-                ExprKind::FirstClassCallable(CallableTarget::Function(name)),
-                span,
-            ))
-        } else {
-            let args = parse_args(tokens, pos, span)?;
-            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
-            Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
-        }
+        parse_function_call_or_callable(tokens, pos, span, name)
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
         *pos += 1;
         let member = match tokens.get(*pos).map(|(token, _)| token) {
