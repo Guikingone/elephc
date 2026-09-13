@@ -834,10 +834,26 @@ pub fn inject_if_used(
         sources.push(STR_GETCSV_SRC);
         sources.push(STR_GETCSV_WRAPPER_SRC);
     }
-    if sources.is_empty() && !inject_randomizer {
+    // Natural-order comparison is BUILT rather than parsed, so it never joins `sources`.
+    let needs_natural_order =
+        usage.references("strnatcmp") || usage.references("strnatcasecmp");
+    // So is the tokenizer surface.
+    let needs_tokenizer =
+        usage.references("token_get_all") || usage.references("token_name");
+    if sources.is_empty() && !inject_randomizer && !needs_natural_order && !needs_tokenizer {
         return program;
     }
     let mut combined = Vec::new();
+    if needs_natural_order {
+        let declarations = crate::strnatcmp_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_tokenizer {
+        let declarations = crate::tokenizer_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
     if inject_randomizer {
         let tokens = crate::lexer::tokenize(RANDOMIZER_SRC)
             .expect("Randomizer compatibility prelude must tokenize");

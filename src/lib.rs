@@ -38,6 +38,8 @@ pub mod assert_prelude;
 pub mod ast_usage;
 /// Narrow PHP-level fallbacks for builtin shapes not handled natively yet.
 pub mod backend_gap_prelude;
+mod strnatcmp_prelude;
+mod tokenizer_prelude;
 /// Builtin catalog and signature metadata snapshots.
 pub mod builtin_metadata;
 /// Single-source builtin registry: catalog, signatures, type-check, and lowering dispatch.
