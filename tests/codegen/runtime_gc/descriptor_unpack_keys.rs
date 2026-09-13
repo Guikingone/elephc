@@ -9,7 +9,8 @@
 //! Key details:
 //! - Sources are declared-`array` returns, whose physical storage is a boxed Mixed cell. That is
 //!   the representation the indexed unpack walk could not read.
-//! - Fixtures pass callbacks through callable parameters to avoid first-class specialization.
+//! - Fixtures pass callbacks through callable parameters to avoid first-class specialization,
+//!   except the tracked callable-array fixture, whose fast-path routing is the point under test.
 //! - Destructor output pins WHEN a payload dies, which a leak summary alone cannot: a duplicate
 //!   name must not destroy the entry it would have replaced.
 //! - Every fixture repeats, because a per-call imbalance only shows up in a leak summary.
@@ -50,6 +51,29 @@ $callback = [new CallableArrayAdder(), 'add'];
 echo throughCallableParam($callback), ':', call_user_func($callback, ...new PairAggregate());
 "#;
     assert_eq!(compile_and_run_tagged(source), "12:12");
+}
+
+/// A tracked callable array spreading a declared `array` parameter binds runtime keys.
+///
+/// The parameter's boxed storage can hold either dense positions or parameter names, so the
+/// tracked instance-method fast path must hand it to the descriptor walk rather than the direct
+/// method ABI. Both spellings bind, and the fixture repeats so a per-call imbalance shows up.
+#[test]
+fn test_core_tracked_callable_array_boxed_array_param_spread_binds_runtime_keys() {
+    let source = r#"<?php
+class TrackedUnpackAdder {
+    public function add(int $first, int $second): int { return $first * 10 + $second; }
+}
+function callTracked(array $values): int {
+    $callback = [new TrackedUnpackAdder(), 'add'];
+    return $callback(...$values);
+}
+echo callTracked([1, 2]), ':', callTracked(['second' => 2, 'first' => 1]), ':', callTracked([1, 2]);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "12:12:12", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Integer keys renumber positionally and string keys bind by name, through both call forms.

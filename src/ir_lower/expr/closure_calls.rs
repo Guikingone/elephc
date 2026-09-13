@@ -79,9 +79,12 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
 
 /// Returns whether a tracked instance callable has an unpack source the direct ABI cannot bind.
 ///
-/// Indexed array sources and static associative literals already have signature-aware direct
-/// lowering. Other spread shapes need the descriptor walk to preserve runtime keys and expand
-/// Traversable values instead of passing the source itself as one method operand.
+/// The split is by physical storage, not by PHP type. A physically indexed `Array(_)` source
+/// carries dense positional keys by construction, and a static associative literal names its
+/// parameters at compile time, so both already have signature-aware direct lowering. Every other
+/// shape must take the descriptor walk: a declared `array` parameter is boxed Mixed storage whose
+/// runtime string keys PHP binds by parameter NAME, and a Traversable must be expanded through
+/// `getIterator()`. Neither can be passed as one method operand without changing PHP semantics.
 fn instance_callable_args_need_descriptor_binder(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],

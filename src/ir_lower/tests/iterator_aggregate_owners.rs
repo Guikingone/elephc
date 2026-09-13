@@ -11,8 +11,9 @@
 //!   `PopCallOperandOwner` then `ReleaseLocalSlot` on normal completion,
 //!   skipped-loop `break`, `return`, and `throw`. Innermost `break` and
 //!   `continue` must not double-retire.
-//! - Tracked instance callable arrays route dynamic aggregate spreads through descriptor binding,
-//!   never through a direct method ABI with the spread source as one operand.
+//! - Tracked instance callable arrays route dynamic aggregate spreads and boxed `array` spreads
+//!   through descriptor binding, never through a direct method ABI with the spread source as
+//!   one operand. Physically indexed sources and plain positional arguments stay direct.
 
 use crate::codegen::platform::Target;
 use crate::ir::{
@@ -369,6 +370,13 @@ function callUnpacked(callable $callback): mixed {{
 }
 
 /// A tracked instance callable array cannot lower a dynamic aggregate as one direct ABI operand.
+///
+/// The split is by physical storage, not by PHP type. A local literal is a physically indexed
+/// `Array(_)` whose keys are dense positions by construction, so the direct method ABI binds it
+/// exactly. A declared `array` parameter is boxed Mixed storage that can carry string keys, which
+/// PHP binds by parameter NAME, so it must take the same runtime-key descriptor walk as the
+/// aggregate. Both descriptor-bound shapes publish one `getIterator()` owner with the LIFO
+/// contract, because the walk boxes every source before `IterStart`.
 #[test]
 fn tracked_instance_callable_aggregate_spread_uses_descriptor_binder_on_every_target() {
     let source = format!(
@@ -380,8 +388,13 @@ function callTrackedUnpacked(): int {{
     $callback = [new UnpackTarget(), 'add'];
     return $callback(...new FreshAgg());
 }}
-function callTrackedIndexed(array $values): int {{
+function callTrackedBoxed(array $values): int {{
     $callback = [new UnpackTarget(), 'add'];
+    return $callback(...$values);
+}}
+function callTrackedIndexed(): int {{
+    $callback = [new UnpackTarget(), 'add'];
+    $values = [1, 2];
     return $callback(...$values);
 }}
 function callTrackedPositional(): int {{
@@ -391,24 +404,26 @@ function callTrackedPositional(): int {{
 "
     );
     for target in TARGETS {
-        let function = lower_function(target, &source, "callTrackedUnpacked");
-        assert_eq!(
-            function
-                .instructions
-                .iter()
-                .filter(|instruction| instruction.op == Op::CallableDescriptorInvoke)
-                .count(),
-            1,
-            "{target}: dynamic aggregate spread must use descriptor invocation"
-        );
-        assert!(
-            !function
-                .instructions
-                .iter()
-                .any(|instruction| instruction.op == Op::MethodCall),
-            "{target}: dynamic aggregate spread must not reach the direct method ABI"
-        );
-        assert_single_owner_lifetime(&function, target);
+        for descriptor_bound in ["callTrackedUnpacked", "callTrackedBoxed"] {
+            let function = lower_function(target, &source, descriptor_bound);
+            assert_eq!(
+                function
+                    .instructions
+                    .iter()
+                    .filter(|instruction| instruction.op == Op::CallableDescriptorInvoke)
+                    .count(),
+                1,
+                "{target}/{descriptor_bound}: runtime-keyed spread must use descriptor invocation"
+            );
+            assert!(
+                !function
+                    .instructions
+                    .iter()
+                    .any(|instruction| instruction.op == Op::MethodCall),
+                "{target}/{descriptor_bound}: runtime-keyed spread must not reach the direct method ABI"
+            );
+            assert_single_owner_lifetime(&function, target);
+        }
 
         for control in ["callTrackedIndexed", "callTrackedPositional"] {
             let function = lower_function(target, &source, control);
