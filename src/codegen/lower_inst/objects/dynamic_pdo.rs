@@ -24,19 +24,12 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_class_has_constructor(
     }
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
-    // Resolved through `constructor_owner`, not the class's own `methods` map: a private
-    // method is not inherited, so a descendant of a class with a private constructor carries
-    // no entry of its own, and PHP still runs the ancestor's constructor when PDO hydrates
-    // that class (php-src reads `ce->constructor`, which is inheritance-resolved). Filtering
-    // on the own map reported NO constructor, so `hydrateClass` skipped the call entirely and
-    // then threw "does not have a constructor" for any `$fetchCtorArgs` (issue #869).
+    let constructor_key = php_symbol_key("__construct");
     let mut classes = ctx
         .module
         .class_infos
         .iter()
-        .filter(|(class_name, _)| {
-            crate::types::constructor_owner(&ctx.module.class_infos, class_name).is_some()
-        })
+        .filter(|(_, info)| info.methods.contains_key(&constructor_key))
         .collect::<Vec<_>>();
     classes.sort_by_key(|(_, info)| info.class_id);
     let matched_labels = classes

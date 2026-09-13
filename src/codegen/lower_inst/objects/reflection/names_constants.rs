@@ -35,13 +35,20 @@ pub(super) fn reflection_constructor_member(
 pub(super) fn inherited_private_constructor_member(
     ctx: &FunctionContext<'_>,
     class_name: &str,
-) -> Option<ReflectionListedMember> {
-    let (owner_name, owner_info) =
-        crate::types::constructor_owner(&ctx.module.class_infos, class_name)?;
+) -> Result<Option<ReflectionListedMember>> {
+    let Some((owner_name, owner_info)) =
+        crate::types::constructor_owner(&ctx.module.class_infos, class_name)
+    else {
+        return Ok(None);
+    };
     if php_symbol_key(owner_name) == php_symbol_key(class_name) {
-        return None;
+        return Ok(None);
     }
-    reflection_class_method_member(ctx, owner_name, owner_info, "__construct").ok()?
+    // The failure is PROPAGATED, not swallowed into `None`. Building a member resolves the
+    // owner's prototype and parameter defaults, and either can fail; answering "no constructor"
+    // instead would turn a real metadata error into a silently wrong `isInstantiable() == true`,
+    // where the ordinary method-member path reports it. `?` here matches that path.
+    reflection_class_method_member(ctx, owner_name, owner_info, "__construct")
 }
 
 /// Builds common ReflectionMethod/ReflectionProperty predicate flags.
