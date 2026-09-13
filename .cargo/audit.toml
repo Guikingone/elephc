@@ -37,6 +37,6 @@ ignore = [
     # service. elephc exposes no remote signing or decryption oracle of its own, and no RSA
     # DECRYPTION path exists in this tree at all. A PHP program that chose to expose PHAR
     # signing as a timed remote service would be exposed; that is a property of that
-    # program, and it is documented in docs/php/phar.md.
+    # program, and it is documented in docs/php/streams.md (the PHAR section).
     "RUSTSEC-2023-0071",
 ]
