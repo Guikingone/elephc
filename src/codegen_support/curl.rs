@@ -26,6 +26,31 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::curl_abi_slots;
 
+/// Publishes the compiled program's terminal-output funnel to the curl bridge.
+///
+/// `__rt_stdout_write` is the single indirection every `echo` travels through: the
+/// `print_r` capture buffer, the output-handler discard, the `ob_*` stack, the `--web`
+/// response capture, and only then the `write(1, …)` syscall. PHP's default `curl_exec()`
+/// write handler goes through the engine's output layer for the same reason, so
+/// `ob_start(); curl_exec($ch); $html = ob_get_clean();` captures the body — where the
+/// bridge's own `write(1, …)` bypassed all of it and left the buffer empty (issue #875).
+///
+/// EMITTED AS A CALL, not as one of the published function-pointer SLOTS above, because the
+/// direction is reversed: those let the runtime call INTO the bridge, while this hands the
+/// bridge an address to call BACK with. The bridge stores it opaquely and never names a
+/// `__rt_*` symbol, which is what keeps `elephc-curl` linkable on its own.
+///
+/// It clobbers the argument registers, so it must be emitted BEFORE the call's own operands
+/// are loaded. Publishing it at every transfer site rather than once at startup keeps the
+/// pay-for-use property this module holds: a curl-free binary emits none of this.
+pub(crate) fn publish_elephc_curl_output_sink(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => abi::emit_symbol_address(emitter, "x0", "__rt_stdout_write"),
+        Arch::X86_64 => abi::emit_symbol_address(emitter, "rdi", "__rt_stdout_write"),
+    }
+    emitter.bl_c("elephc_curl_set_output_sink");                                // hand the bridge the funnel every echo uses
+}
+
 /// Publishes every `elephc_curl` entry point into its runtime slot.
 pub(crate) fn publish_elephc_curl_function_pointers(emitter: &mut Emitter) {
     match emitter.target.arch {

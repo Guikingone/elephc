@@ -507,10 +507,18 @@ despite the name, php-src forwards it straight to libcurl unchanged, and elephc 
 the same: it is an ordinary `long` option, and real libcurl implements the
 header-in-body behavior on its own.
 
-> **Divergence:** that stdout write goes straight to file descriptor 1, so
-> `ob_start()` does **not** capture it the way php's does. Wrap the transfer in
-> `CURLOPT_RETURNTRANSFER` (or a `CURLOPT_WRITEFUNCTION`) if you need the body as a
-> string.
+That write travels the same output funnel as `echo`, so `ob_start()` captures it
+exactly as php's does:
+
+```php
+$ch = curl_init('https://example.com');
+ob_start();
+curl_exec($ch);
+$html = ob_get_clean();   // the body, as in php
+```
+
+Nested buffers, `ob_get_length()`, `ob_end_clean()` and the `--web` response capture
+all see the body the same way.
 
 ### Stream options
 
