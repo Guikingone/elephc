@@ -173,6 +173,169 @@ return $source->id . ":" . $copy->id;"#,
     assert_eq!(values.get(result), FakeValue::String("1:2".to_string()));
 }
 
+/// Verifies each readonly property has one rewrite allowance before and after the clone hook.
+#[test]
+fn execute_program_clone_function_scopes_readonly_reinitialization_per_property_phase() {
+    let program = parse_fragment(
+        br#"class EvalCloneReadonlyPhases {
+    public readonly int $id;
+    public int $trigger {
+        set { $this->id = $value; }
+    }
+    public function __construct($id) { $this->id = $id; }
+    public function __clone() { $this->id = 2; }
+}
+$source = new EvalCloneReadonlyPhases(1);
+$copy = clone($source, ["id" => 3]);
+echo $copy->id . ":";
+try {
+    clone($source, ["trigger" => 4, "id" => 5]);
+    echo "bad";
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+return $source->id;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "3:Cannot modify readonly property EvalCloneReadonlyPhases::$id"
+    );
+    assert_eq!(values.get(result), FakeValue::Int(1));
+}
+
+/// Verifies unary clone releases an owned temporary source after the shallow clone is complete.
+#[test]
+fn execute_program_clone_expression_releases_temporary_source() {
+    let program = parse_fragment(
+        br#"class EvalCloneTemporarySource {
+    public string $label = "source";
+    public function __clone() { $this->label = "clone"; }
+    public function __destruct() { echo $this->label . "|"; }
+}
+$copy = clone new EvalCloneTemporarySource();
+echo "after|";
+unset($copy);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "source|after|clone|");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies clone overrides reject live references but accept the value after its alias is unset.
+#[test]
+fn execute_program_clone_function_rejects_only_shared_reference_overrides() {
+    let program = parse_fragment(
+        br#"class EvalCloneReferenceBox {
+    public int $value = 0;
+}
+$source = new EvalCloneReferenceBox();
+$reference = 42;
+$properties = ["value" => &$reference];
+try {
+    clone($source, $properties);
+    echo "bad";
+} catch (Error $error) {
+    echo $error->getMessage() . "|";
+}
+unset($reference);
+$copy = clone($source, $properties);
+return $source->value . ":" . $copy->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Cannot assign by reference when cloning with updated properties|"
+    );
+    assert_eq!(values.get(result), FakeValue::String("0:42".to_string()));
+}
+
+/// Verifies clone-created dynamic properties use PHP's deprecation handler and exemptions.
+#[test]
+fn execute_program_clone_function_dispatches_dynamic_property_deprecations() {
+    let program = parse_fragment(
+        br#"function eval_clone_dynamic_handler($level, $message) {
+    echo $level . ":" . $message . "|";
+    return true;
+}
+class EvalCloneDynamicPlain {}
+#[AllowDynamicProperties]
+class EvalCloneDynamicAllowed {}
+class EvalCloneDynamicChild extends EvalCloneDynamicAllowed {}
+set_error_handler("eval_clone_dynamic_handler", E_DEPRECATED);
+$plain = clone(new EvalCloneDynamicPlain(), ["value" => 1]);
+$allowed = clone(new EvalCloneDynamicAllowed(), ["value" => 2]);
+$child = clone(new EvalCloneDynamicChild(), ["value" => 3]);
+$standard = clone(new stdClass(), ["value" => 4]);
+return $plain->value . ":" . $allowed->value . ":" . $child->value . ":" . $standard->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "8192:Creation of dynamic property EvalCloneDynamicPlain::$value is deprecated|"
+    );
+    assert_eq!(values.get(result), FakeValue::String("1:2:3:4".to_string()));
+    assert!(values.warnings.is_empty());
+}
+
+/// Verifies clone property failures release the partial clone and reject mangled property names.
+#[test]
+fn execute_program_clone_function_cleans_up_property_failures() {
+    let program = parse_fragment(
+        br#"class EvalClonePropertyFailure {
+    public string $label = "source";
+    public int $trigger {
+        set { $this->label = "failed"; throw new RuntimeException("setter"); }
+    }
+    public function __destruct() { echo $this->label . "|"; }
+}
+$source = new EvalClonePropertyFailure();
+try {
+    clone($source, ["trigger" => 1]);
+} catch (RuntimeException $error) {
+    echo $error->getMessage() . "|";
+}
+try {
+    clone($source, ["\0EvalClonePropertyFailure\0label" => "hidden"]);
+} catch (Error $error) {
+    echo $error->getMessage() . "|";
+}
+return $source->label;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "failed|setter|source|Cannot access property starting with \"\\0\"|"
+    );
+    assert_eq!(values.get(result), FakeValue::String("source".to_string()));
+}
+
 /// Verifies a clone whose hook throws is released before the original error is caught.
 #[test]
 fn execute_program_clone_function_releases_clone_when_hook_throws() {

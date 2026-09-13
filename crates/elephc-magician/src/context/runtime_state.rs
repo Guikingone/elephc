@@ -394,19 +394,38 @@ impl ElephcEvalContext {
         self.class_stack.last().map(String::as_str)
     }
 
-    /// Marks one newly cloned object as eligible for readonly reinitialization.
+    /// Starts one readonly reinitialization phase for a newly cloned object.
     pub(crate) fn begin_clone_initialization(&mut self, identity: u64) {
-        self.clone_initializing_objects.insert(identity);
+        self.clone_reinitialized_properties
+            .insert(identity, HashSet::new());
+    }
+
+    /// Starts the post-hook readonly reinitialization phase for clone property overrides.
+    pub(crate) fn restart_clone_initialization(&mut self, identity: u64) {
+        if let Some(properties) = self.clone_reinitialized_properties.get_mut(&identity) {
+            properties.clear();
+        }
     }
 
     /// Ends readonly reinitialization for one cloned object.
     pub(crate) fn end_clone_initialization(&mut self, identity: u64) {
-        self.clone_initializing_objects.remove(&identity);
+        self.clone_reinitialized_properties.remove(&identity);
     }
 
-    /// Returns whether a property write targets the clone currently being initialized.
-    pub(crate) fn is_clone_initializing(&self, identity: u64) -> bool {
-        self.clone_initializing_objects.contains(&identity)
+    /// Returns whether the object is inside either readonly clone reinitialization phase.
+    pub(crate) fn clone_initialization_is_active(&self, identity: u64) -> bool {
+        self.clone_reinitialized_properties.contains_key(&identity)
+    }
+
+    /// Consumes one property's single readonly rewrite allowance in the active phase.
+    pub(crate) fn consume_clone_reinitialization(
+        &mut self,
+        identity: u64,
+        property: &str,
+    ) -> bool {
+        self.clone_reinitialized_properties
+            .get_mut(&identity)
+            .is_some_and(|properties| properties.insert(property.to_string()))
     }
 
     /// Pushes the class name used to dispatch the current eval method call.

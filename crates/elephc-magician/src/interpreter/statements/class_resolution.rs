@@ -336,6 +336,7 @@ pub(in crate::interpreter) fn eval_object_clone_with_properties_result(
             values.release(result)?;
         }
 
+        context.restart_clone_initialization(clone_identity);
         if let Some(properties) = with_properties {
             eval_apply_clone_properties(clone, properties, context, values)?;
         }
@@ -359,16 +360,69 @@ fn eval_apply_clone_properties(
     let len = values.array_len(properties)?;
     for position in 0..len {
         let key = values.array_iter_key(properties, position)?;
-        let value = values.array_get(properties, key)?;
-        let key_string = values.cast_string(key)?;
-        let key_bytes = values.string_bytes(key_string);
-        let release = values.release(key_string);
-        let key_bytes = key_bytes?;
-        release?;
-        let property_name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-        eval_property_set_result(clone, &property_name, value, context, values)?;
+        let mut owners = vec![key];
+        let mut result = (|| {
+            let value = values.array_get(properties, key)?;
+            owners.push(value);
+            let key_string = values.cast_string(key)?;
+            owners.push(key_string);
+            let key_bytes = values.string_bytes(key_string)?;
+            let property_name =
+                String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+            if property_name.starts_with('\0') {
+                return eval_throw_error(
+                    "Cannot access property starting with \"\\0\"",
+                    context,
+                    values,
+                );
+            }
+            if let Some(reference) = eval_array_reference_key(key, values)?
+                .and_then(|key| context.array_element_alias(properties, &key).cloned())
+            {
+                if eval_clone_property_reference_is_shared(&reference) {
+                    return eval_throw_error(
+                        "Cannot assign by reference when cloning with updated properties",
+                        context,
+                        values,
+                    );
+                }
+            }
+            eval_property_set_result(clone, &property_name, value, context, values)
+        })();
+        for owner in owners.into_iter().rev() {
+            let released = eval_release_value(context, values, owner);
+            if result.is_ok() {
+                result = released;
+            }
+        }
+        result?;
     }
     Ok(())
+}
+
+/// Returns whether a clone override still shares its array element with another storage slot.
+fn eval_clone_property_reference_is_shared(target: &EvalReferenceTarget) -> bool {
+    match target {
+        EvalReferenceTarget::Variable { scope, name } => unsafe {
+            scope
+                .as_ref()
+                .is_some_and(|scope| scope.contains_visible(name))
+        },
+        EvalReferenceTarget::ArrayElement {
+            scope, array_name, ..
+        } => unsafe {
+            scope
+                .as_ref()
+                .is_some_and(|scope| scope.contains_visible(array_name))
+        },
+        EvalReferenceTarget::NestedArrayElement { array_target, .. } => {
+            eval_clone_property_reference_is_shared(array_target)
+        }
+        EvalReferenceTarget::ObjectProperty { .. }
+        | EvalReferenceTarget::StaticProperty { .. }
+        | EvalReferenceTarget::Cell { .. }
+        | EvalReferenceTarget::InvokerSlot { .. } => true,
+    }
 }
 
 /// Generated clone-hook scopes needed by native method dispatch.

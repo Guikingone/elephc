@@ -178,10 +178,13 @@ pub(in crate::interpreter) fn eval_expr(
             arms,
             default,
         } => eval_match_expr(subject, arms, default.as_deref(), context, scope, values),
-        EvalExpr::Clone(object) => {
-            let object = eval_expr(object, context, scope, values)?;
-            eval_object_clone_result(object, context, values)
-        }
+        EvalExpr::Clone(object) => with_eval_operands(
+            &[object.as_ref()],
+            context,
+            scope,
+            values,
+            |args, context, _, values| eval_object_clone_result(args[0], context, values),
+        ),
         EvalExpr::NamespacedCall {
             name,
             fallback_name,

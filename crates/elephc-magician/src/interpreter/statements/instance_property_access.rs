@@ -184,6 +184,14 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 );
             }
             if !is_static {
+                validate_native_readonly_property_write(
+                    object,
+                    identity,
+                    &declaring_class,
+                    property_name,
+                    context,
+                    values,
+                )?;
                 return eval_native_property_set_authorized(
                     object, &declaring_class, property_name, value, context, values,
                 );
@@ -229,10 +237,11 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 values,
             );
         }
+        storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if validate_eval_readonly_property_write(
             &declaring_class,
             &property,
-            Some(identity),
+            Some((identity, &storage_property_name)),
             context,
         )
         .is_err()
@@ -244,7 +253,6 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 values,
             );
         }
-        storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if property.has_set_hook() {
             if !current_eval_property_hook_is(
                 &declaring_class,
@@ -314,6 +322,14 @@ pub(in crate::interpreter) fn eval_property_set_result(
                         values,
                     );
                 }
+                validate_native_readonly_property_write(
+                    object,
+                    identity,
+                    &declaring_class,
+                    property_name,
+                    context,
+                    values,
+                )?;
                 return eval_native_property_set_authorized(
                     object, &declaring_class, property_name, value, context, values,
                 );
@@ -340,6 +356,20 @@ pub(in crate::interpreter) fn eval_property_set_result(
             values,
         );
     }
+    if !declared_property_found
+        && !eval_object_public_property_exists(object, property_name, values)?
+        && !eval_class_allows_dynamic_properties(&object_class_name, context)
+    {
+        eval_dispatch_php_error(
+            &format!(
+                "Creation of dynamic property {}::${property_name} is deprecated",
+                object_class_name.trim_start_matches('\\')
+            ),
+            E_DEPRECATED,
+            context,
+            values,
+        )?;
+    }
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
@@ -364,6 +394,70 @@ pub(in crate::interpreter) fn eval_property_set_result(
     )?;
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
+}
+
+/// Returns whether an eval or seeded native class inherits permission for dynamic properties.
+fn eval_class_allows_dynamic_properties(class_name: &str, context: &ElephcEvalContext) -> bool {
+    let mut current = class_name.trim_start_matches('\\').to_string();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.to_ascii_lowercase()) {
+        if current.eq_ignore_ascii_case("stdClass") {
+            return true;
+        }
+        if let Some(class) = context.class(&current) {
+            if eval_class_has_allow_dynamic_properties_attribute(class) {
+                return true;
+            }
+            let Some(parent) = class.parent() else {
+                return false;
+            };
+            current = context
+                .resolve_class_name(parent)
+                .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+            continue;
+        }
+        if eval_attributes_have_global_builtin_attribute(
+            &context.native_class_attributes(&current),
+            "AllowDynamicProperties",
+        ) {
+            return true;
+        }
+        let Some(parent) = context.native_class_parent(&current) else {
+            return false;
+        };
+        current = parent.to_string();
+    }
+    false
+}
+
+/// Enforces readonly one-shot initialization for properties owned by generated classes.
+fn validate_native_readonly_property_write(
+    object: RuntimeCellHandle,
+    identity: u64,
+    declaring_class: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let flags = values
+        .reflection_property_flags(declaring_class, property_name)?
+        .unwrap_or_default();
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY == 0 {
+        return Ok(());
+    }
+    if context.clone_initialization_is_active(identity) {
+        if context.consume_clone_reinitialization(identity, property_name) {
+            return Ok(());
+        }
+    } else if !values.property_is_initialized(object, property_name)? {
+        return Ok(());
+    }
+    eval_throw_readonly_property_modification_error(
+        declaring_class,
+        property_name,
+        context,
+        values,
+    )
 }
 
 /// Binds one eval object property to a by-reference source parameter.

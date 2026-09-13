@@ -17,6 +17,7 @@ use crate::context::{EvalErrorHandlerState, EvalNativeUserConstant};
 const E_USER_ERROR: i64 = 256;
 const E_USER_WARNING: i64 = 512;
 const E_USER_NOTICE: i64 = 1_024;
+pub(in crate::interpreter) const E_DEPRECATED: i64 = 8_192;
 const E_USER_DEPRECATED: i64 = 16_384;
 const INVALID_RESOURCE_TYPE_MESSAGE: &str =
     "get_resources(): Argument #1 ($type) must be a valid resource type";
@@ -302,21 +303,30 @@ fn eval_trigger_error(
             values,
         );
     }
-    let handled = dispatch_user_error_handler(&message, level, context, values)?;
+    let handled = eval_dispatch_php_error(&message, level, context, values)?;
+    if !handled && level == E_USER_ERROR {
+        return Err(EvalStatus::UserFatal);
+    }
+    values.bool_value(true)
+}
+
+/// Dispatches one PHP diagnostic through the active handler and reporting mask.
+pub(in crate::interpreter) fn eval_dispatch_php_error(
+    message: &str,
+    level: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let handled = dispatch_user_error_handler(message, level, context, values)?;
     let reporting_mask = match values.runtime_error_reporting(None) {
         Ok(mask) => mask,
         Err(EvalStatus::UnsupportedConstruct) => context.error_reporting_mask(),
         Err(status) => return Err(status),
     };
-    if !handled {
-        if reporting_mask & level != 0 {
-            values.warning_unhandled(&format_user_error(&message, level, context))?;
-        }
-        if level == E_USER_ERROR {
-            return Err(EvalStatus::UserFatal);
-        }
+    if !handled && reporting_mask & level != 0 {
+        values.warning_unhandled(&format_user_error(message, level, context))?;
     }
-    values.bool_value(true)
+    Ok(handled)
 }
 
 /// Formats PHP's default user diagnostic with its category and source location.
@@ -324,7 +334,7 @@ fn format_user_error(message: &str, level: i64, context: &ElephcEvalContext) -> 
     let category = match level {
         E_USER_ERROR => "Fatal error",
         E_USER_WARNING => "Warning",
-        E_USER_DEPRECATED => "Deprecated",
+        E_DEPRECATED | E_USER_DEPRECATED => "Deprecated",
         _ => "Notice",
     };
     let (file, _, line, _) = context.call_site();
