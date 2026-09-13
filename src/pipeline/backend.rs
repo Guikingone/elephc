@@ -222,7 +222,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::phase("write-asm");
     let phase_started = Instant::now();
-    if let Err(e) = fs::write(&output_paths.asm, &user_asm) {
+    if let Err(e) = crate::pipeline::artifact_io::write_artifact(&output_paths.asm, user_asm.as_bytes()) {
         crate::progress::clear();
         eprintln!("Error writing '{}': {}", output_paths.asm.display(), e);
         process::exit(1);
@@ -388,7 +388,9 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             .unwrap_or("libelephc_module");
         let exports = exported_functions.values().collect::<Vec<_>>();
         let header = exports::render_c_header(library_stem, &exports);
-        if let Err(error) = fs::write(header_path, header) {
+        if let Err(error) =
+            crate::pipeline::artifact_io::write_artifact(header_path, header.as_bytes())
+        {
             crate::progress::clear();
             eprintln!("Error writing '{}': {}", header_path.display(), error);
             process::exit(1);
@@ -420,7 +422,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // reads it to run the HMAC handshake. Keep it like a `.env` secret.
     if let Some(key) = ir_module.probe_key {
         let sidecar = output_paths.bin.with_extension("key");
-        if let Err(err) = fs::write(&sidecar, crate::probe_key::to_hex(&key)) {
+        if let Err(err) = crate::pipeline::artifact_io::write_artifact(
+            &sidecar,
+            crate::probe_key::to_hex(&key).as_bytes(),
+        ) {
             eprintln!("warning: could not write the build key {}: {err}", sidecar.display());
         } else if let Err(err) = restrict_to_owner(&sidecar) {
             // Not fatal — the key is still usable — but say it, because the

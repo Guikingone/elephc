@@ -62,7 +62,10 @@ pub fn write_source_map(
 ) -> Result<(), String> {
     let source_sha256 = fs::read(source_path).ok().map(|bytes| sha256_hex(&bytes));
     let json = build_source_map(asm, source_path, asm_path, source_sha256.as_deref())?;
-    fs::write(output_path, json)
+    // Through the shared artifact policy, not `fs::write`: the map's path is derived from the
+    // source filename like every other generated file, so a symlink planted there would
+    // otherwise be written through (issue #888).
+    crate::pipeline::write_artifact(output_path, json.as_bytes())
         .map_err(|err| format!("failed to write source map '{}': {}", output_path.display(), err))
 }
 
