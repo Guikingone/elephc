@@ -139,7 +139,12 @@ echo "\n";
     assert_clean(out, "IArIAcIAk0IAn\n");
 }
 
-/// Descriptor unpack of an aggregate must own getIterator() and leave a clean heap.
+/// A tracked callable array unpacking a temporary aggregate destroys it before the callee runs.
+///
+/// PHP's SEND_UNPACK walks the aggregate's `getIterator()` result, destroys that iterator (I),
+/// then frees the temporary aggregate (A), and only afterwards invokes the callee and lets echo
+/// print its result (1). The descriptor walk retires the iterator owner and the pinned source at
+/// its exit, before `CallableDescriptorInvoke`, which is exactly that order.
 #[test]
 fn test_descriptor_unpack_aggregate_heap_clean() {
     let out = compile_and_run_with_heap_debug(&format!(
@@ -152,7 +157,7 @@ echo $callback(...new FreshAgg());
 echo "\n";
 "#
     ));
-    assert_clean(out, "1IA\n");
+    assert_clean(out, "IA1\n");
 }
 
 /// A Traversable parameter must dispatch direct Iterator and IteratorAggregate values at runtime.
