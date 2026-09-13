@@ -184,7 +184,13 @@ echo dump([]);
 /// Verifies an untyped property written with both array shapes keeps hash storage.
 ///
 /// `merge_untyped_property_array_storage` answered `array<mixed>` for the cross-shape case, on the
-/// belief that it was a runtime-dispatched "either". It is not -- consumers read the static type.
+/// belief that it was a runtime-dispatched "either". It is not -- consumers read the static type,
+/// so the hash written by the second seed was read back as a packed vector.
+///
+/// The reader declares `: array` deliberately. An UNTYPED method returning an untyped property
+/// that holds a hash is refused by the checker (`count() argument must be array or Countable
+/// object`) whether or not the two shapes ever meet, so leaving the hint off would test that
+/// separate, pre-existing gap instead of this one.
 #[test]
 fn test_untyped_property_written_with_both_array_shapes_keeps_hash_storage() {
     let out = compile_and_run(
@@ -193,17 +199,18 @@ class Holder {
     private $slot = [];
     public function seedList(): void { $this->slot = ['x', 'y']; }
     public function seedMap(): void { $this->slot = ['a' => 1, 'b' => 2]; }
-    public function read() { return $this->slot; }
+    public function read(): array { return $this->slot; }
 }
 $holder = new Holder();
 $holder->seedList();
 echo json_encode($holder->read()), '|';
 $holder->seedMap();
-echo json_encode($holder->read()), '|';
-echo in_array(2, $holder->read()) ? 'y' : 'n';
+$got = $holder->read();
+echo count($got), '|', json_encode($got), '|';
+echo in_array(2, $got) ? 'y' : 'n';
 "#,
     );
-    assert_eq!(out, "[\"x\",\"y\"]|{\"a\":1,\"b\":2}|y");
+    assert_eq!(out, "[\"x\",\"y\"]|2|{\"a\":1,\"b\":2}|y");
 }
 
 /// Pins the reason the hash is a safe join: a hash whose keys are sequential integers from zero is
