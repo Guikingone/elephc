@@ -734,6 +734,35 @@ fn eval_generator_clear_current(
     Ok(())
 }
 
+/// Runs one `Generator` protocol operation on behalf of the native `__rt_gen_*` helpers.
+///
+/// The generated runtime drives a `Generator` through its fiber fields, which an
+/// INTERPRETER-created generator does not have: it has a frame in this context instead, and
+/// reading the fiber slots of one yields whatever the object's storage happens to hold. The
+/// `__rt_gen_*` helpers therefore probe for an eval owner first and land here, where the
+/// protocol is answered from the registered frame. `argument` is the borrowed cell `send()`
+/// and `throw()` pass; every other operation ignores it.
+#[cfg(not(test))]
+pub(crate) fn eval_generator_protocol_result(
+    identity: u64,
+    method_name: &str,
+    argument: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    // `owned: false`: the cell belongs to the AOT caller, which releases it after the call.
+    let evaluated_args = argument
+        .map(|value| EvaluatedCallArg {
+            name: None,
+            value,
+            ref_target: None,
+            owned: false,
+        })
+        .into_iter()
+        .collect();
+    eval_generator_method_result(identity, method_name, evaluated_args, context, values)
+}
+
 /// Dispatches the `Generator` methods PHP exposes.
 pub(in crate::interpreter) fn eval_generator_method_result(
     identity: u64,

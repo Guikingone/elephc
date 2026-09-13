@@ -160,6 +160,21 @@ impl ElephcEvalContext {
     /// Stores one newly created generator's frame under its object identity.
     pub fn register_eval_generator(&mut self, identity: u64, frame: EvalGeneratorFrame) {
         self.eval_generators.insert(identity, frame);
+        // ALSO publish the owner context. `Generator` is an AOT class, so a generator the
+        // INTERPRETER created is indistinguishable from an AOT one at an AOT call site, and
+        // `lower_method_call`'s dynamic-ownership probe finds no owner, falls through to the
+        // native Iterator protocol, and that switches onto an activation stack this generator
+        // never had -- measured as `ret` into 0x4 with sp inside heap_buf. Publishing ownership
+        // routes the call through the bridge, where `eval_generator_method_result` resumes the
+        // frame registered just above, by the same identity.
+        //
+        // Deliberately NOT `register_dynamic_object`: that also records the object as an
+        // instance of an EVAL-DECLARED class, and `Generator` is not one.
+        #[cfg(not(test))]
+        crate::ffi::dynamic_destructors::register_dynamic_object_context(
+            identity,
+            std::ptr::from_mut::<Self>(self),
+        );
     }
 
     /// Returns whether one object identity is a generator this context owns.
