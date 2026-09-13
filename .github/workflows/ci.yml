@@ -1338,8 +1338,9 @@ jobs:
             "${{ matrix.clang_target }}"
 
   # Eval integration tests compile, link, and run full programs while exercising
-  # eval/magician paths, so keep them out of the ordinary codegen shards. Two
-  # workers per shard reduce wall time without increasing the number of test runs.
+  # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
+  # deterministic shard in one libtest process so runtime-object and bridge caches
+  # survive between cases, with two workers preserving bounded parallelism.
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
     needs: build-archive-macos-aarch64
@@ -1364,18 +1365,26 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
+      - name: Extract test archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
       - name: Run eval codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
-          cargo nextest run --profile ci \
-            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
-            --workspace-remap . \
-            -E 'binary(codegen_tests) and test(~codegen::eval)' \
-            --partition hash:${{ matrix.shard }}/16 \
-            --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+          eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$eval_test_binary"
+          bash scripts/ci/run_eval_codegen_shard.sh \
+            "$eval_test_binary" "${{ matrix.shard }}" 16
 
   eval-codegen-tests-linux-x86_64:
     name: Eval Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
@@ -1400,18 +1409,26 @@ jobs:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
 
+      - name: Extract test archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
       - name: Run eval codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
-          cargo nextest run --profile ci \
-            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
-            --workspace-remap . \
-            -E 'binary(codegen_tests) and test(~codegen::eval)' \
-            --partition hash:${{ matrix.shard }}/16 \
-            --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+          eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$eval_test_binary"
+          bash scripts/ci/run_eval_codegen_shard.sh \
+            "$eval_test_binary" "${{ matrix.shard }}" 16
 
   eval-codegen-tests-linux-aarch64:
     name: Eval Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
@@ -1436,18 +1453,26 @@ jobs:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
 
+      - name: Extract test archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
       - name: Run eval codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
-          cargo nextest run --profile ci \
-            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
-            --workspace-remap . \
-            -E 'binary(codegen_tests) and test(~codegen::eval)' \
-            --partition hash:${{ matrix.shard }}/16 \
-            --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+          eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$eval_test_binary"
+          bash scripts/ci/run_eval_codegen_shard.sh \
+            "$eval_test_binary" "${{ matrix.shard }}" 16
 
   image-api-sync:
     name: Image API stubs in sync
