@@ -684,8 +684,13 @@ fn test_error_own_constructor_arity_still_names_the_instantiated_class() {
 }
 
 /// An inherited PUBLIC constructor names the class that DECLARES it, which is what php-src
-/// reports (`Too few arguments to function Base::__construct()`) — the descendant inherits the
-/// entry, so this path was already correct and stays so.
+/// reports (`Too few arguments to function Base::__construct()`).
+///
+/// This one CHANGES with the fix, and deliberately so: a public constructor IS in the
+/// descendant's own method map, so the owner walk stops at the descendant — but the declaring
+/// class it then reports is still the ancestor. Measured before the fix, this same program said
+/// `Constructor 'Sub::__construct'`, naming a class whose source has no constructor. The
+/// message moves for every INHERITED constructor, not only a private one.
 #[test]
 fn test_error_inherited_public_constructor_arity_names_the_declaring_class() {
     expect_error(

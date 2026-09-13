@@ -125,8 +125,14 @@ impl Checker {
                 // Owner::__construct()`). #796 made the visibility half say so; the arity half
                 // still said `Child::__construct` (issue #870).
                 //
-                // For an ordinary class that declares its own constructor the two coincide, so
-                // every other diagnostic is unchanged.
+                // This moves the name for EVERY INHERITED constructor, not only a private one.
+                // An inherited PUBLIC or PROTECTED constructor IS in the descendant's own method
+                // map, so the owner walk stops at the descendant — but `method_declaring_classes`
+                // still points at the ancestor that wrote it, and php-src names that ancestor
+                // too (`new Sub()` on `Base`'s constructor reports
+                // `Too few arguments to function Base::__construct()`, where elephc said
+                // `Sub::__construct`). Only a class that declares its OWN constructor is
+                // unchanged, because there the two names are the same class.
                 let declaring_class = owner_info
                     .method_declaring_classes
                     .get("__construct")
