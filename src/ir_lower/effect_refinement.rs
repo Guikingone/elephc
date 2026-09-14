@@ -309,12 +309,20 @@ fn property_effects_for_value(
         // scope-dependent answers have to be taken before it: php refuses the name from a scope
         // that may not reach it, and warns `Undefined property` for one it resolves to a dynamic
         // property that has never been created.
-        if property_name_is_inaccessible(function, context, &runtime_class, property) {
-            effects |= Effects::MAY_THROW;
-            continue;
-        }
-        if property_name_is_dynamic(function, context, &runtime_class, property) {
-            effects |= Effects::MAY_WARN;
+        let inaccessible =
+            property_name_is_inaccessible(function, context, &runtime_class, property);
+        let dynamic = property_name_is_dynamic(function, context, &runtime_class, property);
+        if inaccessible || dynamic {
+            // PHP consults `__get` before reporting either an access error or an undefined
+            // property warning. The backend follows that order, so effect refinement must keep
+            // the accessor's effects for the same two name-resolution outcomes.
+            if class.methods.contains_key("__get") {
+                effects |= method_summary_for_class(context, &runtime_class, "__get")?;
+            } else if inaccessible {
+                effects |= Effects::MAY_THROW;
+            } else {
+                effects |= Effects::MAY_WARN;
+            }
             continue;
         }
         if let Some((index, (name, _))) = class.visible_property(property) {
