@@ -170,7 +170,13 @@ pub(super) fn widen_clone_override_property_storage(checker: &mut Checker) {
 fn reserve_property_hash_storage(checker: &mut Checker, class_name: &str) {
     // Same exclusions as `widen_class`: a checker-injected builtin, a packed class and an enum
     // all own their physical layout together with the code that reads it.
-    if !checker.declared_classes.contains(class_name)
+    //
+    // The builtin catalog, NOT `declared_classes`, is the authority for the first of those. The
+    // driver repopulates `declared_classes` from the class map AFTER builtin injection, so that
+    // set contains the injected SPL, Reflection, DateTime and throwable classes too and excludes
+    // nothing here. A user subclass of a builtin is absent from the catalog and stays eligible.
+    if elephc_builtin_contract::lookup_class(class_name).is_some()
+        || !checker.declared_classes.contains(class_name)
         || checker.packed_classes.contains_key(class_name)
         || checker.enums.contains_key(class_name)
         || super::builtin_stdclass::is_stdclass(class_name)
@@ -208,7 +214,14 @@ fn widen_class(checker: &mut Checker, class_name: &str) {
     // Only a class this program DECLARES is widened. A checker-injected builtin (SPL, Reflection,
     // DateTime, the throwables) owns its slot representation together with the code that reads it,
     // and `clone()` on one of those is refused by the applicator planner anyway.
-    if !checker.declared_classes.contains(class_name)
+    //
+    // The builtin catalog is what decides that, because `declared_classes` cannot: the driver
+    // repopulates it from the class map AFTER builtin injection, so the injected classes are in
+    // it. Without this gate a runtime-shaped two-argument `clone()` restamped builtin slots and
+    // an SPL constructor then refused to lower its own declared `callable` parameter into its own
+    // `Callable` slot. A user subclass of a builtin is absent from the catalog and stays eligible.
+    if elephc_builtin_contract::lookup_class(class_name).is_some()
+        || !checker.declared_classes.contains(class_name)
         || checker.packed_classes.contains_key(class_name)
         || checker.enums.contains_key(class_name)
     {

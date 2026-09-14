@@ -503,6 +503,20 @@ unsafe extern "C" {
     /// Installs child traversal, boxed-Throwable final release, and array reference retirement callbacks.
     #[link_name = "__elephc_eval_install_object_owner_hooks_v2"]
     pub(super) fn __elephc_eval_install_object_owner_hooks(child: usize, release: usize, retire: usize);
+
+    /// Installs the eval dynamic-object clone callback the generated `clone` lowering consults.
+    #[link_name = "__elephc_eval_install_object_clone_hook_v1"]
+    pub(super) fn __elephc_eval_install_dynamic_object_clone_hook(callback: usize);
+
+    /// Reports whether one natively built array entry still belongs to a live PHP reference set.
+    /// Every argument is borrowed; the query allocates nothing and cannot throw.
+    #[link_name = "__elephc_eval_array_entry_is_shared_reference_v1"]
+    pub(super) fn __elephc_eval_array_entry_is_shared_reference(
+        array: *mut RuntimeCell,
+        key_ptr: *const u8,
+        key_len: u64,
+        value: *mut RuntimeCell,
+    ) -> u64;
 }
 
 /// Forwards one installed eval ob-handler callback address to the generated runtime.

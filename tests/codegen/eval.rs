@@ -29631,3 +29631,260 @@ echo eval($code);
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies AOT `clone $object` clones an eval-declared object and runs its eval `__clone()`.
+///
+/// The object has no generated class layout at all, so this only passes when the generated
+/// `clone` hands the identity to Magician, which owns the dynamic-class metadata.
+#[test]
+fn test_aot_clone_eval_declared_object_with_clone_keyword() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalAotCloneKeywordBox {
+    public string $name;
+    public int $count;
+    public function __construct($name, $count) { $this->name = $name; $this->count = $count; }
+    public function __clone() { $this->name = $this->name . ":clone"; }
+    public function label() { return $this->name . "/" . $this->count; }
+}
+return new EvalAotCloneKeywordBox("A", 1);');
+$copy = clone $box;
+$copy->count = 9;
+echo $box->name; echo ":";
+echo $box->count; echo ":";
+echo $copy->name; echo ":";
+echo $copy->count; echo ":";
+echo get_class($copy); echo ":";
+echo $copy->label();
+"#,
+    );
+    assert_eq!(out, "A:1:A:clone:9:EvalAotCloneKeywordBox:A:clone/9");
+}
+
+/// Verifies `clone($object)` and `clone($object, $withProperties)` reach the same eval operation.
+///
+/// PHP 8.5 runs `__clone()` FIRST and applies the overrides afterwards, so the override wins
+/// over the hook's own write to the same property.
+#[test]
+fn test_aot_clone_eval_declared_object_through_clone_function() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalAotCloneFunctionBox {
+    public string $name;
+    public int $count;
+    public function __construct($name, $count) { $this->name = $name; $this->count = $count; }
+    public function __clone() { $this->count = $this->count + 100; }
+}
+return new EvalAotCloneFunctionBox("A", 1);');
+$plain = clone($box);
+$overridden = clone($box, ["name" => "B", "count" => 7]);
+echo $box->name; echo ":";
+echo $box->count; echo ":";
+echo $plain->name; echo ":";
+echo $plain->count; echo ":";
+echo $overridden->name; echo ":";
+echo $overridden->count; echo ":";
+echo get_class($overridden);
+"#,
+    );
+    assert_eq!(out, "A:1:A:101:B:7:EvalAotCloneFunctionBox");
+}
+
+/// Verifies a private eval `__clone()` is refused when AOT global scope clones the object.
+#[test]
+fn test_aot_clone_eval_declared_object_rejects_private_hook_from_global_scope() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalAotClonePrivateHookBox {
+    public string $name = "A";
+    private function __clone() { $this->name = "A:private"; }
+}
+return new EvalAotClonePrivateHookBox();');
+try {
+    $copy = clone $box;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo ":"; echo $box->name;
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Call to private EvalAotClonePrivateHookBox::__clone() from global scope:A"
+    );
+}
+
+/// Verifies the AOT invocation scope, not global scope, decides protected eval `__clone()` access.
+///
+/// The eval class extends an emitted AOT class, so cloning from inside that AOT parent's own
+/// method IS allowed while the identical clone from global scope is refused. The same fixture
+/// proves a STATICALLY TYPED object parameter still reaches the eval clone callback.
+#[test]
+fn test_aot_clone_eval_declared_object_uses_aot_invocation_scope_for_protected_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotCloneScopeParent {
+    // Declared on the PARENT so the read below is statically valid through a parent-typed value.
+    // The eval subclass inherits this slot, which is also what the hook mutates.
+    public string $name = "A";
+
+    // The parameter is typed as the EMITTED parent, so the operand reaches `clone` as a concrete
+    // object slot. The value it actually holds is an eval-declared SUBCLASS, which is exactly the
+    // case a Mixed-only bridge would silently miss.
+    // The RETURN type is `mixed` on purpose: `get_class()` only consults Magician for a
+    // runtime-shaped value, so a statically typed result would report this parent rather than
+    // the eval subclass the object really is.
+    public static function copy(EvalAotCloneScopeParent $object): mixed { return clone $object; }
+}
+
+$box = eval('class EvalAotCloneScopeChild extends EvalAotCloneScopeParent {
+    protected function __clone() { $this->name = $this->name . ":hook"; }
+}
+return new EvalAotCloneScopeChild();');
+// The eval instance arrives as Mixed, which the checker will not pass to a typed parameter.
+// `instanceof` narrows it. The else arm exists so a FALSE result fails the assertion loudly
+// instead of silently skipping the case this fixture is here to prove.
+if ($box instanceof EvalAotCloneScopeParent) {
+    $copy = EvalAotCloneScopeParent::copy($box);
+    echo $copy->name; echo ":";
+    echo get_class($copy); echo ":";
+} else {
+    echo "not-an-instance:";
+}
+try {
+    clone $box;
+    echo "bad";
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "A:hook:EvalAotCloneScopeChild:Call to protected EvalAotCloneScopeChild::__clone() from global scope"
+    );
+}
+
+/// Verifies a throwing eval `__clone()` crosses back as a catchable AOT Throwable.
+#[test]
+fn test_aot_clone_eval_declared_object_propagates_throwing_hook() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalAotCloneThrowingBox {
+    public string $name = "A";
+    public function __clone() { throw new RuntimeException("clone failed"); }
+}
+return new EvalAotCloneThrowingBox();');
+try {
+    $copy = clone $box;
+    echo "bad";
+} catch (RuntimeException $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo ":"; echo $box->name;
+"#,
+    );
+    assert_eq!(out, "RuntimeException:clone failed:A");
+}
+
+/// Verifies the refused clone leaves no unfinished object behind and is not released twice.
+///
+/// `--heap-debug` is the authoritative allocator check: the unfinished clone is released exactly
+/// once inside Magician before the Throwable crosses back, so the summary must stay clean.
+#[test]
+fn test_aot_clone_eval_declared_object_throwing_hook_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$box = eval('class EvalAotCloneThrowingHeapBox {
+    public string $name = "A";
+    public function __destruct() { echo "drop:"; }
+    public function __clone() { throw new RuntimeException("clone failed"); }
+}
+return new EvalAotCloneThrowingHeapBox();');
+try {
+    clone $box;
+    echo "bad";
+} catch (RuntimeException $e) {
+    echo "caught:";
+}
+unset($box);
+echo "after";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "drop:caught:drop:after", "{}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies an ordinary emitted AOT object still takes the generated clone path.
+///
+/// The callback is installed here because the program links Magician, so a miss is the only
+/// thing that can keep the generated `__clone()` hook and the generated layout copy in play.
+#[test]
+fn test_aot_clone_eval_declared_object_callback_miss_keeps_aot_clone_path() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotCloneMissBox {
+    public string $name = "A";
+    public int $count = 1;
+
+    public function __clone(): void {
+        $this->name = $this->name . ":aot";
+    }
+}
+
+$box = eval('return new EvalAotCloneMissBox();');
+$copy = clone $box;
+$copy->count = 5;
+echo $box->name; echo ":";
+echo $box->count; echo ":";
+echo $copy->name; echo ":";
+echo $copy->count; echo ":";
+echo get_class($copy);
+"#,
+    );
+    assert_eq!(out, "A:1:A:aot:5:EvalAotCloneMissBox");
+}
+
+/// Verifies a by-reference entry in an AOT-built override array is refused in iteration order.
+///
+/// Magician's own alias table knows nothing about an array generated code built, so this only
+/// passes when the native hash-entry reference state is read too. The FIRST override reaches an
+/// undeclared property and fires the eval-declared `__set()`, which prints. The SECOND is the
+/// one the `foreach` by-reference alias is still attached to, so the printed side effect has to
+/// appear BEFORE the error: that ordering is what proves the refusal happened per entry rather
+/// than as an up-front scan of the whole array.
+#[test]
+fn test_aot_clone_eval_declared_object_rejects_aot_reference_override_entry() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalAotCloneRefOverrideBox {
+    public string $kept = "K";
+    public function __set($name, $value) { echo "set:" . $name . "=" . $value . ":"; }
+}
+return new EvalAotCloneRefOverrideBox();');
+$overrides = ["extra" => "E", "second" => "S"];
+foreach ($overrides as $key => &$slot) {}
+try {
+    clone($box, $overrides);
+    echo "bad";
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+echo ":"; echo $box->kept;
+"#,
+    );
+    assert_eq!(
+        out,
+        "set:extra=E:Cannot assign by reference when cloning with updated properties:K"
+    );
+}

@@ -25,6 +25,9 @@
 //! - A property whose backend storage cannot accept a runtime-shaped value (pointers, buffers,
 //!   resources, callables, packed fields) gets an explicit refusal arm. Overrides are never
 //!   silently dropped, and the applicator never asks the backend for a store it cannot emit.
+//! - Only classes this program DECLARES are planned. A checker-injected builtin is skipped
+//!   entirely: the checker never widens its slots, and its clones fall to the existing catchable
+//!   "property overrides are not supported for this class" runtime Error instead.
 
 mod arms;
 mod body;
@@ -413,9 +416,15 @@ fn candidate_classes(module: &Module, sites: &CloneOverrideSites) -> Vec<String>
     }
     names
         .into_iter()
-        .filter(|name| {
-            crate::ir_lower::reflection::canonical_builtin_reflection_class_name(name).is_none()
-        })
+        // A checker-injected builtin keeps its own authoritative layout. The checker's override
+        // widening in `types::checker::clone_override_storage` deliberately restamps USER classes
+        // only, so planning an applicator for a builtin means writing a runtime-shaped value into
+        // a slot nothing ever widened, and a slot whose declared type cannot take one (a
+        // `Callable`, say) refuses the whole BUILD rather than the single write. The catalog is
+        // the same authority `reserve_eval_subclass_property_storage` consults, and it already
+        // contains every builtin reflection class this filter used to name one at a time.
+        // A user subclass of a builtin is absent from the catalog, so it stays eligible.
+        .filter(|name| elephc_builtin_contract::lookup_class(name).is_none())
         .collect()
 }
 

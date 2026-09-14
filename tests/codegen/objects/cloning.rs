@@ -2131,3 +2131,25 @@ fn emit_clone_dynamic_property_assembly(dir: &std::path::Path, target: &str) -> 
     );
     std::fs::read_to_string(dir.join("clone_dynamic.s")).expect("emitted assembly")
 }
+
+/// Verifies a two-argument `clone()` on a BUILTIN receiver refuses instead of failing the build.
+///
+/// The `mixed` parameter makes the site runtime-shaped, which is the branch that plans an
+/// applicator for every candidate class. A catalog builtin owns its own layout, so it gets no
+/// applicator and the class-id dispatch misses into the existing override guard. The trailing
+/// `count($box)` proves the builtin's own metadata was never restamped on the way through.
+#[test]
+fn test_clone_function_refuses_overrides_on_a_builtin_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+function copyWith(mixed $object): mixed { return clone($object, ["storage" => "x"]); }
+$box = new ArrayObject([1, 2]);
+try { copyWith($box); echo "no throw;"; } catch (Error $e) { echo "caught:" . $e->getMessage() . ";"; }
+echo count($box);
+"#,
+    );
+    assert_eq!(
+        out,
+        "caught:clone(): Argument #2 ($withProperties) property overrides are not supported for this class;2"
+    );
+}

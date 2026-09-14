@@ -49,6 +49,10 @@ use crate::context::{
 
 use abstract_requirements::*;
 pub(crate) use array_updates::*;
+// Re-exported under a distinct name so the `class_resolution::*` glob below and the crate-level
+// re-export in `interpreter/mod.rs` cannot import the same name at two visibilities.
+#[cfg(not(test))]
+pub(crate) use class_resolution::eval_object_clone_with_properties_result as eval_object_clone_with_properties_for_ffi;
 use attributes_magic_validation::*;
 pub(in crate::interpreter) use callable_objects::*;
 pub(in crate::interpreter) use class_declarations::*;

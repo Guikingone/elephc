@@ -247,7 +247,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
 }
 
 /// Creates a shallow clone, invokes `__clone()`, then applies PHP 8.5 property overrides.
-pub(in crate::interpreter) fn eval_object_clone_with_properties_result(
+pub(crate) fn eval_object_clone_with_properties_result(
     object: RuntimeCellHandle,
     with_properties: Option<RuntimeCellHandle>,
     context: &mut ElephcEvalContext,
@@ -376,16 +376,26 @@ fn eval_apply_clone_properties(
                     values,
                 );
             }
-            if let Some(reference) = eval_array_reference_key(key, values)?
+            // Two independent sources can prove this entry is still part of a reference set.
+            // The eval alias table describes targets a hash entry cannot (variables, nested
+            // elements, object and static properties, cells, invoker slots), and it only knows
+            // arrays eval itself built. An override array generated code built carries its
+            // state in the native hash entry instead. Both are read for every entry, and
+            // either one refusing throws at this exact point in php's iteration order.
+            let alias_is_shared = eval_array_reference_key(key, values)?
                 .and_then(|key| context.array_element_alias(properties, &key).cloned())
-            {
-                if eval_clone_property_reference_is_shared(&reference) {
-                    return eval_throw_error(
-                        "Cannot assign by reference when cloning with updated properties",
-                        context,
-                        values,
-                    );
-                }
+                .is_some_and(|reference| eval_clone_property_reference_is_shared(&reference));
+            let entry_is_shared = crate::runtime_hooks::array_entry_is_shared_reference(
+                properties,
+                &property_name,
+                Some(value),
+            );
+            if alias_is_shared || entry_is_shared {
+                return eval_throw_error(
+                    "Cannot assign by reference when cloning with updated properties",
+                    context,
+                    values,
+                );
             }
             eval_property_set_result(clone, &property_name, value, context, values)
         })();

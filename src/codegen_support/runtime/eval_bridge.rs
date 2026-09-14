@@ -41,6 +41,7 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter) {
     }
     emit_gc_lifecycle_wrappers(emitter);
     release_boundary::emit(emitter);
+    array_reference_query::emit_array_entry_reference_query(emitter);
     resources::emit_resource_inventory_wrapper(emitter);
     backtrace::emit_backtrace_entry_wrapper(emitter);
 }
@@ -69,6 +70,7 @@ mod x86_64_numeric;
 mod x86_64_compare;
 mod x86_64_output;
 mod raw_object_helpers;
+mod array_reference_query;
 mod aarch64_reflection_names;
 mod aarch64_reflection_members;
 mod x86_64_reflection_names;

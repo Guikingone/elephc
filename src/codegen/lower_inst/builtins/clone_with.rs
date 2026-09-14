@@ -21,6 +21,13 @@
 //!   cannot: it reads the trailing hidden ABI operand and compares it against the statically
 //!   computed set of scopes the hook is visible from, so one escaped `clone(...)` reports
 //!   `global scope` and `scope X` at the two places it is invoked from.
+//! - An object Magician declared inside `eval()` has no generated class layout at all, so EVERY
+//!   object operand is offered to the installed eval clone callback FIRST. A statically typed
+//!   operand is offered too: a parameter annotated with an emitted base class can still hold an
+//!   eval-declared SUBCLASS at run time. That callback owns the whole operation for an identity
+//!   it recognizes: dynamic-class registration, reference-alias copying, eval `__clone()`
+//!   dispatch, invocation-scope visibility, and PHP 8.5 overrides. A miss, or a program that
+//!   never linked Magician, falls straight through to everything below.
 //! - `$withProperties` is applied by `overrides`, after `__clone()` and while the clone is still
 //!   an unwind-visible owner. A literal `[]` needs no code at all, and an omitted second operand
 //!   IS the empty array by definition. A runtime class this program generated no applicator for
@@ -89,6 +96,16 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if let Some(properties) = inst.operands.get(1).copied() {
         emit_clone_properties_type_guard(ctx, properties)?;
     }
+    // Both argument guards have already run, so an eval-owned identity reaches Magician with
+    // exactly the errors PHP reports first. `eval_handled` lands on the shared result store.
+    let eval_handled = ctx.next_label("clone_eval_bridge_handled");
+    emit_eval_clone_bridge(
+        ctx,
+        object,
+        inst.operands.get(1).copied(),
+        inst.operands.get(2).copied(),
+        &eval_handled,
+    )?;
     emit_boxed_shallow_clone(ctx, object)?;
     emit_uncloneable_guard(ctx);
 
@@ -114,7 +131,231 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, 16);
     abi::emit_load_temporary_stack_slot(ctx.emitter, &clone_box, 0);
     abi::emit_release_temporary_stack(ctx.emitter, CLONE_OWNER_BYTES);
+    // The eval callback returns its own finished clone box in the same register, with the
+    // temporary stack already balanced, so both producers share one result store.
+    ctx.emitter.label(&eval_handled);
     store_clone_result(ctx, inst)
+}
+
+/// Byte offsets inside the eval clone bridge's own temporary frame.
+const EVAL_CLONE_OBJECT_OFFSET: usize = 0;
+const EVAL_CLONE_PROPERTIES_OFFSET: usize = 8;
+const EVAL_CLONE_OUT_OFFSET: usize = 16;
+const EVAL_CLONE_THROWABLE_OFFSET: usize = 24;
+const EVAL_CLONE_SCOPE_PTR_OFFSET: usize = 32;
+const EVAL_CLONE_SCOPE_LEN_OFFSET: usize = 40;
+const EVAL_CLONE_CALLBACK_OFFSET: usize = 48;
+const EVAL_CLONE_STATUS_OFFSET: usize = 56;
+const EVAL_CLONE_FRAME_BYTES: usize = 64;
+
+/// Offers a Mixed operand to Magician's installed clone callback before the AOT path runs.
+///
+/// Status one means Magician owned the identity and produced the finished clone: the boxed clone
+/// is left in the result register and control jumps to `handled`. Status two means eval
+/// `__clone()` threw; the operation already released its own unfinished clone, so the owned
+/// Throwable box is the only thing handed back and it is rethrown natively here, outside the
+/// Rust frame. Status zero is a miss and simply falls through.
+fn emit_eval_clone_bridge(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    properties: Option<ValueId>,
+    invocation_scope: Option<ValueId>,
+    handled: &str,
+) -> Result<()> {
+    let object_ty = ctx.value_php_type(object)?.codegen_repr();
+    if !matches!(
+        object_ty,
+        PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return Ok(());
+    }
+    let absent = ctx.next_label("clone_eval_bridge_absent");
+    let missed = ctx.next_label("clone_eval_bridge_missed");
+    let threw = ctx.next_label("clone_eval_bridge_threw");
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let scratch = abi::secondary_scratch_reg(ctx.emitter).to_string();
+    let callback_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
+
+    // A program without the eval bridge linked leaves this slot zero, so nothing changes.
+    abi::emit_symbol_address(ctx.emitter, &callback_reg, "_elephc_eval_object_clone_fn");
+    abi::emit_load_from_address(ctx.emitter, &callback_reg, &callback_reg, 0);
+    emit_branch_if_zero(ctx, &callback_reg, &absent);
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_CLONE_FRAME_BYTES);
+    abi::emit_store_to_sp(ctx.emitter, &callback_reg, EVAL_CLONE_CALLBACK_OFFSET);
+    abi::emit_load_int_immediate(ctx.emitter, &scratch, 0);
+    for offset in [
+        EVAL_CLONE_PROPERTIES_OFFSET,
+        EVAL_CLONE_OUT_OFFSET,
+        EVAL_CLONE_THROWABLE_OFFSET,
+        EVAL_CLONE_SCOPE_PTR_OFFSET,
+        EVAL_CLONE_SCOPE_LEN_OFFSET,
+    ] {
+        abi::emit_store_to_sp(ctx.emitter, &scratch, offset);
+    }
+
+    // The callback keys on the raw object identity, exactly like the destructor bridge, and the
+    // operand stays borrowed for the whole call. A concrete slot already holds that pointer; a
+    // boxed one has to be unboxed first.
+    ctx.load_value_to_result(object)?;
+    if matches!(object_ty, PhpType::Object(_)) {
+        abi::emit_store_to_sp(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            EVAL_CLONE_OBJECT_OFFSET,
+        );
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+        abi::emit_store_to_sp(ctx.emitter, payload_reg, EVAL_CLONE_OBJECT_OFFSET);
+    }
+
+    let owns_properties_box = emit_eval_clone_properties_operand(ctx, properties)?;
+    emit_eval_clone_invocation_scope(ctx, invocation_scope)?;
+
+    let target = ctx.emitter.target;
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        EVAL_CLONE_OBJECT_OFFSET,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 1),
+        EVAL_CLONE_PROPERTIES_OFFSET,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 2),
+        EVAL_CLONE_SCOPE_PTR_OFFSET,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 3),
+        EVAL_CLONE_SCOPE_LEN_OFFSET,
+    );
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 4),
+        EVAL_CLONE_OUT_OFFSET,
+    );
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 5),
+        EVAL_CLONE_THROWABLE_OFFSET,
+    );
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &scratch, EVAL_CLONE_CALLBACK_OFFSET);
+    abi::emit_call_reg(ctx.emitter, &scratch);
+
+    abi::emit_store_to_sp(ctx.emitter, &result_reg, EVAL_CLONE_STATUS_OFFSET);
+    if owns_properties_box {
+        // The Mixed box made only to carry a typed array argument is retired on every status.
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            &result_reg,
+            EVAL_CLONE_PROPERTIES_OFFSET,
+        );
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, EVAL_CLONE_STATUS_OFFSET);
+    emit_branch_if_reg_equals_immediate(ctx, &result_reg, 2, &threw);
+    emit_branch_if_zero(ctx, &result_reg, &missed);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, EVAL_CLONE_OUT_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_CLONE_FRAME_BYTES);
+    abi::emit_jump(ctx.emitter, handled);
+
+    ctx.emitter.label(&threw);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, EVAL_CLONE_THROWABLE_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_reg_to_symbol(ctx.emitter, &result_reg, "_exc_value", 0);
+    // The frame is balanced before unwinding, and the throw happens outside the Rust callback.
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_CLONE_FRAME_BYTES);
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+
+    ctx.emitter.label(&missed);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_CLONE_FRAME_BYTES);
+    ctx.emitter.label(&absent);
+    Ok(())
+}
+
+/// Stages the borrowed `$withProperties` box, reporting whether a temporary box was created.
+fn emit_eval_clone_properties_operand(
+    ctx: &mut FunctionContext<'_>,
+    properties: Option<ValueId>,
+) -> Result<bool> {
+    // An omitted second argument IS the empty override array, so the slot stays null.
+    let Some(properties) = properties else {
+        return Ok(false);
+    };
+    let properties_ty = ctx.value_php_type(properties)?.codegen_repr();
+    ctx.load_value_to_result(properties)?;
+    let owns_box = !matches!(properties_ty, PhpType::Mixed | PhpType::Union(_));
+    if owns_box {
+        emit_box_current_value_as_mixed(ctx.emitter, &properties_ty);
+    }
+    abi::emit_store_to_sp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        EVAL_CLONE_PROPERTIES_OFFSET,
+    );
+    Ok(owns_box)
+}
+
+/// Stages the caller's lexical AOT class name, which PHP checks `__clone()` visibility against.
+///
+/// A direct site knows its own scope statically. A callable wrapper body shared across call
+/// sites reads the trailing hidden operand instead and maps that dense class id back to its
+/// name, so a method that invoked `clone(...)` never reports global scope.
+fn emit_eval_clone_invocation_scope(
+    ctx: &mut FunctionContext<'_>,
+    invocation_scope: Option<ValueId>,
+) -> Result<()> {
+    let Some(invocation_scope) = invocation_scope else {
+        let Some(lexical_class) = ctx.function.lexical_class.clone() else {
+            return Ok(());
+        };
+        emit_store_eval_clone_scope_name(ctx, &lexical_class);
+        return Ok(());
+    };
+    let mut scopes = ctx
+        .module
+        .class_infos
+        .iter()
+        .map(|(name, info)| (info.class_id as i64, name.clone()))
+        .collect::<Vec<_>>();
+    scopes.sort_by_key(|(class_id, _)| *class_id);
+    if scopes.is_empty() {
+        return Ok(());
+    }
+    let done = ctx.next_label("clone_eval_bridge_scope_ready");
+    let labels = scopes
+        .iter()
+        .map(|_| ctx.next_label("clone_eval_bridge_scope"))
+        .collect::<Vec<_>>();
+    ctx.load_value_to_result(invocation_scope)?;
+    let scope_reg = abi::int_result_reg(ctx.emitter).to_string();
+    for ((class_id, _), label) in scopes.iter().zip(labels.iter()) {
+        emit_branch_if_reg_equals_immediate(ctx, &scope_reg, *class_id, label);
+    }
+    // No dense id matched, so the call really did come from global scope and the slots stay null.
+    abi::emit_jump(ctx.emitter, &done);
+    for ((_, class_name), label) in scopes.iter().zip(labels.iter()) {
+        ctx.emitter.label(label);
+        emit_store_eval_clone_scope_name(ctx, class_name);
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Writes one interned class name and its byte length into the bridge's scope slots.
+fn emit_store_eval_clone_scope_name(ctx: &mut FunctionContext<'_>, class_name: &str) {
+    let (label, len) = ctx.data.add_string(class_name.as_bytes());
+    let scratch = abi::secondary_scratch_reg(ctx.emitter).to_string();
+    abi::emit_symbol_address(ctx.emitter, &scratch, &label);
+    abi::emit_store_to_sp(ctx.emitter, &scratch, EVAL_CLONE_SCOPE_PTR_OFFSET);
+    abi::emit_load_int_immediate(ctx.emitter, &scratch, len as i64);
+    abi::emit_store_to_sp(ctx.emitter, &scratch, EVAL_CLONE_SCOPE_LEN_OFFSET);
 }
 
 /// Refuses property overrides no generated applicator can apply, as early as the operand allows.

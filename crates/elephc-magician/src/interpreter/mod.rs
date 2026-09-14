@@ -80,6 +80,8 @@ use scope_cells::*;
 #[cfg(not(test))]
 pub(crate) use statements::eval_dynamic_destructor_for_object_cell;
 #[cfg(not(test))]
+pub(crate) use statements::eval_object_clone_with_properties_for_ffi;
+#[cfg(not(test))]
 pub(crate) use output_handlers::eval_ob_handler_callback;
 use statements::*;
 use throwables::*;

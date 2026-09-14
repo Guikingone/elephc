@@ -7,6 +7,8 @@
 //! Key details:
 //! - Both supported architectures expose the same bridge callbacks.
 //! - The v2 destructor installer rejects archives using the legacy callback ABI at link time.
+//! - The v1 clone installer fills the slot the generated `clone` lowering consults before its
+//!   own shallow-clone adapter, so an eval-declared object is cloned by Magician instead.
 
 use super::*;
 
@@ -32,6 +34,7 @@ pub(super) fn emit_aarch64_install_dynamic_object_destructor_hook(emitter: &mut 
     emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for object destruction
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
     emit_install_object_owner_hooks(emitter);
+    emit_install_object_clone_hook(emitter);
 }
 
 /// Emits the x86_64 wrapper that boxes a borrowed raw object pointer for Rust eval.
@@ -56,6 +59,7 @@ pub(super) fn emit_x86_64_install_dynamic_object_destructor_hook(emitter: &mut E
     emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for object destruction
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
     emit_install_object_owner_hooks(emitter);
+    emit_install_object_clone_hook(emitter);
 }
 
 /// Installs C callbacks whose final-release hook returns an owned Throwable box or null.
@@ -82,6 +86,22 @@ fn emit_install_object_owner_hooks(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return after installing all optional ownership callbacks
 }
 
+/// Installs the C callback a generated `clone` offers every Mixed object to before cloning it.
+fn emit_install_object_clone_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_object_clone_hook_v1");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_elephc_eval_object_clone_fn");
+            emitter.instruction("str x0, [x9]");                                // store the eval dynamic-object clone callback
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r10", "_elephc_eval_object_clone_fn");
+            emitter.instruction("mov QWORD PTR [r10], rdi");                    // store the eval dynamic-object clone callback
+        }
+    }
+    emitter.instruction("ret");                                                 // return after installing the optional eval clone hook
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +126,9 @@ mod tests {
             assert!(output.contains("_elephc_eval_object_gc_child_fn"), "{name}");
             assert!(output.contains("_elephc_eval_object_release_fn"), "{name}");
             assert!(output.contains("_elephc_eval_array_reference_retire_fn"), "{name}");
+            let clone_installer = target.extern_symbol("__elephc_eval_install_object_clone_hook_v1");
+            assert_eq!(output.matches(&format!("{clone_installer}:")).count(), 1, "{name}");
+            assert!(output.contains("_elephc_eval_object_clone_fn"), "{name}");
             let third_arg_store = match target.arch {
                 Arch::AArch64 => "str x2, [x9]",
                 Arch::X86_64 => "mov QWORD PTR [r10], rdx",

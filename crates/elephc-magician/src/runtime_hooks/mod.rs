@@ -30,6 +30,7 @@ use crate::abi::ElephcEvalContext;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 #[cfg(not(test))]
 use externs::{
+    __elephc_eval_install_dynamic_object_clone_hook,
     __elephc_eval_install_dynamic_object_destructor_hook, __elephc_eval_value_array_new,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
 };
@@ -116,6 +117,53 @@ pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
             crate::ffi::array_references::retire_array_reference_cell_callback as *const () as usize,
         );
     }
+}
+
+/// Installs the eval dynamic-object clone callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of a function with the
+/// `__elephc_eval_dynamic_object_clone` ABI; the generated `clone` lowering calls
+/// through it before its own shallow-clone adapter runs.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_dynamic_object_clone_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_dynamic_object_clone_hook(callback);
+    }
+}
+
+/// Reports whether one natively built override entry still belongs to a live PHP reference set.
+///
+/// Magician's own array-element alias table only knows arrays eval itself built, so an override
+/// array that generated code built is read here instead. Every input stays borrowed.
+#[cfg(not(test))]
+pub(crate) fn array_entry_is_shared_reference(
+    array: RuntimeCellHandle,
+    key: &str,
+    value: Option<RuntimeCellHandle>,
+) -> bool {
+    if array.is_null() {
+        return false;
+    }
+    let shared = unsafe {
+        externs::__elephc_eval_array_entry_is_shared_reference(
+            array.as_ptr(),
+            key.as_ptr(),
+            key.len() as u64,
+            value.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr),
+        )
+    };
+    shared != 0
+}
+
+/// Unit test builds do not link the generated runtime, so no native entry state can exist.
+#[cfg(test)]
+pub(crate) fn array_entry_is_shared_reference(
+    _array: crate::value::RuntimeCellHandle,
+    _key: &str,
+    _value: Option<crate::value::RuntimeCellHandle>,
+) -> bool {
+    false
 }
 
 /// Installs the eval output-buffering handler callback into the generated runtime.
