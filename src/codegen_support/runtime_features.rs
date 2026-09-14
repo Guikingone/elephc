@@ -1289,18 +1289,8 @@ mod tests {
     #[test]
     fn test_descriptor_invoker_runtime_features_require_elephc_crypto_bridge() {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures {
-            regex: false,
-            mb_strlen: false,
-            phar_archive: false,
             descriptor_invoker: true,
-            eval_bridge: false,
-            eval_scope: false,
-            web: false,
-            pdo_udf: false,
-            fiber: false,
-            generator: false,
-            popen_resource: false,
-            directory_resource: false,
+            ..RuntimeFeatures::none()
         })
         .iter()
         .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));
