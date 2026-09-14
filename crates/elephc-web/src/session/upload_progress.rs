@@ -120,6 +120,24 @@ pub(crate) struct Tracker {
     /// work grow with frames x body — an unauthenticated remote client could send a large
     /// body as many small frames and spend the worker's CPU quadratically (issue #885).
     last_delim: Option<usize>,
+    /// How far the delimiter search has already looked, whether or not it found anything.
+    ///
+    /// `last_delim` alone is not enough to make the scan incremental, and that was the
+    /// remaining quadratic window. A frame that finds NO new delimiter leaves `last_delim`
+    /// where it was, so the next frame restarted from it and re-searched the whole open
+    /// tail — `O(frames x tail)` for as long as one part keeps growing, which is exactly
+    /// the pre-trigger window a client controls by delaying the progress-key field.
+    ///
+    /// Resuming from here instead means every byte is searched once. The search restarts
+    /// `delim.len() - 1` bytes earlier so a delimiter straddling two frames is still found:
+    /// that is the most of one that can sit in the already-scanned region without having
+    /// been matched.
+    scanned: usize,
+    /// How far the in-flight part's HEADER search has already looked, relative to the part.
+    ///
+    /// Same rule as `scanned`, for the same reason, bounded by [`MAX_PART_HEADER_BYTES`].
+    /// Reset whenever a new delimiter starts a new part.
+    inflight_header_scanned: usize,
     /// Completed-part file entries accumulated so far, one per boundary-delimited part.
     completed: Vec<FileProgress>,
     /// The in-flight part after `last_delim`, once its header block has been parsed.
@@ -282,6 +300,20 @@ impl Tracker {
         files
     }
 
+/// Where a delimiter search should resume, given what has already been searched.
+///
+/// This is THE fix for the pre-trigger quadratic window, isolated so it can be asserted on
+/// directly: the old behaviour was `part_start` unconditionally, so a frame that found no
+/// new delimiter left the next frame re-searching the whole open tail.
+///
+/// Resuming at `scanned - (delim_len - 1)` searches every byte exactly once while still
+/// catching a delimiter straddling two frames — `delim_len - 1` is the most of one that can
+/// sit in the already-searched region without having matched. Never before `part_start`,
+/// because bytes belonging to an earlier part are not this part's to scan.
+fn resume_index(part_start: usize, scanned: usize, delim_len: usize) -> usize {
+    part_start.max(scanned.saturating_sub(delim_len.saturating_sub(1)))
+}
+
     /// Consumes every boundary-delimited part that has become complete since the last call.
     ///
     /// The cursor only ever moves forward, and each new delimiter is found with
@@ -289,15 +321,16 @@ impl Tracker {
     /// unlike the sliding comparison this replaced, which an adversarial repeated-prefix
     /// boundary drove to `O(body x boundary)`.
     fn advance_completed_parts(&mut self, body: &[u8]) {
-        let mut cursor = match self.last_delim {
+        let part_start = match self.last_delim {
             Some(previous) => previous + self.delim.len(),
             None => 0,
         };
-        while cursor <= body.len() {
-            let Some(relative) = memchr::memmem::find(&body[cursor..], &self.delim) else {
+        let mut search_from = Self::resume_index(part_start, self.scanned, self.delim.len());
+        while search_from <= body.len() {
+            let Some(relative) = memchr::memmem::find(&body[search_from..], &self.delim) else {
                 break;
             };
-            let position = cursor + relative;
+            let position = search_from + relative;
             if let Some(previous) = self.last_delim {
                 let segment = &body[previous + self.delim.len()..position];
                 let segment = strip_prefix(segment, b"\r\n");
@@ -305,11 +338,14 @@ impl Tracker {
                 self.absorb_completed_part(segment);
             }
             self.last_delim = Some(position);
-            // A new part begins: whatever was in flight is now complete or gone.
+            // A new part begins: whatever was in flight is now complete or gone, and its
+            // header search starts over from the new part's first byte.
             self.inflight = None;
             self.inflight_unparsable = false;
-            cursor = position + self.delim.len();
+            self.inflight_header_scanned = 0;
+            search_from = position + self.delim.len();
         }
+        self.scanned = body.len();
     }
 
     /// Records one completed part: a file entry, the progress key, or the session id.
@@ -361,7 +397,14 @@ impl Tracker {
             return;
         }
         let window = tail.len().min(MAX_PART_HEADER_BYTES);
-        let Some(header_end) = memchr::memmem::find(&tail[..window], b"\r\n\r\n") else {
+        // Resume the terminator search where it stopped, backing up three bytes so a
+        // `\r\n\r\n` split across frames is still found. Without this the header window is
+        // re-searched on every frame until it is complete — bounded by 8 KiB rather than by
+        // the body, but still restarting from the same index each time.
+        let resume = self.inflight_header_scanned.saturating_sub(3).min(window);
+        let found = memchr::memmem::find(&tail[resume..window], b"\r\n\r\n").map(|at| resume + at);
+        self.inflight_header_scanned = window;
+        let Some(header_end) = found else {
             if tail.len() >= MAX_PART_HEADER_BYTES {
                 self.inflight_unparsable = true;
             }
@@ -593,6 +636,8 @@ pub(crate) fn begin(headers: &[(String, String)], query: &str) -> Option<Tracker
         last_write_time: Instant::now() - std::time::Duration::from_secs(3600),
         key: None,
         last_delim: None,
+            scanned: 0,
+            inflight_header_scanned: 0,
         completed: Vec::new(),
         inflight: None,
         inflight_unparsable: false,
@@ -1317,6 +1362,8 @@ mod tests {
             last_write_time: Instant::now(),
             key: None,
             last_delim: None,
+            scanned: 0,
+            inflight_header_scanned: 0,
             completed: Vec::new(),
             inflight: None,
             inflight_unparsable: false,
@@ -1443,6 +1490,8 @@ mod tests {
             last_write_time: Instant::now(),
             key: None,
             last_delim: None,
+            scanned: 0,
+            inflight_header_scanned: 0,
             completed: Vec::new(),
             inflight: None,
             inflight_unparsable: false,
@@ -1484,6 +1533,8 @@ mod tests {
             last_write_time: Instant::now(),
             key: None,
             last_delim: None,
+            scanned: 0,
+            inflight_header_scanned: 0,
             completed: Vec::new(),
             inflight: None,
             inflight_unparsable: false,
@@ -1518,6 +1569,8 @@ mod tests {
             last_write_time: Instant::now(),
             key: None,
             last_delim: None,
+            scanned: 0,
+            inflight_header_scanned: 0,
             completed: Vec::new(),
             inflight: None,
             inflight_unparsable: false,
@@ -1586,6 +1639,84 @@ mod tests {
         assert!(files[0].done);
         assert!(!files[1].done);
         assert_eq!(files[1].bytes_processed, 2000);
+    }
+
+    /// Issue #885, the PRE-TRIGGER window: the delimiter search must not restart from
+    /// `last_delim` on a frame that finds nothing.
+    ///
+    /// `last_delim` alone only made the scan incremental ACROSS parts. While one part keeps
+    /// growing — a large first part, or a client that simply delays the progress-key field —
+    /// no frame finds a new delimiter, so every frame re-searched the whole open tail and
+    /// total work stayed `O(frames x tail)`. That window is entirely client-controlled,
+    /// which is what makes it the same attack #885 is about.
+    ///
+    /// Asserted on `resume_index` itself rather than on elapsed time: it is the decision
+    /// that was wrong, and a wall-clock assertion would be flaky on a loaded machine. The
+    /// pre-fix behaviour was `part_start` unconditionally — the first `assert_ne!` is
+    /// exactly what that produced.
+    #[test]
+    fn the_delimiter_search_resumes_instead_of_restarting() {
+        let delim_len = "--BOUND".len();
+        let part_start = 64;
+
+        // A part that has grown to 100 KiB without a new delimiter: the next frame must
+        // look near the end, not back at the part's first byte.
+        let scanned = 64 + 100 * 1024;
+        let resume = Tracker::resume_index(part_start, scanned, delim_len);
+        assert_ne!(
+            resume, part_start,
+            "restarting at the part start is the quadratic behaviour this replaced"
+        );
+        assert_eq!(resume, scanned - (delim_len - 1));
+
+        // Total work over many frames is the body plus a fixed overlap per frame, not the
+        // sum of the tails. 500 frames of 10 bytes: linear is ~8 KiB of re-scan, the
+        // restart shape is over a megabyte.
+        let mut searched = 0usize;
+        let mut scanned = part_start;
+        for _ in 0..500 {
+            let body_len = scanned + 10;
+            searched += body_len - Tracker::resume_index(part_start, scanned, delim_len);
+            scanned = body_len;
+        }
+        let linear_bound = (scanned - part_start) + 500 * (delim_len - 1 + 10);
+        assert!(
+            searched <= linear_bound,
+            "search did {searched} bytes of work for {} bytes of body; bound {linear_bound}",
+            scanned - part_start
+        );
+
+        // The clamp: a cursor from an earlier part never drags the search backwards.
+        assert_eq!(Tracker::resume_index(part_start, 0, delim_len), part_start);
+        assert_eq!(Tracker::resume_index(part_start, 10, delim_len), part_start);
+    }
+
+    /// A delimiter split across two frames is still found once the scan resumes from
+    /// `scanned - (delim.len() - 1)` rather than from the frame boundary itself.
+    ///
+    /// This is the case the overlap exists for, and the one a naive "search only the new
+    /// bytes" cursor gets wrong: the frame that completes the delimiter would never see its
+    /// leading bytes again.
+    #[test]
+    fn a_delimiter_split_across_frames_is_still_found() {
+        let mut tracker = incremental_tracker();
+        let head: &[u8] = b"--BOUND\r\nContent-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\r\n\r\nDATA\r\n";
+        let mut body = head.to_vec();
+        tracker.advance(&body);
+        assert!(tracker.completed.is_empty());
+
+        // Feed the next delimiter one byte at a time: every intermediate frame ends with a
+        // partial "--BOUND" that must not be lost.
+        for byte in b"--BOUND" {
+            body.push(*byte);
+            tracker.advance(&body);
+        }
+        assert_eq!(
+            tracker.completed.len(),
+            1,
+            "the split delimiter closed the first part"
+        );
+        assert_eq!(tracker.completed[0].name, b"x.bin".to_vec());
     }
 
     /// Issue #885: the header block of the in-flight part is parsed once, and an unbounded
