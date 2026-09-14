@@ -8,6 +8,7 @@
 //! - Search sentinels and optional bounds are materialized consistently for both targets.
 
 use super::*;
+use crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL;
 
 /// Lowers `str_contains()` through `strpos()` and converts found positions to bool.
 pub(crate) fn lower_str_contains(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -247,12 +248,12 @@ pub(crate) fn lower_substr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             inst.operands.len()
         )));
     }
-    let has_length = optional_null_length_is_present(ctx, inst, 2)?;
+    let length_kind = optional_null_length_kind(ctx, inst, 2)?;
     let neg_done = ctx.next_label("substr_neg_done");
     let len_done = ctx.next_label("substr_len_done");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_substr_aarch64(ctx, inst, has_length, &neg_done, &len_done)?,
-        Arch::X86_64 => lower_substr_x86_64(ctx, inst, has_length, &neg_done, &len_done)?,
+        Arch::AArch64 => lower_substr_aarch64(ctx, inst, length_kind, &neg_done, &len_done)?,
+        Arch::X86_64 => lower_substr_x86_64(ctx, inst, length_kind, &neg_done, &len_done)?,
     }
     store_if_result(ctx, inst)
 }
@@ -265,10 +266,10 @@ pub(crate) fn lower_substr_replace(ctx: &mut FunctionContext<'_>, inst: &Instruc
             inst.operands.len()
         )));
     }
-    let has_length = optional_null_length_is_present(ctx, inst, 3)?;
+    let length_kind = optional_null_length_kind(ctx, inst, 3)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_substr_replace_aarch64(ctx, inst, has_length)?,
-        Arch::X86_64 => lower_substr_replace_x86_64(ctx, inst, has_length)?,
+        Arch::AArch64 => lower_substr_replace_aarch64(ctx, inst, length_kind)?,
+        Arch::X86_64 => lower_substr_replace_x86_64(ctx, inst, length_kind)?,
     }
     abi::emit_call_label(ctx.emitter, "__rt_substr_replace");
     store_if_result(ctx, inst)
@@ -287,34 +288,87 @@ pub(crate) fn lower_substr_count(ctx: &mut FunctionContext<'_>, inst: &Instructi
             inst.operands.len()
         )));
     }
-    let has_length = optional_null_length_is_present(ctx, inst, 3)?;
+    let length_kind = optional_null_length_kind(ctx, inst, 3)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_substr_count_aarch64(ctx, inst, has_length)?,
-        Arch::X86_64 => lower_substr_count_x86_64(ctx, inst, has_length)?,
+        Arch::AArch64 => lower_substr_count_aarch64(ctx, inst, length_kind)?,
+        Arch::X86_64 => lower_substr_count_x86_64(ctx, inst, length_kind)?,
     }
-    emit_substr_count_argument_guards(ctx, has_length);
+    emit_substr_count_argument_guards(ctx, length_kind);
     abi::emit_call_label(ctx.emitter, "__rt_substr_count");
     store_if_result(ctx, inst)
 }
 
-/// Reports whether an optional string-builtin `$length` actually bounds the operation.
+/// Classifies whether an optional string-builtin `$length` is absent, concrete, or nullable.
 ///
 /// PHP's default is `null`, meaning "to the end of the subject", and an explicitly written
-/// `null` behaves identically. A statically-null operand (checker type `Void`/`Never`) is
-/// therefore treated exactly like an omitted argument instead of being coerced to `0`, which
-/// would select an empty substring or replacement window.
-fn optional_null_length_is_present(
+/// `null` behaves identically. A `TaggedScalar` needs a runtime tag check, while a statically
+/// null operand can immediately take the absent path.
+fn optional_null_length_kind(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
     operand_index: usize,
-) -> Result<bool> {
+) -> Result<OptionalLengthKind> {
     let Some(length) = inst.operands.get(operand_index) else {
-        return Ok(false);
+        return Ok(OptionalLengthKind::Absent);
     };
-    Ok(!matches!(
-        ctx.value_php_type(*length)?.codegen_repr(),
-        PhpType::Void | PhpType::Never
-    ))
+    let raw_type = ctx.value_php_type(*length)?;
+    let codegen_type = raw_type.codegen_repr();
+    match codegen_type {
+        PhpType::Void | PhpType::Never => Ok(OptionalLengthKind::Absent),
+        PhpType::TaggedScalar => Ok(OptionalLengthKind::TaggedScalar),
+        PhpType::Mixed | PhpType::Union(_) => Ok(OptionalLengthKind::Boxed),
+        _ => Ok(OptionalLengthKind::Concrete),
+    }
+}
+
+/// Compile-time representation of a nullable optional string length.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum OptionalLengthKind {
+    /// The operand is omitted or statically null.
+    Absent,
+    /// The operand has a statically non-null representation.
+    Concrete,
+    /// The operand is an inline runtime `int|null` tagged scalar.
+    TaggedScalar,
+    /// The operand is a boxed `Mixed`/union value requiring a runtime null-tag check.
+    Boxed,
+}
+
+/// Loads an optional length as an integer, mapping runtime null to `i64::MAX`.
+///
+/// The substring paths already clamp oversized positive lengths to the remaining subject, so
+/// this gives runtime null the same through-the-end behavior as omission without consuming zero
+/// or any negative integer as a sentinel. Runtime-nullable forms also leave their null/int tag
+/// in the tagged-scalar tag register for `substr_count()`'s remaining-window selection.
+fn load_optional_length_null_as_max(
+    ctx: &mut FunctionContext<'_>,
+    length: ValueId,
+    name: &str,
+    length_kind: OptionalLengthKind,
+) -> Result<()> {
+    match length_kind {
+        OptionalLengthKind::Absent | OptionalLengthKind::Concrete => {
+            return load_as_int(ctx, length, name);
+        }
+        OptionalLengthKind::Boxed => {
+            return load_mixed_weak_int_null_as_max(ctx, length, name);
+        }
+        OptionalLengthKind::TaggedScalar => {}
+    }
+    ctx.load_value_to_result(length)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", i64::MAX);
+            ctx.emitter.instruction(&format!("cmp x1, #{}", TAGGED_SCALAR_TAG_NULL)); // check whether the optional length carries the runtime null tag
+            ctx.emitter.instruction("csel x0, x9, x0, eq");                     // map only runtime null to the through-the-end length
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r11", i64::MAX);
+            ctx.emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); // check whether the optional length carries the runtime null tag
+            ctx.emitter.instruction("cmove rax, r11");                          // map only runtime null to the through-the-end length
+        }
+    }
+    Ok(())
 }
 
 /// Materializes AArch64 `substr_count()` arguments into the counter's ABI registers.
@@ -325,7 +379,7 @@ fn optional_null_length_is_present(
 fn lower_substr_count_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    has_length: bool,
+    length_kind: OptionalLengthKind,
 ) -> Result<()> {
     let haystack = expect_operand(inst, 0)?;
     let needle = expect_operand(inst, 1)?;
@@ -340,11 +394,19 @@ fn lower_substr_count_aarch64(
         abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
     }
     abi::emit_push_reg(ctx.emitter, "x0");
-    if has_length {
-        let length = expect_operand(inst, 3)?;
-        load_as_int(ctx, length, "substr_count length")?;
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+    match length_kind {
+        OptionalLengthKind::Absent => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+        }
+        OptionalLengthKind::Concrete => {
+            let length = expect_operand(inst, 3)?;
+            load_as_int(ctx, length, "substr_count length")?;
+        }
+        OptionalLengthKind::TaggedScalar | OptionalLengthKind::Boxed => {
+            let length = expect_operand(inst, 3)?;
+            load_optional_length_null_as_max(ctx, length, "substr_count length", length_kind)?;
+            ctx.emitter.instruction("mov x7, x1");                              // preserve the optional count length's runtime tag
+        }
     }
     ctx.emitter.instruction("mov x6, x0");                                      // park the raw window length until the subject length is known
     abi::emit_pop_reg(ctx.emitter, "x5");
@@ -360,7 +422,7 @@ fn lower_substr_count_aarch64(
 fn lower_substr_count_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    has_length: bool,
+    length_kind: OptionalLengthKind,
 ) -> Result<()> {
     let haystack = expect_operand(inst, 0)?;
     let needle = expect_operand(inst, 1)?;
@@ -375,11 +437,19 @@ fn lower_substr_count_x86_64(
         abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
     }
     abi::emit_push_reg(ctx.emitter, "rax");
-    if has_length {
-        let length = expect_operand(inst, 3)?;
-        load_as_int(ctx, length, "substr_count length")?;
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+    match length_kind {
+        OptionalLengthKind::Absent => {
+            abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+        }
+        OptionalLengthKind::Concrete => {
+            let length = expect_operand(inst, 3)?;
+            load_as_int(ctx, length, "substr_count length")?;
+        }
+        OptionalLengthKind::TaggedScalar | OptionalLengthKind::Boxed => {
+            let length = expect_operand(inst, 3)?;
+            load_optional_length_null_as_max(ctx, length, "substr_count length", length_kind)?;
+            ctx.emitter.instruction("mov r11, rdx");                            // preserve the optional count length's runtime tag
+        }
     }
     ctx.emitter.instruction("mov r9, rax");                                     // park the raw window length until the subject length is known
     abi::emit_pop_reg(ctx.emitter, "r8");
@@ -395,10 +465,13 @@ fn lower_substr_count_x86_64(
 /// pass its end), then `$length` (negative values are measured back from the subject end, so
 /// they are added to the bytes remaining after `$offset`, and neither direction may leave the
 /// subject). Afterwards the subject registers hold the window the counter scans.
-fn emit_substr_count_argument_guards(ctx: &mut FunctionContext<'_>, has_length: bool) {
+fn emit_substr_count_argument_guards(
+    ctx: &mut FunctionContext<'_>,
+    length_kind: OptionalLengthKind,
+) {
     emit_substr_count_needle_guard(ctx);
     emit_substr_count_offset_guard(ctx);
-    emit_substr_count_length_guard(ctx, has_length);
+    emit_substr_count_length_guard(ctx, length_kind);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("add x1, x1, x5");                          // slide the subject pointer to the start of the counted window
@@ -467,16 +540,26 @@ fn emit_substr_count_offset_guard(ctx: &mut FunctionContext<'_>) {
 /// With no explicit `$length` the window simply runs to the subject end. Otherwise a negative
 /// length is measured back from that end, which is why it is added to the remaining byte count
 /// rather than to the offset.
-fn emit_substr_count_length_guard(ctx: &mut FunctionContext<'_>, has_length: bool) {
+fn emit_substr_count_length_guard(
+    ctx: &mut FunctionContext<'_>,
+    length_kind: OptionalLengthKind,
+) {
     let non_negative_label = ctx.next_label("substr_count_length_non_negative");
     let bad_label = ctx.next_label("substr_count_length_bad");
     let ok_label = ctx.next_label("substr_count_length_ok");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub x9, x2, x5");                          // compute the bytes remaining after the resolved offset
-            if !has_length {
+            if length_kind == OptionalLengthKind::Absent {
                 ctx.emitter.instruction("mov x6, x9");                          // an omitted or null length runs to the subject end
                 return;
+            }
+            if matches!(
+                length_kind,
+                OptionalLengthKind::TaggedScalar | OptionalLengthKind::Boxed
+            ) {
+                ctx.emitter.instruction(&format!("cmp x7, #{}", TAGGED_SCALAR_TAG_NULL)); // does the saved length tag represent runtime null?
+                ctx.emitter.instruction("csel x6, x9, x6, eq");                 // runtime null selects all bytes remaining after the offset
             }
             ctx.emitter.instruction("cmp x6, #0");                              // is the requested length measured back from the subject end?
             ctx.emitter.instruction(&format!("b.ge {}", non_negative_label));   // a non-negative length is already a window size
@@ -492,9 +575,16 @@ fn emit_substr_count_length_guard(ctx: &mut FunctionContext<'_>, has_length: boo
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r10, rsi");                            // copy the subject length before deriving the remaining bytes
             ctx.emitter.instruction("sub r10, r8");                             // compute the bytes remaining after the resolved offset
-            if !has_length {
+            if length_kind == OptionalLengthKind::Absent {
                 ctx.emitter.instruction("mov r9, r10");                         // an omitted or null length runs to the subject end
                 return;
+            }
+            if matches!(
+                length_kind,
+                OptionalLengthKind::TaggedScalar | OptionalLengthKind::Boxed
+            ) {
+                ctx.emitter.instruction(&format!("cmp r11, {}", TAGGED_SCALAR_TAG_NULL)); // does the saved length tag represent runtime null?
+                ctx.emitter.instruction("cmove r9, r10");                       // runtime null selects all bytes remaining after the offset
             }
             ctx.emitter.instruction("cmp r9, 0");                               // is the requested length measured back from the subject end?
             ctx.emitter.instruction(&format!("jge {}", non_negative_label));    // a non-negative length is already a window size
@@ -594,17 +684,16 @@ pub(super) struct StrstrLabels {
 pub(super) fn lower_substr_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    has_length: bool,
+    length_kind: OptionalLengthKind,
     neg_done: &str,
     len_done: &str,
 ) -> Result<()> {
     load_substr_string_and_offset_aarch64(ctx, inst)?;
-    // Whether a non-null length was supplied is known here at compile time, so it is never
-    // encoded in the length's own value. In particular, `-1` is a real php length while
-    // omitted and statically-null lengths both mean "through the end".
-    if has_length {
+    // Omitted and statically-null lengths skip the clamp. Runtime-tagged null maps to a
+    // saturating positive length, while every integer payload remains a real PHP length.
+    if length_kind != OptionalLengthKind::Absent {
         let length = expect_operand(inst, 2)?;
-        load_as_int(ctx, length, "substr length")?;
+        load_optional_length_null_as_max(ctx, length, "substr length", length_kind)?;
         ctx.emitter.instruction("mov x3, x0");                                  // move the explicit substring length into the clamp register
     }
     ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the substring offset after optional length materialization
@@ -619,7 +708,7 @@ pub(super) fn lower_substr_aarch64(
     ctx.emitter.instruction("csel x0, x2, x0, gt");                             // clamp offsets past the end to the source-string length
     ctx.emitter.instruction("add x1, x1, x0");                                  // advance the result pointer to the selected substring start
     ctx.emitter.instruction("sub x2, x2, x0");                                  // compute the remaining byte length after the selected offset
-    if has_length {
+    if length_kind != OptionalLengthKind::Absent {
         // A NEGATIVE length is php's "stop this many bytes before the end", counted from the
         // remaining tail — not an error and not zero.
         ctx.emitter.instruction("cmp x3, #0");                                  // check whether the requested substring length is negative
@@ -651,15 +740,15 @@ pub(super) fn load_substr_string_and_offset_aarch64(
 pub(super) fn lower_substr_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    has_length: bool,
+    length_kind: OptionalLengthKind,
     neg_done: &str,
     len_done: &str,
 ) -> Result<()> {
     load_substr_string_and_offset_x86_64(ctx, inst)?;
     // See the AArch64 sibling: omitted and statically-null lengths both skip the clamp.
-    if has_length {
+    if length_kind != OptionalLengthKind::Absent {
         let length = expect_operand(inst, 2)?;
-        load_as_int(ctx, length, "substr length")?;
+        load_optional_length_null_as_max(ctx, length, "substr length", length_kind)?;
         ctx.emitter.instruction("mov rcx, rax");                                // move the explicit substring length into the clamp register
     }
     abi::emit_pop_reg(ctx.emitter, "rax");
@@ -675,7 +764,7 @@ pub(super) fn lower_substr_x86_64(
     ctx.emitter.instruction("cmovg rax, rsi");                                  // clamp offsets past the end to the source-string length
     ctx.emitter.instruction("add rdi, rax");                                    // advance the result pointer to the selected substring start
     ctx.emitter.instruction("sub rsi, rax");                                    // compute the remaining byte length after the selected offset
-    if has_length {
+    if length_kind != OptionalLengthKind::Absent {
         // A NEGATIVE length is php's "stop this many bytes before the end", counted from the
         // remaining tail — not an error and not zero.
         ctx.emitter.instruction("cmp rcx, 0");                                  // check whether the requested substring length is negative
@@ -806,7 +895,7 @@ pub(super) fn lower_strstr_x86_64(
 pub(super) fn lower_substr_replace_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    has_length: bool,
+    length_kind: OptionalLengthKind,
 ) -> Result<()> {
     let subject = expect_string_operand(ctx, inst, 0, "substr_replace")?;
     let replacement = expect_string_operand(ctx, inst, 1, "substr_replace")?;
@@ -817,7 +906,7 @@ pub(super) fn lower_substr_replace_aarch64(
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the replacement string while materializing slice bounds
     load_as_int(ctx, start, "substr_replace start")?;
     abi::emit_push_reg(ctx.emitter, "x0");
-    materialize_substr_replace_length_aarch64(ctx, inst, has_length)?;
+    materialize_substr_replace_length_aarch64(ctx, inst, length_kind)?;
     abi::emit_pop_reg(ctx.emitter, "x0");
     ctx.emitter.instruction("ldp x3, x4, [sp], #16");                           // restore replacement into the secondary runtime string argument
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore subject into the primary runtime string argument
@@ -828,7 +917,7 @@ pub(super) fn lower_substr_replace_aarch64(
 pub(super) fn lower_substr_replace_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    has_length: bool,
+    length_kind: OptionalLengthKind,
 ) -> Result<()> {
     let subject = expect_string_operand(ctx, inst, 0, "substr_replace")?;
     let replacement = expect_string_operand(ctx, inst, 1, "substr_replace")?;
@@ -839,7 +928,7 @@ pub(super) fn lower_substr_replace_x86_64(
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     load_as_int(ctx, start, "substr_replace start")?;
     abi::emit_push_reg(ctx.emitter, "rax");
-    materialize_substr_replace_length_x86_64(ctx, inst, has_length)?;
+    materialize_substr_replace_length_x86_64(ctx, inst, length_kind)?;
     abi::emit_pop_reg(ctx.emitter, "rcx");
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
@@ -850,11 +939,11 @@ pub(super) fn lower_substr_replace_x86_64(
 pub(super) fn materialize_substr_replace_length_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    has_length: bool,
+    length_kind: OptionalLengthKind,
 ) -> Result<()> {
-    if has_length {
+    if length_kind != OptionalLengthKind::Absent {
         let length = expect_operand(inst, 3)?;
-        load_as_int(ctx, length, "substr_replace length")?;
+        load_optional_length_null_as_max(ctx, length, "substr_replace length", length_kind)?;
         ctx.emitter.instruction("mov x7, x0");                                  // pass the explicit replacement length to the runtime helper
     } else {
         // `i64::MAX`, not `-1`: the helper bounds the length by what remains, so a saturating
@@ -869,11 +958,11 @@ pub(super) fn materialize_substr_replace_length_aarch64(
 pub(super) fn materialize_substr_replace_length_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    has_length: bool,
+    length_kind: OptionalLengthKind,
 ) -> Result<()> {
-    if has_length {
+    if length_kind != OptionalLengthKind::Absent {
         let length = expect_operand(inst, 3)?;
-        load_as_int(ctx, length, "substr_replace length")?;
+        load_optional_length_null_as_max(ctx, length, "substr_replace length", length_kind)?;
         ctx.emitter.instruction("mov r8, rax");                                 // pass the explicit replacement length to the runtime helper
     } else {
         // See the AArch64 sibling: `i64::MAX` runs through the subject end, `-1` is a real length.

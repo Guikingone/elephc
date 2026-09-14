@@ -8,6 +8,7 @@
 //! - Numeric coercions and separator defaults remain PHP-compatible across targets.
 
 use super::*;
+use crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL;
 
 const FLOAT_TO_INT_BITS_OFFSET: usize = 0;
 const FLOAT_TO_INT_VALUE_OFFSET: usize = 8;
@@ -431,13 +432,28 @@ fn php_type_accepts_int(ty: &PhpType) -> bool {
     }
 }
 
-/// Casts a boxed weak integer argument while preserving float precision diagnostics.
-fn emit_mixed_weak_int(
+/// Loads a boxed weak integer argument while mapping runtime null to `i64::MAX`.
+///
+/// The original cell pointer is staged on the aligned temporary stack across unboxing so
+/// non-null values can still use the ordinary weak-int conversion. The tagged-scalar tag
+/// register carries null status for runtime null and int status for every converted value.
+pub(super) fn load_mixed_weak_int_null_as_max(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     context: &str,
 ) -> Result<()> {
+    emit_mixed_weak_int(ctx, value, context, Some(i64::MAX))
+}
+
+/// Casts a boxed weak integer argument while preserving null policy and float diagnostics.
+fn emit_mixed_weak_int(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    context: &str,
+    null_result: Option<i64>,
+) -> Result<()> {
     let from_float = ctx.next_label("weak_mixed_to_int_float");
+    let from_null = null_result.map(|_| ctx.next_label("weak_mixed_to_int_null"));
     let done = ctx.next_label("weak_mixed_to_int_done");
     load_value_to_first_int_arg(ctx, value)?;
     abi::emit_reserve_temporary_stack(ctx.emitter, MIXED_TO_INT_FRAME_BYTES);
@@ -449,11 +465,19 @@ fn emit_mixed_weak_int(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            if let Some(from_null) = &from_null {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", TAGGED_SCALAR_TAG_NULL)); // check whether the boxed optional integer is runtime null
+                ctx.emitter.instruction(&format!("b.eq {from_null}"));          // map runtime null through the caller-selected result
+            }
             ctx.emitter.instruction("cmp x0, #2");                              // tag 2 is the only scalar cast that can lose integer precision
             ctx.emitter.instruction(&format!("b.eq {from_float}"));             // route floats through the deprecating weak conversion
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", MIXED_TO_INT_CELL_OFFSET);
         }
         Arch::X86_64 => {
+            if let Some(from_null) = &from_null {
+                ctx.emitter.instruction(&format!("cmp rax, {}", TAGGED_SCALAR_TAG_NULL)); // check whether the boxed optional integer is runtime null
+                ctx.emitter.instruction(&format!("je {from_null}"));            // map runtime null through the caller-selected result
+            }
             ctx.emitter.instruction("cmp rax, 2");                              // tag 2 is the only scalar cast that can lose integer precision
             ctx.emitter.instruction(&format!("je {from_float}"));               // route floats through the deprecating weak conversion
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", MIXED_TO_INT_CELL_OFFSET);
@@ -461,6 +485,9 @@ fn emit_mixed_weak_int(
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
     abi::emit_release_temporary_stack(ctx.emitter, MIXED_TO_INT_FRAME_BYTES);
+    if null_result.is_some() {
+        crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+    }
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&from_float);
     match ctx.emitter.target.arch {
@@ -469,6 +496,27 @@ fn emit_mixed_weak_int(
     }
     abi::emit_release_temporary_stack(ctx.emitter, MIXED_TO_INT_FRAME_BYTES);
     emit_weak_float_result_to_int(ctx, context);
+    if null_result.is_some() {
+        crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+    }
+    if let (Some(from_null), Some(null_result)) = (from_null, null_result) {
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&from_null);
+        abi::emit_release_temporary_stack(ctx.emitter, MIXED_TO_INT_FRAME_BYTES);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            null_result,
+        );
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_NULL)); // retain runtime-null status beside the saturating length
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_NULL)); // retain runtime-null status beside the saturating length
+            }
+        }
+    }
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -513,7 +561,7 @@ pub(crate) fn load_as_int(
             abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
             Ok(())
         }
-        PhpType::Mixed | PhpType::Union(_) => emit_mixed_weak_int(ctx, value, name),
+        PhpType::Mixed | PhpType::Union(_) => emit_mixed_weak_int(ctx, value, name, None),
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name, other
