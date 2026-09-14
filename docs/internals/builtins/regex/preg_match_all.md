@@ -2,7 +2,7 @@
 title: "preg_match_all() — internals"
 description: "Compiler internals for preg_match_all(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 376
+  order: 731
 ---
 
 ## `preg_match_all()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_match_all.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -23,8 +23,8 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `checker_hook`
-- **Result type source**: `checked`
+- **Validation**: `signature`
+- **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
@@ -39,19 +39,19 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_match_all(string $pattern, string $subject, mixed $matches = null, int $flags = 0, int $offset = 0): int
+function preg_match_all(string $pattern, string $subject): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–5 arguments (3 optional).
-- **By-reference parameters**: `$matches`.
+- **Arity**: takes exactly 2 arguments.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
 - **Adapter reason**: `by-reference-or-lvalue`.
+- **Eval signature compatibility**: `additional-by-reference-output`.
 - **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$matches`.
 

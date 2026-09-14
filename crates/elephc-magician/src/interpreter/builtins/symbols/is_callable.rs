@@ -282,12 +282,24 @@ fn eval_callable_object_class_name(
 }
 
 /// Returns whether a normalized eval callback has an invokable target.
-fn eval_callable_probe_exists(
+///
+/// Exposed beyond `is_callable()` itself for `crate::interpreter::builtins::curl::callbacks`:
+/// `curl_setopt()`'s KIND 8 options validate their callable EAGERLY, at setopt time, exactly
+/// as php-src and the AOT prelude do (`is_callable($value)` there), and normalization alone
+/// does not answer that question — `eval_callable("no_such_function")` happily produces a
+/// `Named` callable for a name nothing defines.
+pub(in crate::interpreter) fn eval_callable_probe_exists(
     callback: &EvaluatedCallable,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_ref() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_callable_probe_exists(callback, owner_context, values)
+        }
         EvaluatedCallable::Named { name, .. } => Ok(context.has_closure(name)
             || super::function_exists::eval_function_probe_exists(context, name)),
         EvaluatedCallable::BoundClosure { name, .. } => Ok(context.has_closure(name)

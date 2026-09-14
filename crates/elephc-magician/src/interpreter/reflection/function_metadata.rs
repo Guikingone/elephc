@@ -296,6 +296,11 @@ pub(super) fn eval_reflection_closure_target_method(
     values: &mut impl RuntimeValueOps,
 ) -> Option<(String, String)> {
     match target? {
+        // A ForeignContext target only keeps its owning eval context alive around the target it
+        // wraps; the class and method it stands for are that target's.
+        EvalClosureObjectTarget::ForeignContext { target, .. } => {
+            eval_reflection_closure_target_method(Some(target), context, values)
+        }
         EvalClosureObjectTarget::InvokableObject { object } => {
             let class_name = eval_closure_bound_object_class_name(*object, context, values).ok()?;
             Some((class_name, "__invoke".to_string()))
@@ -621,7 +626,18 @@ pub(super) fn eval_reflection_function_closure_this_result(
     let Some(target) = eval_reflection_function_closure_target(target) else {
         return values.null();
     };
+    eval_reflection_closure_target_this_result(target, values)
+}
+
+/// Resolves `getClosureThis()` recursively through a foreign-context closure proxy.
+fn eval_reflection_closure_target_this_result(
+    target: &EvalClosureObjectTarget,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     match target {
+        EvalClosureObjectTarget::ForeignContext { target, .. } => {
+            eval_reflection_closure_target_this_result(target, values)
+        }
         EvalClosureObjectTarget::BoundNamed {
             bound_this: Some(object),
             ..
@@ -679,7 +695,22 @@ pub(super) fn eval_reflection_function_closure_scope_class_name(
     let Some(target) = eval_reflection_function_closure_target(target) else {
         return Ok(None);
     };
+    eval_reflection_closure_target_scope_class_name(target, context, values)
+}
+
+/// Resolves one closure target's scope, switching to a retained foreign owner when required.
+fn eval_reflection_closure_target_scope_class_name(
+    target: &EvalClosureObjectTarget,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
     match target {
+        EvalClosureObjectTarget::ForeignContext { target, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_ref() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_reflection_closure_target_scope_class_name(target, owner_context, values)
+        }
         EvalClosureObjectTarget::Named(_) => Ok(None),
         EvalClosureObjectTarget::BoundNamed {
             name,
@@ -717,7 +748,22 @@ pub(super) fn eval_reflection_function_closure_called_class_name(
     let Some(target) = eval_reflection_function_closure_target(target) else {
         return Ok(None);
     };
+    eval_reflection_closure_target_called_class_name(target, context, values)
+}
+
+/// Resolves one closure target's called class through any retained foreign owner.
+fn eval_reflection_closure_target_called_class_name(
+    target: &EvalClosureObjectTarget,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
     match target {
+        EvalClosureObjectTarget::ForeignContext { target, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_ref() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_reflection_closure_target_called_class_name(target, owner_context, values)
+        }
         EvalClosureObjectTarget::Named(_) => Ok(None),
         EvalClosureObjectTarget::BoundNamed {
             bound_this,

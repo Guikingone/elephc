@@ -10,6 +10,15 @@
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 
+/// One PHP handler retained by Magician for a process signal.
+#[derive(Clone, Copy)]
+pub enum EvalPcntlSignalHandler {
+    /// Native `SIG_DFL` or `SIG_IGN` disposition value.
+    Disposition(i64),
+    /// Runtime callable cell retained while the handler remains registered.
+    Callable(RuntimeCellHandle),
+}
+
 /// Process-level eval context passed opaquely across the C ABI.
 ///
 /// Generated code never inspects this layout directly; it only passes pointers
@@ -87,6 +96,8 @@ pub struct ElephcEvalContext {
     pub(super) dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
     pub(super) array_element_aliases: HashMap<(u64, EvalArrayReferenceKey), EvalReferenceTarget>,
     pub(super) array_cursors: HashMap<usize, EvalArrayCursor>,
+    pub(super) pcntl_foreign_callables:
+        HashMap<usize, pcntl_runtime::EvalPcntlContextLease>,
     pub(super) dynamic_initialized_properties: HashSet<(u64, String)>,
     /// Live interpreter call frames, innermost last, for `debug_backtrace()`.
     /// Execution state of every live generator, keyed by its object identity.
@@ -206,6 +217,7 @@ impl ElephcEvalContext {
             dynamic_property_aliases: HashMap::new(),
             array_element_aliases: HashMap::new(),
             array_cursors: HashMap::new(),
+            pcntl_foreign_callables: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
             eval_generators: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
@@ -308,6 +320,7 @@ impl ElephcEvalContext {
             dynamic_property_aliases: HashMap::new(),
             array_element_aliases: HashMap::new(),
             array_cursors: HashMap::new(),
+            pcntl_foreign_callables: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
             eval_generators: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),

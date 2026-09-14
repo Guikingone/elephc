@@ -84,6 +84,12 @@ pub(super) fn eval_static_method_call_result_resolved(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reject_fiber_switch_during_pcntl_dispatch(
+        &class_name,
+        method_name,
+        context,
+        values,
+    )?;
     // Every step below can refuse, and until this trace existed a refusal anywhere in the chain
     // surfaced as one anonymous fatal with no way to tell which step it was.
     if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {

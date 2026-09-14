@@ -8,10 +8,11 @@
 //!
 //! Key details:
 //!
-//! - EXACT PINS TAKE PRECEDENCE. Lock manifests, project manifests, and `.php-version` files
-//!   can each state the PHP profile exactly. A version CONSTRAINT (`"^8.2"`) is considered only
-//!   when it excludes the newest maintained profile, because choosing an arbitrary point inside
-//!   an otherwise compatible range would invent intent that the declaration does not express.
+//! - EXACT PINS WIN. `composer.lock`'s `platform-overrides.php`,
+//!   `composer.json`'s `config.platform.php`, and `.php-version` directly select a profile.
+//!   A `require.php` constraint is consulted only when it excludes the newest maintained
+//!   profile, in which case the newest admitted profile is selected. The local constraint
+//!   parser follows Composer's range semantics instead of Cargo's.
 //!
 //! - NOTHING IS REQUIRED. Every source is optional at every level, and a project with no
 //!   recognized manifest resolves to the default exactly as before. Compiling a lone `.php`

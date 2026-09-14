@@ -2,20 +2,19 @@
 title: "glob()"
 description: "Finds pathnames matching a pattern."
 sidebar:
-  order: 135
+  order: 276
 ---
 
 ## glob()
 
 ```php
-function glob(string $pattern, int $flags = 0): array
+function glob(string $pattern): array
 ```
 
 Finds pathnames matching a pattern.
 
 **Parameters**:
 - `$pattern` (`string`)
-- `$flags` (`int`), default `0`, optional
 
 **Returns**: `array`
 

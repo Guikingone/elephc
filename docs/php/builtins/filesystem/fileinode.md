@@ -2,7 +2,7 @@
 title: "fileinode()"
 description: "Gets file inode."
 sidebar:
-  order: 126
+  order: 267
 ---
 
 ## fileinode()

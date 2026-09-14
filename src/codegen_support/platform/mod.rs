@@ -22,15 +22,6 @@ mod tests {
     };
     use super::*;
 
-    /// Verifies predefined path and locale constants follow each supported target platform.
-    #[test]
-    fn test_php_platform_constant_values() {
-        assert_eq!(Platform::MacOS.php_max_path_len(), 1024);
-        assert_eq!(Platform::Linux.php_max_path_len(), 4096);
-        assert_eq!(Platform::MacOS.lc_numeric(), 4);
-        assert_eq!(Platform::Linux.lc_numeric(), 1);
-    }
-
     #[test]
     /// Parsing "linux-aarch64", "linux-x86_64", and "aarch64-apple-darwin" returns the correct Platform+Arch pair.
     fn test_target_parse() {
@@ -257,6 +248,10 @@ mod tests {
         );
         assert_eq!(transform_c_call("bl __rt_itoa"), None);
         assert_eq!(transform_c_call("bl _sin"), Some("bl sin".to_string()));
+        assert_eq!(
+            transform_c_call("bl _unsetenv"),
+            Some("bl unsetenv".to_string())
+        );
     }
 
     #[test]

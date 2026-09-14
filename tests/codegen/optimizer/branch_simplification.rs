@@ -53,8 +53,11 @@ fn function_ir<'a>(module: &'a str, signature_prefix: &str) -> &'a str {
     &rest[..next]
 }
 
+// The `continue` targets the loop, which stops AST control-flow normalization from rotating
+// the trailing break guard into `do ... while (!guard)`; the constant `while (true)` test
+// therefore survives to EIR, where this suite needs it.
 const WHILE_TRUE_LOOP: &str =
-    "<?php $i = 0; while (true) { echo $i; $i++; if ($i >= $argc + 3) break; } echo \"!\";";
+    "<?php $i = 0; while (true) { echo $i; $i++; if ($i < 2) continue; if ($i >= $argc + 3) break; } echo \"!\";";
 
 /// The constant `while (true)` condition lowers to a `cond_br` on `const_bool
 /// true`; branch simplification folds it away while the loop still runs and

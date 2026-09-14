@@ -2,7 +2,7 @@
 title: "getenv() — internals"
 description: "Compiler internals for getenv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 134
+  order: 275
 ---
 
 ## `getenv()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/getenv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/getenv.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `shared`
 - **Result ownership**: `fresh`
-- **Effects**: `static (2 declared effects)`
+- **Effects**: `shared`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function getenv(string $name = null, bool $local_only = false): string|false
+function getenv(?string $name = null, bool $local_only = false): string|array|false
 ```
 
 ## What the type checker enforces

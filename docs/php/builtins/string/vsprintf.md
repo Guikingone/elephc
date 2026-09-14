@@ -2,7 +2,7 @@
 title: "vsprintf()"
 description: "Returns a formatted string using an array of values."
 sidebar:
-  order: 501
+  order: 850
 ---
 
 ## vsprintf()

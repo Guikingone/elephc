@@ -2,7 +2,7 @@
 title: "is_nan() — internals"
 description: "Compiler internals for is_nan(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 300
+  order: 583
 ---
 
 ## `is_nan()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_nan.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_nan.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

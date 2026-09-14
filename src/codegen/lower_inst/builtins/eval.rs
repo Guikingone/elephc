@@ -37,6 +37,7 @@ const EVAL_STATUS_PARSE_ERROR: i64 = 1;
 const EVAL_STATUS_RUNTIME_FATAL: i64 = 2;
 const EVAL_STATUS_UNCAUGHT_THROWABLE: i64 = 3;
 const EVAL_STATUS_UNSUPPORTED: i64 = 4;
+const EVAL_STATUS_ESCAPING_PCNTL_CALLABLE: i64 = 6;
 /// PHP's process exit status for a parse error, measured with `php -n` 8.5.6.
 const EVAL_PARSE_ERROR_EXIT_STATUS: u32 = 255;
 /// The status the bridge has always exited with for its two anonymous fatals.
@@ -52,10 +53,13 @@ const EVAL_RUNTIME_FATAL_EXIT_STATUS: u32 = 1;
 /// archive only when `eval_bridge` is set), so `__elephc_eval_report_runtime_fatal` does not
 /// exist in its link. These are the exact strings that reporter falls back to when the
 /// interpreter recorded no clause, which is always the case when there is no interpreter.
+const EVAL_PARSE_ERROR_MESSAGE: &str = "Parse error: eval() fragment is invalid\n";
 const EVAL_UNSUPPORTED_MESSAGE: &str =
     "Fatal error: eval() fragment uses an unsupported construct\n";
 /// The runtime-fatal wording, for programs that do not link the interpreter bridge.
 const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";
+const EVAL_ESCAPING_PCNTL_CALLABLE_MESSAGE: &str =
+    "Fatal error: PCNTL handler/closure cannot escape its eval context\n";
 const EVAL_STACK_BYTES: usize = 96;
 const EVAL_RESULT_VALUE_CELL_OFFSET: usize = 8;
 const EVAL_RESULT_ERROR_OFFSET: usize = 16;

@@ -79,6 +79,11 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Filesystem,
     /// Dispatches `filter_var(...)`.
     FilterVar,
+    /// Dispatches the whole `ext/curl` easy-interface family (behind the `curl` Cargo
+    /// feature; see `crate::interpreter::builtins::curl`'s module doc). One shared
+    /// variant with internal name dispatch, mirroring `HashContext`/`Openssl`.
+    #[cfg(feature = "curl")]
+    Curl,
     /// Dispatches `acos(...)`.
     Acos,
     /// Dispatches `asin(...)`.
@@ -183,6 +188,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Min,
     /// Dispatches network, host, environment, and process builtins.
     NetworkEnv,
+    /// Dispatches PCNTL process-control builtins.
+    Pcntl,
+    /// Dispatches the `xml_*` / `xmlwriter_*` family by forwarding to the compiled xml prelude.
+    Xml,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -412,6 +421,8 @@ impl EvalValuesHook {
             Self::Exp => one_arg(evaluated_args, values, eval_exp_result),
             Self::Filesystem => eval_filesystem_values_result(name, evaluated_args, context, values),
             Self::FilterVar => eval_filter_var_values_result(evaluated_args, values),
+            #[cfg(feature = "curl")]
+            Self::Curl => eval_curl_declared_values_result(name, evaluated_args, context, values),
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Intval => match evaluated_args {
@@ -513,7 +524,11 @@ impl EvalValuesHook {
             Self::Max => eval_max_result(evaluated_args, values),
             Self::Min => eval_min_result(evaluated_args, values),
             Self::MtRand => eval_mt_rand_values_result(evaluated_args, values),
-            Self::NetworkEnv => eval_network_env_values_result(name, evaluated_args, values),
+            Self::NetworkEnv => {
+                eval_network_env_values_result(name, evaluated_args, context, values)
+            }
+            Self::Pcntl => eval_pcntl_values_result(name, evaluated_args, context, values),
+            Self::Xml => eval_xml_values_result(name, evaluated_args, context, values),
             Self::NumberFormat => {
                 eval_number_format_declared_values_result(evaluated_args, values)
             }

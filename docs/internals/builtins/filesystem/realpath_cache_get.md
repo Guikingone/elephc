@@ -2,7 +2,7 @@
 title: "realpath_cache_get() — internals"
 description: "Compiler internals for realpath_cache_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 154
+  order: 295
 ---
 
 ## `realpath_cache_get()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/realpath_cache_get.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/realpath_cache_get.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

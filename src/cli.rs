@@ -142,7 +142,7 @@ Output modes:
 Target:
   --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
                           linux-aarch64 | linux-x86_64 (default: host)
-  --php-version VERSION   8.2 | 8.3 | 8.4 | 8.5 (default: 8.5)
+  --php-version VERSION   8.0 through 8.6 (detected; fallback: 8.5)
 
 Codegen:
   --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
@@ -154,8 +154,9 @@ Codegen:
                           counts to stderr at exit
   --with-monitoring       Embed the profiling capability, dormant until `elephc monitor`
                           asks. Local/--exact captures report exact wall time,
-                          allocations, retained objects, DB queries/wait and calls,
-                          rooted at {main}; file I/O is not measured. A service's
+                          allocations, retained objects, DB queries/wait, outgoing
+                          network operations/wait and calls, rooted at {main}; file
+                          I/O is not measured. A service's
                           default answer is sampled CPU time. Inlined functions
                           fold into their caller (as with --counters).
   --with-monitoring=NAMES Embed it for the named functions only (comma list; trailing
@@ -1220,11 +1221,13 @@ mod tests {
             "elephc".into(),
             "--with-pdo".into(),
             "--with-tls".into(),
+            "--with-pcntl".into(),
             "app.php".into(),
         ];
         let config = compile_config(&args);
         assert!(config.with_crates.contains("pdo"));
         assert!(config.with_crates.contains("tls"));
+        assert!(config.with_crates.contains("pcntl"));
     }
 
     /// Verifies `--with-web` aliases `--web` (full web mode) instead of being

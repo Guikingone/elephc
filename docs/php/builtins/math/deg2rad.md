@@ -2,7 +2,7 @@
 title: "deg2rad()"
 description: "Converts a degree value to radians."
 sidebar:
-  order: 290
+  order: 573
 ---
 
 ## deg2rad()

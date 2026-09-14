@@ -95,6 +95,8 @@ pub enum RuntimeCallTarget {
     },
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
+    /// A typed PCNTL process-control operation with target-aware availability.
+    Pcntl(crate::ir::PcntlRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
     Function(crate::ir::RuntimeFnId),
     /// A source-sensitive runtime function plus the call site's strict-PHP visibility profile.
@@ -141,6 +143,7 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
             }),
+            RuntimeCallTarget::Pcntl(target) => Some(target.signature()),
             RuntimeCallTarget::Function(target) => {
                 target.descriptor().logical_signature
             }
@@ -190,6 +193,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::EvalQuietPropertyFetch { enter: true } => "eval.quiet_fetch_enter",
             RuntimeCallTarget::EvalQuietPropertyFetch { enter: false } => "eval.quiet_fetch_leave",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
+            RuntimeCallTarget::Pcntl(target) => target.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),
             RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),
         }

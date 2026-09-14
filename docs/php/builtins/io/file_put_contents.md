@@ -2,22 +2,20 @@
 title: "file_put_contents()"
 description: "Writes data to a file."
 sidebar:
-  order: 177
+  order: 318
 ---
 
 ## file_put_contents()
 
 ```php
-function file_put_contents(string $filename, mixed $data, int $flags = 0, mixed $context = null): int
+function file_put_contents(string $filename, string $data): int
 ```
 
 Writes data to a file.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$data` (`mixed`)
-- `$flags` (`int`), default `0`, optional
-- `$context` (`mixed`), default `null`, optional
+- `$data` (`string`)
 
 **Returns**: `int`
 

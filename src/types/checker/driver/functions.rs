@@ -40,6 +40,12 @@ impl Checker {
                 }
                 let builtin = crate::strict_php::with_source_mode(stmt.source_mode, || {
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
+                        .filter(|builtin| {
+                            crate::types::checker::builtins::catalog::builtin_is_available_for_target(
+                                builtin,
+                                self.target,
+                            )
+                        })
                 });
                 if let Some(builtin) = builtin.filter(|_| stmt.source_mode != SourceMode::Internal) {
                     errors.push(CompileError::new(
@@ -74,6 +80,12 @@ impl Checker {
                 }
                 let builtin = crate::strict_php::with_source_mode(stmt.source_mode, || {
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
+                        .filter(|builtin| {
+                            crate::types::checker::builtins::catalog::builtin_is_available_for_target(
+                                builtin,
+                                self.target,
+                            )
+                        })
                 });
                 if let Some(builtin) = builtin.filter(|_| stmt.source_mode != SourceMode::Internal) {
                     errors.push(CompileError::new(
@@ -116,7 +128,7 @@ impl Checker {
 
     /// Returns true if `name` resolves to any declared function: user declaration, variant group, or
     /// extern. Resolution is case-insensitive via PHP symbol key matching.
-    pub(super) fn has_function_decl_folded(&self, name: &str) -> bool {
+    pub(crate) fn has_function_decl_folded(&self, name: &str) -> bool {
         let key = php_symbol_key(name);
         self.fn_decls
             .keys()

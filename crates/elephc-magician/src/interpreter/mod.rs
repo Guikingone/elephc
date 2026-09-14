@@ -32,6 +32,8 @@ mod scope_cells;
 mod statements;
 #[cfg(not(test))]
 mod output_handlers;
+#[cfg(not(test))]
+mod pcntl_escape;
 mod throwables;
 
 use crate::context::{
@@ -78,6 +80,8 @@ pub use runtime_ops::RuntimeValueOps;
 pub(crate) use builtins::eval_spl_autoload_class as eval_spl_autoload_class_bridge;
 pub(crate) use builtins::eval_spl_autoload_classlike_definition;
 use runtime_ops::*;
+#[cfg(not(test))]
+pub(crate) use pcntl_escape::value_contains_foreign_pcntl_callable;
 use scope_cells::*;
 #[cfg(not(test))]
 pub(crate) use statements::eval_dynamic_destructor_for_object_cell;

@@ -262,3 +262,42 @@ try {
 
     assert_eq!(out, "fc");
 }
+
+/// A `return` nested in a branch of a non-throwing `try` body must still run `finally`, and
+/// code after the `try` must not be sunk into that `finally` (it would then run on the return
+/// path too). Before the fix the `try` was flattened and `report(3)` skipped the separator
+/// (issue #878).
+#[test]
+fn test_dead_code_elimination_keeps_finally_for_nested_return_in_non_throwing_try() {
+    let out = compile_and_run(
+        r#"<?php
+function report(int $count): void {
+    try {
+        if ($count > 1) { echo $count . " items"; return; }
+        echo "1 item";
+    } finally {
+        echo "|";
+    }
+    echo "after;";
+}
+function scan(array $items): int {
+    $seen = 0;
+    foreach ($items as $item) {
+        try {
+            if ($item < 0) { break; }
+            $seen++;
+        } finally {
+            echo "f";
+        }
+        echo $item;
+    }
+    return $seen;
+}
+report($argc);
+report($argc + 2);
+echo scan([1, 2, -1, 3]);
+"#,
+    );
+
+    assert_eq!(out, "1 item|after;3 items|f1f2f2");
+}

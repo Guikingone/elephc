@@ -106,47 +106,12 @@ impl Platform {
         }
     }
 
-    /// Returns the PHP-compatible operating-system family for this target.
-    pub fn php_os_family(&self) -> &'static str {
+    /// Returns the PHP-compatible operating-system family name.
+    pub fn php_os_family_name(&self) -> &'static str {
         match self {
             Platform::MacOS => "Darwin",
             Platform::Linux => "Linux",
             Platform::Windows => "Windows",
-        }
-    }
-
-    /// Returns PHP's target-specific `PHP_MAXPATHLEN` predefined constant.
-    pub fn php_max_path_len(&self) -> i64 {
-        match self {
-            Platform::MacOS => 1024,
-            Platform::Linux => 4096,
-            Platform::Windows => 2048,
-        }
-    }
-
-    /// Returns the target C library's `LC_NUMERIC` category value exposed by PHP.
-    pub fn lc_numeric(&self) -> i64 {
-        match self {
-            Platform::MacOS | Platform::Windows => 4,
-            Platform::Linux => 1,
-        }
-    }
-
-    /// Returns the target C library's `SIGUSR1` signal number exposed by PHP.
-    pub fn sigusr1(&self) -> i64 {
-        match self {
-            Platform::MacOS => 30,
-            Platform::Linux => 10,
-            Platform::Windows => panic!("SIGUSR1 is unavailable on the Windows target"),
-        }
-    }
-
-    /// Returns the target C library's `SIGUSR2` signal number exposed by PHP.
-    pub fn sigusr2(&self) -> i64 {
-        match self {
-            Platform::MacOS => 31,
-            Platform::Linux => 12,
-            Platform::Windows => panic!("SIGUSR2 is unavailable on the Windows target"),
         }
     }
 

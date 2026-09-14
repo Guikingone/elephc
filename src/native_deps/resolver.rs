@@ -63,6 +63,18 @@ pub fn resolve_for_compilation(
     resolve_for_compilation_with(source, target, requirements, &cache, &SystemToolchains)
 }
 
+/// Names the PHP-visible surface a managed package serves, for the "<feature> support requires
+/// managed native package <name>" diagnostics: `pcre2` backs the regex builtins and `libxml2`
+/// the xml/xmlwriter extensions. A package without a surface of its own (the curl chain, zlib)
+/// is reported by its package name.
+fn feature_label(package: &str) -> &str {
+    match package {
+        "pcre2" => "regex",
+        "libxml2" => "xml",
+        _ => package,
+    }
+}
+
 /// Pure read-only resolver with injected cache and toolchain identity for tests and integration.
 pub(crate) fn resolve_for_compilation_with(
     source: &Path,
@@ -75,7 +87,7 @@ pub(crate) fn resolve_for_compilation_with(
         return Ok(Vec::new());
     }
     let first_package = requirements[0].package_name();
-    let feature = if first_package == "pcre2" { "regex" } else { first_package };
+    let feature = feature_label(first_package);
     let search_root = source
         .parent()
         .and_then(|parent| std::fs::canonicalize(parent).ok())
@@ -111,26 +123,42 @@ pub(crate) fn resolve_for_compilation_with(
     })?;
     let mut seen = BTreeSet::new();
     let mut resolved = Vec::new();
-    for requirement in requirements {
-        let name = requirement.package_name();
-        if !seen.insert(name.to_string()) { continue; }
-        let selected = manifest.dependencies().get(name).ok_or_else(|| NativeError::new(
+    // A flat worklist, not a `for` loop over `requirements`: a package's own
+    // catalog/lock-declared dependencies (e.g. `curl` -> `["openssl", "zlib"]`,
+    // the first non-empty `PackageVersion::dependencies`) are spliced in right
+    // after it resolves, so a single top-level requirement such as `curl` alone
+    // still yields every archive its final link needs — the caller only ever
+    // names the leaf feature (see `crate::pipeline::backend`), never the
+    // transitive chain. Splicing at `cursor` (not appending) preserves the
+    // pre-order dependent-before-dependency shape the lock already recorded
+    // (`curl, openssl, zlib`), which is also the exact static link order libcurl's own
+    // dependency chain requires (`libcurl.a -> libssl.a -> libcrypto.a -> libz.a`).
+    let mut queue: Vec<String> = requirements
+        .iter()
+        .map(|requirement| requirement.package_name().to_string())
+        .collect();
+    let mut cursor = 0;
+    while cursor < queue.len() {
+        let name = queue[cursor].clone();
+        cursor += 1;
+        if !seen.insert(name.clone()) { continue; }
+        let selected = manifest.dependencies().get(name.as_str()).ok_or_else(|| NativeError::new(
             NativeErrorKind::Manifest,
             format!("project does not declare required native package {name}"),
         )
         .with_path(&project.manifest)
         .with_project(&project.root)
         .with_recovery(format!("elephc native add {name}")))?;
-        let version = catalog::version(name, Some(selected))?;
+        let version = catalog::version(&name, Some(selected))?;
         catalog::ensure_target(version, target)?;
-        let locked = lock.package(name).ok_or_else(|| {
+        let locked = lock.package(&name).ok_or_else(|| {
             NativeError::new(NativeErrorKind::Lock, "native lock is missing or stale")
                 .with_path(&project.lock)
                 .with_project(&project.root)
                 .with_recovery(&lock_recovery)
         })?;
         let key = ArtifactKey {
-            package: name,
+            package: &name,
             version: version.version,
             recipe: version.recipe_revision,
             source_sha256: version.source.sha256,
@@ -144,7 +172,7 @@ pub(crate) fn resolve_for_compilation_with(
         })?;
         let retained = version.retained_headers.iter().chain(version.ordered_link_outputs.iter()).copied().collect::<Vec<_>>();
         let identity = ReceiptIdentity {
-            package: name, version: version.version, recipe: version.recipe_revision,
+            package: &name, version: version.version, recipe: version.recipe_revision,
             source_sha256: version.source.sha256, target: target.as_str(), abi: &toolchain.abi,
             toolchain_fingerprint: &toolchain.fingerprint,
             required_outputs: &retained,
@@ -178,9 +206,12 @@ pub(crate) fn resolve_for_compilation_with(
             archives.push(root.join(relative));
         }
         resolved.push(ResolvedNativePackage {
-            package: name.to_string(), artifact_root: root, archives,
+            package: name.clone(), artifact_root: root, archives,
             system_libraries: target_plan.system_libraries.clone(), frameworks: target_plan.frameworks.clone(),
         });
+        for (offset, dependency) in locked.dependencies.iter().enumerate() {
+            queue.insert(cursor + offset, dependency.clone());
+        }
     }
     Ok(resolved)
 }
@@ -306,6 +337,36 @@ mod tests {
         std::fs::remove_dir_all(fixture).unwrap();
     }
 
+    /// Verifies the diagnostic names the PHP surface a package serves — regex for pcre2, xml
+    /// for libxml2 — and falls back to the package name for every other catalog package.
+    #[test]
+    fn feature_label_names_the_php_surface_or_the_package() {
+        assert_eq!(feature_label("libxml2"), "xml");
+        assert_eq!(feature_label("pcre2"), "regex");
+        for package in ["curl", "libssh2", "nghttp2", "openssl", "zlib", "unknown"] {
+            assert_eq!(feature_label(package), package, "{package} has no surface of its own");
+        }
+    }
+
+    /// Verifies an xml-style requirement without a manifest is reported as xml support, with
+    /// the libxml2 recovery, through the same path the regex diagnostic takes.
+    #[test]
+    fn missing_project_for_libxml2_names_xml_support() {
+        struct PanicToolchains;
+        impl ToolchainProvider for PanicToolchains {
+            /// Fails the test if project discovery does not stop first.
+            fn resolve(&self, _target: Target) -> Result<super::super::toolchain::NativeToolchain, NativeError> { panic!("toolchain should not be queried") }
+        }
+        let cache = CacheLayout::from_values(Path::new("/"), Some(std::ffi::OsStr::new("/missing-cache")), None, None).unwrap();
+        let fixture = std::env::temp_dir().join(format!("elephc-no-project-xml-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&fixture);
+        std::fs::create_dir_all(&fixture).unwrap();
+        let error = resolve_for_compilation_with(&fixture.join("main.php"), Target::detect_host(), &[NativeRequirement::package("libxml2")], &cache, &PanicToolchains).unwrap_err();
+        assert!(error.to_string().contains("xml support requires managed native package libxml2"), "{error}");
+        assert!(error.to_string().contains("elephc native add libxml2"), "{error}");
+        std::fs::remove_dir_all(fixture).unwrap();
+    }
+
     /// Verifies absent lock state carries the discovered project and non-locked repair command.
     #[test]
     fn missing_lock_is_actionable() {
@@ -398,6 +459,116 @@ mod tests {
             assert!(rendered.contains("recovery: cd --"));
             assert!(rendered.contains("elephc native install --locked --target"));
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Fabricates one complete, verifiable local artifact for a catalog package: every
+    /// catalog-declared retained header/archive as a tiny non-empty dummy file, plus a
+    /// receipt whose recorded hashes match what was just written. Mirrors the shape a
+    /// real recipe publishes without invoking any actual build, using the catalog's own
+    /// `retained_headers`/`ordered_link_outputs` lists so the fixture cannot drift from
+    /// what `receipt.verify()` actually requires.
+    fn fabricate_artifact(cache: &CacheLayout, name: &str, toolchain: &NativeToolchain, target: Target) {
+        let version = catalog::version(name, None).expect("catalog package");
+        let key = ArtifactKey {
+            package: name,
+            version: version.version,
+            recipe: version.recipe_revision,
+            source_sha256: version.source.sha256,
+            target: target.as_str(),
+            abi: &toolchain.abi,
+            toolchain_fingerprint: &toolchain.fingerprint,
+        };
+        let root = cache.artifact_path(&key).expect("artifact path");
+        let retained: Vec<&str> = version
+            .retained_headers
+            .iter()
+            .chain(version.ordered_link_outputs.iter())
+            .copied()
+            .collect();
+        for relative in &retained {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().expect("catalog output has a parent directory"))
+                .unwrap();
+            fs::write(&path, b"fixture").unwrap();
+        }
+        let outputs = super::super::receipt::collect_outputs(&root, &retained).unwrap();
+        let identity = ToolIdentity { command: "fixture".into(), version: "fixture".into() };
+        let receipt = ArtifactReceipt {
+            schema: 1,
+            package: name.to_string(),
+            version: version.version.to_string(),
+            recipe: version.recipe_revision,
+            source_sha256: version.source.sha256.to_string(),
+            target: target.as_str().to_string(),
+            abi: toolchain.abi.clone(),
+            compiler: identity.clone(),
+            archiver: identity.clone(),
+            ranlib: identity,
+            toolchain_fingerprint: toolchain.fingerprint.clone(),
+            outputs,
+            created_by: "test".to_string(),
+        };
+        receipt.write(&root).unwrap();
+    }
+
+    /// Verifies a single top-level `curl` requirement resolves its full catalog-declared
+    /// transitive chain (`libssh2`, `nghttp2`, `openssl`, `zlib`) without the caller ever
+    /// naming them, in exactly the dependent-before-dependency order libcurl's own static
+    /// link requires: `libcurl.a -> libssh2.a -> libssl.a -> libcrypto.a -> libz.a ->
+    /// libnghttp2.a`. That sequence is NOT the catalog's declaration order — `libssh2`
+    /// declares `openssl`/`zlib` itself, so the walk splices them in behind `libssh2` and
+    /// `nghttp2` (which needs nothing) lands last. Before this test, `resolve_for_
+    /// compilation_with` only ever iterated the exact `requirements` slice a caller passed
+    /// in, so a lone `NativeRequirement::package("curl")` (what `crate::pipeline::backend`
+    /// emits) resolved `curl`'s own archive only, silently dropping every archive that
+    /// satisfies it from the final link plan.
+    #[test]
+    fn curl_requirement_resolves_its_transitive_native_chain() {
+        let root = project_fixture(
+            "curl-transitive",
+            "[native]\nschema = 1\n[native.dependencies]\ncurl = \"8.21.0\"\nlibssh2 = \"1.11.1\"\nnghttp2 = \"1.70.0\"\nopenssl = \"3.5.8\"\nzlib = \"1.3.2\"\n",
+            true,
+        );
+        let cache = CacheLayout::from_values(
+            &root,
+            Some(root.join("cache").as_os_str()),
+            None,
+            None,
+        )
+        .unwrap();
+        let target = Target::detect_host();
+        let toolchain = FixedToolchains.resolve(target).expect("fixed toolchain");
+        for package in ["curl", "libssh2", "nghttp2", "openssl", "zlib"] {
+            fabricate_artifact(&cache, package, &toolchain, target);
+        }
+
+        let resolved = resolve_for_compilation_with(
+            &root.join("main.php"),
+            target,
+            &[NativeRequirement::package("curl")],
+            &cache,
+            &FixedToolchains,
+        )
+        .expect("curl requirement resolves its transitive chain");
+
+        let names: Vec<&str> = resolved.iter().map(|package| package.package.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["curl", "libssh2", "openssl", "zlib", "nghttp2"],
+            "curl's own dependency order must be preserved, not re-sorted alphabetically"
+        );
+        let archive_filenames: Vec<String> = resolved
+            .iter()
+            .flat_map(|package| package.archives.iter())
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            archive_filenames,
+            vec!["libcurl.a", "libssh2.a", "libssl.a", "libcrypto.a", "libz.a", "libnghttp2.a"],
+            "final link order must match libcurl's own dependency order"
+        );
+
         fs::remove_dir_all(root).unwrap();
     }
 }

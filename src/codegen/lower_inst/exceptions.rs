@@ -198,9 +198,7 @@ pub(super) fn emit_value_error_unless(
             ctx.emitter.instruction(&format!("cmp {}, {}", low, high));         // is the interval degenerate?
             ctx.emitter.instruction(&format!("b.eq {}", ok_label));             // a single-point interval accepts any step magnitude
             ctx.emitter.instruction(&format!("csel x9, {}, {}, le", low, high));// x9 = the smaller of the two endpoints
-            ctx.emitter.instruction(
-                &format!("csel x10, {}, {}, le", high, low)
-            );                                                                  // x10 = the larger of the two endpoints
+            ctx.emitter.instruction(&format!("csel x10, {}, {}, le", high, low)); // x10 = the larger of the two endpoints
             ctx.emitter.instruction("sub x9, x10, x9");                         // x9 = high - low, the spanned interval as an unsigned width
             ctx.emitter.instruction(&format!("cmp {}, #0", reg));               // is the guarded argument negative?
             ctx.emitter.instruction(&format!("cneg x10, {}, lt", reg));         // x10 = |argument|, its unsigned magnitude
@@ -302,7 +300,7 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
     Ok(())
 }
 
-/// Throws an Error using a persisted message in the string-result registers.
+/// Throws a catchable PHP `Error` whose message already sits in the string-result registers.
 pub(super) fn emit_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);

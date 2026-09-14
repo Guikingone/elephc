@@ -4,6 +4,12 @@
 //! (the compiler binary, which depends on this crate's rlib) use these exact
 //! functions, so the two sides can never drift.
 //!
+//! Called from:
+//! - Probe client and server connection entry points in `elephc-probe`.
+//!
+//! Key details:
+//! - Both peers authenticate the same build key without sending it over the wire.
+//!
 //! Protocol (challenge-response, no secret on the wire, no replay):
 //!   client → server : nonce_c
 //!   server → client : nonce_s, HMAC(key, "S" || nonce_c || nonce_s)   (binary proves identity)

@@ -77,6 +77,7 @@ pub(super) fn dce_try_stmt(
         if let Some(finally_body) = finally_body {
             if !block_may_throw(&try_body)
                 && matches!(block_terminal_effect(&try_body), TerminalEffect::FallsThrough)
+                && !block_has_early_exit(&try_body, 0)
             {
                 let mut stmts = try_body;
                 stmts.extend(finally_body);

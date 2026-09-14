@@ -2,7 +2,7 @@
 title: "prev() — internals"
 description: "Compiler internals for prev(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 63
+  order: 62
 ---
 
 ## `prev()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/prev.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/prev.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

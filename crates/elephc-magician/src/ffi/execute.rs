@@ -20,6 +20,8 @@ use crate::errors::{report_fatal_diagnostic, EvalParseDiagnostic, EvalStatus};
 use crate::eval_ir;
 #[cfg(not(test))]
 use crate::interpreter;
+#[cfg(not(test))]
+use crate::interpreter::RuntimeValueOps;
 use crate::parse_cache;
 #[cfg(not(test))]
 use crate::runtime_hooks::ElephcRuntimeOps;
@@ -226,7 +228,48 @@ unsafe fn execute_parsed_eval(
         interpreter::execute_program_outcome_with_context(context, program, scope, &mut values);
     context.pop_call_frame();
     match outcome {
-        Ok(outcome) => write_outcome(outcome, out).code(),
+        Ok(outcome) => {
+            if let interpreter::EvalOutcome::Value(result) = &outcome {
+                match interpreter::value_contains_foreign_pcntl_callable(
+                    *result,
+                    context,
+                    &mut values,
+                ) {
+                    Ok(true) => {
+                        let _ = values.release(*result);
+                        return EvalStatus::EscapingPcntlCallable.code();
+                    }
+                    Ok(false) => {}
+                    Err(status) => {
+                        let _ = values.release(*result);
+                        return status.code();
+                    }
+                }
+            }
+            let escape_candidates = eval_escape_scope_cells(context, scope);
+            for candidate in escape_candidates {
+                match interpreter::value_contains_foreign_pcntl_callable(
+                    candidate,
+                    context,
+                    &mut values,
+                ) {
+                    Ok(true) => {
+                        if let interpreter::EvalOutcome::Value(result) = &outcome {
+                            let _ = values.release(*result);
+                        }
+                        return EvalStatus::EscapingPcntlCallable.code();
+                    }
+                    Ok(false) => {}
+                    Err(status) => {
+                        if let interpreter::EvalOutcome::Value(result) = &outcome {
+                            let _ = values.release(*result);
+                        }
+                        return status.code();
+                    }
+                }
+            }
+            write_outcome(outcome, out).code()
+        }
         Err(status) => {
             if eval_trace_enabled() {
                 let call_site = context.call_site();
@@ -239,6 +282,26 @@ unsafe fn execute_parsed_eval(
             status.code()
         }
     }
+}
+
+/// Collects every visible local and global cell that could cross the eval-to-AOT boundary.
+#[cfg(not(test))]
+fn eval_escape_scope_cells(
+    context: &ElephcEvalContext,
+    scope: &ElephcEvalScope,
+) -> Vec<crate::value::RuntimeCellHandle> {
+    let mut cells = scope.aot_visible_cells();
+    if let Some(global_scope) = context.global_scope_ptr() {
+        let current_scope = scope as *const ElephcEvalScope as *mut ElephcEvalScope;
+        if global_scope != current_scope {
+            if let Some(global_scope) = unsafe { global_scope.as_ref() } {
+                cells.extend(global_scope.aot_visible_cells());
+            }
+        }
+    }
+    cells.sort_unstable_by_key(|cell| cell.as_ptr() as usize);
+    cells.dedup_by_key(|cell| cell.as_ptr() as usize);
+    cells
 }
 
 /// Keeps crate unit tests independent from generated runtime assembly wrappers.

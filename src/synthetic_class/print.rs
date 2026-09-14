@@ -99,6 +99,7 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             params,
             param_attributes,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -113,7 +114,8 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                     Some(ty) => format!("{} ", type_expr(ty)),
                     None => String::new(),
                 };
-                list.push_str(&format!("{hint}...${tail}"));
+                let by_ref = if *variadic_by_ref { "&" } else { "" };
+                list.push_str(&format!("{hint}{by_ref}...${tail}"));
             }
             let signature = format!(
                 "{indent}function {name}({list}){}",
@@ -220,7 +222,8 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                         Some(ty) => format!("{} ", type_expr(ty)),
                         None => String::new(),
                     };
-                    list.push_str(&format!("{hint}...${tail}"));
+                    let by_ref = if method.variadic_by_ref { "&" } else { "" };
+                    list.push_str(&format!("{hint}{by_ref}...${tail}"));
                 }
                 out.push_str(&format!(
                     "{}{visibility}{modifiers}function {}({list}){} {}\n",
@@ -539,6 +542,14 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             out.push_str(&format!("{indent}}}"));
             out
         }
+        // A parser-generated group (multi-argument `echo`, destructuring, the empty no-op that
+        // positions a `default:` written before a case) prints as its statements; an empty
+        // group prints nothing.
+        StmtKind::Synthetic(body) => body
+            .iter()
+            .map(|inner| statement(inner, depth))
+            .collect::<Vec<_>>()
+            .join("\n"),
         other => panic!("print: unmodelled statement {:?}", truncate(other)),
     }
 }

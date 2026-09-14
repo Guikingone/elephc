@@ -71,8 +71,8 @@ const ROUTE_NAME_MAX: usize = ROUTE_SLOT_BYTES - 1;
 const RING_BYTES: usize = 8 + RING_SLOTS * SLOT_WORDS * 8;
 /// Route-table bytes: an 8-byte count followed by the fixed route slots.
 const ROUTE_TABLE_BYTES: usize = 8 + MAX_ROUTES * ROUTE_SLOT_BYTES;
-/// Words per route in the event table: `[io_ops, wait_ns]`.
-const EVENT_WORDS: usize = 2;
+/// Words per route: `[db_ops, db_wait_ns, network_ops, network_wait_ns]`.
+const EVENT_WORDS: usize = 4;
 /// One extra bucket for id 0, which the route table reserves for "untagged" —
 /// a CLI run, or a `--web` request whose route did not fit the table. Dropping
 /// those events would understate the totals silently, which is worse than a row
@@ -135,12 +135,9 @@ const SPEND_ATTEMPTS: usize = 3;
 /// never seen it.
 const REPLAY_TABLE_BYTES: usize = REPLAY_SLOTS * REPLAY_SLOT_BYTES;
 /// Shared-region byte size: the ring, then the route table, then the per-route
-/// event counters, then the control word, then the replay table — all inherited
-/// across a `--web` fork, so route ids stay consistent, every worker's counters
-/// land in one place, and a signature spent on one worker is spent on all.
-///
-/// Each new area is appended LAST so adding it moves no existing offset: every
-/// other area is addressed from the constants above it.
+/// event counters, then the control word, then the replay table. All offsets are
+/// derived from the sizes above, and the whole internal layout is inherited
+/// across a `--web` fork so route ids, counters, and replay state stay shared.
 const REGION_BYTES: usize =
     RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES + CONTROL_BYTES + REPLAY_TABLE_BYTES;
 
@@ -271,6 +268,17 @@ fn event_window_active(base: usize) -> bool {
     ASKED.load(Ordering::Relaxed)
         || unsafe { region_asked(base) }.load(Ordering::Acquire) == ASK_ACTIVE
 }
+
+/// Reports whether bridge-side event timing belongs to the probe's active window.
+///
+/// Reached through a runtime slot because a remote ask is shared across worker
+/// processes and is therefore not represented by each worker's exact-capture word.
+#[no_mangle]
+pub extern "C" fn elephc_probe_event_active() -> u32 {
+    let base = REGION.load(Ordering::Relaxed);
+    u32::from(base != 0 && event_window_active(base))
+}
+
 /// I/O events are **not sampled**. A driver call fires exactly one, so these
 /// counts are exact — the sampler's statistical nature applies to *time*, which
 /// it observes 1000x/second, not to events it is told about. Keeping the two
@@ -317,7 +325,19 @@ pub extern "C" fn elephc_probe_note_wait(ns: u64) {
     note_event(1, ns);
 }
 
-/// Renders the per-route event counters, one line per route that saw DB activity.
+/// Records one outgoing network operation against the current request.
+#[no_mangle]
+pub extern "C" fn elephc_probe_note_network() {
+    note_event(2, 1);
+}
+
+/// Records nanoseconds blocked in an outgoing network operation.
+#[no_mangle]
+pub extern "C" fn elephc_probe_note_network_wait(ns: u64) {
+    note_event(3, ns);
+}
+
+/// Renders database and network event counters for every route that saw activity.
 ///
 /// Deliberately its own line prefix rather than extra columns on the folded
 /// samples: a consumer must not be able to mistake an exact count for a sampled
@@ -333,7 +353,9 @@ pub fn event_report(base: usize) -> String {
     for route_id in 0..EVENT_BUCKETS {
         let io = unsafe { event_word(base, route_id, 0) }.load(Ordering::Relaxed);
         let wait = unsafe { event_word(base, route_id, 1) }.load(Ordering::Relaxed);
-        if io == 0 && wait == 0 {
+        let network = unsafe { event_word(base, route_id, 2) }.load(Ordering::Relaxed);
+        let network_wait = unsafe { event_word(base, route_id, 3) }.load(Ordering::Relaxed);
+        if io == 0 && wait == 0 && network == 0 && network_wait == 0 {
             continue;
         }
         let name = if route_id == 0 {
@@ -341,7 +363,14 @@ pub fn event_report(base: usize) -> String {
         } else {
             unsafe { read_route_slot(base, route_id - 1) }
         };
-        out.push_str(&format!("elephc-probe-io: {name} ops={io} wait_ns={wait}\n"));
+        if io != 0 || wait != 0 {
+            out.push_str(&format!("elephc-probe-io: {name} ops={io} wait_ns={wait}\n"));
+        }
+        if network != 0 || network_wait != 0 {
+            out.push_str(&format!(
+                "elephc-probe-network: {name} ops={network} wait_ns={network_wait}\n"
+            ));
+        }
     }
     out
 }
@@ -1078,6 +1107,19 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
         flag.write(1);
         ASKED.store(true, Ordering::Relaxed);
         arm_timer();
+        // The same channel that said "you are being monitored" can also answer
+        // "what have you sampled so far" — but only for a monitor that said it
+        // would ask. The exact path spawns, waits for the program to finish and
+        // reads its output; a thread parked in `recv` for the whole of that run
+        // is one nobody wanted, and one more thing between the program and its
+        // exit.
+        if POLLED.load(Ordering::Relaxed) {
+            start_control_channel(CONTROL_FD, || {
+                std::thread::Builder::new()
+                    .name("elephc-probe-control".to_string())
+                    .spawn(serve_control_channel)
+            });
+        }
     }
 
     // fork() RESETS interval timers in the child (POSIX; `man 2 fork`), so a
@@ -1095,7 +1137,7 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     // The remote endpoint is opt-in: a Unix socket path in ELEPHC_PROBE_ADDR
     // turns it on. A background thread accepts connections, runs the build-key
     // handshake, and serves the folded profile — so a live production process
-    // can be profiled by `elephc monitor --probe-host` without SIGPROF from
+    // can be profiled by `elephc monitor <addr>` without SIGPROF from
     // outside and without suspending the process.
     if !key.is_null() {
         if let Ok(path) = std::env::var("ELEPHC_PROBE_ADDR") {
@@ -1104,6 +1146,149 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
             }
         }
     }
+}
+
+/// Starts the control server, disconnecting the authenticated channel on failure.
+/// A receive timeout cannot distinguish a slow server from one that never started.
+/// Closing the unserved peer lets the monitor report failure and leave PHP running.
+/// The spawn operation is injected so resource exhaustion can be tested without
+/// exhausting the application's own thread or memory limits.
+fn start_control_channel(
+    fd: libc::c_int,
+    spawn: impl FnOnce() -> std::io::Result<std::thread::JoinHandle<()>>,
+) {
+    if spawn().is_err() {
+        // SAFETY: init owns this authenticated socket and no server was created.
+        // Shutdown also disconnects any inherited duplicates of the peer.
+        unsafe {
+            libc::shutdown(fd, libc::SHUT_RDWR);
+            libc::close(fd);
+        }
+        // The descriptor is gone; a later atfork must not close whatever now
+        // occupies fd 3.
+        forget_control_fd();
+    }
+}
+
+/// Request byte the monitor sends on the control channel to ask for a snapshot
+/// of what has been sampled so far.
+///
+/// One byte, because the channel carries exactly one question. Anything else is
+/// ignored rather than answered: fd 3 is an ordinary number and this thread must
+/// never invent a reply to a protocol it does not own.
+const CONTROL_SNAPSHOT_REQUEST: u8 = b'S';
+
+/// Serves sampled snapshots to the process that launched us, over the control
+/// channel it already holds the other end of.
+///
+/// The channel IS the credential. A socketpair created before the fork cannot be
+/// opened, guessed, or replayed by anything else on the machine, which is why
+/// this path needs no key handshake where the network endpoint does — the same
+/// reasoning that lets init treat its magic byte as "you are being monitored".
+///
+/// What this buys is `--live` without an external sampler. Reading a process
+/// from the outside needs a tool that ships on macOS alone, so the live table
+/// was macOS-only — for a program `monitor` had launched ITSELF, and could
+/// therefore simply have asked. Answering here is the ask.
+///
+/// Snapshots are cumulative, exactly as the endpoint's answer is; a caller that
+/// wants one window subtracts two of them. Keeping the accumulation on this side
+/// would mean the probe deciding what a window is, which is the caller's
+/// question, and would lose a sample to every reader that ever disconnected.
+fn serve_control_channel() {
+    // The same transition the endpoint runs when a key-holder asks: open the
+    // shared window so `--web` workers that forked before this process was
+    // asked adopt it on their next request and fill the ring this thread reads.
+    // Without this, launched `--live` answered only the master's own samples.
+    begin_sampled();
+    // Both for the reasons the endpoint thread blocks them. SIGPIPE: a monitor
+    // that exits mid-write must not take the profiled process down with it.
+    // SIGPROF: `ITIMER_PROF` is delivered to the PROCESS and the kernel picks
+    // any thread not blocking it, so the sampler would otherwise interrupt this
+    // thread and fill the ring with the profiler's own frames instead of the
+    // ones running PHP.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGPIPE);
+        libc::sigaddset(&mut set, libc::SIGPROF);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+    }
+    loop {
+        let mut request = [0u8; 1];
+        // Safety: CONTROL_FD is the socketpair end init identified; this thread
+        // is its only reader.
+        let read = unsafe {
+            libc::recv(
+                CONTROL_FD,
+                request.as_mut_ptr() as *mut libc::c_void,
+                1,
+                0,
+            )
+        };
+        if read < 0 {
+            // A signal that arrived mid-wait is not the monitor leaving. Treating
+            // `EINTR` as the end would stop serving snapshots silently, and the
+            // live loop on the other side reads that as "the target is gone" and
+            // stops with the program still running.
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            break;
+        }
+        if read == 0 {
+            // A real EOF: the monitor is gone, which is the end of the reason
+            // this thread exists.
+            break;
+        }
+        if request[0] != CONTROL_SNAPSHOT_REQUEST {
+            continue;
+        }
+        let profile = sampled_answer();
+        let bytes = profile.as_bytes();
+        let header = (bytes.len() as u32).to_le_bytes();
+        if !control_send_all(&header) || !control_send_all(bytes) {
+            break;
+        }
+    }
+    // The monitor is gone. Forget so a later close of fd 3 cannot leave a
+    // stale claim that would close whatever the process opens there next.
+    forget_control_fd();
+}
+
+/// Writes every byte of `data` to the control channel, or reports that it could
+/// not.
+///
+/// A short write on a stream socket is ordinary, not an error, and a reply that
+/// stops halfway is worse than no reply: the reader is length-prefixed and would
+/// block waiting for a body that is never coming.
+fn control_send_all(data: &[u8]) -> bool {
+    let mut sent = 0usize;
+    while sent < data.len() {
+        // Safety: writing `data`'s own bytes to a socket this thread owns.
+        let wrote = unsafe {
+            libc::send(
+                CONTROL_FD,
+                data[sent..].as_ptr() as *const libc::c_void,
+                data.len() - sent,
+                0,
+            )
+        };
+        if wrote < 0 {
+            // Same reasoning as the read side: an interrupted write has sent
+            // nothing and can simply be retried, where reporting failure would
+            // truncate a reply the reader is length-prefixed to wait for.
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return false;
+        }
+        if wrote == 0 {
+            return false;
+        }
+        sent += wrote as usize;
+    }
+    true
 }
 
 /// Starts sampled collection, because someone authenticated and asked for it.
@@ -1178,10 +1363,75 @@ unsafe fn disarm_timer() {
 }
 
 /// `pthread_atfork` child hook: disarm the timer in the child (belt-and-
-/// suspenders — fork already resets it). A `--web` worker re-arms via
-/// `elephc_probe_rearm`.
+/// suspenders — fork already resets it) and drop an inherited control
+/// socket. A `--web` worker re-arms via `elephc_probe_rearm`; it does not
+/// keep the master's credential fd.
 extern "C" fn disarm_after_fork() {
-    unsafe { disarm_timer() };
+    unsafe {
+        disarm_timer();
+        drop_inherited_control_channel();
+    }
+}
+
+/// Closes fd 3 in a `fork` child when this process claimed it as the control
+/// channel.
+///
+/// `close`, not `shutdown`: shutdown would tear down the master's still-live
+/// socket. Only the child's descriptor is dropped. `FD_CLOEXEC` remains the
+/// exec-without-fork defence; this is the fork-without-exec one.
+///
+/// Called only from the atfork child hook. The child's `CONTROL_OWNED` is a
+/// copied word, so clearing it here does not change the parent.
+///
+/// The flag is not enough: a long-lived process can lose the channel, close
+/// fd 3, and reuse that number for a file or socket. Closing then would
+/// drop an unrelated descriptor in every later fork child. The recorded
+/// device and inode have to still match.
+fn drop_inherited_control_channel() {
+    let owned = CONTROL_OWNED.swap(false, Ordering::Relaxed);
+    let should_close = owned && control_identity(CONTROL_FD)
+        .is_some_and(|(dev, ino)| same_control_identity(dev, ino));
+    forget_control_fd();
+    if !should_close {
+        return;
+    }
+    // SAFETY: fstat says this is still the socket we claimed. close is
+    // async-signal-safe.
+    unsafe {
+        libc::close(CONTROL_FD);
+    }
+}
+
+/// Device and inode of an open descriptor, or `None` if it is already closed.
+fn control_identity(fd: i32) -> Option<(u64, u64)> {
+    unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut st) != 0 {
+            return None;
+        }
+        Some((st.st_dev as u64, st.st_ino as u64))
+    }
+}
+
+/// Whether `dev`/`ino` are the control socket this process claimed.
+fn same_control_identity(dev: u64, ino: u64) -> bool {
+    dev == CONTROL_DEV.load(Ordering::Relaxed) && ino == CONTROL_INO.load(Ordering::Relaxed)
+}
+
+/// Records that fd 3 is the live-control socket, by its current inode.
+fn remember_control_fd() {
+    if let Some((dev, ino)) = control_identity(CONTROL_FD) {
+        CONTROL_DEV.store(dev, Ordering::Relaxed);
+        CONTROL_INO.store(ino, Ordering::Relaxed);
+        CONTROL_OWNED.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Clears the claim and its identity so a later atfork will not close fd 3.
+fn forget_control_fd() {
+    CONTROL_OWNED.store(false, Ordering::Relaxed);
+    CONTROL_DEV.store(0, Ordering::Relaxed);
+    CONTROL_INO.store(0, Ordering::Relaxed);
 }
 
 /// Disarms the profiling timer. A host that calls `execve` WITHOUT forking (a
@@ -1374,8 +1624,44 @@ const CONTROL_FD: i32 = 3;
 /// buffered when the child looks. A stray inherited socket on the same descriptor
 /// says nothing and is ignored.
 const CONTROL_MAGIC: &[u8] = b"ELEPHC-MONITOR-1";
+/// The same marker, from a monitor that intends to POLL this process for
+/// snapshots rather than read its output at the end.
+///
+/// Same length as the plain one, so the peek that decides whether fd 3 is ours
+/// is unchanged — it reads a fixed sixteen bytes and compares. Written before
+/// the fork like the other, which is what makes this free of a race: the child
+/// cannot look before the parent has decided.
+///
+/// The distinction earns its keep by NOT starting a server for a run that will
+/// never ask. `--live` polls; the exact path spawns, waits for the program to
+/// end and reads its output, and a thread parked in `recv` for the whole of that
+/// is a thread nobody wanted.
+const CONTROL_MAGIC_LIVE: &[u8] = b"ELEPHC-MONITOR-L";
 /// Returned to the spawning monitor only after the marker was consumed.
 const CONTROL_ACK: &[u8] = b"ELEPHC-MONITOR-ACK-1";
+
+/// Whether the monitor that started this process said it would poll it.
+///
+/// Set by the marker check, read by init. A plain word rather than a return
+/// value because `control_fd_present` answers a yes/no question that three
+/// callers already depend on, and widening it would make every one of them
+/// carry a distinction only one of them uses.
+static POLLED: AtomicBool = AtomicBool::new(false);
+
+/// Whether this process claimed fd 3 as the live-control socket.
+///
+/// `FD_CLOEXEC` only closes the descriptor on `exec`. A `--web` worker is
+/// `fork` without `exec`, so it would otherwise keep a copy of the credential
+/// socket: the monitor would not see EOF when the master left, and every
+/// worker would hold the private channel. The atfork child hook closes the
+/// inherited fd when this flag is set, and only then — fd 3 is an ordinary
+/// number on an unmonitored binary.
+static CONTROL_OWNED: AtomicBool = AtomicBool::new(false);
+/// Device of the claimed control socket. Compared at fork so a reused fd 3
+/// is not closed.
+static CONTROL_DEV: AtomicU64 = AtomicU64::new(0);
+/// Inode of the claimed control socket. Paired with `CONTROL_DEV`.
+static CONTROL_INO: AtomicU64 = AtomicU64::new(0);
 
 /// Whether this process was started by `elephc monitor`.
 ///
@@ -1418,9 +1704,11 @@ fn control_fd_present() -> bool {
             buf.len(),
             libc::MSG_PEEK | libc::MSG_DONTWAIT,
         );
-        if read != CONTROL_MAGIC.len() as isize || buf != CONTROL_MAGIC {
+        let polled = buf == CONTROL_MAGIC_LIVE;
+        if read != CONTROL_MAGIC.len() as isize || (buf != CONTROL_MAGIC && !polled) {
             return false;
         }
+        POLLED.store(polled, Ordering::Relaxed);
         // It is ours: consume the marker so nothing downstream reads it back.
         libc::recv(
             CONTROL_FD,
@@ -1432,12 +1720,30 @@ fn control_fd_present() -> bool {
         // socketpair creator, reached and accepted the activation point. The
         // exact monitor uses this to distinguish a valid empty selective window
         // from a clean run whose control channel was never recognised.
-        libc::send(
+        let acked = libc::send(
             CONTROL_FD,
             CONTROL_ACK.as_ptr() as *const libc::c_void,
             CONTROL_ACK.len(),
             libc::MSG_NOSIGNAL,
-        ) == CONTROL_ACK.len() as isize
+        ) == CONTROL_ACK.len() as isize;
+        // The parent cleared CLOEXEC so fd 3 survived exec. Once the marker is
+        // ours, it must not leak into children: possession of this socket is
+        // the credential. CLOEXEC covers fork+exec (`popen`); the atfork
+        // child hook closes the fd for fork-only `--web` workers.
+        set_cloexec(CONTROL_FD);
+        remember_control_fd();
+        acked
+    }
+}
+
+/// Marks `fd` close-on-exec. Best-effort: a failure here does not undo a
+/// handshake that already consumed the marker.
+fn set_cloexec(fd: i32) {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+        }
     }
 }
 
@@ -1703,9 +2009,65 @@ fn decode_hex(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Everything carried out of the ring so far.
+///
+/// Shared by control-channel and endpoint readers, never by the signal handler.
+/// The lock covers ticket selection, folding and publication as one transaction.
+static CARRIED: std::sync::Mutex<Carried> = std::sync::Mutex::new(Carried::new());
+
+/// The cumulative half of the answer: stacks, allocation weights, and the count
+/// of samples that produced a walkable stack.
+struct Carried {
+    folded: std::collections::BTreeMap<Vec<String>, u64>,
+    allocated: std::collections::BTreeMap<Vec<String>, u64>,
+    valid: u64,
+    /// First ticket not yet included in these totals; protected by the same lock.
+    through: u64,
+}
+
+impl Carried {
+    /// Creates an empty accumulator before any ring tickets have been consumed.
+    const fn new() -> Self {
+        Self {
+            folded: std::collections::BTreeMap::new(),
+            allocated: std::collections::BTreeMap::new(),
+            valid: 0,
+            through: 0,
+        }
+    }
+}
+
+/// Adds one fold's worth of ring to what has been carried, and answers the
+/// running total.
+///
+/// The caller holds the accumulator lock from ticket selection through publication.
+fn carry_forward(
+    carried: &mut Carried,
+    taken: u64,
+    folded: std::collections::BTreeMap<Vec<String>, u64>,
+    allocated: std::collections::BTreeMap<Vec<String>, u64>,
+    valid: u64,
+) -> (
+    std::collections::BTreeMap<Vec<String>, u64>,
+    std::collections::BTreeMap<Vec<String>, u64>,
+    u64,
+) {
+    for (stack, count) in folded {
+        *carried.folded.entry(stack).or_default() += count;
+    }
+    for (stack, allocs) in allocated {
+        *carried.allocated.entry(stack).or_default() += allocs;
+    }
+    carried.valid += valid;
+    carried.through = taken;
+    (carried.folded.clone(), carried.allocated.clone(), carried.valid)
+}
+
 /// Renders the current folded profile for the endpoint responder.
 pub fn current_folded_profile() -> Option<String> {
-    unsafe { folded_profile() }
+    // Cumulative: this is the answer `monitor --live` subtracts one window from
+    // the previous, and the endpoint's own contract says the same.
+    unsafe { folded_profile_with(true) }
 }
 
 /// How long the first sampled answer waits for collection to produce something.
@@ -1800,6 +2162,23 @@ pub unsafe extern "C" fn elephc_probe_dump() {
 /// a concurrent handler may add a sample mid-read (endpoint) — a raced slot
 /// only skews one count, never corrupts memory.
 unsafe fn folded_profile() -> Option<String> {
+    folded_profile_with(false)
+}
+
+/// The same fold, optionally CUMULATIVE across calls.
+///
+/// `cumulative` is what the snapshot answer needs and the exit dump does not.
+/// The dump reads once, with the timer disarmed, and "everything still in the
+/// ring" is exactly right for it; a reader that asks every window needs the
+/// total, because the ring stops growing the moment its head wraps and a
+/// consumer subtracting one answer from the last then sees nothing at all.
+///
+/// The raw dump stays independent of the snapshot accumulator. Repeated reads
+/// without new samples are idempotent in either mode.
+///
+/// # Safety
+/// As `folded_profile`.
+unsafe fn folded_profile_with(cumulative: bool) -> Option<String> {
     let table = TABLE_PTR.load(Ordering::Relaxed) as *const SymtabEntry;
     let table_len = TABLE_LEN.load(Ordering::Relaxed);
     if table.is_null() || table_len == 0 {
@@ -1819,10 +2198,33 @@ unsafe fn folded_profile() -> Option<String> {
         .collect();
     symbols.sort_by_key(|(address, _)| *address);
 
+    // Readers share both the totals and the ticket watermark. Hold one lock
+    // across selection, folding and publication so concurrent endpoint/control
+    // readers cannot carry the same interval twice. A poisoned transaction has
+    // no trustworthy totals; return no profile instead of publishing a false one.
+    let mut carried = if cumulative { Some(CARRIED.lock().ok()?) } else { None };
     let head = region_head()?;
     let base = REGION.load(Ordering::Relaxed);
-    let taken = head.load(Ordering::Relaxed) as usize;
-    let available = taken.min(RING_SLOTS);
+    let taken = head.load(Ordering::Relaxed);
+    // Fold by TICKET, not by slot, and only the tickets not folded already.
+    //
+    // The ring holds the last `RING_SLOTS` samples, so folding all of it answers
+    // "the recent window" — which stops growing the moment the head wraps. The
+    // answer is documented as CUMULATIVE and `monitor --live` subtracts one from
+    // the previous on that basis, so past 8192 samples every delta went zero or
+    // negative and the live table emptied while the program ran flat out. What
+    // is cumulative is not the ring; it is what has been carried out of it.
+    //
+    // A slot caught mid-write is skipped, as it always was, and the watermark
+    // still advances past it: one sample lost rather than the same slot counted
+    // again on the next read. The reader that falls more than a full ring behind
+    // loses what was overwritten, which no fixed ring can avoid.
+    let oldest_live = taken.saturating_sub(RING_SLOTS as u64);
+    let from = if let Some(carried) = carried.as_ref() {
+        carried.through.max(oldest_live)
+    } else {
+        oldest_live
+    };
     let mut valid = 0u64;
     let mut folded: std::collections::BTreeMap<Vec<String>, u64> = std::collections::BTreeMap::new();
     // Allocations charged to each stack, kept apart from the sample counts: they
@@ -1830,7 +2232,8 @@ unsafe fn folded_profile() -> Option<String> {
     // profile whose bars mean two things at once.
     let mut allocated: std::collections::BTreeMap<Vec<String>, u64> =
         std::collections::BTreeMap::new();
-    for index in 0..available {
+    for ticket in from..taken {
+        let index = (ticket % RING_SLOTS as u64) as usize;
         // Acquire the depth gate before reading the PCs the handler stored; a
         // torn or in-flight slot with depth 0 is skipped.
         // Read the sequence first: odd means a handler is inside this slot right
@@ -1887,6 +2290,15 @@ unsafe fn folded_profile() -> Option<String> {
         }
         *folded.entry(stack).or_default() += 1;
     }
+    // Carried out of the ring before anything is rendered, so what the answer
+    // reports is every sample since the process started and not merely the ones
+    // still in the buffer.
+    let (folded, allocated, valid) = if let Some(carried) = carried.as_mut() {
+        carry_forward(carried, taken, folded, allocated, valid)
+    } else {
+        (folded, allocated, valid)
+    };
+    drop(carried);
     // A dormant binary took no samples and recorded no events. Saying
     // "elephc-probe-samples: 0" would still announce a profiler to anyone
     // reading the program's own stderr, which is exactly what
@@ -2071,9 +2483,12 @@ mod tests {
 
             let verdict = super::control_fd_present();
 
+            // Read the claimed descriptor, not `ours`. send(ours) lands on
+            // `theirs`, which is what was dup2'd onto fd 3; recving `ours`
+            // only passed when socketpair itself allocated fd 3.
             let mut buf = [0u8; 256];
             let left = libc::recv(
-                ours,
+                super::CONTROL_FD,
                 buf.as_mut_ptr() as *mut libc::c_void,
                 buf.len(),
                 libc::MSG_DONTWAIT,
@@ -2141,6 +2556,10 @@ mod tests {
             );
             let left = if left < 0 { 0 } else { left as usize };
 
+            // CLOEXEC is a descriptor flag on the fd the handshake just claimed
+            // (fd 3), not on `theirs`. Check before restoring the original fd 3.
+            let flags = libc::fcntl(super::CONTROL_FD, libc::F_GETFD);
+
             if saved >= 0 {
                 libc::dup2(saved, super::CONTROL_FD);
                 libc::close(saved);
@@ -2154,6 +2573,12 @@ mod tests {
             assert_eq!(ack_len, super::CONTROL_ACK.len() as isize);
             assert_eq!(ack, super::CONTROL_ACK, "activation must be acknowledged");
             assert_eq!(&buf[..left], trailing, "the marker must be consumed, and only it");
+            assert!(flags >= 0, "control fd must still be open after the handshake");
+            assert_ne!(
+                flags & libc::FD_CLOEXEC,
+                0,
+                "the credential socket must not survive into fork/popen children"
+            );
         }
     }
 
@@ -2479,6 +2904,214 @@ mod tests {
             !mid_write.as_deref().unwrap_or_default().contains(name),
             "a slot a handler is inside must not fold, however readable it looks: {mid_write:?}"
         );
+    }
+
+    /// The cumulative answer keeps growing after the ring's head has lapped.
+    ///
+    /// The ring holds the last `RING_SLOTS` samples, so folding all of it
+    /// answers "the recent window" — and `monitor --live` subtracts one answer
+    /// from the previous on the documented promise that it is CUMULATIVE. Past
+    /// 8192 samples the count stopped growing, so every later delta was zero or
+    /// negative and the live table emptied while the program ran flat out. The
+    /// CLI fixtures run six seconds at about a kilohertz and never reach the
+    /// lap, which is why nothing saw it.
+    ///
+    /// Staged rather than run for real: a fixture long enough to take 8192
+    /// samples is eight seconds of CPU in a unit test, and what is under test is
+    /// the arithmetic across the lap, not the sampler.
+    #[test]
+    fn a_lapped_ring_still_answers_a_growing_total() {
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let name = "hot\0";
+        let end = "<end>\0";
+        let symbols = [
+            SymtabEntry {
+                address: 0x1000,
+                name_ptr: name.as_ptr() as u64,
+                name_len: name.len() as u64,
+            },
+            SymtabEntry {
+                address: 0x2000,
+                name_ptr: end.as_ptr() as u64,
+                name_len: end.len() as u64,
+            },
+        ];
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let saved_ptr = TABLE_PTR.swap(symbols.as_ptr() as usize, Ordering::Relaxed);
+        let saved_len = TABLE_LEN.swap(symbols.len(), Ordering::Relaxed);
+        let saved_stopped = STOPPED.swap(false, Ordering::Relaxed);
+        reset_carried();
+
+        let answers = unsafe {
+            let head = region_head().expect("mapped");
+
+            // One sample, taken as ticket 0 and still in the ring.
+            head.store(1, Ordering::Relaxed);
+            region_word(base, 0, 0).store(1, Ordering::Release);
+            region_word(base, 0, PC_WORD0).store(0x1000, Ordering::Relaxed);
+            region_word(base, 0, SEQ_WORD).store(slot_seq_settled(0), Ordering::Release);
+            let first = folded_profile_with(true);
+
+            // Asked AGAIN with nothing new taken. The total must not move: a
+            // sample still sitting in the ring has already been carried, and a
+            // fold that re-reads it counts it twice — which grows the total for
+            // the wrong reason and would hide the lap defect from this test.
+            let asked_twice = folded_profile_with(true);
+
+            // The head has now lapped: `RING_SLOTS` further samples were taken
+            // and the newest of them landed back in slot 0, overwriting the one
+            // above. All the reader can still SEE is one sample; the total it
+            // must report is two.
+            let lapped = RING_SLOTS as u64 + 1;
+            head.store(lapped, Ordering::Relaxed);
+            region_word(base, 0, 0).store(1, Ordering::Release);
+            region_word(base, 0, PC_WORD0).store(0x1000, Ordering::Relaxed);
+            region_word(base, 0, SEQ_WORD).store(slot_seq_settled(lapped - 1), Ordering::Release);
+            let after_lap = folded_profile_with(true);
+            (first, asked_twice, after_lap)
+        };
+
+        REGION.store(saved_region, Ordering::Relaxed);
+        TABLE_PTR.store(saved_ptr, Ordering::Relaxed);
+        TABLE_LEN.store(saved_len, Ordering::Relaxed);
+        STOPPED.store(saved_stopped, Ordering::Relaxed);
+        reset_carried();
+
+        let (first, asked_twice, after_lap) = answers;
+        let first = first.unwrap_or_default();
+        let asked_twice = asked_twice.unwrap_or_default();
+        let after_lap = after_lap.unwrap_or_default();
+        assert!(
+            first.contains("elephc-probe-samples: 1"),
+            "the first answer counts the one sample taken: {first}"
+        );
+        assert!(
+            asked_twice.contains("elephc-probe-samples: 1"),
+            "asking twice must not count the same sample twice: {asked_twice}"
+        );
+        assert!(
+            after_lap.contains("elephc-probe-samples: 2"),
+            "a lapped ring must still answer a GROWING total; a count that stops at what the \
+             buffer still holds is what emptied the live table: {after_lap}"
+        );
+        // Matched on the tail rather than on `"hot 2"`: the fixture's symbol
+        // names carry their C terminator, so the folded line reads `hot\0 2`.
+        assert!(
+            after_lap
+                .lines()
+                .any(|line| line.starts_with("elephc-probe: ") && line.ends_with(" 2")),
+            "and the per-stack weight has to grow with it: {after_lap}"
+        );
+    }
+
+    /// A refused thread spawn must expose EOF, not an unserved socket that times out.
+    #[test]
+    fn failed_control_thread_start_disconnects_the_monitor() {
+        use std::io::{Read, Write};
+        use std::os::fd::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (mut monitor, mut server) = UnixStream::pair().unwrap();
+        monitor.set_read_timeout(Some(std::time::Duration::from_millis(200))).unwrap();
+        server.write_all(&CONTROL_ACK).unwrap();
+        start_control_channel(server.into_raw_fd(), || {
+            Err(std::io::Error::from_raw_os_error(libc::EAGAIN))
+        });
+        let mut ack = [0; CONTROL_ACK.len()];
+        monitor.read_exact(&mut ack).unwrap();
+        assert_eq!(ack, CONTROL_ACK);
+        let mut byte = [0];
+        assert_eq!(monitor.read(&mut byte).expect("startup failure must not become a timeout"), 0);
+    }
+
+    /// Successful startup retains the peer so the server can answer its monitor.
+    #[test]
+    fn successful_control_thread_start_keeps_the_channel_open() {
+        use std::io::{Read, Write};
+        use std::os::fd::{FromRawFd, IntoRawFd};
+        use std::os::unix::net::UnixStream;
+
+        let (mut monitor, server) = UnixStream::pair().unwrap();
+        monitor.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+        let fd = server.into_raw_fd();
+        start_control_channel(fd, || {
+            std::thread::Builder::new().spawn(move || {
+                // SAFETY: ownership transfers only after the server thread starts.
+                let mut server = unsafe { UnixStream::from_raw_fd(fd) };
+                let mut request = [0];
+                server.read_exact(&mut request).unwrap();
+                server.write_all(&request).unwrap();
+            })
+        });
+        monitor.write_all(b"S").unwrap();
+        let mut answer = [0];
+        monitor.read_exact(&mut answer).unwrap();
+        assert_eq!(&answer, b"S");
+    }
+
+    /// Concurrent endpoint/control readers must count each settled ticket once,
+    /// including both sample counts and allocation weights after a full ring.
+    #[test]
+    fn concurrent_readers_carry_each_ring_ticket_once() {
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let name = "concurrent_hot";
+        let end = "<end>";
+        let symbols = [
+            SymtabEntry { address: 0x1000, name_ptr: name.as_ptr() as u64, name_len: name.len() as u64 },
+            SymtabEntry { address: 0x2000, name_ptr: end.as_ptr() as u64, name_len: end.len() as u64 },
+        ];
+        let mut region = vec![0u64; REGION_BYTES / 8];
+        let base = region.as_mut_ptr() as usize;
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let saved_ptr = TABLE_PTR.swap(symbols.as_ptr() as usize, Ordering::Relaxed);
+        let saved_len = TABLE_LEN.swap(symbols.len(), Ordering::Relaxed);
+        reset_carried();
+        unsafe {
+            for ticket in 0..RING_SLOTS {
+                region_word(base, ticket, 0).store(1, Ordering::Release);
+                region_word(base, ticket, 2).store(3, Ordering::Relaxed);
+                region_word(base, ticket, PC_WORD0).store(0x1000, Ordering::Relaxed);
+                region_word(base, ticket, SEQ_WORD)
+                    .store(slot_seq_settled(ticket as u64), Ordering::Release);
+            }
+            region_head().expect("mapped").store(RING_SLOTS as u64, Ordering::Relaxed);
+        }
+        let barrier = &std::sync::Barrier::new(4);
+        let answers = std::thread::scope(|scope| {
+            let readers: Vec<_> = (0..4)
+                .map(|_| scope.spawn(move || {
+                    barrier.wait();
+                    current_folded_profile()
+                }))
+                .collect();
+            readers.into_iter().map(|reader| reader.join().unwrap()).collect::<Vec<_>>()
+        });
+        let serial = current_folded_profile();
+        REGION.store(saved_region, Ordering::Relaxed);
+        TABLE_PTR.store(saved_ptr, Ordering::Relaxed);
+        TABLE_LEN.store(saved_len, Ordering::Relaxed);
+        reset_carried();
+        for answer in answers.into_iter().chain([serial]) {
+            let answer = answer.expect("published symbols");
+            for expected in [
+                format!("elephc-probe-samples: {RING_SLOTS}"),
+                format!("elephc-probe: {name} {RING_SLOTS}"),
+                format!("elephc-probe-alloc: {name} {}", RING_SLOTS * 3),
+            ] {
+                assert!(answer.lines().any(|line| line == expected), "{answer}");
+            }
+        }
+    }
+
+    /// Clears what previous folds carried, so one test's samples are not another
+    /// test's total. The accumulator is process-wide by design.
+    fn reset_carried() {
+        if let Ok(mut carried) = CARRIED.lock() {
+            *carried = Carried::new();
+        }
     }
 
     /// Two writers a lap apart cannot agree on a settled value.
@@ -3315,6 +3948,9 @@ mod tests {
             elephc_probe_note_io();
         }
         elephc_probe_note_wait(2_290_874);
+        elephc_probe_note_network();
+        elephc_probe_note_network();
+        elephc_probe_note_network_wait(33);
 
         let id = unsafe { intern_route("GET /orders") };
         assert!(id > 0, "the route table must hand out a 1-based id");
@@ -3322,6 +3958,8 @@ mod tests {
         elephc_probe_note_io();
         elephc_probe_note_io();
         elephc_probe_note_wait(1_000);
+        elephc_probe_note_network();
+        elephc_probe_note_network_wait(9);
 
         let report = event_report(base);
         assert!(
@@ -3332,8 +3970,16 @@ mod tests {
             report.contains("elephc-probe-io: GET /orders ops=2 wait_ns=1000"),
             "{report}"
         );
-        // Routes that saw no I/O must not produce an empty row.
-        assert_eq!(report.lines().count(), 2, "{report}");
+        assert!(
+            report.contains("elephc-probe-network: <untagged> ops=2 wait_ns=33"),
+            "{report}"
+        );
+        assert!(
+            report.contains("elephc-probe-network: GET /orders ops=1 wait_ns=9"),
+            "{report}"
+        );
+        // Routes that saw no monitored event must not produce an empty row.
+        assert_eq!(report.lines().count(), 4, "{report}");
 
         REGION.store(0, Ordering::Relaxed);
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
@@ -3341,6 +3987,8 @@ mod tests {
         // With no region mapped the entry points are inert rather than unsafe.
         elephc_probe_note_io();
         elephc_probe_note_wait(1);
+        elephc_probe_note_network();
+        elephc_probe_note_network_wait(1);
         assert!(event_report(0).is_empty());
     }
 
@@ -3354,6 +4002,7 @@ mod tests {
         REGION.store(base, Ordering::Relaxed);
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         let was_asked = ASKED.swap(false, Ordering::Relaxed);
+        assert_eq!(elephc_probe_event_active(), 0);
 
         for _ in 0..7 {
             elephc_probe_note_io();
@@ -3362,6 +4011,7 @@ mod tests {
         assert!(event_report(base).is_empty(), "pre-ask callbacks must be inert");
 
         unsafe { region_asked(base) }.store(ASK_INITIALIZING, Ordering::Release);
+        assert_eq!(elephc_probe_event_active(), 0);
         elephc_probe_note_io();
         elephc_probe_note_wait(100);
         assert!(
@@ -3374,20 +4024,27 @@ mod tests {
         // publishes ACTIVE, so legacy/stale bytes cannot leak into this window.
         unsafe { event_word(base, 0, 0) }.store(11, Ordering::Relaxed);
         unsafe { event_word(base, 0, 1) }.store(1_100, Ordering::Relaxed);
+        unsafe { event_word(base, 0, 2) }.store(12, Ordering::Relaxed);
+        unsafe { event_word(base, 0, 3) }.store(1_200, Ordering::Relaxed);
         activate_shared_window(base);
+        assert_eq!(elephc_probe_event_active(), 1);
         elephc_probe_note_io();
         elephc_probe_note_io();
         elephc_probe_note_wait(23);
+        elephc_probe_note_network();
+        elephc_probe_note_network_wait(29);
         let report = event_report(base);
         assert_eq!(
             report,
-            "elephc-probe-io: <untagged> ops=2 wait_ns=23\n",
+            "elephc-probe-io: <untagged> ops=2 wait_ns=23\n\
+             elephc-probe-network: <untagged> ops=1 wait_ns=29\n",
             "the first report must contain only the active window"
         );
 
         ASKED.store(was_asked, Ordering::Relaxed);
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         REGION.store(0, Ordering::Relaxed);
+        assert_eq!(elephc_probe_event_active(), 0);
     }
 
     #[test]
@@ -3483,3 +4140,6 @@ mod tests {
         REGION.store(0, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod process_tests;

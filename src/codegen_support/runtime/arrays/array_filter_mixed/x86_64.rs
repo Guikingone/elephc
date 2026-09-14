@@ -228,6 +228,13 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                // return boxed filtered array
 
     emitter.label("__rt_array_filter_mixed_invalid_mode_x86");
+    // The shared ValueError thrower opens its own frame assuming it was spliced at a function
+    // ENTRY, where System V leaves rsp 8 bytes past a 16-byte boundary. This helper is 168
+    // bytes into its frame here, so the throw path first returns the stack to the entry state
+    // — it never comes back, and an unaligned `__rt_heap_alloc` below faults once the
+    // allocator reaches real C.
+    emitter.instruction("mov rsp, rbp");                                       // drop this helper's spill slots before the shared throw sequence
+    emitter.instruction("pop rbp");                                            // restore the caller frame pointer, leaving rsp as it was at entry
     value_error::emit_throw_value_error_x86_64(
         emitter,
         "_array_filter_mode_msg",

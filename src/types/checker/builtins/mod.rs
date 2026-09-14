@@ -10,6 +10,7 @@
 
 pub(crate) mod arrays;
 mod callables;
+pub(crate) use callables::callback_dummy_arg_for_type;
 pub(crate) mod catalog;
 pub(crate) mod io;
 mod late_bound;
@@ -24,8 +25,9 @@ use super::Checker;
 
 pub(crate) use catalog::{
     all_supported_builtin_function_names, canonical_builtin_function_name,
-    is_php_visible_builtin_function_for_profile, is_supported_builtin_function,
-    strict_php_hidden_builtin, supported_builtin_function_names_for_profile,
+    is_php_visible_builtin_function_for_profile, is_php_visible_builtin_function_for_target,
+    is_supported_builtin_function, strict_php_hidden_builtin,
+    supported_builtin_function_names_for_profile, supported_builtin_function_names_for_target,
 };
 #[cfg(test)]
 pub(crate) use catalog::is_php_visible_builtin_function;
@@ -103,11 +105,16 @@ impl Checker {
     /// An argument past the fixed parameters maps onto the variadic entry, which carries
     /// the shared contract's own passing mode — `sscanf("12", "%d", "not writable")` has
     /// no storage behind its third argument either.
+    ///
+    /// `plan` is the call's normalized argument plan, and an argument it MATERIALIZED from a
+    /// declared default is skipped: `preg_match($p, $s)` reaches here with a literal in the
+    /// `$matches` position that the caller never wrote, and PHP has nothing to complain about.
     fn validate_registry_by_ref_args(
         &mut self,
         def: &crate::builtins::registry::BuiltinDef,
         name: &str,
         args: &[Expr],
+        plan: Option<&crate::types::call_args::CallArgPlan>,
     ) -> Result<(), CompileError> {
         let regular_param_count = def
             .params
@@ -122,6 +129,12 @@ impl Checker {
                 continue;
             };
             if !def.ref_params.get(param_index).copied().unwrap_or(false) {
+                continue;
+            }
+            if matches!(
+                plan.and_then(|plan| plan.regular_args.get(arg_index)),
+                Some(crate::types::call_args::PlannedRegularArg::Default(_))
+            ) {
                 continue;
             }
             // `sort($a)`, `preg_match(..., $m)` and friends reach this local through its
@@ -178,6 +191,12 @@ impl Checker {
         // eagerly inferred by argument normalization. Their handlers inspect the
         // raw operands directly.
         let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        if self.has_function_decl_folded(name)
+            && crate::builtins::registry::lookup(name).is_some()
+            && !catalog::builtin_is_available_for_target(name, self.target)
+        {
+            return Ok(None);
+        }
         // `--strict-php` hides extension builtins entirely: the call must fall
         // through to user-function resolution and the standard undefined-function
         // diagnostics, mirroring PHP where these names do not exist. This must
@@ -188,16 +207,19 @@ impl Checker {
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
         let normalized_args;
+        let mut builtin_arg_plan = None;
         let args = if let Some(sig) =
             (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
         {
-            normalized_args = self.normalize_builtin_call_args(
+            let plan = self.plan_builtin_call_args(
                 &sig,
                 args,
                 span,
                 &format!("Builtin '{}'", name),
                 env,
             )?;
+            normalized_args = plan.normalized_args();
+            builtin_arg_plan = Some(plan);
             normalized_args.as_slice()
         } else {
             args
@@ -222,7 +244,18 @@ impl Checker {
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
-            self.validate_registry_by_ref_args(def, name, args)?;
+            // A builtin the registry knows but this target does not provide is a hard error,
+            // not a fallthrough: the call cannot lower.
+            if !catalog::builtin_is_available_for_target(name, self.target) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "{}() is not available for the {} target",
+                        def.name, self.target
+                    ),
+                ));
+            }
+            self.validate_registry_by_ref_args(def, name, args, builtin_arg_plan.as_ref())?;
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };
@@ -315,6 +348,7 @@ impl Checker {
                 checker: self,
                 name,
                 args,
+                argument_plan: builtin_arg_plan.as_ref(),
                 span,
                 env,
             };

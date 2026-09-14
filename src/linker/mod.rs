@@ -72,9 +72,9 @@ pub(crate) fn bridges_in(
     bridges::bridges_in(link_libraries)
 }
 
-/// Maps one bridge library name to its canonical PHP extension, when distinct.
-pub(crate) fn php_extension_for_lib(lib_name: &str) -> Option<&'static str> {
-    bridges::php_extension_for_lib(lib_name)
+/// Maps one bridge library name to the PHP extensions identified by linking that bridge.
+pub(crate) fn php_extensions_for_lib(lib_name: &str) -> &'static [&'static str] {
+    bridges::php_extensions_for_lib(lib_name)
 }
 
 /// Returns native libraries required by the selected optional PDO bridge profile.
@@ -403,12 +403,7 @@ pub(crate) fn link_with_plan(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<(), LinkError> {
-    let mut resolved = bridges::resolve(plan, forced_whole_archive)?;
-    if target.platform == Platform::MacOS {
-        for library in std::mem::take(&mut resolved.macos_libraries) {
-            resolved.plan.push(LinkItem::named_runtime(library));
-        }
-    }
+    let resolved = bridges::resolve(plan, forced_whole_archive, target.platform)?;
     let prepared = (target.platform == Platform::MacOS)
         .then(|| archive_dedup::prepare(&resolved.plan));
     let render_plan = prepared

@@ -142,7 +142,12 @@ fn emit_filter_validate_int_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: filter_validate_int ---");
     emitter.label_global("__rt_filter_validate_int");
 
-    emitter.instruction("call __rt_filter_trim_ws");                            // trim PHP-filter whitespace: rax=ptr, rdx=len (trimmed); x86_64 `call`/`ret` need no explicit frame here
+    // System V wants rsp 16-byte aligned at the `call`, and this helper is entered with the
+    // caller's return address already pushed, so eight bytes of padding is the whole frame it
+    // needs — `__rt_filter_trim_ws` takes its arguments in registers.
+    emitter.instruction("sub rsp, 8");                                          // realign the stack for the System V call below
+    emitter.instruction("call __rt_filter_trim_ws");                            // trim PHP-filter whitespace: rax=ptr, rdx=len (trimmed)
+    emitter.instruction("add rsp, 8");                                          // release the alignment padding
 
     emitter.instruction("test rdx, rdx");                                       // an empty (post-trim) string is never a valid integer
     emitter.instruction("je __rt_filter_validate_int_fail_x86_64");             // reject empty input

@@ -2,21 +2,19 @@
 title: "scandir()"
 description: "Lists files and directories inside the specified path."
 sidebar:
-  order: 158
+  order: 299
 ---
 
 ## scandir()
 
 ```php
-function scandir(string $directory, int $sorting_order = 0, mixed $context = null): array
+function scandir(string $directory): array
 ```
 
 Lists files and directories inside the specified path.
 
 **Parameters**:
 - `$directory` (`string`)
-- `$sorting_order` (`int`), default `0`, optional
-- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `array`
 

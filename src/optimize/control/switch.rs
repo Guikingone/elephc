@@ -28,15 +28,36 @@ pub(crate) fn prune_switch_stmt(
     strict_types: bool,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
-    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
-        cases
-            .into_iter()
-            .map(|(patterns, body)| {
-                (patterns.into_iter().map(prune_expr).collect(), prune_block(body))
-            })
-            .collect(),
-    )));
-    let default = normalize_optional_block(default.map(prune_block));
+    // A `default` written between cases falls through into the case after it, which every
+    // structural rewrite below (empty-case folding, constant materialization, the single-case
+    // `if`) models as "default runs last". Such a switch only gets its bodies pruned; EIR
+    // lowering places the bodies at their source positions.
+    let default_is_middle = default
+        .as_ref()
+        .is_some_and(|body| !switch_default_runs_last(&cases, body));
+    let cases: Vec<(Vec<Expr>, Vec<Stmt>)> = cases
+        .into_iter()
+        .map(|(patterns, body)| {
+            (patterns.into_iter().map(prune_expr).collect(), prune_block(body))
+        })
+        .collect();
+    let default = default.map(prune_block);
+    if default_is_middle {
+        return vec![Stmt {
+            kind: StmtKind::Switch {
+                subject,
+                cases,
+                default,
+            },
+            span,
+            source_mode,
+            strict_types,
+            attributes: Vec::new(),
+        }];
+    }
+    let (cases, default) = strip_final_switch_break(cases, default);
+    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(cases)));
+    let default = normalize_optional_block(default);
 
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
         return expr_to_effect_stmt(subject);
@@ -117,6 +138,32 @@ pub(crate) fn prune_switch_stmt(
     } else {
         Vec::new()
     }
+}
+
+/// Drops the trailing `break` of the body that runs last in a `switch`: the `default` body when
+/// there is one and it is last in source order, otherwise the last case body. Falling off that
+/// body leaves the `switch` exactly as the `break` does, so the terminator only adds an extra
+/// exit edge for later passes. A `default` written between cases keeps its `break` (falling off
+/// it would enter the next case), and so does everything else in that switch. The strip happens
+/// before case normalization so a case emptied this way is folded like any other empty trailing
+/// case.
+fn strip_final_switch_break(
+    mut cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
+    if let Some(default_body) = default {
+        if !switch_default_runs_last(&cases, &default_body) {
+            return (cases, Some(default_body));
+        }
+        return (
+            cases,
+            Some(strip_trailing_terminator(default_body, TailTerminator::SwitchBreak)),
+        );
+    }
+    if let Some((_, body)) = cases.last_mut() {
+        *body = strip_trailing_terminator(std::mem::take(body), TailTerminator::SwitchBreak);
+    }
+    (cases, None)
 }
 
 /// Returns whether rewriting this single-case switch into an `if` would put a node the CHECKER

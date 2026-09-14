@@ -2,7 +2,7 @@
 title: "class_implements() — internals"
 description: "Compiler internals for class_implements(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 79
+  order: 78
 ---
 
 ## `class_implements()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/class_implements.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/class_implements.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

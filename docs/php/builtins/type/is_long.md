@@ -2,7 +2,7 @@
 title: "is_long()"
 description: "Alias of is_int()."
 sidebar:
-  order: 522
+  order: 870
 ---
 
 ## is_long()

@@ -2,7 +2,7 @@
 title: "inet_ntop() — internals"
 description: "Compiler internals for inet_ntop(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 436
+  order: 791
 ---
 
 ## `inet_ntop()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/inet_ntop.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/inet_ntop.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

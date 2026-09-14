@@ -281,6 +281,17 @@ pub(in crate::interpreter) fn eval_new_object_result(
         return eval_dynamic_class_new_object(&class, args, context, scope, values)
             .map_err(|status| trace_new_object_error("eval_class", class_name, status, context));
     }
+    // `CURLFile`/`CURLStringFile` DELIBERATELY FALL THROUGH to the native-class fallback
+    // below, and that is the whole point rather than an oversight. They used to be
+    // intercepted here alongside the curl multi/share interfaces, on a "TWO DISTINCT OBJECT
+    // SPACES" argument that does not apply to them: unlike every other curl class, they are
+    // PURE PHP DATA CLASSES wrapping no native handle at all
+    // (`crate::curl_prelude`'s own comment above their declarations), so the real AOT class
+    // an `elephc_curl`-linked program already carries works correctly inside `eval()` — its
+    // properties read, its getters and setters dispatch, and
+    // `crate::interpreter::builtins::curl::multipart` consumes exactly such an object when
+    // it walks a `CURLOPT_POSTFIELDS` array. The interception existed only because that
+    // walk did not, which made a constructible `CURLFile` a value nothing could use.
     // `new` IS AN AUTOLOAD TRIGGER IN PHP, and this path never was one. Nothing above consults a
     // loader: the reflection owners are handled first, then classes this context already declares,
     // and then allocation was attempted straight away. So a class only a registered autoloader
@@ -493,15 +504,15 @@ pub(super) fn eval_instanceof_expr(
     let value = eval_expr(value, context, scope, values)?;
     let result = match target {
         EvalInstanceOfTarget::ClassName(class_name) => {
-            let tag = values.type_tag(value)?;
             let target_class = eval_instanceof_static_target_name(class_name, context)?;
+            let tag = values.type_tag(value)?;
             if tag == EVAL_TAG_CALLABLE {
-                return values.bool_value(eval_callable_descriptor_is_closure(&target_class));
+                eval_callable_descriptor_is_closure(&target_class)
+            } else if tag == EVAL_TAG_OBJECT {
+                eval_instanceof_object_result(value, &target_class, context, values)?
+            } else {
+                false
             }
-            if tag != EVAL_TAG_OBJECT {
-                return values.bool_value(false);
-            }
-            eval_instanceof_object_result(value, &target_class, context, values)?
         }
         EvalInstanceOfTarget::Expr(target) => {
             let target = eval_expr(target, context, scope, values)?;

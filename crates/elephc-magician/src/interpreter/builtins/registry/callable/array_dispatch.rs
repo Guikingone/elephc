@@ -17,6 +17,17 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_evaluated_callable_with_call_array_args(
+                callback,
+                evaluated_args,
+                owner_context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
                 let parameter_is_by_ref = closure.function().parameter_is_by_ref();
@@ -86,7 +97,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
             called_class,
             native_class,
             bridge_scope,
-        } => match native_class {
+        } => {
+            eval_reject_fiber_object_switch_during_pcntl_dispatch(
+                *object,
+                method,
+                context,
+                values,
+            )?;
+            match native_class {
             Some(native_class) => eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                 *object,
                 native_class,
@@ -105,14 +123,22 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 context,
                 values,
             ),
-        },
+            }
+        }
         EvaluatedCallable::StaticMethod {
             class_name,
             method,
             called_class,
             native_class,
             bridge_scope,
-        } => match native_class {
+        } => {
+            eval_reject_fiber_switch_during_pcntl_dispatch(
+                class_name,
+                method,
+                context,
+                values,
+            )?;
+            match native_class {
             Some(native_class) => {
                 eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                     native_class,
@@ -145,6 +171,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                     values,
                 ),
             },
+            }
         },
     }
 }

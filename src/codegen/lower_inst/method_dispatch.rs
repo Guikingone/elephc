@@ -145,6 +145,7 @@ fn lower_native_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         &param_types,
         &ref_params,
         true,
+        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -160,8 +161,7 @@ fn lower_native_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
-    Ok(())
+    emit_ref_arg_writebacks(ctx, &call_args)
 }
 
 /// Returns whether a ReflectionFunction method depends on retained callable metadata.
@@ -490,6 +490,7 @@ pub(super) fn lower_mixed_method_candidate_call(
         &inst.operands,
         &param_types,
         &ref_params,
+        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -504,8 +505,7 @@ pub(super) fn lower_mixed_method_candidate_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &candidate.target)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args)
 }
 
 /// Validates boxed arguments against the concrete candidate's nominal object parameters.

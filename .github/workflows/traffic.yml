@@ -5,18 +5,36 @@ on:
     - cron: '0 23 * * *' # daily at 23:00 UTC
   workflow_dispatch:
 
+# The commit below is pushed with an Illegal Bot installation token, not the
+# workflow token, so `main` can stay protected: the App is the branch ruleset's
+# only bypass actor. The default token needs no write access here.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   collect:
     runs-on: ubuntu-latest
     steps:
+      # Pinned to a full commit SHA rather than the `v2` tag: this step receives
+      # the App private key, so a moved upstream tag would change the code that
+      # handles it without any diff to review here. Every workflow that mints a
+      # bot token pins the same SHA; bump them together.
+      - name: Mint Illegal Bot token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
+          private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Fetch and accumulate clone stats
         env:
-          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+          # The traffic API needs `Administration: read`, which the App grants;
+          # this replaces the personal access token this step used to carry.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           gh api repos/${{ github.repository }}/traffic/clones > /tmp/api_clones.json
 
@@ -58,8 +76,11 @@ jobs:
 
       - name: Generate static star history
         run: |
+          # The App token, not the workflow token: reading stargazers needs more
+          # than the `contents: read` this workflow's token now carries, and the
+          # App already holds the metadata access every other step here uses.
           set -o pipefail
-          GH_TOKEN="${{ github.token }}" gh api --paginate --slurp \
+          GH_TOKEN="${{ steps.app-token.outputs.token }}" gh api --paginate --slurp \
             -H "Accept: application/vnd.github.star+json" \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             "repos/${{ github.repository }}/stargazers?per_page=100" \
@@ -70,10 +91,17 @@ jobs:
                 --dark-output .github/traffic/star-history-dark.svg
 
       - name: Commit updated stats
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Unlike the workflow token, an App token *does* trigger workflows on
+          # push. `[skip ci]` keeps this nightly bookkeeping commit from starting
+          # a full CI run on main, matching the behaviour before the bot.
+          BOT_ID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
           git add .github/traffic/
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "chore: update repository stats"
+          git commit -m "chore: update repository stats [skip ci]"
           git push

@@ -130,6 +130,7 @@ pub(super) fn parse_error_plan() -> EvalAotPlan {
         scope_function_name: None,
         scope_eir_program: None,
         reads: BTreeSet::new(),
+        quiet_reads: BTreeSet::new(),
         array_read_constraints: BTreeSet::new(),
         assoc_array_read_constraints: BTreeSet::new(),
         float_predicate_read_constraints: BTreeSet::new(),
@@ -157,6 +158,11 @@ where
 {
     let mut scope_access = collect_scope_accesses(&program);
     scope_access.reads = collect_scope_reads_before_writes(&program);
+    let quiet_reads = scope_access
+        .reads
+        .difference(&scope_access.warning_reads)
+        .cloned()
+        .collect();
     let folded_program = with_implicit_eval_return(fold_static_builtin_calls_in_program(
         program.clone(),
     ));
@@ -209,6 +215,7 @@ where
             .map(|_| eir_scope_function_name(fragment, strict_php)),
         scope_eir_program,
         reads: scope_access.reads,
+        quiet_reads,
         array_read_constraints,
         assoc_array_read_constraints,
         float_predicate_read_constraints,

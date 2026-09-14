@@ -1113,6 +1113,8 @@ pub(crate) fn lower_closure_function(
         captures,
         parent.classes,
         parent.current_class.as_deref(),
+        parent.builtin_call_types,
+        &loop_storage_scope,
     );
     signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
@@ -1150,6 +1152,8 @@ pub(crate) fn lower_closure_function_with_context(
         captures,
         parent.classes,
         parent.current_class.as_deref(),
+        parent.builtin_call_types,
+        &loop_storage_scope,
     );
     signature.by_ref_return = by_ref_return;
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
@@ -1860,6 +1864,8 @@ fn closure_signature_from_ast(
     captures: &[(String, PhpType, bool)],
     classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
     current_class: Option<&str>,
+    builtin_call_types: &std::collections::HashMap<(String, Span), PhpType>,
+    loop_storage_scope: &str,
 ) -> FunctionSig {
     let parent_class = current_class.and_then(|class_name| {
         classes
@@ -1900,7 +1906,14 @@ fn closure_signature_from_ast(
     }
     if return_type.is_none() {
         if let Some(return_ty) =
-            direct_closure_return_type(body, captures, &signature.params, classes)
+            direct_closure_return_type(
+                body,
+                captures,
+                &signature.params,
+                classes,
+                builtin_call_types,
+            loop_storage_scope,
+            )
         {
             signature.return_type = return_ty;
         } else if !body_contains_value_return(body) {
@@ -1916,6 +1929,8 @@ fn direct_closure_return_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
+    builtin_call_types: &std::collections::HashMap<(String, Span), PhpType>,
+    loop_storage_scope: &str,
 ) -> Option<PhpType> {
     let [stmt] = body else {
         return None;
@@ -1923,7 +1938,14 @@ fn direct_closure_return_type(
     let StmtKind::Return(Some(expr)) = &stmt.kind else {
         return None;
     };
-    Some(direct_closure_return_expr_type(expr, captures, params, classes))
+    Some(direct_closure_return_expr_type(
+        expr,
+        captures,
+        params,
+        classes,
+        builtin_call_types,
+        loop_storage_scope,
+    ))
 }
 
 /// Returns a direct closure return expression type, consulting capture and parameter
@@ -1940,20 +1962,39 @@ fn direct_closure_return_expr_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
+    builtin_call_types: &std::collections::HashMap<(String, Span), PhpType>,
+    loop_storage_scope: &str,
 ) -> PhpType {
+    if matches!(expr.kind, ExprKind::FunctionCall { .. }) {
+        if let Some(ty) = builtin_call_types.get(&(loop_storage_scope.to_string(), expr.span)) {
+            return ty.clone();
+        }
+    }
     // An array literal returned directly is stamped with this inferred type and its elements
     // are coerced into it by `lower_return_expr`, so its slots must be resolved against the
     // closure signature instead of the syntactic integer default.
     if let ExprKind::ArrayLiteral(items) = &expr.kind {
         if !items.is_empty() {
             return PhpType::Array(Box::new(direct_closure_return_array_element_type(
-                items, captures, params, classes,
+                items,
+                captures,
+                params,
+                classes,
+                builtin_call_types,
+            loop_storage_scope,
             )));
         }
     }
     if let ExprKind::ArrayLiteralAssoc(pairs) = &expr.kind {
         if !pairs.is_empty() {
-            return direct_closure_return_assoc_literal_type(pairs, captures, params, classes);
+            return direct_closure_return_assoc_literal_type(
+                pairs,
+                captures,
+                params,
+                classes,
+                builtin_call_types,
+            loop_storage_scope,
+            );
         }
     }
     if let ExprKind::ScopedConstantAccess {
@@ -2027,12 +2068,21 @@ fn direct_closure_return_array_element_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
+    builtin_call_types: &std::collections::HashMap<(String, Span), PhpType>,
+    loop_storage_scope: &str,
 ) -> PhpType {
     let mut elem_ty = PhpType::Never;
     for item in items {
         elem_ty = crate::ir_lower::expr::merge_ir_indexed_element_type(
             elem_ty,
-            direct_closure_return_array_item_type(item, captures, params, classes),
+            direct_closure_return_array_item_type(
+                item,
+                captures,
+                params,
+                classes,
+                builtin_call_types,
+            loop_storage_scope,
+            ),
         );
     }
     elem_ty
@@ -2048,9 +2098,18 @@ fn direct_closure_return_array_item_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
+    builtin_call_types: &std::collections::HashMap<(String, Span), PhpType>,
+    loop_storage_scope: &str,
 ) -> PhpType {
     if let ExprKind::Spread(inner) = &item.kind {
-        let source = direct_closure_return_array_item_type(inner, captures, params, classes);
+        let source = direct_closure_return_array_item_type(
+            inner,
+            captures,
+            params,
+            classes,
+            builtin_call_types,
+        loop_storage_scope,
+        );
         return match source.codegen_repr() {
             PhpType::Array(elem) => match elem.codegen_repr() {
                 PhpType::Void | PhpType::Never => PhpType::Mixed,
@@ -2065,7 +2124,12 @@ fn direct_closure_return_array_item_type(
         return PhpType::Mixed;
     }
     crate::ir_lower::expr::ir_array_storage_type(direct_closure_return_expr_type(
-        item, captures, params, classes,
+        item,
+        captures,
+        params,
+        classes,
+        builtin_call_types,
+        loop_storage_scope,
     ))
 }
 
@@ -2081,6 +2145,8 @@ fn direct_closure_return_assoc_literal_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
+    builtin_call_types: &std::collections::HashMap<(String, Span), PhpType>,
+    loop_storage_scope: &str,
 ) -> PhpType {
     let mut key_ty = PhpType::Never;
     let mut value_ty = PhpType::Never;
@@ -2096,7 +2162,14 @@ fn direct_closure_return_assoc_literal_type(
         };
         value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(
             value_ty,
-            direct_closure_return_array_item_type(value, captures, params, classes),
+            direct_closure_return_array_item_type(
+                value,
+                captures,
+                params,
+                classes,
+                builtin_call_types,
+            loop_storage_scope,
+            ),
         );
     }
     PhpType::AssocArray {

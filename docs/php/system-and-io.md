@@ -16,8 +16,8 @@ sidebar:
 | `hrtime()` | `hrtime($as_number = false): array\|int` | High-resolution monotonic time (`CLOCK_MONOTONIC`). Returns `[seconds, nanoseconds]`, or the total nanoseconds as an int when `$as_number` is true — for benchmarking elapsed time. |
 | `sleep()` | `sleep($seconds): int` | Sleep for seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
-| `getenv()` | `getenv($name): string\|false` | Get an environment variable; a missing name returns `false`, while a present empty value returns `""` |
-| `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
+| `getenv()` | `getenv($name = null, $local_only = false): string\|array\|false` | Get one environment variable, or — with no argument — the whole environment as a string-keyed array. Answers `false` for a name that is not set, and `""` for one set to the empty string. `$local_only` is accepted and has no effect: there is no environment here separate from the process's |
+| `putenv()` | `putenv($assignment): bool` | Set an environment variable (`KEY=VALUE`), or remove it when the argument has no `=` |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
 | `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |
 | `constant()` | `constant($name): mixed` | Value of a global constant named by a string literal. AOT has no runtime constant table, so a dynamic name, a `Foo::BAR` class constant, and an unknown name are compile errors |
@@ -30,6 +30,75 @@ sidebar:
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
+
+## The environment and the CLI superglobals
+
+`getenv()` reads the process environment live, so a `putenv()` made earlier in the
+same program is visible to it:
+
+```php
+putenv("APP_MODE=debug");
+echo getenv("APP_MODE");        // debug
+putenv("APP_MODE");             // a bare name REMOVES the variable
+var_dump(getenv("APP_MODE"));   // bool(false)
+```
+
+Called with no argument it answers the whole environment as a string-keyed array,
+and the optional `$local_only` argument is accepted and has no effect — in the CLI
+SAPI there is no environment separate from the process's, so both forms agree:
+
+```php
+$env = getenv();
+echo count($env), "\n";
+echo $env["PATH"], "\n";
+```
+
+A value containing `=` is split on the **first** one, as PHP does, so a variable
+whose value holds an `=` keeps its name and its whole value.
+
+### `$_ENV` and `$_SERVER`
+
+Both superglobals carry the environment in an ordinary compiled CLI program, and
+`$_SERVER` carries PHP's own CLI keys on top of it:
+
+| Key | Value |
+|---|---|
+| `argv` | the program's arguments, like `$argv` |
+| `argc` | the argument count, like `$argc` |
+| `PHP_SELF`, `SCRIPT_NAME`, `SCRIPT_FILENAME`, `PATH_TRANSLATED` | `$argv[0]` — a compiled program has no script at run time, so the thing that was actually invoked is the closest true answer |
+| `DOCUMENT_ROOT` | `""` |
+| `REQUEST_TIME`, `REQUEST_TIME_FLOAT` | the start time, as `time()` and `microtime(true)` |
+
+The five request superglobals (`$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`,
+`$_REQUEST`) stay empty arrays, exactly as they are under `php` on the command
+line. Under [`--web`](../beyond-php/web.md#request-input) `$_SERVER` describes the
+HTTP request instead.
+
+Seeding is pay-for-use: only the superglobals a program actually spells are built,
+which is what PHP's `auto_globals_jit` does for the same reason.
+
+`$_ENV` and `$_SERVER` are **snapshots taken before the program ran**, so a later
+`putenv()` does not reach them — only `getenv()`. PHP has the same asymmetry:
+
+```php
+putenv("LATE=1");
+var_dump(getenv("LATE"));        // string(1) "1"
+var_dump(isset($_ENV["LATE"]));  // bool(false)
+```
+
+#### Known limitation
+
+Reading an **element** of the nested `$_SERVER['argv']` does not work: the index
+returns a raw pointer as an `int` and `foreach` over it iterates zero times, while
+`count($_SERVER['argv'])` is correct. This is a general limitation of a typed
+array held inside a `mixed` value rather than anything specific to `argv`, and it
+predates the CLI superglobals. Read `$argv` directly, which is unaffected:
+
+```php
+foreach ($argv as $i => $arg) {   // correct
+    echo $i, ": ", $arg, "\n";
+}
+```
 
 ## PHP version surface
 

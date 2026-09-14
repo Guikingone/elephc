@@ -181,6 +181,20 @@ pub(crate) const TOKEN_INT_CONSTANTS: &[(&str, [i64; 7])] = &[
     ("T_BAD_CHARACTER", [407, 406, 406, 411, 410, 411, 417]),
 ];
 
+/// Reports whether `name` is a predefined tokenizer constant on any supported profile.
+///
+/// The `T_*` family cannot live in the shared constant catalog: its values are PROFILE-dependent
+/// (`T_PIPE` does not exist before 8.4, and every id shifts between releases), which
+/// `ConstValue` has no way to express. So every consumer that would otherwise ask the catalog —
+/// the namespace fallback in `name_resolver::names`, the checker's constant table, prescan's
+/// value materialization — asks this table instead, exactly as the target-dependent PCNTL
+/// constants are asked of `pcntl_constants`.
+pub(crate) fn is_token_int_constant(name: &str) -> bool {
+    TOKEN_INT_CONSTANTS
+        .iter()
+        .any(|(candidate, _)| *candidate == name)
+}
+
 /// Returns the selected profile's value for a predefined tokenizer constant.
 pub(crate) fn token_int_constant_value(name: &str, php_version: PhpVersion) -> Option<i64> {
     let profile_index = match php_version {

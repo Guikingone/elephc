@@ -229,6 +229,9 @@ fn eval_invoke_autoload_callback(
 /// Names one normalized callback for the opt-in autoload trace.
 fn eval_autoload_callback_trace_kind(callback: &EvaluatedCallable) -> String {
     match callback {
+        EvaluatedCallable::ForeignContext { callback, .. } => {
+            format!("foreign:{}", eval_autoload_callback_trace_kind(callback))
+        }
         EvaluatedCallable::Named { name, .. } => format!("named:{name}"),
         EvaluatedCallable::BoundClosure { name, .. } => format!("closure:{name}"),
         EvaluatedCallable::InvokableObject { .. } => "invokable-object".to_string(),
@@ -316,17 +319,7 @@ fn eval_spl_autoload_class_local(
                 status
             })?;
             if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
-                let kind = match &callback {
-                    EvaluatedCallable::Named { name, .. } => format!("named:{name}"),
-                    EvaluatedCallable::BoundClosure { name, .. } => format!("closure:{name}"),
-                    EvaluatedCallable::InvokableObject { .. } => "invokable-object".to_string(),
-                    EvaluatedCallable::ObjectMethod { method, native_class, .. } => {
-                        format!("object-method:{native_class:?}::{method}")
-                    }
-                    EvaluatedCallable::StaticMethod { class_name, method, native_class, .. } => {
-                        format!("static-method:{class_name}:{native_class:?}::{method}")
-                    }
-                };
+                let kind = eval_autoload_callback_trace_kind(&callback);
                 eprintln!("[elephc-eval-trace] phase=spl_autoload_callback stage=normalized kind={kind}");
             }
             let result = eval_evaluated_callable_with_values(&callback, vec![class], context, values)

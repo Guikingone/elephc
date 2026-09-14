@@ -8,6 +8,7 @@
 //! - Entries remain backend-neutral; checker, lowering, and interpreter hooks join by `BuiltinId`.
 
 use crate::{
+    PhpModule,
     Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec,
     VariadicSpec,
 };
@@ -49,13 +50,15 @@ macro_rules! param {
 
 macro_rules! contract {
     (
-        $name:literal, $area:ident, [$($param:expr),* $(,)?],
+        $name:literal, $area:ident, $module:ident, [$($param:expr),* $(,)?],
         $variadic:expr, $returns:ident, $summary:literal, $manual:literal
     ) => {
         BuiltinContract {
             id: BuiltinId::from_canonical_name($name),
             name: $name,
             area: Area::$area,
+            module: PhpModule::$module,
+            since: None,
             kind: BuiltinKind::Function,
             params: &[$($param),*],
             variadic: $variadic,
@@ -79,6 +82,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     contract!(
         "error_log",
         System,
+        Standard,
         [
             param!("message", Str),
             param!("message_type", Int = DefaultSpec::Int(0)),
@@ -93,6 +97,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     contract!(
         "extract",
         Array,
+        Standard,
         [
             param!("array", Mixed),
             param!("flags", Int = DefaultSpec::Int(0)),
@@ -106,6 +111,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     contract!(
         "filter_var",
         System,
+        Filter,
         [
             param!("value", Mixed),
             param!("filter", Int = DefaultSpec::Int(516)),
@@ -119,6 +125,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     contract!(
         "get_debug_type",
         Types,
+        Standard,
         [param!("value", Mixed)],
         None,
         Str,
@@ -128,6 +135,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     contract!(
         "header_remove",
         System,
+        Standard,
         [param!("name", Str = DefaultSpec::Null)],
         None,
         Void,
@@ -137,6 +145,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     contract!(
         "headers_sent",
         System,
+        Standard,
         [
             param!(ref "filename", Mixed = DefaultSpec::Null),
             param!(ref "line", Mixed = DefaultSpec::Null),
@@ -149,6 +158,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     contract!(
         "parse_str",
         String,
+        Standard,
         [param!("string", Str), param!(ref "result", Mixed)],
         None,
         Void,
@@ -158,6 +168,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     contract!(
         "preg_grep",
         System,
+        Pcre,
         [
             param!("pattern", Str),
             param!("array", Mixed),
@@ -171,6 +182,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     contract!(
         "setlocale",
         System,
+        Standard,
         [param!("category", Int), param!("locales", Mixed)],
         Some(VariadicSpec::value("rest")),
         Mixed,
@@ -180,6 +192,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     contract!(
         "unpack",
         String,
+        Standard,
         [
             param!("format", Str),
             param!("string", Str),

@@ -2,7 +2,7 @@
 title: "spl_autoload() — internals"
 description: "Compiler internals for spl_autoload(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 383
+  order: 738
 ---
 
 ## `spl_autoload()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_autoload.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_autoload.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

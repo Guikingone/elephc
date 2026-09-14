@@ -29,19 +29,8 @@ pub(crate) fn lower_class_like_exists(
         return lower_runtime_interface_exists(ctx, inst, value);
     }
     if let Some(symbol_name) = maybe_const_string_operand(ctx, value)? {
-        let exists = match name {
-            "class_exists" => contains_folded(
-                ctx.module
-                    .class_infos
-                    .keys()
-                    .filter(|class_name| !is_internal_synthetic_class_name(class_name)),
-                &symbol_name,
-            ),
-            "interface_exists" => contains_folded(ctx.module.interface_infos.keys(), &symbol_name),
-            "trait_exists" => contains_folded(ctx.module.trait_table.names.iter(), &symbol_name),
-            "enum_exists" => contains_folded(ctx.module.enum_infos.keys(), &symbol_name),
-            _ => false,
-        };
+        let candidates = class_like_exists_candidates(ctx, name);
+        let exists = contains_folded(candidates.iter(), &symbol_name);
         emit_static_bool(ctx, exists);
     } else {
         lower_dynamic_class_like_exists(ctx, name, value)?;
@@ -130,7 +119,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_class_like_exists(
             name
         )));
     }
-    let candidates = dynamic_class_like_exists_candidates(ctx, name);
+    let candidates = class_like_exists_candidates(ctx, name);
     if candidates.is_empty() {
         emit_static_bool(ctx, false);
         return Ok(());
@@ -156,11 +145,12 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_class_like_exists(
     Ok(())
 }
 
-/// Collects deterministic class-like name candidates for a dynamic existence lookup.
-pub(in crate::codegen::lower_inst) fn dynamic_class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<String> {
+/// Collects deterministic metadata and intrinsic names for literal and dynamic existence probes.
+fn class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<String> {
     let mut candidates = BTreeSet::new();
     match name {
         "class_exists" => {
+            candidates.extend(crate::types::builtin_classes::intrinsic_class_names().map(str::to_owned));
             candidates.extend(
                 ctx.module
                     .class_infos

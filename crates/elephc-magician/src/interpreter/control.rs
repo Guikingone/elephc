@@ -13,8 +13,10 @@
 //!   owned `Mixed*`), while every consumer treats `value` as borrowed. `owned` carries that debt
 //!   from the producer to the one place that can settle it — after the callee has been handed
 //!   the value — so the element is neither leaked nor freed while the callee still reads it.
+//! - Runtime cells are opaque handles; only foreign PCNTL callables own a
+//!   temporary lease that keeps their eval context alive through dispatch.
 
-use crate::context::EvalReferenceTarget;
+use crate::context::{pcntl_runtime::EvalPcntlContextLease, EvalReferenceTarget};
 use crate::value::RuntimeCellHandle;
 
 /// Internal statement-control result used to propagate eval returns and loops.
@@ -98,6 +100,10 @@ pub(super) enum EvalByRefBindingMode<'a> {
 
 /// One already evaluated PHP callback supported by the eval dispatcher.
 pub(super) enum EvaluatedCallable {
+    ForeignContext {
+        callback: Box<EvaluatedCallable>,
+        owner: EvalPcntlContextLease,
+    },
     Named {
         name: String,
         display_name: String,

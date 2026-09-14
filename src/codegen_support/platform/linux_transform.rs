@@ -107,6 +107,7 @@ const C_SYMBOLS: &[&str] = &[
     "tan",
     "tanh",
     "time",
+    "unsetenv",
     "usleep",
 ];
 

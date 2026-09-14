@@ -89,7 +89,7 @@ pub(crate) fn lower(
     module.runtime_bound_functions = std::sync::Arc::new(
         runtime_bindings::collect_runtime_bound_functions(program),
     );
-    let constants = crate::codegen::collect_constants(program, target.platform);
+    let constants = crate::codegen::collect_constants(program, target);
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);
     populate_metadata(&mut module, program, check_result);

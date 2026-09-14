@@ -30,14 +30,25 @@ pub fn contracts() -> &'static [BuiltinContract] {
     static CONTRACTS: OnceLock<Vec<BuiltinContract>> = OnceLock::new();
     CONTRACTS
         .get_or_init(|| {
+            #[cfg(feature = "curl")]
+            let curl_capacity = crate::catalog_curl::CURL_CONTRACTS.len();
+            #[cfg(not(feature = "curl"))]
+            let curl_capacity = 0;
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
                     + crate::catalog_data_additional::CONTRACTS.len()
-                    + crate::catalog_surfaces::SURFACE_CONTRACTS.len(),
+                    + crate::catalog_pcntl::CONTRACTS.len()
+                    + crate::catalog_xml::CONTRACTS.len()
+                    + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
+                    + curl_capacity,
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_data_additional::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
+            #[cfg(feature = "curl")]
+            contracts.extend_from_slice(crate::catalog_curl::CURL_CONTRACTS);
             for contract in &mut contracts {
                 contract.requirements = crate::requirements::fixed_requirements(contract.id);
             }
@@ -136,10 +147,19 @@ mod tests {
     /// Verifies the shared catalog validates and exposes every compiler/eval surface.
     #[test]
     fn catalog_is_valid_and_complete_for_all_contract_surfaces() {
-        // 570 + parse_str + levenshtein (substr_count and get_debug_type already had
-        // contracts; only their EVAL_IMPLEMENTATION_PENDING listing moved) + get_cfg_var
-        // + the four cycle-collector controls + flush + var_export.
-        assert_eq!(contracts().len(), 579);
+        // The PHP-visible `curl_*` surface is published only with the `curl`
+        // feature; see `crate::catalog_curl`'s module doc.
+        let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
+        // This branch's catalog carries 30 contracts main's does not: `extract`, `filter_var`,
+        // `flush`, the four `gc_*` functions, `get_cfg_var`, `get_debug_type`, `header_remove`,
+        // `headers_sent`, `levenshtein`, `parse_str`, `preg_grep`, `preg_quote`, `setlocale`,
+        // `strcspn`, `strpbrk`, `strrchr`, `strspn`, `unpack`, the two tick registrars, and the
+        // seven `--web` prelude declarations this branch contracted (`error_reporting`,
+        // `get_error_handler`, `register_shutdown_function`, `restore_error_handler`,
+        // `restore_exception_handler`, `set_error_handler`, `set_exception_handler`). It also
+        // re-applies its own semantics to entries both catalogs share, so the per-backend
+        // splits below differ from main's by more than those 30 names alone.
+        assert_eq!(contracts().len(), 1069 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

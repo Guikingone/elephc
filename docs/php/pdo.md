@@ -40,9 +40,11 @@ read them before porting security-sensitive or data-loading code.
 ## PHP compatibility version
 
 PDO's generated surface is selected with `--php-version=8.0` through
-`--php-version=8.6`; `ELEPHC_PHP_VERSION` provides the same selection for automation.
-The command-line option wins over the environment and the default is PHP 8.5.
-Patch versions and values outside this range are rejected.
+`--php-version=8.6`. Without the flag, the compiler walks upward from the entry
+file for a Composer platform pin, `.php-version`, or a narrowing Composer PHP
+constraint, then falls back to PHP 8.5. Patch versions are accepted in project
+pins, while the command-line flag requires one of the supported `major.minor`
+values.
 
 | Target | PDO differences selected by elephc |
 | --- | --- |
@@ -1411,3 +1413,47 @@ runs this fixture after the ordinary native and libpq suites.
   build and use rustls with the ring provider. mysql 28's `rustls-tls-ring` feature removes
   the former aws-lc-rs/C-toolchain cost. Custom `--no-default-features` builds still reject
   a requested TLS connection loudly rather than silently downgrading it.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+### PDO
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`pdo_drivers()`](./builtins/database/pdo_drivers.md) | `(): array` | `array` | ✓ | — |
+
+Classes: `PDO`, `PDOException`, `PDORow`, `PDOStatement`.
+
+### pdo_dblib
+
+Classes: `Pdo\Dblib`.
+
+### pdo_firebird
+
+Classes: `Pdo\Firebird`.
+
+### pdo_ibm (PECL)
+
+Classes: `Pdo\Ibm`.
+
+### pdo_mysql
+
+Classes: `Pdo\Mysql`.
+
+### pdo_odbc
+
+Classes: `Pdo\Odbc`.
+
+### pdo_pgsql
+
+Classes: `Pdo\Pgsql`.
+
+### pdo_sqlite
+
+Classes: `Pdo\Sqlite`.
+
+<!-- elephc:generated:symbols:end -->

@@ -14,6 +14,27 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?;
     let class_name = class_name_immediate(ctx, inst)?.to_string();
+    // `instanceof Closure` has a direct answer from the value's own storage — a native callable
+    // descriptor IS a Closure — but only when every closure in the program is native.
+    //
+    // A PROGRAM WITH AN EVAL BRIDGE ALSO HAS INTERPRETED CLOSURES, and those are not callable
+    // descriptors: the interpreter hands back its generic object wrapper, so the tag test below
+    // answers `false` for a value PHP calls a Closure. Symfony's event dispatcher is exactly
+    // that shape — `$listener[0] instanceof Closure` guards the conversion of a lazily built
+    // listener — and a false answer there leaves the array unconverted until `$listener(...)`
+    // fatals. So the fast path is taken only when the answer cannot come from the bridge, and
+    // everything else falls through to the eval-aware matcher below, which asks the bridge's
+    // identity table first and the native matcher (descriptors included) second.
+    let closure_probe = class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Closure");
+    if closure_probe
+        && (matches!(value_ty, PhpType::Callable)
+            || !ctx.module.required_runtime_features.eval_bridge)
+    {
+        emit_closure_instanceof(ctx, value, &value_ty)?;
+        return store_if_result(ctx, inst);
+    }
     if !matches!(
         value_ty,
         PhpType::Callable
@@ -101,6 +122,36 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         ctx.emitter.label(done);
     }
     store_if_result(ctx, inst)
+}
+
+/// Tests callable storage against PHP's built-in `Closure` class identity.
+fn emit_closure_instanceof(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    match value_ty {
+        PhpType::Callable => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #10");                     // runtime tag 10 is a Closure callable descriptor
+                    ctx.emitter.instruction("cset x0, eq");                     // return whether the boxed value carries that tag
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 10");                     // runtime tag 10 is a Closure callable descriptor
+                    ctx.emitter.instruction("sete al");                         // materialize the callable-tag comparison
+                    ctx.emitter.instruction("movzx rax, al");                   // widen the boolean result to the integer ABI
+                }
+            }
+        }
+        _ => emit_false(ctx),
+    }
+    Ok(())
 }
 
 /// Lowers dynamic `instanceof` where the target is resolved from a runtime string or object.

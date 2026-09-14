@@ -46,6 +46,17 @@ pub(crate) fn reset_reference_volatile() {
     REFERENCE_VOLATILE.with(|cell| cell.borrow_mut().clear());
 }
 
+/// Isolates pre-check guard alias tracking from the regular post-check propagation pass.
+pub(crate) fn with_fresh_reference_volatile<R>(f: impl FnOnce() -> R) -> R {
+    REFERENCE_VOLATILE.with(|cell| {
+        let previous = cell.replace(crate::superglobals::SUPERGLOBALS.iter()
+            .map(|name| name.to_string()).collect());
+        let result = f();
+        cell.replace(previous);
+        result
+    })
+}
+
 /// Marks `name` as bound by reference, disabling constant propagation for it.
 pub(in crate::optimize) fn mark_reference_volatile(name: &str) {
     REFERENCE_VOLATILE.with(|cell| {

@@ -12,8 +12,8 @@ mod managed;
 mod platform;
 
 use super::{
-    bcmath, callables, diagnostics, exceptions, filter, generators, numeric, round_mode, strings,
-    system,
+    bcmath, callables, curl, diagnostics, exceptions, filter, generators, numeric, round_mode,
+    strings, system,
 };
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
@@ -127,6 +127,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_hash_equals(emitter);
     strings::emit_hash_algos_list(emitter);
     strings::emit_hash_context(emitter);
+
+    // ext/curl easy-handle helpers. Emitted unconditionally, like the hash-context
+    // family: each one reaches the bridge through a null-by-default function-pointer
+    // slot, so a program that never uses curl carries a few hundred unreachable bytes
+    // and NO reference to any `elephc_curl_*` symbol.
+    curl::emit_curl(emitter);
     strings::emit_openssl_methods(emitter);
     strings::emit_openssl_cipher(emitter);
     strings::emit_digest_to_string(emitter);
@@ -160,6 +166,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_getenv(emitter);
     system::emit_getenv_all(emitter);
     system::emit_error_log(emitter);
+
     system::emit_shell_exec(emitter);
     system::emit_date(emitter);
     system::emit_date_default_timezone(emitter);
@@ -169,6 +176,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_hrtime(emitter);
     system::emit_mktime(emitter);
     system::emit_strtotime(emitter);
+    system::emit_pcntl_rusage_array(emitter);
+    system::emit_pcntl_siginfo_array(emitter);
+    system::emit_pcntl_signal_dispatch(emitter);
     system::emit_json_encode_bool(emitter);
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);

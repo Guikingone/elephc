@@ -514,6 +514,54 @@ impl Lexer<'_> {
             }
         }
     }
+
+    /// Appends one PHP double-quoted escape, consuming any hexadecimal or octal tail.
+    fn push_double_quoted_escape(&mut self, escaped: char, out: &mut String) {
+        match escaped {
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'v' => out.push('\x0b'),
+            'e' => out.push('\x1b'),
+            'f' => out.push('\x0c'),
+            '\\' => out.push('\\'),
+            '"' => out.push('"'),
+            '$' => out.push('$'),
+            'x' | 'X' => {
+                let mut digits = String::new();
+                while digits.len() < 2
+                    && self.peek_char().is_some_and(|ch| ch.is_ascii_hexdigit())
+                {
+                    digits.push(self.peek_char().expect("hex digit was checked"));
+                    self.bump_char();
+                }
+                if digits.is_empty() {
+                    out.push('\\');
+                    out.push(escaped);
+                } else {
+                    let byte = u8::from_str_radix(&digits, 16)
+                        .expect("one or two checked hexadecimal digits must parse");
+                    out.push(char::from(byte));
+                }
+            }
+            first @ '0'..='7' => {
+                let mut digits = String::from(first);
+                while digits.len() < 3
+                    && self.peek_char().is_some_and(|ch| matches!(ch, '0'..='7'))
+                {
+                    digits.push(self.peek_char().expect("octal digit was checked"));
+                    self.bump_char();
+                }
+                let byte = u16::from_str_radix(&digits, 8)
+                    .expect("checked octal digits must parse") as u8;
+                out.push(char::from(byte));
+            }
+            other => {
+                out.push('\\');
+                out.push(other);
+            }
+        }
+    }
 }
 
 /// Removes flexible heredoc/nowdoc indentation using PHP's closing-marker width rule.

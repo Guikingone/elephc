@@ -18,6 +18,7 @@ pub(crate) mod function_variants;
 mod instr;
 mod module;
 mod source_units;
+mod pcntl_runtime;
 mod print;
 mod runtime_call;
 mod types;
@@ -46,6 +47,7 @@ pub use module::{
     ClassTable, ConstScalar, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
     Module, PackedLayoutTable, TraitMethodInfo,
 };
+pub use pcntl_runtime::{PcntlRuntime, PcntlTargetSupport};
 pub use print::{print_function, print_module};
 pub use source_units::{SourceCatalog, SourceId};
 pub use runtime_call::{

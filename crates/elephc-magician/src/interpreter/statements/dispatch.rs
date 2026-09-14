@@ -21,6 +21,7 @@ pub(in crate::interpreter) fn execute_statements(
 ) -> Result<EvalControl, EvalStatus> {
     let mut position = 0;
     while let Some(stmt) = statements.get(position) {
+        eval_pcntl_maybe_dispatch(context, values)?;
         match execute_stmt(stmt, context, scope, values) {
             Ok(EvalControl::None) => {
                 eval_run_due_tick(context, values)?;

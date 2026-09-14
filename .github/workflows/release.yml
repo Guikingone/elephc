@@ -23,6 +23,12 @@ jobs:
       checks: read
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ubuntu-latest
+    outputs:
+      # The exact commit this job verified. Downstream jobs check out this SHA
+      # rather than re-resolving the tag, which is mutable: a tag retargeted
+      # after the checks below would otherwise carry unverified code into the
+      # bump commit that `prepare` pushes to protected main.
+      sha: ${{ steps.tag.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,9 +73,11 @@ jobs:
 
   prepare:
     name: Bump version on main
-    # Pushes the version-bump commit to main.
+    # Pushes the version-bump commit to main with an Illegal Bot installation
+    # token, not the workflow token: `main` is protected and the App is the
+    # ruleset's only bypass actor. The default token needs no write access.
     permissions:
-      contents: write
+      contents: read
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ubuntu-latest
     needs:
@@ -80,12 +88,28 @@ jobs:
       # version bump themselves.
       sha: ${{ steps.bump.outputs.sha }}
     steps:
+      # Pinned to a full commit SHA rather than the `v2` tag: this step receives
+      # the App private key, so a moved upstream tag would change the code that
+      # handles it without any diff to review here. Every workflow that mints a
+      # bot token pins the same SHA; bump them together.
+      - name: Mint Illegal Bot token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
+          private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          # The SHA `verify-ci` resolved and checked, never the tag itself.
+          ref: ${{ needs.verify-ci.outputs.sha }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Set version from tag and push bump to main
         id: bump
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           export VERSION
@@ -118,10 +142,15 @@ jobs:
           )
           PY
           echo "Set Cargo.toml and Cargo.lock version to ${VERSION}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Unlike the workflow token, an App token *does* trigger workflows on
+          # push. `[skip ci]` keeps the bump commit from starting a second full
+          # CI run on main, matching the behaviour before the bot: the tagged
+          # commit this bump sits on was already verified green by `verify-ci`.
+          BOT_ID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock
-          git commit -m "chore: bump version to ${VERSION}" || true
+          git commit -m "chore: bump version to ${VERSION} [skip ci]" || true
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -172,7 +201,14 @@ jobs:
       # `every_bridge_staticlib_ships_in_the_release_tarball` fails the build
       # rather than letting the two lists drift again.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-magician
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
+
+      - name: Build curl-aware Magician staticlib
+        run: |
+          cargo build --release -p elephc-magician --features curl \
+            --target-dir target/elephc-magician-curl-release-build
+          cp target/elephc-magician-curl-release-build/release/libelephc_magician.a \
+            target/release/libelephc_magician_curl.a
 
       - name: Strip binary
         run: strip target/release/elephc
@@ -194,7 +230,11 @@ jobs:
             libelephc_probe.a \
             libelephc_instr.a \
             libelephc_web.a \
-            libelephc_magician.a
+            libelephc_pcntl.a \
+            libelephc_xml.a \
+            libelephc_magician.a \
+            libelephc_curl.a \
+            libelephc_magician_curl.a
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else
@@ -231,6 +271,11 @@ jobs:
     needs:
       - prepare
       - build
+    # Cold `elephc native add curl` builds openssl/zlib/nghttp2/libssh2/curl
+    # from source (~6 minutes), and `native add libxml2` (the xml bridge's
+    # parser) adds about a minute. A warm cache is a no-op. Other packed
+    # bridges still compile-probe in the same job.
+    timeout-minutes: 45
     strategy:
       # One incomplete target should still report the state of the other two.
       fail-fast: false
@@ -249,11 +294,35 @@ jobs:
 
       # The probe links real programs, which the build jobs never do on these
       # runners; macOS runners carry the Xcode command line tools already.
+      # `build-essential` is also what `elephc native add curl` needs to
+      # compile the managed libcurl chain (perl is on the image; openssl's
+      # Configure invokes it). libbz2/zlib are the runtime's own stream-layer
+      # libraries (`-lz -lbz2`, src/codegen_support/runtime_features.rs), not
+      # catalog packages: the `--with-xml probe.php` link needs them on Linux
+      # because every program linking the xml bridge carries them, even a
+      # parser-only one — the bridge's prelude calls `fopen()`, which enables
+      # the runtime's phar stream feature. Same package set as
+      # managed-native-smoke.
       - name: Install a linking toolchain
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils build-essential file
+          sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
+
+      # The probe native-adds curl in its empty WORKDIR before
+      # --with-curl, and libxml2 before --with-xml, then compile-probes the
+      # packed archives. This cache is the default root that add writes
+      # (`~/.cache/elephc/native`), keyed like curl-codegen-tests (plus the
+      # libxml2 lock and recipe) so a warm runner skips the from-source
+      # openssl/libcurl/libxml2 rebuild. The compiler itself stays
+      # fail-closed for real projects.
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib/libxml2
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            verify-native-${{ matrix.target }}-
 
       - name: Download the built tarball
         uses: actions/download-artifact@v4
@@ -294,9 +363,23 @@ jobs:
           generate_release_notes: true
           files: dist/*
 
+      # Scoped to the tap repository only: an installation token minted for a
+      # single repo cannot touch anything else in the organisation. Pinned to a
+      # full commit SHA for the same reason as the other bot-token steps.
+      - name: Mint Illegal Bot token for the tap
+        id: tap-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
+          private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
+          owner: illegalstudio
+          repositories: homebrew-tap
+
       - name: Update Homebrew tap
         env:
-          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
+          APP_SLUG: ${{ steps.tap-token.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.tap-token.outputs.token }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
           VERSION_NUM="${VERSION#v}"
@@ -334,7 +417,11 @@ jobs:
               lib.install "libelephc_probe.a"
               lib.install "libelephc_instr.a"
               lib.install "libelephc_web.a"
+              lib.install "libelephc_pcntl.a"
+              lib.install "libelephc_xml.a"
               lib.install "libelephc_magician.a"
+              lib.install "libelephc_curl.a"
+              lib.install "libelephc_magician_curl.a"
             end
 
             test do
@@ -391,8 +478,9 @@ jobs:
 
           # Push to tap
           cd /tmp/homebrew-tap
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          BOT_ID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
           git add Formula/elephc.rb
           git commit -m "Update elephc to ${VERSION}"
           git push

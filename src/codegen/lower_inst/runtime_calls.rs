@@ -43,6 +43,9 @@ pub(super) fn lower(
             lower_eval_quiet_property_fetch(ctx, enter)
         }
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
+        RuntimeCallTarget::Pcntl(target) => {
+            crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)
+        }
         RuntimeCallTarget::Function(target) => super::runtime_functions::lower(ctx, inst, target),
         RuntimeCallTarget::ProfiledFunction { target, .. } => {
             super::runtime_functions::lower(ctx, inst, target)

@@ -19,6 +19,8 @@ mod call_result_alias;
 mod constant_folding;
 #[path = "optimizer/constant_propagation.rs"]
 mod constant_propagation;
+#[path = "optimizer/control_flow_normalization.rs"]
+mod control_flow_normalization;
 #[path = "optimizer/checked_int_sink.rs"]
 mod checked_int_sink;
 #[path = "optimizer/checked_numeric_chain.rs"]

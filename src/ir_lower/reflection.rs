@@ -438,3 +438,42 @@ fn function_attribute_sources(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::BUILTIN_REFLECTION_CLASS_NAMES;
+
+    /// Pins this lowering list to the shared class catalog: it is exactly the `ext/reflection`
+    /// CLASSES minus the three the AOT backend never lowers a body for. The module's enum
+    /// (`PropertyHookType`) is injected by `builtin_enums` and has no methods either.
+    ///
+    /// * `ReflectionException` is a throwable with no synthetic methods at all — the checker
+    ///   injects it with the other builtin throwables.
+    /// * `ReflectionFunctionAbstract` is abstract, so nothing constructs it; the concrete
+    ///   subclasses that inherit its methods (`ReflectionFunction`, `ReflectionMethod`) carry
+    ///   them into lowering already, because the checker hands lowering FLATTENED classes.
+    /// * `ReflectionReference`'s only public entry point is the static `fromArrayElement()`,
+    ///   whose AOT body is the conservative `null` the checker builds; Magician owns the
+    ///   hard-reference answer.
+    #[test]
+    fn reflection_class_list_matches_the_catalog() {
+        const NOT_LOWERED: &[&str] = &[
+            "ReflectionException",
+            "ReflectionFunctionAbstract",
+            "ReflectionReference",
+        ];
+        let mut expected: Vec<&str> = elephc_builtin_contract::classes()
+            .iter()
+            .filter(|class| {
+                class.module == elephc_builtin_contract::PhpModule::Reflection
+                    && class.kind == elephc_builtin_contract::ClassKind::Class
+                    && !NOT_LOWERED.contains(&class.name)
+            })
+            .map(|class| class.name)
+            .collect();
+        expected.sort_unstable();
+        let mut actual: Vec<&str> = BUILTIN_REFLECTION_CLASS_NAMES.to_vec();
+        actual.sort_unstable();
+        assert_eq!(actual, expected);
+    }
+}

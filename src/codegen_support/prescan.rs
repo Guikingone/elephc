@@ -10,294 +10,49 @@
 
 use std::collections::HashMap;
 
-use crate::codegen_support::platform::Platform;
+use elephc_builtin_contract::{lookup_constant, ConstValue};
+
+use crate::codegen_support::platform::{Platform, Target};
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
-use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STRING_CONSTANTS};
-use crate::types::ent_constants::ENT_INT_CONSTANTS;
-use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
-use crate::types::filter_constants::FILTER_INT_CONSTANTS;
-use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::math_constants::MATH_INT_CONSTANTS;
-use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
-use crate::types::preg_constants::PREG_INT_CONSTANTS;
-use crate::types::session_constants::SESSION_INT_CONSTANTS;
-use crate::types::stream_constants::STREAM_INT_CONSTANTS;
-use crate::types::iconv_constants::{iconv_impl, ICONV_INT_CONSTANTS, ICONV_VERSION};
-use crate::types::standard_constants::STANDARD_INT_CONSTANTS;
-use crate::types::string_constants::STRING_INT_CONSTANTS;
+use crate::types::iconv_constants::{iconv_impl, ICONV_VERSION};
+use crate::types::pcntl_constants::pcntl_int_constants;
+use crate::types::predefined_constants::{literal_of, php_type_of, registered_constants};
 use crate::types::token_constants::{token_int_constant_value, TOKEN_INT_CONSTANTS};
 use crate::types::PhpType;
 
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
 ///
-/// Built-in constants include platform-specific values (e.g., `FNM_*` flags differ
-/// between macOS and Linux), `PATHINFO_*` bitmask values, `ENT_*` HTML-escaping flags,
-/// stream handles (`STDIN`/`STDOUT`/`STDERR`), `LOCK_*` values, array callback-mode
-/// constants, `JSON_*` integer constants, and `PREG_*` integer constants. User constants
-/// come from `const` declarations and `define()` calls discovered by `collect_constant_decls`.
-///
-/// The PHP VERSION SURFACE (`PHP_VERSION`, `PHP_VERSION_ID`, `PHP_MAJOR_VERSION`,
-/// `PHP_MINOR_VERSION`, `PHP_RELEASE_VERSION`, `PHP_EXTRA_VERSION`) and `PHP_SAPI` are baked
-/// here through exactly the same mechanism as `PHP_OS`: a literal seeded into this map, whose
-/// type is declared in `types::checker::driver::init` and whose name bypasses symbol-table
-/// resolution in `name_resolver::names::is_builtin_global_constant`. Their values come from the
-/// compilation's `--php-version` profile and `--web` mode, read from the codegen thread-local
-/// pair (`compile_php_version` / `compile_is_web_sapi`) rather than from a parameter, because
-/// this function sits under `ir_lower::lower` which does not carry the profile. See
+/// Every builtin constant comes from the shared catalog (`elephc_builtin_contract::constants()`,
+/// read through `types::predefined_constants`): fixed values are materialized as literals
+/// straight from their contract, while the TARGET- AND PROFILE-DEPENDENT ones
+/// (`ConstValue::TargetDependent`: `PHP_OS`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
+/// `DIRECTORY_SEPARATOR`, the platform-specific `FNM_*` / `LC_*` families, `PHP_MAXPATHLEN`,
+/// `ICONV_IMPL` / `ICONV_VERSION`)
+/// are computed here under their catalogued names. The version surface reads the compilation's
+/// `--php-version` profile and `--web` mode from the codegen thread-local pair
+/// (`compile_php_version` / `compile_is_web_sapi`) rather than from a parameter, because this
+/// function sits under `ir_lower::lower` which does not carry the profile. See
 /// `web_prelude::PhpVersion::version_string` for the version rule and `web_prelude::sapi_name`
-/// for the SAPI mapping.
+/// for the SAPI mapping. `every_target_dependent_constant_is_computed` pins this function
+/// against the catalog so no such name can be left without a value.
+///
+/// User constants come from `const` declarations and `define()` calls discovered by
+/// `collect_constant_decls`; a builtin name always wins over a user declaration of it.
 pub(crate) fn collect_constants(
     program: &Program,
-    target_platform: Platform,
+    target: Target,
 ) -> HashMap<String, (ExprKind, PhpType)> {
+    let target_platform = target.platform;
     let mut constants = HashMap::new();
-    constants.insert(
-        "PHP_OS".to_string(),
-        (
-            ExprKind::StringLiteral(target_platform.php_os_name().to_string()),
-            PhpType::Str,
-        ),
-    );
-    constants.insert(
-        "PHP_OS_FAMILY".to_string(),
-        (
-            ExprKind::StringLiteral(target_platform.php_os_family().to_string()),
-            PhpType::Str,
-        ),
-    );
-    for (name, value) in [
-        ("SCANDIR_SORT_ASCENDING", 0),
-        ("SCANDIR_SORT_DESCENDING", 1),
-        ("SCANDIR_SORT_NONE", 2),
-    ] {
-        constants.insert(name.to_string(), (ExprKind::IntLiteral(value), PhpType::Int));
+    for constant in registered_constants() {
+        if let Some(literal) = literal_of(constant.value) {
+            constants.insert(
+                constant.name.to_string(),
+                (literal, php_type_of(constant.value)),
+            );
+        }
     }
     let php_version = crate::codegen_support::compile_php_version();
-    constants.insert(
-        "PHP_VERSION".to_string(),
-        (
-            ExprKind::StringLiteral(php_version.version_string().to_string()),
-            PhpType::Str,
-        ),
-    );
-    constants.insert(
-        "PHP_VERSION_ID".to_string(),
-        (
-            ExprKind::IntLiteral(i64::from(php_version.version_id())),
-            PhpType::Int,
-        ),
-    );
-    constants.insert(
-        "PHP_MAJOR_VERSION".to_string(),
-        (
-            ExprKind::IntLiteral(i64::from(php_version.major())),
-            PhpType::Int,
-        ),
-    );
-    constants.insert(
-        "PHP_MINOR_VERSION".to_string(),
-        (
-            ExprKind::IntLiteral(i64::from(php_version.minor())),
-            PhpType::Int,
-        ),
-    );
-    constants.insert(
-        "PHP_RELEASE_VERSION".to_string(),
-        (
-            ExprKind::IntLiteral(i64::from(php_version.release())),
-            PhpType::Int,
-        ),
-    );
-    constants.insert(
-        "PHP_EXTRA_VERSION".to_string(),
-        (
-            ExprKind::StringLiteral(php_version.extra_version().to_string()),
-            PhpType::Str,
-        ),
-    );
-    constants.insert(
-        "PHP_SAPI".to_string(),
-        (
-            ExprKind::StringLiteral(
-                crate::web_prelude::sapi_name(crate::codegen_support::compile_is_web_sapi())
-                    .to_string(),
-            ),
-            PhpType::Str,
-        ),
-    );
-    constants.insert(
-        "SID".to_string(),
-        (ExprKind::StringLiteral(String::new()), PhpType::Str),
-    );
-    constants.insert(
-        "PATHINFO_DIRNAME".to_string(),
-        (ExprKind::IntLiteral(1), PhpType::Int),
-    );
-    constants.insert(
-        "PATHINFO_BASENAME".to_string(),
-        (ExprKind::IntLiteral(2), PhpType::Int),
-    );
-    constants.insert(
-        "PATHINFO_EXTENSION".to_string(),
-        (ExprKind::IntLiteral(4), PhpType::Int),
-    );
-    constants.insert(
-        "PATHINFO_FILENAME".to_string(),
-        (ExprKind::IntLiteral(8), PhpType::Int),
-    );
-    constants.insert(
-        "PATHINFO_ALL".to_string(),
-        (ExprKind::IntLiteral(15), PhpType::Int),
-    );
-    for (name, value) in [
-        ("PHP_URL_SCHEME", 0),
-        ("PHP_URL_HOST", 1),
-        ("PHP_URL_PORT", 2),
-        ("PHP_URL_USER", 3),
-        ("PHP_URL_PASS", 4),
-        ("PHP_URL_PATH", 5),
-        ("PHP_URL_QUERY", 6),
-        ("PHP_URL_FRAGMENT", 7),
-    ] {
-        constants.insert(
-            name.to_string(),
-            (ExprKind::IntLiteral(value), PhpType::Int),
-        );
-    }
-    for (name, value) in ENT_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    let (fnm_noescape, fnm_pathname) = match target_platform {
-        Platform::MacOS => (1, 2),
-        Platform::Linux => (2, 1),
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
-    };
-    constants.insert(
-        "FNM_NOESCAPE".to_string(),
-        (ExprKind::IntLiteral(fnm_noescape), PhpType::Int),
-    );
-    constants.insert(
-        "FNM_PATHNAME".to_string(),
-        (ExprKind::IntLiteral(fnm_pathname), PhpType::Int),
-    );
-    constants.insert(
-        "FNM_PERIOD".to_string(),
-        (ExprKind::IntLiteral(4), PhpType::Int),
-    );
-    constants.insert(
-        "FNM_CASEFOLD".to_string(),
-        (ExprKind::IntLiteral(16), PhpType::Int),
-    );
-    constants.insert(
-        "STDIN".to_string(),
-        (ExprKind::IntLiteral(0), PhpType::stream_resource()),
-    );
-    constants.insert(
-        "STDOUT".to_string(),
-        (ExprKind::IntLiteral(1), PhpType::stream_resource()),
-    );
-    constants.insert(
-        "STDERR".to_string(),
-        (ExprKind::IntLiteral(2), PhpType::stream_resource()),
-    );
-    constants.insert(
-        "LOCK_SH".to_string(),
-        (ExprKind::IntLiteral(1), PhpType::Int),
-    );
-    constants.insert(
-        "LOCK_EX".to_string(),
-        (ExprKind::IntLiteral(2), PhpType::Int),
-    );
-    constants.insert(
-        "LOCK_UN".to_string(),
-        (ExprKind::IntLiteral(3), PhpType::Int),
-    );
-    constants.insert(
-        "LOCK_NB".to_string(),
-        (ExprKind::IntLiteral(4), PhpType::Int),
-    );
-    for (name, value) in ARRAY_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in STRING_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in ICONV_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in JSON_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in FILTER_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in MATH_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in OPENSSL_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in STREAM_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in PREG_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in DATE_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in SESSION_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in ERROR_LEVEL_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in STANDARD_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
     for (name, _values) in TOKEN_INT_CONSTANTS {
         let value = token_int_constant_value(name, php_version)
             .expect("registered tokenizer constant must have a profile value");
@@ -306,154 +61,74 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(value), PhpType::Int),
         );
     }
-    for (name, value) in DATE_STRING_CONSTANTS {
+    let (fnm_noescape, fnm_pathname) = match target_platform {
+        Platform::MacOS => (1, 2),
+        Platform::Linux => (2, 1),
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    };
+    let str_const = |value: String| (ExprKind::StringLiteral(value), PhpType::Str);
+    let int_const = |value: i64| (ExprKind::IntLiteral(value), PhpType::Int);
+    // `setlocale()`'s categories are plain C-library enumerators, and the two libcs number them
+    // differently: Darwin orders them alphabetically from `LC_ALL = 0`, glibc puts `LC_CTYPE`
+    // first and `LC_ALL` last. A program that passes `LC_NUMERIC` to `setlocale()` would select
+    // `LC_TIME` on Linux if the value were baked from the host's headers, so the whole family is
+    // target-dependent. `Platform::lc_ctype` answers for the one category the regex helpers
+    // select themselves, and agrees with the value baked here.
+    let per_platform = |macos: i64, linux: i64| {
+        int_const(match target_platform {
+            Platform::MacOS => macos,
+            Platform::Linux => linux,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        })
+    };
+    let computed = [
+        ("PHP_OS", str_const(target_platform.php_os_name().to_string())),
+        ("PHP_OS_FAMILY", str_const(target_platform.php_os_family_name().to_string())),
+        ("PHP_VERSION", str_const(php_version.version_string().to_string())),
+        ("PHP_VERSION_ID", int_const(i64::from(php_version.version_id()))),
+        ("PHP_MAJOR_VERSION", int_const(i64::from(php_version.major()))),
+        ("PHP_MINOR_VERSION", int_const(i64::from(php_version.minor()))),
+        ("PHP_RELEASE_VERSION", int_const(i64::from(php_version.release()))),
+        ("PHP_EXTRA_VERSION", str_const(php_version.extra_version().to_string())),
+        (
+            "PHP_SAPI",
+            str_const(
+                crate::web_prelude::sapi_name(crate::codegen_support::compile_is_web_sapi())
+                    .to_string(),
+            ),
+        ),
+        ("DIRECTORY_SEPARATOR", str_const(std::path::MAIN_SEPARATOR.to_string())),
+        ("FNM_NOESCAPE", int_const(fnm_noescape)),
+        ("FNM_PATHNAME", int_const(fnm_pathname)),
+        ("ICONV_IMPL", str_const(iconv_impl(target_platform == Platform::MacOS).to_string())),
+        ("ICONV_VERSION", str_const(ICONV_VERSION.to_string())),
+        ("LC_ALL", per_platform(0, 6)),
+        ("LC_COLLATE", per_platform(1, 3)),
+        ("LC_CTYPE", per_platform(2, 0)),
+        ("LC_MESSAGES", per_platform(6, 5)),
+        ("LC_MONETARY", per_platform(3, 4)),
+        ("LC_NUMERIC", per_platform(4, 1)),
+        ("LC_TIME", per_platform(5, 2)),
+        // php-src exposes `MAXPATHLEN` from the target's own headers: `PATH_MAX` is 1024 on
+        // Darwin and 4096 on Linux.
+        ("PHP_MAXPATHLEN", per_platform(1024, 4096)),
+    ];
+    for (name, value) in computed {
+        debug_assert!(
+            matches!(
+                lookup_constant(name).map(|constant| constant.value),
+                Some(ConstValue::TargetDependent(_))
+            ),
+            "{name} is computed by prescan but the catalog does not mark it TargetDependent"
+        );
+        constants.insert(name.to_string(), value);
+    }
+    for (name, value) in pcntl_int_constants(target) {
         constants.insert(
             (*name).to_string(),
-            (ExprKind::StringLiteral((*value).to_string()), PhpType::Str),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
-    constants.insert(
-        "PHP_MAXPATHLEN".to_string(),
-        (
-            ExprKind::IntLiteral(target_platform.php_max_path_len()),
-            PhpType::Int,
-        ),
-    );
-    for name in [
-        "PHP_WINDOWS_VERSION_MAJOR",
-        "PHP_WINDOWS_VERSION_MINOR",
-        "PHP_WINDOWS_VERSION_BUILD",
-    ] {
-        constants.insert(
-            name.to_string(),
-            (ExprKind::IntLiteral(0), PhpType::Int),
-        );
-    }
-    constants.insert(
-        "LC_CTYPE".to_string(),
-        (
-            ExprKind::IntLiteral(i64::from(target_platform.lc_ctype())),
-            PhpType::Int,
-        ),
-    );
-    constants.insert(
-        "LC_NUMERIC".to_string(),
-        (
-            ExprKind::IntLiteral(target_platform.lc_numeric()),
-            PhpType::Int,
-        ),
-    );
-    constants.insert(
-        "SIGUSR1".to_string(),
-        (
-            ExprKind::IntLiteral(target_platform.sigusr1()),
-            PhpType::Int,
-        ),
-    );
-    constants.insert(
-        "SIGUSR2".to_string(),
-        (
-            ExprKind::IntLiteral(target_platform.sigusr2()),
-            PhpType::Int,
-        ),
-    );
-    // Lexer-tokenized numeric / math constants (also reachable via `use const` aliases).
-    constants.insert(
-        "PHP_INT_MAX".to_string(),
-        (ExprKind::IntLiteral(i64::MAX), PhpType::Int),
-    );
-    constants.insert(
-        "PHP_INT_MIN".to_string(),
-        (ExprKind::IntLiteral(i64::MIN), PhpType::Int),
-    );
-    constants.insert(
-        "PHP_FLOAT_MAX".to_string(),
-        (ExprKind::FloatLiteral(f64::MAX), PhpType::Float),
-    );
-    constants.insert(
-        "PHP_FLOAT_MIN".to_string(),
-        (ExprKind::FloatLiteral(f64::MIN_POSITIVE), PhpType::Float),
-    );
-    constants.insert(
-        "PHP_FLOAT_EPSILON".to_string(),
-        (ExprKind::FloatLiteral(f64::EPSILON), PhpType::Float),
-    );
-    constants.insert(
-        "INF".to_string(),
-        (ExprKind::FloatLiteral(f64::INFINITY), PhpType::Float),
-    );
-    constants.insert(
-        "NAN".to_string(),
-        (ExprKind::FloatLiteral(f64::NAN), PhpType::Float),
-    );
-    constants.insert(
-        "M_PI".to_string(),
-        (ExprKind::FloatLiteral(std::f64::consts::PI), PhpType::Float),
-    );
-    constants.insert(
-        "M_E".to_string(),
-        (ExprKind::FloatLiteral(std::f64::consts::E), PhpType::Float),
-    );
-    constants.insert(
-        "M_SQRT2".to_string(),
-        (
-            ExprKind::FloatLiteral(std::f64::consts::SQRT_2),
-            PhpType::Float,
-        ),
-    );
-    constants.insert(
-        "M_PI_2".to_string(),
-        (
-            ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_2),
-            PhpType::Float,
-        ),
-    );
-    constants.insert(
-        "M_PI_4".to_string(),
-        (
-            ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_4),
-            PhpType::Float,
-        ),
-    );
-    constants.insert(
-        "M_LOG2E".to_string(),
-        (
-            ExprKind::FloatLiteral(std::f64::consts::LOG2_E),
-            PhpType::Float,
-        ),
-    );
-    constants.insert(
-        "M_LOG10E".to_string(),
-        (
-            ExprKind::FloatLiteral(std::f64::consts::LOG10_E),
-            PhpType::Float,
-        ),
-    );
-    constants.insert(
-        "ICONV_IMPL".to_string(),
-        (
-            ExprKind::StringLiteral(iconv_impl(target_platform == Platform::MacOS).to_string()),
-            PhpType::Str,
-        ),
-    );
-    constants.insert(
-        "ICONV_VERSION".to_string(),
-        (
-            ExprKind::StringLiteral(ICONV_VERSION.to_string()),
-            PhpType::Str,
-        ),
-    );
-    constants.insert(
-        "PHP_EOL".to_string(),
-        (ExprKind::StringLiteral("\n".to_string()), PhpType::Str),
-    );
-    constants.insert(
-        "DIRECTORY_SEPARATOR".to_string(),
-        (
-            ExprKind::StringLiteral(std::path::MAIN_SEPARATOR.to_string()),
-            PhpType::Str,
-        ),
-    );
     collect_constant_decls(program, &mut constants);
     constants
 }
@@ -526,28 +201,96 @@ mod tests {
     /// Verifies fnmatch constants follow target platform.
     #[test]
     fn test_fnmatch_constants_follow_target_platform() {
-        let mac = collect_constants(&vec![], Platform::MacOS);
+        use crate::codegen_support::platform::Arch;
+
+        let mac = collect_constants(&vec![], Target::new(Platform::MacOS, Arch::AArch64));
         assert_eq!(int_constant(&mac, "FNM_NOESCAPE"), 1);
         assert_eq!(int_constant(&mac, "FNM_PATHNAME"), 2);
         assert_eq!(int_constant(&mac, "FNM_PERIOD"), 4);
         assert_eq!(int_constant(&mac, "FNM_CASEFOLD"), 16);
 
-        let linux = collect_constants(&vec![], Platform::Linux);
+        let linux = collect_constants(&vec![], Target::new(Platform::Linux, Arch::AArch64));
         assert_eq!(int_constant(&linux, "FNM_NOESCAPE"), 2);
         assert_eq!(int_constant(&linux, "FNM_PATHNAME"), 1);
         assert_eq!(int_constant(&linux, "FNM_PERIOD"), 4);
         assert_eq!(int_constant(&linux, "FNM_CASEFOLD"), 16);
     }
 
-    /// Verifies signal numbers follow the target C library rather than the build host.
+    /// Verifies the locale-category and path-length constants follow the target's own C library.
+    ///
+    /// Darwin numbers `setlocale()`'s categories alphabetically from `LC_ALL = 0`; glibc puts
+    /// `LC_CTYPE` first and `LC_ALL` last, so a program passing `LC_NUMERIC` would select
+    /// `LC_TIME` on Linux if one table were baked for both. `php -n` 8.5.10 on macOS prints the
+    /// Darwin column; `PATH_MAX` is 1024 there and 4096 on Linux.
     #[test]
-    fn test_signal_constants_follow_target_platform() {
-        let mac = collect_constants(&vec![], Platform::MacOS);
-        assert_eq!(int_constant(&mac, "SIGUSR1"), 30);
-        assert_eq!(int_constant(&mac, "SIGUSR2"), 31);
+    fn test_locale_and_path_constants_follow_target_platform() {
+        use crate::codegen_support::platform::Arch;
 
-        let linux = collect_constants(&vec![], Platform::Linux);
-        assert_eq!(int_constant(&linux, "SIGUSR1"), 10);
-        assert_eq!(int_constant(&linux, "SIGUSR2"), 12);
+        let mac = collect_constants(&vec![], Target::new(Platform::MacOS, Arch::AArch64));
+        assert_eq!(int_constant(&mac, "LC_ALL"), 0);
+        assert_eq!(int_constant(&mac, "LC_COLLATE"), 1);
+        assert_eq!(int_constant(&mac, "LC_CTYPE"), 2);
+        assert_eq!(int_constant(&mac, "LC_MONETARY"), 3);
+        assert_eq!(int_constant(&mac, "LC_NUMERIC"), 4);
+        assert_eq!(int_constant(&mac, "LC_TIME"), 5);
+        assert_eq!(int_constant(&mac, "LC_MESSAGES"), 6);
+        assert_eq!(int_constant(&mac, "PHP_MAXPATHLEN"), 1024);
+
+        let linux = collect_constants(&vec![], Target::new(Platform::Linux, Arch::AArch64));
+        assert_eq!(int_constant(&linux, "LC_CTYPE"), 0);
+        assert_eq!(int_constant(&linux, "LC_NUMERIC"), 1);
+        assert_eq!(int_constant(&linux, "LC_TIME"), 2);
+        assert_eq!(int_constant(&linux, "LC_COLLATE"), 3);
+        assert_eq!(int_constant(&linux, "LC_MONETARY"), 4);
+        assert_eq!(int_constant(&linux, "LC_MESSAGES"), 5);
+        assert_eq!(int_constant(&linux, "LC_ALL"), 6);
+        assert_eq!(int_constant(&linux, "PHP_MAXPATHLEN"), 4096);
+
+        // The runtime's own `setlocale()` call sites read the same category from `Platform`.
+        assert_eq!(i64::from(Platform::MacOS.lc_ctype()), int_constant(&mac, "LC_CTYPE"));
+        assert_eq!(i64::from(Platform::Linux.lc_ctype()), int_constant(&linux, "LC_CTYPE"));
+    }
+
+    /// Verifies every catalogued constant the compiler registers gets a value here, on every
+    /// target, with the type the catalog declares — including each `TargetDependent` one.
+    #[test]
+    fn every_target_dependent_constant_is_computed() {
+        for platform in [Platform::MacOS, Platform::Linux] {
+            let constants = collect_constants(
+                &vec![],
+                Target::new(platform, crate::codegen_support::platform::Arch::AArch64),
+            );
+            for constant in registered_constants() {
+                let (_, ty) = constants
+                    .get(constant.name)
+                    .unwrap_or_else(|| panic!("{} has no value on {platform:?}", constant.name));
+                assert_eq!(*ty, php_type_of(constant.value), "{} type", constant.name);
+            }
+        }
+    }
+
+    /// Verifies PCNTL constants are seeded with target-specific values and availability.
+    #[test]
+    fn test_pcntl_constants_follow_target_platform() {
+        use crate::codegen_support::platform::{AppleVariant, Arch};
+
+        let mac = collect_constants(&vec![], Target::new(Platform::MacOS, Arch::AArch64));
+        assert_eq!(int_constant(&mac, "SIGCHLD"), 20);
+        assert_eq!(int_constant(&mac, "PCNTL_EAGAIN"), 35);
+        assert!(mac.contains_key("PRIO_DARWIN_BG"));
+        assert!(!mac.contains_key("CLONE_NEWNS"));
+
+        let linux = collect_constants(&vec![], Target::new(Platform::Linux, Arch::AArch64));
+        assert_eq!(int_constant(&linux, "SIGCHLD"), 17);
+        assert_eq!(int_constant(&linux, "PCNTL_EAGAIN"), 11);
+        assert!(linux.contains_key("CLONE_NEWNS"));
+        assert!(!linux.contains_key("PRIO_DARWIN_BG"));
+
+        let ios = collect_constants(
+            &vec![],
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+        );
+        assert!(!ios.contains_key("SIGCHLD"));
+        assert!(!ios.contains_key("PCNTL_EAGAIN"));
     }
 }

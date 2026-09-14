@@ -329,3 +329,87 @@ fn test_normalize_control_flow_hoists_non_throwing_try_prefix() {
     assert_eq!(pruned[0], Stmt::echo(Expr::int_lit(7)));
     assert!(matches!(pruned[1].kind, StmtKind::Try { .. }));
 }
+
+/// A `return` nested in a branch of a non-throwing `try` body still runs `finally` under PHP,
+/// so `try { if ($a) { echo 1; return; } echo 2; } finally { echo 9; }` keeps its shell even
+/// though the body as a whole falls through.
+#[test]
+fn test_normalize_control_flow_keeps_try_finally_with_nested_return() {
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![
+                Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("a"),
+                        then_body: vec![
+                            Stmt::echo(Expr::int_lit(1)),
+                            Stmt::new(StmtKind::Return(None), Span::dummy()),
+                        ],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(2)),
+            ],
+            catches: Vec::new(),
+            finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program.clone());
+
+    assert_eq!(pruned, program);
+}
+
+/// A `break` that leaves a non-throwing `try` body inside a loop also runs `finally`, so the
+/// shell is kept; a `break` that only leaves a loop nested inside the body does not count.
+#[test]
+fn test_normalize_control_flow_keeps_try_finally_with_nested_loop_break() {
+    let leaving_break = Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("a"),
+            then_body: vec![Stmt::new(StmtKind::Break(1), Span::dummy())],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        Span::dummy(),
+    );
+    let kept = vec![Stmt::new(
+        StmtKind::While {
+            condition: Expr::var("go"),
+            body: vec![Stmt::new(
+                StmtKind::Try {
+                    try_body: vec![leaving_break.clone(), Stmt::echo(Expr::int_lit(2))],
+                    catches: Vec::new(),
+                    finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+    assert_eq!(normalize_control_flow(kept.clone()), kept);
+
+    // The guard sits after another statement so the loop shell is kept exactly as written.
+    let inner_loop = Stmt::new(
+        StmtKind::While {
+            condition: Expr::var("b"),
+            body: vec![Stmt::echo(Expr::int_lit(3)), leaving_break],
+        },
+        Span::dummy(),
+    );
+    let flattened = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![inner_loop.clone(), Stmt::echo(Expr::int_lit(2))],
+            catches: Vec::new(),
+            finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+    assert_eq!(
+        normalize_control_flow(flattened),
+        vec![inner_loop, Stmt::echo(Expr::int_lit(2)), Stmt::echo(Expr::int_lit(9))]
+    );
+}

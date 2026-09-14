@@ -73,6 +73,12 @@ pub(in crate::interpreter) fn eval_closure_object_target_from_callable(
     callable: EvaluatedCallable,
 ) -> EvalClosureObjectTarget {
     match callable {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            EvalClosureObjectTarget::ForeignContext {
+                target: Box::new(eval_closure_object_target_from_callable(*callback)),
+                owner,
+            }
+        }
         EvaluatedCallable::Named { name, .. } => EvalClosureObjectTarget::Named(name),
         EvaluatedCallable::BoundClosure {
             name,
@@ -323,6 +329,20 @@ pub(super) fn eval_closure_bind_target(
         );
     };
     match target {
+        EvalClosureObjectTarget::ForeignContext { target, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let object = eval_closure_bind_target(
+                *target,
+                Some(bound_this),
+                bound_scope,
+                rebinds_function_scope,
+                owner_context,
+                values,
+            )?;
+            register_foreign_closure_result(object, owner, owner_context, context, values)
+        }
         EvalClosureObjectTarget::Named(name) | EvalClosureObjectTarget::BoundNamed { name, .. } => {
             let Some(closure) = context.closure(&name) else {
                 if eval_function_probe_exists(context, &name) {
@@ -424,6 +444,19 @@ pub(super) fn eval_closure_unbind_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match target {
+        EvalClosureObjectTarget::ForeignContext { target, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let object = eval_closure_unbind_target(
+                *target,
+                bound_scope,
+                rebinds_function_scope,
+                owner_context,
+                values,
+            )?;
+            register_foreign_closure_result(object, owner, owner_context, context, values)
+        }
         EvalClosureObjectTarget::Named(name) | EvalClosureObjectTarget::BoundNamed { name, .. } => {
             if rebinds_function_scope
                 && context.closure(&name).is_none()
@@ -453,4 +486,26 @@ pub(super) fn eval_closure_unbind_target(
             values,
         ),
     }
+}
+
+/// Mirrors one owner-context closure result into the caller while retaining its owner lease.
+fn register_foreign_closure_result(
+    object: RuntimeCellHandle,
+    owner: crate::context::pcntl_runtime::EvalPcntlContextLease,
+    owner_context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    let Some(target) = owner_context.closure_object_target(identity).cloned() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    context.register_closure_object_target(
+        identity,
+        EvalClosureObjectTarget::ForeignContext {
+            target: Box::new(target),
+            owner,
+        },
+    );
+    Ok(object)
 }

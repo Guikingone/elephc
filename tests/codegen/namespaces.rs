@@ -9,6 +9,8 @@
 
 use crate::support::*;
 
+mod polyfills;
+
 /// Verifies that name resolution descends into an assignment used as a condition.
 ///
 /// The closure parameter and method call sit below `!($value = ...)`; leaving an assignment

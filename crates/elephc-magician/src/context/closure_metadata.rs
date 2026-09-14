@@ -6,12 +6,17 @@
 //!
 //! Key details:
 //! - Bound receivers/scopes and by-reference captures remain explicit runtime metadata.
+//! - Foreign PCNTL handler closures retain the eval context that owns their callable metadata.
 
 use super::*;
 
 /// Callable target represented by a PHP-visible eval `Closure` object.
 #[derive(Clone)]
 pub enum EvalClosureObjectTarget {
+    ForeignContext {
+        target: Box<EvalClosureObjectTarget>,
+        owner: pcntl_runtime::EvalPcntlContextLease,
+    },
     Named(String),
     BoundNamed {
         name: String,
@@ -39,8 +44,12 @@ pub enum EvalClosureObjectTarget {
 
 impl EvalClosureObjectTarget {
     /// Returns the receiver cell owned by this closure target, when it has one.
+    ///
+    /// A `ForeignContext` wrapper owns no receiver of its own: it only keeps the owning eval
+    /// context alive around the target it wraps, so it answers for that target.
     pub(crate) fn receiver(&self) -> Option<RuntimeCellHandle> {
         match self {
+            Self::ForeignContext { target, .. } => target.receiver(),
             Self::BoundNamed { bound_this, .. } => *bound_this,
             Self::InvokableObject { object } | Self::ObjectMethod { object, .. } => Some(*object),
             Self::Named(_) | Self::StaticMethod { .. } => None,
@@ -50,10 +59,19 @@ impl EvalClosureObjectTarget {
     /// Allows closure construction to replace a borrowed receiver with its retained cell.
     pub(crate) fn receiver_mut(&mut self) -> Option<&mut RuntimeCellHandle> {
         match self {
+            Self::ForeignContext { target, .. } => target.receiver_mut(),
             Self::BoundNamed { bound_this, .. } => bound_this.as_mut(),
             Self::InvokableObject { object } | Self::ObjectMethod { object, .. } => Some(object),
             Self::Named(_) | Self::StaticMethod { .. } => None,
         }
+    }
+}
+
+#[cfg(not(test))]
+impl EvalClosureObjectTarget {
+    /// Returns whether this callable depends on metadata retained by another eval context.
+    pub(crate) fn contains_foreign_context(&self) -> bool {
+        matches!(self, Self::ForeignContext { .. })
     }
 }
 

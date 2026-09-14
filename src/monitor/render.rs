@@ -220,7 +220,9 @@ pub(crate) fn demangle(symbol: &str) -> String {
     if let Some(rest) = stem.strip_prefix("fn_") {
         return rest.replace("_u_", "_");
     }
-    if let Some(rest) = stem.strip_prefix("method_") {
+    if let Some(rest) = stem.strip_prefix("method_").or_else(|| {
+        super::is_static_method_symbol(stem).then(|| &stem["static_".len()..])
+    }) {
         let protected = rest.replace("_u_", "\u{1}");
         if let Some((class, method)) = protected.split_once('_') {
             return format!(

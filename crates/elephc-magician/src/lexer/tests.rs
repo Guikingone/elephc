@@ -483,15 +483,13 @@ fn escaped_dollar_stays_literal_and_suppresses_interpolation() {
     );
 }
 
-/// Verifies the single-character half of the double-quoted escape table.
-///
-/// `\q` has no meaning, and PHP keeps both the backslash and the letter for it.
+/// Verifies simple, hexadecimal, and octal double-quoted escapes.
 #[test]
 fn double_quoted_escape_table_expands_the_named_escapes() {
     assert_eq!(
-        kinds(r#""a\nb\tc\\d\"e\q\x41";"#),
+        kinds(r#""a\nb\tc\\d\"e\q\x41\101\0";"#),
         vec![
-            string("a\nb\tc\\d\"e\\qA"),
+            string("a\nb\tc\\d\"e\\qAA\0"),
             TokenKind::Semicolon,
             TokenKind::Eof
         ]

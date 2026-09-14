@@ -2,7 +2,7 @@
 title: "touch() — internals"
 description: "Compiler internals for touch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 164
+  order: 305
 ---
 
 ## `touch()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/touch.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/touch.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -28,7 +28,7 @@ sidebar:
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `dynamic_target`
+- **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function touch(string $filename, int $mtime = null, int $atime = null): bool
+function touch(string $filename, ?int $mtime = null, ?int $atime = null): bool
 ```
 
 ## What the type checker enforces

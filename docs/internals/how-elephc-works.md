@@ -250,6 +250,9 @@ This pass currently handles cases such as:
 - rewriting safe single-case `switch` shells to `if`
 - merging adjacent identical `catch` handlers into canonical multi-catch clauses with deduplicated, stably ordered type lists
 - folding an outer `finally` into an inner `try` when the wrapper is structurally redundant
+- swapping negated two-way `if` branches onto the positive test
+- canonicalizing loop shells: `for` without an update clause becomes `while`, `do ... while (true)` becomes `while (true)`, leading `if (...) break;` guards fold into the loop test, and an endless loop ending in a break guard rotates into `do ... while`
+- dropping trailing terminators that transfer exactly where falling off the block would: a `continue` ending a loop body, the `break` ending the last `switch` body, and a bare `return;` ending a function body
 
 ## Phase 14: Dead-code elimination
 

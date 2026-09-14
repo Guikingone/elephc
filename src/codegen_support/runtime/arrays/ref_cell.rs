@@ -18,10 +18,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// High 32 bits of the x86_64 heap wrapper magic word (`"ELEPH"`), stamped into the kind word so the
-/// generic refcount/decref helpers recognize the cell as an elephc-owned managed heap block.
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
-
 /// Emits `__rt_ref_cell_alloc`: allocate a kind-7 refcounted reference cell.
 ///
 /// Allocates 16 payload bytes through the managed heap (header refcount = 1), stamps the heap kind to 6,
@@ -78,7 +74,7 @@ fn emit_ref_cell_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the inner value-tag across the heap allocation call
     emitter.instruction("mov rax, 16");                                         // reference cells store value@0 and inner_tag@8
     emitter.instruction("call __rt_heap_alloc");                                // allocate the cell storage; header refcount starts at 1
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 7)); // materialize the reference-cell kind word with the x86_64 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(7))); // materialize the reference-cell kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a reference cell in the uniform header
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the inner value word after the heap allocation
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the inner value at cell+0
@@ -215,7 +211,7 @@ fn emit_ref_cell_decref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_ref_cell_decref_skip");                       // pointers above the live heap end are not reference cells
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // ignore foreign pointers that do not carry the elephc x86_64 heap marker
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // ignore foreign pointers that do not carry the elephc x86_64 heap marker
     emitter.instruction("jne __rt_ref_cell_decref_skip");                       // only elephc-owned reference cells participate in x86_64 decref bookkeeping
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit reference-cell refcount from the uniform heap header
     emitter.instruction("sub r10d, 1");                                         // decrement the reference-cell refcount for the releasing owner
@@ -517,8 +513,13 @@ mod tests {
         ] {
             assert!(asm.contains(&format!(".globl {}\n", sym)), "missing {sym}");
         }
-        // The x86_64 kind word combines the heap marker (0x454C5048 << 32) with low-byte kind 7.
-        assert!(asm.contains("mov r10, 0x454c504800000006"));
+        // The x86_64 kind word combines the heap marker with low-byte kind 7, the same kind the
+        // AArch64 emitter stamps above. Built through the canonical helper, never hand-typed:
+        // a transposed marker assembles fine and makes every refcount a silent no-op (#482).
+        assert!(asm.contains(&format!(
+            "mov r10, 0x{:x}",
+            crate::codegen_support::sentinels::x86_64_heap_kind_word(7)
+        )));
         assert!(asm.contains("jmp __rt_incref"));
         assert!(asm.contains("jmp __rt_ref_cell_free_deep"));
     }

@@ -12,7 +12,7 @@ use super::super::*;
 
 /// Returns true if the statement list contains a break or continue, considering
 /// nested ifdef, if, try, and switch guards recursively.
-pub(super) fn block_contains_loop_exit(body: &[Stmt]) -> bool {
+pub(crate) fn block_contains_loop_exit(body: &[Stmt]) -> bool {
     body.iter().any(stmt_contains_loop_exit)
 }
 

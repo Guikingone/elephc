@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Reference targets, scalar coercion, defaults, and object type checks stay aligned by index.
+//! - Extra positional arguments to user-defined callables are evaluated but ignored like PHP.
 
 use super::*;
 

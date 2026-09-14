@@ -2,7 +2,7 @@
 title: "preg_match() — internals"
 description: "Compiler internals for preg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 375
+  order: 730
 ---
 
 ## `preg_match()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_match.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches = null, int $flags = 0, int $offset = 0): int
+function preg_match(string $pattern, string $subject, array $matches = []): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–5 arguments (3 optional).
+- **Arity**: takes 2–3 arguments (1 optional).
 - **By-reference parameters**: `$matches`.
 
 ## Eval interpreter (magician)
@@ -52,6 +52,7 @@ function preg_match(string $pattern, string $subject, array $matches = null, int
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
 - **Adapter reason**: `by-reference-or-lvalue`.
+- **Eval signature compatibility**: `additional-optional-parameters`.
 - **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$matches`.
 

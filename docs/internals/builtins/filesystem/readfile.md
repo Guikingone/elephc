@@ -2,7 +2,7 @@
 title: "readfile() — internals"
 description: "Compiler internals for readfile(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 151
+  order: 292
 ---
 
 ## `readfile()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/readfile.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/readfile.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function readfile(string $filename, bool $use_include_path = false, mixed $context = null): mixed
+function readfile(string $filename): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–3 arguments (2 optional).
+- **Arity**: takes exactly 1 argument.
 
 ## Eval interpreter (magician)
 

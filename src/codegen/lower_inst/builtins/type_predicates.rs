@@ -453,6 +453,7 @@ fn emit_callable_array_predicate(ctx: &mut FunctionContext<'_>, value: ValueId) 
 /// Lowers `is_object()`: true for statically-known objects and closures, or boxed values whose
 /// runtime tag is an object (6) or callable descriptor (10). An `iterable` is the other half of
 /// the same run-time question `is_array` asks — see [`emit_iterable_heap_kind_predicate`].
+/// Lowers `is_object()`: true for objects and Closures, including boxed runtime tags 6 and 10.
 pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_object", 1)?;
     let value = expect_operand(inst, 0)?;

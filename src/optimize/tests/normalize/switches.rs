@@ -160,10 +160,8 @@ fn test_normalize_control_flow_merges_adjacent_identical_switch_cases() {
             assert_eq!(cases[0].0, vec![Expr::int_lit(1), Expr::int_lit(2)]);
             assert_eq!(cases[0].1, shared_body);
             assert_eq!(cases[1].0, vec![Expr::int_lit(3)]);
-            assert_eq!(
-                cases[1].1,
-                vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break(1), Span::dummy())]
-            );
+            // The last body leaves the switch by falling off it, so its `break` is dropped.
+            assert_eq!(cases[1].1, vec![Stmt::echo(Expr::int_lit(9))]);
             assert!(default.is_none());
         }
         other => panic!("expected normalized switch, got {:?}", other),
@@ -359,4 +357,240 @@ fn test_normalize_control_flow_still_rewrites_when_the_decision_names_another_no
         "expected the rewrite to fire, got {:?}",
         pruned[0].kind
     );
+}
+
+/// The `default` body runs last, so its trailing `break` is dropped while the case bodies
+/// keep theirs: `case 1: echo 1; break; default: echo 2; break;` keeps the first `break`
+/// and loses the second.
+#[test]
+fn test_normalize_control_flow_drops_trailing_break_of_default_body() {
+    let first_body = vec![
+        Stmt::echo(Expr::int_lit(1)),
+        Stmt::new(StmtKind::Break(1), Span::dummy()),
+    ];
+    let second_body = vec![
+        Stmt::echo(Expr::int_lit(2)),
+        Stmt::new(StmtKind::Break(1), Span::dummy()),
+    ];
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![
+                (vec![Expr::int_lit(1)], first_body.clone()),
+                (vec![Expr::int_lit(2)], second_body.clone()),
+            ],
+            default: Some(vec![
+                Stmt::echo(Expr::int_lit(3)),
+                Stmt::new(StmtKind::Break(1), Span::dummy()),
+            ]),
+        },
+        Span::dummy(),
+    )];
+
+    let normalized = normalize_control_flow(program);
+
+    assert_eq!(
+        normalized,
+        vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], first_body),
+                    (vec![Expr::int_lit(2)], second_body),
+                ],
+                default: Some(vec![Stmt::echo(Expr::int_lit(3))]),
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+/// With a `default` present, a `break`-only last case still exits the switch instead of
+/// falling into `default`, so that `break` is kept.
+#[test]
+fn test_normalize_control_flow_keeps_break_only_last_case_before_default() {
+    let cases = vec![
+        (
+            vec![Expr::int_lit(1)],
+            vec![
+                Stmt::echo(Expr::int_lit(1)),
+                Stmt::new(StmtKind::Break(1), Span::dummy()),
+            ],
+        ),
+        (
+            vec![Expr::int_lit(2)],
+            vec![Stmt::new(StmtKind::Break(1), Span::dummy())],
+        ),
+    ];
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: cases.clone(),
+            default: Some(vec![Stmt::echo(Expr::int_lit(3))]),
+        },
+        Span::dummy(),
+    )];
+
+    let normalized = normalize_control_flow(program);
+
+    assert_eq!(
+        normalized,
+        vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases,
+                default: Some(vec![Stmt::echo(Expr::int_lit(3))]),
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+/// Without a `default`, a `break`-only last case becomes an empty trailing case, which the
+/// existing empty-case folding already represents as "match and leave".
+#[test]
+fn test_normalize_control_flow_empties_break_only_last_case_without_default() {
+    let first_body = vec![
+        Stmt::echo(Expr::int_lit(1)),
+        Stmt::new(StmtKind::Break(1), Span::dummy()),
+    ];
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![
+                (vec![Expr::int_lit(1)], first_body.clone()),
+                (
+                    vec![Expr::int_lit(2)],
+                    vec![Stmt::new(StmtKind::Break(1), Span::dummy())],
+                ),
+            ],
+            default: None,
+        },
+        Span::dummy(),
+    )];
+
+    let normalized = normalize_control_flow(program);
+
+    assert_eq!(
+        normalized,
+        vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], first_body),
+                    (vec![Expr::int_lit(2)], Vec::new()),
+                ],
+                default: None,
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+/// Builds a span starting at `line:1` so fixtures can encode source order.
+fn span_at_line(line: u32) -> Span {
+    Span {
+        line,
+        col: 1,
+        end_line: line,
+        end_col: 1,
+    }
+}
+
+/// A `default` written between two cases is not the last body of the switch: falling off it
+/// would enter the following case, so its trailing `break` is kept (and nothing else in that
+/// switch is stripped). The same shape with the `default` written last drops its `break`.
+#[test]
+fn test_normalize_control_flow_keeps_break_of_default_written_between_cases() {
+    let case_body = |value: i64, line: u32| {
+        vec![
+            Stmt::new(StmtKind::Echo(Expr::int_lit(value)), span_at_line(line)),
+            Stmt::new(StmtKind::Break(1), span_at_line(line)),
+        ]
+    };
+    let default_body = |line: u32| {
+        vec![
+            Stmt::new(StmtKind::Echo(Expr::int_lit(9)), span_at_line(line)),
+            Stmt::new(StmtKind::Break(1), span_at_line(line)),
+        ]
+    };
+    let pattern = |value: i64, line: u32| {
+        vec![Expr::new(ExprKind::IntLiteral(value), span_at_line(line))]
+    };
+
+    // case 1 (line 1), default (line 2), case 2 (line 3)
+    let middle = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![
+                (pattern(1, 1), case_body(1, 1)),
+                (pattern(2, 3), case_body(2, 3)),
+            ],
+            default: Some(default_body(2)),
+        },
+        Span::dummy(),
+    )];
+    assert_eq!(normalize_control_flow(middle.clone()), middle);
+
+    // case 1 (line 1), case 2 (line 2), default (line 3)
+    let last = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![
+                (pattern(1, 1), case_body(1, 1)),
+                (pattern(2, 2), case_body(2, 2)),
+            ],
+            default: Some(default_body(3)),
+        },
+        Span::dummy(),
+    )];
+    assert_eq!(
+        normalize_control_flow(last),
+        vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases: vec![
+                    (pattern(1, 1), case_body(1, 1)),
+                    (pattern(2, 2), case_body(2, 2)),
+                ],
+                default: Some(vec![Stmt::new(
+                    StmtKind::Echo(Expr::int_lit(9)),
+                    span_at_line(3),
+                )]),
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+/// A switch whose `default` sits between cases is left structurally untouched: the empty
+/// `case 1` before it must keep falling into the `default`, not be merged into `case 2`, and
+/// the fallthrough `default` keeps its position.
+#[test]
+fn test_normalize_control_flow_keeps_switch_with_default_between_cases_untouched() {
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![
+                (
+                    vec![Expr::new(ExprKind::IntLiteral(1), span_at_line(1))],
+                    Vec::new(),
+                ),
+                (
+                    vec![Expr::new(ExprKind::IntLiteral(2), span_at_line(3))],
+                    vec![
+                        Stmt::new(StmtKind::Echo(Expr::int_lit(2)), span_at_line(3)),
+                        Stmt::new(StmtKind::Break(1), span_at_line(3)),
+                    ],
+                ),
+            ],
+            default: Some(vec![Stmt::new(
+                StmtKind::Echo(Expr::int_lit(9)),
+                span_at_line(2),
+            )]),
+        },
+        Span::dummy(),
+    )];
+
+    assert_eq!(normalize_control_flow(program.clone()), program);
 }

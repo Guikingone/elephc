@@ -12,7 +12,7 @@
 //! - Backend support is joined separately and must not be inferred from this file.
 
 use crate::{
-    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec,
+    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, TypeSpec,
     VariadicSpec,
 };
 
@@ -37,7 +37,7 @@ macro_rules! param {
 
 macro_rules! surface {
     (
-        $name:literal, $area:ident, $kind:ident,
+        $name:literal, $area:ident, $module:ident, $kind:ident,
         [$($param:expr),* $(,)?], $variadic:expr, $returns:ident,
         $summary:literal $(, extension: $extension:expr)?
     ) => {
@@ -45,6 +45,8 @@ macro_rules! surface {
             id: BuiltinId::from_canonical_name($name),
             name: $name,
             area: Area::$area,
+            module: PhpModule::$module,
+            since: None,
             kind: BuiltinKind::$kind,
             params: &[$($param),*],
             variadic: $variadic,
@@ -70,6 +72,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "buffer_new",
         Pointers,
+        Elephc,
         DedicatedSyntax,
         [param!("length", Int)],
         None,
@@ -80,6 +83,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "die",
         System,
+        Core,
         LanguageConstruct,
         [param!("status", Int = DefaultSpec::Int(0))],
         None,
@@ -89,6 +93,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "empty",
         Types,
+        Core,
         LanguageConstruct,
         [param!("value", Mixed)],
         None,
@@ -98,6 +103,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "exit",
         System,
+        Core,
         LanguageConstruct,
         [param!("status", Int = DefaultSpec::Int(0))],
         None,
@@ -107,6 +113,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "get_called_class",
         Callables,
+        Core,
         Function,
         [],
         None,
@@ -116,6 +123,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "get_class_methods",
         Callables,
+        Core,
         Function,
         [param!("object_or_class", Mixed)],
         None,
@@ -125,6 +133,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "get_class_vars",
         Callables,
+        Core,
         Function,
         [param!("class", Mixed)],
         None,
@@ -134,6 +143,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "hash_copy",
         String,
+        Hash,
         PreludeProvided,
         [param!("context", Mixed)],
         None,
@@ -143,6 +153,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "hash_final",
         String,
+        Hash,
         PreludeProvided,
         [
             param!("context", Mixed),
@@ -155,6 +166,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "hash_init",
         String,
+        Hash,
         PreludeProvided,
         [
             param!("algo", Str),
@@ -168,15 +180,85 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "hash_update",
         String,
+        Hash,
         PreludeProvided,
         [param!("context", Mixed), param!("data", Str)],
         None,
         Mixed,
         "Feeds data into an incremental hashing context."
     ),
+    // The `--web` request prelude's error/exception-handler stack and shutdown queue. All six
+    // are PHP declarations over the request-local state helpers (`__elephc_error_handler_state`
+    // and friends), so they have no `builtin!` binding. The prelude widens PHP's `?callable`
+    // to `mixed` because a handler slot also holds `null` and a callable array; the contracts
+    // record what the prelude declares, which is what prelude parity compares.
+    surface!(
+        "get_error_handler",
+        Web,
+        Core,
+        PreludeProvided,
+        [],
+        None,
+        Mixed,
+        "Returns the current user-defined error handler."
+    ),
+    surface!(
+        "register_shutdown_function",
+        Web,
+        Standard,
+        PreludeProvided,
+        [param!("callback", Callable)],
+        Some(VariadicSpec::value("args")),
+        Void,
+        "Registers a callback to run when the script terminates."
+    ),
+    surface!(
+        "restore_error_handler",
+        Web,
+        Core,
+        PreludeProvided,
+        [],
+        None,
+        Bool,
+        "Restores the previous user-defined error handler."
+    ),
+    surface!(
+        "restore_exception_handler",
+        Web,
+        Core,
+        PreludeProvided,
+        [],
+        None,
+        Bool,
+        "Restores the previous user-defined exception handler."
+    ),
+    surface!(
+        "set_error_handler",
+        Web,
+        Core,
+        PreludeProvided,
+        [
+            param!("callback", Mixed),
+            param!("error_levels", Int = DefaultSpec::Constant("E_ALL")),
+        ],
+        None,
+        Mixed,
+        "Installs a user-defined error handler and returns the previous one."
+    ),
+    surface!(
+        "set_exception_handler",
+        Web,
+        Core,
+        PreludeProvided,
+        [param!("callback", Mixed)],
+        None,
+        Mixed,
+        "Installs a user-defined exception handler and returns the previous one."
+    ),
     surface!(
         "isset",
         Types,
+        Core,
         LanguageConstruct,
         [param!("var", Mixed)],
         Some(VariadicSpec::value("vars")),
@@ -193,6 +275,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "levenshtein",
         String,
+        Standard,
         PreludeProvided,
         [
             param!("string1", Str),
@@ -214,6 +297,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "var_export",
         Io,
+        Standard,
         PreludeProvided,
         [
             param!("value", Mixed),
@@ -226,6 +310,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "unset",
         Types,
+        Core,
         LanguageConstruct,
         [param!("var", Mixed)],
         Some(VariadicSpec::value("vars")),

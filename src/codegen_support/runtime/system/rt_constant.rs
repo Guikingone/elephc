@@ -138,7 +138,10 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // park the owned message length
     emitter.instruction("mov rax, 32");                                         // request Throwable payload storage
     emitter.instruction("call __rt_heap_alloc");                                // allocate the \Error object payload
-    emitter.instruction("mov r10, 0x4548504c00000006");                         // x86_64 heap-kind word: object magic + kind 6
+    emitter.instruction(&format!(
+        "mov r10, 0x{:x}",
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
+    ));                                                                         // x86_64 heap-kind word: heap marker + object kind 6
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocation as a runtime object
     abi::emit_load_symbol_to_reg(emitter, "r10", "_constant_error_class_id", 0);
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the \Error class id at the object header
