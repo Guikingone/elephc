@@ -2193,10 +2193,11 @@ fn require_array_to_mixed_result(result_ty: &PhpType, inst: &Instruction) -> Res
     }
 }
 
-/// Verifies that `array_to_hash` produces associative-array storage.
+/// Verifies that `array_to_hash` produces hash-capable storage.
 fn require_array_to_hash_result(result_ty: &PhpType, inst: &Instruction) -> Result<PhpType> {
     match result_ty {
         PhpType::AssocArray { value, .. } => Ok(value.codegen_repr()),
+        PhpType::Array(value) if value.codegen_repr() == PhpType::Mixed => Ok(PhpType::Mixed),
         other => Err(CodegenIrError::unsupported(format!(
             "{} result PHP type {:?}",
             inst.op.name(),

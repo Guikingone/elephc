@@ -95,6 +95,15 @@ pub(super) fn lower_foreach(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    // Capture the declared element type before applying the loop storage contract. A by-reference
+    // loop widens the source payload to boxed Mixed cells, but the bound local remains a typed
+    // reference and must keep rejecting incompatible write-through assignments.
+    let declared_ref_value_ty = value_by_ref.then(|| match &array.kind {
+        ExprKind::Variable(name) if ctx.local_slots.contains_key(name.as_str()) => {
+            foreach_ref_value_type(&ctx.local_type(name).codegen_repr())
+        }
+        _ => PhpType::Mixed,
+    });
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
@@ -121,6 +130,8 @@ pub(super) fn lower_foreach(
     };
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
+    let ref_value_ty = declared_ref_value_ty
+        .unwrap_or_else(|| foreach_ref_value_type(&source_ty));
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
     let value_needs_null_init = !ctx.local_slots.contains_key(value_var);
     // A foreach over a concretely-indexed array (`Array` of a non-Mixed element
@@ -151,7 +162,7 @@ pub(super) fn lower_foreach(
         initialize_foreach_mixed_local_if_needed(ctx, key_var, key_needs_null_init, array.span);
     }
     if value_by_ref {
-        let value_ty = foreach_ref_value_type(&source_ty);
+        let value_ty = ref_value_ty.clone();
         ctx.declare_local(value_var, value_ty.clone());
         ctx.set_local_type(value_var, value_ty);
         if !value_needs_null_init {
@@ -224,7 +235,7 @@ pub(super) fn lower_foreach(
         ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
     }
     if value_by_ref {
-        let slot = ctx.declare_local(value_var, foreach_ref_value_type(&source_ty));
+        let slot = ctx.declare_local(value_var, ref_value_ty);
         ctx.release_ref_cell_owner(value_var, Some(array.span));
         ctx.emit_void(
             Op::IterCurrentValueRef,
@@ -288,9 +299,9 @@ pub(super) fn lower_foreach(
 /// and strings persisted) whose entries are then widened to boxed Mixed cells, which is where the
 /// reference word lives. `Op::ArrayToHash` consumes the loaded owner and returns its replacement,
 /// and `store_mutated_local` releases the local's own reference, so the array is freed exactly
-/// once and the hash owns every child. The local is retyped to match, mirroring the checker
-/// (`crate::types::checker::stmt_check::control_flow`), so post-loop reads use hash storage
-/// instead of reinterpreting boxed-cell pointers as the old packed payload type.
+/// once and the hash owns every child. The local keeps the runtime-polymorphic `Array(Mixed)`
+/// representation, mirroring the checker: earlier operations still see indexed storage, while
+/// later reads safely dispatch on the promoted heap kind.
 ///
 /// Only a SIMPLE variable source is promoted, which is the same condition the checker applies.
 /// Element and property sources keep the existing fetch-for-write path.
@@ -308,30 +319,20 @@ fn promote_by_ref_foreach_source(
     if !ctx.local_slots.contains_key(name.as_str()) {
         return;
     }
-    let PhpType::Array(elem_ty) = ctx.local_type(name).codegen_repr() else {
+    let PhpType::Array(_) = ctx.local_type(name).codegen_repr() else {
         return;
     };
-    // An `Array(Mixed)` local may ALREADY be a runtime-promoted hash with string keys, so its
-    // key type stays Mixed; a concrete-element indexed array can only ever have integer keys.
-    let key_ty = if matches!(elem_ty.codegen_repr(), PhpType::Mixed) {
-        PhpType::Mixed
-    } else {
-        PhpType::Int
-    };
-    let assoc_ty = PhpType::AssocArray {
-        key: Box::new(key_ty),
-        value: Box::new(PhpType::Mixed),
-    };
+    let storage_ty = PhpType::Array(Box::new(PhpType::Mixed));
     let array_value = ctx.load_local(name, Some(array.span));
     let hash = ctx.emit_value(
         Op::ArrayToHash,
         vec![array_value.value],
         None,
-        assoc_ty.clone(),
+        storage_ty.clone(),
         Op::ArrayToHash.default_effects(),
         Some(array.span),
     );
-    ctx.store_mutated_local(name, hash, assoc_ty, Some(array.span));
+    ctx.store_mutated_local(name, hash, storage_ty, Some(array.span));
 }
 
 /// Lowers the `foreach` source expression under the loop's binding mode.

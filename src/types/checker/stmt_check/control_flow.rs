@@ -237,36 +237,29 @@ impl Checker {
                     } else {
                         PhpType::Int
                     };
-                    // An indexed foreach-by-reference over a SIMPLE local promotes that local to
-                    // integer-keyed hash storage with boxed Mixed entries, because only a hash
-                    // ENTRY carries the persistent per-entry reference marker a live alias needs;
-                    // an indexed payload slot has nowhere to record one, so `clone($o, $arr)`
-                    // could not see that an entry is still referenced
-                    // (`crate::ir_lower::stmt::typed_foreach::promote_by_ref_foreach_source`).
-                    // This mirrors the AssocArray arm below: reflect the promotion in BOTH the
-                    // bound local and a simple source local, so post-loop reads do not
-                    // reinterpret boxed-cell pointers as the old packed payload type.
+                    // An indexed foreach-by-reference over a SIMPLE local promotes the payload
+                    // to runtime hash storage with boxed Mixed entries, because only a hash ENTRY
+                    // carries the persistent per-entry reference marker a live alias needs. Keep
+                    // the source's static representation runtime-polymorphic (`Array(Mixed)`),
+                    // rather than claiming it is always an `AssocArray`: statements before this
+                    // loop still operate on the original indexed payload, while statements after
+                    // it must accept the promoted hash. The bound reference retains the original
+                    // element type so the strict checker still rejects incompatible write-through
+                    // assignments.
                     let promotes_to_hash =
                         *value_by_ref && matches!(&array.kind, ExprKind::Variable(_));
                     if let Some(k) = key_var {
                         env.insert(k.clone(), key_ty.clone());
                         self.clear_foreach_callable_metadata(k);
                     }
-                    let value_ty = if promotes_to_hash {
-                        PhpType::Mixed
-                    } else {
-                        *elem_ty.clone()
-                    };
+                    let value_ty = *elem_ty.clone();
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
                     if promotes_to_hash {
                         if let ExprKind::Variable(source_name) = &array.kind {
                             env.insert(
                                 source_name.clone(),
-                                PhpType::AssocArray {
-                                    key: Box::new(key_ty),
-                                    value: Box::new(PhpType::Mixed),
-                                },
+                                PhpType::Array(Box::new(PhpType::Mixed)),
                             );
                         }
                     }
@@ -276,14 +269,11 @@ impl Checker {
                         self.clear_foreach_callable_metadata(k);
                     }
                     // Associative foreach-by-reference converts every entry to boxed Mixed
-                    // storage. Reflect that in both the bound local and a simple source local,
-                    // so post-loop reads do not reinterpret boxed-cell pointers as the old
-                    // concrete payload type.
-                    let value_ty = if *value_by_ref {
-                        PhpType::Mixed
-                    } else {
-                        *value.clone()
-                    };
+                    // storage. Reflect that in a simple source local so post-loop reads do not
+                    // reinterpret boxed-cell pointers as the old concrete payload type. The
+                    // reference local itself retains the entry's declared type, matching the
+                    // checker's normal strict write-through rules.
+                    let value_ty = *value.clone();
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
                     if *value_by_ref {
