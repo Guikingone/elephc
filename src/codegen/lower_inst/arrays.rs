@@ -729,9 +729,13 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_indexed_array(array_ty.clone(), inst)?;
     let elem_ty = indexed_array_element_type(&array_ty, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, &elem_ty)?,
-        Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
+    if elem_ty.codegen_repr() == PhpType::Mixed {
+        lower_runtime_polymorphic_array_push(ctx, array, value)?;
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, &elem_ty)?,
+            Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
+        }
     }
     let stored_type = if matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never) {
         ctx.value_php_type(value)?.codegen_repr()
@@ -744,6 +748,70 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ctx.store_value_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
+    Ok(())
+}
+
+/// Appends to `Array(Mixed)`, whose payload may have been promoted to associative hash storage.
+///
+/// Mixed-key writes and by-reference foreach promotion deliberately preserve this static type
+/// while changing the runtime heap kind. Dispatching here prevents an append after promotion from
+/// passing a hash header to an indexed-array helper. Each branch materializes its own owned Mixed
+/// payload because indexed append retains then releases the temporary, while hash append consumes
+/// the owned payload directly.
+fn lower_runtime_polymorphic_array_push(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    let hash = ctx.next_label("array_push_mixed_hash");
+    let done = ctx.next_label("array_push_mixed_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // select associative storage after a runtime promotion
+            ctx.emitter.instruction(&format!("b.eq {hash}"));                  // hash append has a distinct header and growth helper
+            lower_array_push_aarch64(ctx, array, value, &PhpType::Mixed)?;
+            ctx.emitter.instruction(&format!("b {done}"));                     // join with the updated container pointer in x0
+
+            ctx.emitter.label(&hash);
+            prepare_boxed_mixed_value_for_container(ctx, value)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.load_value_to_reg(array, "x9")?;
+            abi::emit_pop_reg(ctx.emitter, "x1");                              // transfer the owned Mixed cell into the hash entry
+            ctx.emitter.instruction("mov x0, x9");                             // pass the runtime hash receiver
+            ctx.emitter.instruction("mov x2, xzr");                            // boxed Mixed values use only the low payload word
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x3",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_append");
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                             // select associative storage after a runtime promotion
+            ctx.emitter.instruction(&format!("je {hash}"));                    // hash append has a distinct header and growth helper
+            lower_array_push_x86_64(ctx, array, value, &PhpType::Mixed)?;
+            ctx.emitter.instruction(&format!("jmp {done}"));                   // join with the updated container pointer in rax
+
+            ctx.emitter.label(&hash);
+            prepare_boxed_mixed_value_for_container(ctx, value)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.load_value_to_reg(array, "r11")?;
+            abi::emit_pop_reg(ctx.emitter, "rsi");                             // transfer the owned Mixed cell into the hash entry
+            ctx.emitter.instruction("mov rdi, r11");                           // pass the runtime hash receiver
+            ctx.emitter.instruction("xor edx, edx");                           // boxed Mixed values use only the low payload word
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "rcx",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_append");
+        }
+    }
+    ctx.emitter.label(&done);
     Ok(())
 }
 

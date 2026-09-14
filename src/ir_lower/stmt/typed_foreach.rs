@@ -95,15 +95,6 @@ pub(super) fn lower_foreach(
     body: &[Stmt],
     loop_span: Span,
 ) {
-    // Capture the declared element type before applying the loop storage contract. A by-reference
-    // loop widens the source payload to boxed Mixed cells, but the bound local remains a typed
-    // reference and must keep rejecting incompatible write-through assignments.
-    let declared_ref_value_ty = value_by_ref.then(|| match &array.kind {
-        ExprKind::Variable(name) if ctx.local_slots.contains_key(name.as_str()) => {
-            foreach_ref_value_type(&ctx.local_type(name).codegen_repr())
-        }
-        _ => PhpType::Mixed,
-    });
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
@@ -130,8 +121,6 @@ pub(super) fn lower_foreach(
     };
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
-    let ref_value_ty = declared_ref_value_ty
-        .unwrap_or_else(|| foreach_ref_value_type(&source_ty));
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
     let value_needs_null_init = !ctx.local_slots.contains_key(value_var);
     // A foreach over a concretely-indexed array (`Array` of a non-Mixed element
@@ -162,7 +151,7 @@ pub(super) fn lower_foreach(
         initialize_foreach_mixed_local_if_needed(ctx, key_var, key_needs_null_init, array.span);
     }
     if value_by_ref {
-        let value_ty = ref_value_ty.clone();
+        let value_ty = foreach_ref_value_type(&source_ty);
         ctx.declare_local(value_var, value_ty.clone());
         ctx.set_local_type(value_var, value_ty);
         if !value_needs_null_init {
@@ -235,7 +224,7 @@ pub(super) fn lower_foreach(
         ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
     }
     if value_by_ref {
-        let slot = ctx.declare_local(value_var, ref_value_ty);
+        let slot = ctx.declare_local(value_var, foreach_ref_value_type(&source_ty));
         ctx.release_ref_cell_owner(value_var, Some(array.span));
         ctx.emit_void(
             Op::IterCurrentValueRef,
