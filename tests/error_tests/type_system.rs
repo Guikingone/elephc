@@ -1687,12 +1687,41 @@ fn test_typed_local_not_killable() {
     expect_error("<?php int $a = 1; unset($a); $a = \"x\";", "cannot reassign");
 }
 
-/// Parameters with a declared type hint are a contract: never killable.
-/// (An untyped parameter stays killable — pin that too.)
+/// A PHP parameter type hint constrains the INCOMING ARGUMENT, not the local afterwards, so a
+/// type-hinted parameter is as killable and as retypable as an untyped one (issue #857).
+/// `function format(float $v): string { $v = (string) $v; return $v; }` is valid PHP that used
+/// to be rejected with `cannot reassign $v from float to string`.
 #[test]
-fn test_typed_param_not_killable() {
-    expect_error("<?php function f(int $a) { unset($a); $a = \"x\"; } f(1);", "cannot reassign");
+fn test_typed_param_is_killable() {
+    expect_no_error("<?php function f(int $a) { unset($a); $a = \"x\"; echo $a; } f(1);");
     expect_no_error("<?php function f($a) { unset($a); $a = \"x\"; echo $a; } f(1);");
+    expect_no_error(
+        "<?php function format(float $v): string { $v = (string) $v; return $v; } echo format(1.5);",
+    );
+}
+
+/// Retyping a type-hinted parameter still warns, exactly as retyping any other local does, and
+/// `--strict-locals` still turns that warning into the hard error.
+#[test]
+fn test_typed_param_retype_warns_and_is_strict_locals_error() {
+    expect_warning(
+        "<?php function format(float $v): string { $v = (string) $v; return $v; } echo format(1.5);",
+        "$v changes type from float to string",
+    );
+    expect_error_strict(
+        "<?php function format(float $v): string { $v = (string) $v; return $v; } echo format(1.5);",
+        "cannot reassign",
+    );
+}
+
+/// A BY-REFERENCE typed parameter is still never killable: the caller's storage is reachable
+/// through it, so abandoning the binding would strand the alias.
+#[test]
+fn test_typed_by_ref_param_not_killable() {
+    expect_error(
+        "<?php function f(int &$a) { unset($a); $a = \"x\"; } $n = 1; f($n);",
+        "cannot reassign",
+    );
 }
 
 /// Class properties never reach the local retype paths: pin the declared-property error.

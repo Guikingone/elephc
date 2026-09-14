@@ -289,9 +289,15 @@ pub(crate) struct Checker {
     /// Names declared `static` in the current body. Their storage outlives the call, so the
     /// binding is never killable.
     pub static_local_names: HashSet<String>,
-    /// Names whose type was DECLARED in the current body: `TypedAssign` locals (`int $x = …`)
-    /// and parameters carrying a type hint. A declaration is a programmer contract and stays
-    /// strict in both permissive and `--strict-locals` mode.
+    /// Names whose type was DECLARED in the current body by a `TypedAssign` local
+    /// (`int $x = …`). A declaration is a programmer contract and stays strict in both
+    /// permissive and `--strict-locals` mode.
+    ///
+    /// PARAMETERS are deliberately absent, type hint or not. A PHP parameter type constrains
+    /// the INCOMING ARGUMENT; it says nothing about the local afterwards, and php-src lets
+    /// `function f(float $v) { $v = (string) $v; }` reassign it freely (issue #857). Listing
+    /// typed parameters here made them permanently monomorphic and rejected that valid PHP
+    /// with `cannot reassign $v from float to string`.
     pub typed_local_names: HashSet<String>,
     /// The `unset()` ARGUMENTS whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed there. EIR lowering consults these to abandon the old frame slot instead of
@@ -443,8 +449,9 @@ impl Checker {
             // by-value closure captures. None of those live in a frame slot this body owns, so
             // abandoning them would strand storage the program still reaches by name.
             // PARAMETERS are the one seeded shape that IS frame storage, and they are seeded
-            // with an explicit depth 0 by `enter_local_binding_scope` — an untyped parameter
-            // stays kill-eligible (`test_typed_param_not_killable` pins both halves).
+            // with an explicit depth 0 by `enter_local_binding_scope`, so a parameter stays
+            // kill-eligible — a TYPE HINT does not change that, because it constrains the
+            // incoming argument rather than the local (`test_typed_param_is_killable`).
             //
             // A name a CONDITIONAL group introduced without going through an assignment (a
             // `foreach` or `list()` target, a `catch` variable, a builtin out-parameter, array
@@ -523,10 +530,13 @@ impl Checker {
     /// entry, so depth 0 is its true binding depth; recording it explicitly is what lets a
     /// MISSING depth entry mean "seeded, not bound here — not killable" in
     /// [`Checker::local_binding_is_killable`].
+    ///
+    /// The declared-type exclusion set starts EMPTY rather than seeded with the type-hinted
+    /// parameters: a hint constrains the incoming argument, not the local, so a parameter is
+    /// as retypable as any other local the body binds (see [`Checker::typed_local_names`]).
     pub(crate) fn enter_local_binding_scope(
         &mut self,
         param_names: Vec<String>,
-        typed_param_names: Vec<String>,
     ) -> SavedLocalBindingScope {
         let saved = SavedLocalBindingScope {
             conditional_depth: self.local_conditional_depth,
@@ -542,7 +552,7 @@ impl Checker {
         };
         self.local_conditional_depth = 0;
         self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
-        self.typed_local_names = typed_param_names.into_iter().collect();
+        self.typed_local_names = HashSet::new();
         // Cleared rather than inherited: a caller that runs `eval` says nothing about the body
         // about to be checked. `run_mixed_storage_scan` fills it in for real, and BOTH callers of
         // this method run that scan immediately afterwards — `with_local_storage_context` and

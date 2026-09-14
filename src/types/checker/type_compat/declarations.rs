@@ -388,10 +388,10 @@ impl Checker {
     /// the given values while running `f`. Saves and restores all state afterward to avoid
     /// leaking context across nested checks.
     ///
-    /// `typed_param_names` seeds the body's declared-type exclusion set with the parameters
-    /// that carry a type hint: a declared type is a contract, so those locals are never
-    /// kill/retype eligible. `param_names` is every parameter, typed or not, and seeds their
-    /// binding depth at 0 (see [`Checker::enter_local_binding_scope`]). The rest of the
+    /// `param_names` is every parameter, typed or not, and seeds their binding depth at 0
+    /// (see [`Checker::enter_local_binding_scope`]). A parameter's TYPE HINT is not carried
+    /// into the declared-type exclusion set: it constrains the incoming argument, not the
+    /// local, so a type-hinted parameter is as retypable as any other local. The rest of the
     /// per-body local-binding eligibility state (conditional depth, binding depths, reference
     /// aliases, `static` names) is reset here too — it describes one frame and must not leak
     /// between caller and callee.
@@ -407,7 +407,6 @@ impl Checker {
         &mut self,
         ref_param_names: Vec<String>,
         param_names: Vec<String>,
-        typed_param_names: Vec<String>,
         pre_bound_own_storage: std::collections::HashMap<String, crate::types::PhpType>,
         body: &[crate::parser::ast::Stmt],
         f: F,
@@ -415,8 +414,7 @@ impl Checker {
     where
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
-        let saved_local_binding_scope =
-            self.enter_local_binding_scope(param_names, typed_param_names);
+        let saved_local_binding_scope = self.enter_local_binding_scope(param_names);
         let saved_ref_params = self.active_ref_params.clone();
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();

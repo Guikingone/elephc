@@ -36,7 +36,7 @@ impl Checker {
         // Top level is a body like any other, and this pass runs TWICE. Without a reset the
         // second pass would start with the first pass's aliases and binding depths already in
         // place, so the same `unset` could be eligible in one pass and not the other.
-        let saved_local_binding_scope = self.enter_local_binding_scope(Vec::new(), Vec::new());
+        let saved_local_binding_scope = self.enter_local_binding_scope(Vec::new());
         // `enter_local_binding_scope` does NOT touch `active_ref_params`, so the top level installs
         // it here the way `with_local_storage_context` does for every other body: saved, emptied,
         // restored. Top level declares no by-reference parameters and captures nothing, so the set

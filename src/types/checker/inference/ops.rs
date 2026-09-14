@@ -480,21 +480,6 @@ impl Checker {
             .map(|(name, _, _, _)| name.clone())
             .chain(variadic.iter().map(|name| (*name).clone()))
             .collect();
-        // A closure parameter with a declared type hint is a contract inside the body.
-        let typed_variadic = match &expr.kind {
-            ExprKind::Closure {
-                variadic: Some(variadic_name),
-                variadic_type: Some(_),
-                ..
-            } => Some(variadic_name.clone()),
-            _ => None,
-        };
-        let closure_typed_params: Vec<String> = params
-            .iter()
-            .filter(|(_, type_ann, _, _)| type_ann.is_some())
-            .map(|(name, _, _, _)| name.clone())
-            .chain(typed_variadic)
-            .collect();
         // Inside a closure body, `$this` is permitted even with no enclosing
         // class method: the closure may be bound to an object later. Track the
         // nesting so `infer_this_type` can allow it (as a runtime-dispatched
@@ -526,7 +511,6 @@ impl Checker {
         let body_result = self.with_local_storage_context(
             closure_ref_params,
             closure_param_names,
-            closure_typed_params,
             pre_bound_own_storage,
             body,
             |checker| {
