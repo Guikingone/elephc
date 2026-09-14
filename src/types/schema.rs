@@ -517,11 +517,49 @@ pub fn resolve_property_name(
                 PropertyNameResolution::Inaccessible(Visibility::Protected)
             }
         }
+        // Checker-injected builtin subclasses use synthetic PHP bodies to model engine-owned
+        // methods. Those bodies must be able to reach the private storage inherited from another
+        // injected builtin, such as FilterIterator::__construct writing IteratorIterator::$inner.
+        // User code never receives this privilege: its lexical scope is not a catalog builtin.
+        Visibility::Private
+            if builtin_scope_owns_inherited_storage(classes, class_name, declaring, scope) =>
+        {
+            PropertyNameResolution::Visible
+        }
         // Step 1 already answered for the declaring scope, so reaching here means this scope is
         // not it. A STRICT ancestor's slot is invisible rather than refused.
         Visibility::Private if declaring != class_name => PropertyNameResolution::Dynamic,
         Visibility::Private => PropertyNameResolution::Inaccessible(Visibility::Private),
     }
+}
+
+/// Returns whether a checker-injected builtin method is accessing inherited engine storage.
+///
+/// Builtin class bodies are synthetic compiler implementation details, not user-authored PHP.
+/// Requiring their inherited private slots to follow userland dynamic-property rules would either
+/// add a hash to fixed builtin layouts or reject every program that injects the relevant prelude.
+/// The receiver and lexical scope must name the same builtin subclass, and the declaring class
+/// must be a builtin ancestor, so ordinary subclasses and unrelated builtin receivers remain
+/// governed by PHP visibility.
+fn builtin_scope_owns_inherited_storage(
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+    declaring: &str,
+    scope: Option<&str>,
+) -> bool {
+    let Some(scope) = scope else {
+        return false;
+    };
+    let is_checker_injected = |name| {
+        elephc_builtin_contract::lookup_class(name).is_some_and(|contract| {
+            contract.route == elephc_builtin_contract::ClassRoute::CheckerInjected
+        })
+    };
+    scope == class_name
+        && declaring != class_name
+        && class_inherits_from(classes, class_name, declaring)
+        && is_checker_injected(scope)
+        && is_checker_injected(declaring)
 }
 
 /// Returns whether the layout of `class_name` carries `property` but php resolves it to a
