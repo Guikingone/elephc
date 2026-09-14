@@ -770,17 +770,17 @@ fn lower_runtime_polymorphic_array_push(
             ctx.load_value_to_reg(array, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
             ctx.emitter.instruction("cmp x0, #3");                              // select associative storage after a runtime promotion
-            ctx.emitter.instruction(&format!("b.eq {hash}"));                  // hash append has a distinct header and growth helper
+            ctx.emitter.instruction(&format!("b.eq {hash}"));                   // hash append has a distinct header and growth helper
             lower_array_push_aarch64(ctx, array, value, &PhpType::Mixed)?;
-            ctx.emitter.instruction(&format!("b {done}"));                     // join with the updated container pointer in x0
+            ctx.emitter.instruction(&format!("b {done}"));                      // join with the updated container pointer in x0
 
             ctx.emitter.label(&hash);
             prepare_boxed_mixed_value_for_container(ctx, value)?;
             abi::emit_push_reg(ctx.emitter, "x0");
             ctx.load_value_to_reg(array, "x9")?;
-            abi::emit_pop_reg(ctx.emitter, "x1");                              // transfer the owned Mixed cell into the hash entry
-            ctx.emitter.instruction("mov x0, x9");                             // pass the runtime hash receiver
-            ctx.emitter.instruction("mov x2, xzr");                            // boxed Mixed values use only the low payload word
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // transfer the owned Mixed cell into the hash entry
+            ctx.emitter.instruction("mov x0, x9");                              // pass the runtime hash receiver
+            ctx.emitter.instruction("mov x2, xzr");                             // boxed Mixed values use only the low payload word
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 "x3",
@@ -789,20 +789,20 @@ fn lower_runtime_polymorphic_array_push(
             abi::emit_call_label(ctx.emitter, "__rt_hash_append");
         }
         Arch::X86_64 => {
-            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(array, "rax")?;
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
-            ctx.emitter.instruction("cmp rax, 3");                             // select associative storage after a runtime promotion
-            ctx.emitter.instruction(&format!("je {hash}"));                    // hash append has a distinct header and growth helper
+            ctx.emitter.instruction("cmp rax, 3");                              // select associative storage after a runtime promotion
+            ctx.emitter.instruction(&format!("je {hash}"));                     // hash append has a distinct header and growth helper
             lower_array_push_x86_64(ctx, array, value, &PhpType::Mixed)?;
-            ctx.emitter.instruction(&format!("jmp {done}"));                   // join with the updated container pointer in rax
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the updated container pointer in rax
 
             ctx.emitter.label(&hash);
             prepare_boxed_mixed_value_for_container(ctx, value)?;
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.load_value_to_reg(array, "r11")?;
-            abi::emit_pop_reg(ctx.emitter, "rsi");                             // transfer the owned Mixed cell into the hash entry
-            ctx.emitter.instruction("mov rdi, r11");                           // pass the runtime hash receiver
-            ctx.emitter.instruction("xor edx, edx");                           // boxed Mixed values use only the low payload word
+            abi::emit_pop_reg(ctx.emitter, "rsi");                              // transfer the owned Mixed cell into the hash entry
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the runtime hash receiver
+            ctx.emitter.instruction("xor edx, edx");                            // boxed Mixed values use only the low payload word
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 "rcx",
