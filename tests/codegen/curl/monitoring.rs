@@ -245,15 +245,20 @@ echo ">>";
     let (after_output, after) = run("after", "after.json");
 
     // The two runs are only comparable if they did the same work. Each prints
-    // `<bytes>;<chunks>;<burn result>`: the same ten-byte body delivered, and `burn` (which
-    // is pure) run exactly once on each side, so equal results mean equal work. The chunk
-    // count is reported rather than asserted equal — the burn is already pinned to the
+    // `<bytes>;<chunks>;<burn result>`, and BOTH halves have to be checked on BOTH runs:
+    // the burn result alone cannot distinguish a control that transferred nothing, because
+    // `burn` is pure and runs once either way — a short or empty control response would
+    // then compare network waits from transfers that are not equivalent.
+    //
+    // The chunk count is reported rather than asserted equal: the burn is pinned to the
     // first invocation, so a split body no longer changes the work, but seeing the split in
     // the failure message is worth more than hiding it.
-    assert!(
-        inside_output.starts_with("10;"),
-        "the in-callback run did not receive the fixture body: {inside_output:?}"
-    );
+    for (shape, output) in [("in-callback", &inside_output), ("control", &after_output)] {
+        assert!(
+            output.starts_with("10;"),
+            "the {shape} run did not receive the fixture body: {output:?}"
+        );
+    }
     let burn_result = |output: &str| -> String {
         output
             .rsplit_once(';')
