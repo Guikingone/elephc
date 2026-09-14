@@ -167,8 +167,42 @@ pub(super) fn lower_const_dynamic_prop_get(
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
     }
+    let mode = property_fetch_mode(inst);
+    if let Some(class_name) = scope_dynamic_property_class_for_object(ctx, object, property)? {
+        if matches!(
+            resolve_property_read_arm(ctx, &class_name, property, mode, inst)?,
+            Some(PropertyNameArm::MagicDeferred { .. })
+        ) {
+            emit_dynamic_property_miss_result(ctx, inst);
+            return store_if_result(ctx, inst);
+        }
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, base_reg)?;
+        emit_scope_dynamic_property_read(ctx, inst, &class_name, property, base_reg, mode)?;
+        return store_if_result(ctx, inst);
+    }
     if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, property)? {
         return lower_allow_dynamic_prop_get(ctx, inst, object, property, offset);
+    }
+    // A literal name reaches an inaccessible slot only where the checker tolerates the access.
+    // php raises for a value read and answers a probe `null`; neither may read the slot, and on a
+    // class that declares an accessor php reports nothing at all.
+    if let PhpType::Object(class_name) = ctx.value_php_type(object)? {
+        match resolve_property_read_arm(ctx, &class_name, property, mode, inst)? {
+            // Only a value read reaches this arm; a probe drops it below.
+            Some(PropertyNameArm::Refuse { message, .. }) => {
+                super::super::exceptions::emit_error(ctx, &message);
+                return Ok(());
+            }
+            // `MagicDeferred` is php's accessor answer this compiler cannot dispatch yet, and
+            // `None` is a probe of a refused name. Both answer php `null` without reading the
+            // slot, which holds storage this scope may not see.
+            Some(PropertyNameArm::MagicDeferred { .. }) | None => {
+                emit_dynamic_property_miss_result(ctx, inst);
+                return store_if_result(ctx, inst);
+            }
+            _ => {}
+        }
     }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -190,7 +224,8 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
 ) -> Result<()> {
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
-    let candidates = declared_mixed_property_get_candidates(ctx, inst)?;
+    let mode = property_fetch_mode(inst);
+    let candidates = declared_mixed_property_get_candidates(ctx, mode, inst)?;
     let done_label = ctx.next_label("mixed_dyn_prop_get_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_get_miss");
     let miss_no_stack_label = ctx.next_label("mixed_dyn_prop_get_miss_no_stack");
@@ -200,7 +235,7 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
         .map(|candidate| {
             ctx.next_label(&format!(
                 "mixed_dyn_prop_get_{}",
-                label_fragment(&candidate.slot.property)
+                label_fragment(&candidate.candidate.slot.property)
             ))
         })
         .collect::<Vec<_>>();
@@ -214,20 +249,53 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, candidate, label);
+        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, &candidate.candidate, label);
     }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
+        let slot = &candidate.candidate.slot;
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-        if candidate.slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+        // Only `Slot` touches storage. Every temporary block is released BEFORE the arm's own
+        // exit, so the unwinder and `done` both see the same stack pointer on every path.
+        match &candidate.kind {
+            // php refuses the read from this scope.
+            MixedPropertyReadKind::Refuse(message) => {
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                super::super::exceptions::emit_error(ctx, message);
+                continue;
+            }
+            // php makes this name invisible on this class, so it answers from the per-instance
+            // hash and a value read that finds nothing warns `Undefined property`. The shared miss
+            // arm cannot do it: it answers for every unmatched name, including the ones this
+            // compiler still reports silently.
+            MixedPropertyReadKind::ScopeDynamic => {
+                let class_name = slot.class_name.clone();
+                let property = slot.property.clone();
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                emit_scope_dynamic_property_read(
+                    ctx, inst, &class_name, &property, base_reg, mode,
+                )?;
+                abi::emit_jump(ctx.emitter, &done_label);
+                continue;
+            }
+            // php answers `__get` or `__isset`, which a runtime name cannot reach yet.
+            MixedPropertyReadKind::MagicDeferred => {
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                emit_dynamic_property_miss_result(ctx, inst);
+                abi::emit_jump(ctx.emitter, &done_label);
+                continue;
+            }
+            MixedPropertyReadKind::Slot => {}
         }
-        emit_property_load(ctx, &candidate.slot, base_reg)?;
-        materialize_loaded_property_result(ctx, inst, &candidate.slot.php_type)?;
+        if slot.is_declared {
+            emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
+        }
+        emit_property_load(ctx, slot, base_reg)?;
+        materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
         abi::emit_release_temporary_stack(ctx.emitter, 32);
         abi::emit_jump(ctx.emitter, &done_label);
     }

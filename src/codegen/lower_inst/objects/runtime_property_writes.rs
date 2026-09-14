@@ -184,6 +184,13 @@ pub(super) fn lower_runtime_object_prop_set(
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 super::super::exceptions::emit_error(ctx, message);
             }
+            // A WRITE never builds either of these: `resolve_property_write_arm` drops a dynamic
+            // name so the miss arm below creates the dynamic property with php's deprecation, and
+            // it has no accessor-deferred answer. Falling through to that arm keeps the name on
+            // php's answer if the resolution ever changes.
+            PropertyNameArm::ScopeDynamic { .. } | PropertyNameArm::MagicDeferred { .. } => {
+                abi::emit_jump(ctx.emitter, &miss_label)
+            }
         }
     }
 
@@ -345,6 +352,11 @@ fn mixed_property_write_candidate(
                 return Ok(None);
             };
             (slot, Some(message))
+        }
+        // A write never builds either arm, and a class that cannot answer the name by slot is not
+        // a candidate for the class-id dispatch: the receiver-shaped miss path handles it.
+        PropertyNameArm::ScopeDynamic { .. } | PropertyNameArm::MagicDeferred { .. } => {
+            return Ok(None)
         }
     };
     Ok(Some(MixedPropertyWriteCandidate {

@@ -485,13 +485,20 @@ fn test_error_cannot_reduce_visibility_when_overriding_method() {
     );
 }
 
-/// Verifies the error diagnostic for subclass cannot access parent private property.
+/// Verifies that a subclass reading a parent's private property is NOT a compile error.
+///
+/// php 7.4 removed shadow properties: `Base::$value` lives under a mangled key, so the child's
+/// by-name table does not contain it and the plain name is a DYNAMIC property there. php 8.5.10
+/// warns `Undefined property: Child::$value` at run time and answers null, so refusing the
+/// program at compile time rejected a program php accepts. The run-time behaviour is pinned by
+/// `tests/codegen/objects/property_access/scope_visibility.rs`.
+///
+/// A private property declared by the receiver's OWN class is still an access error: see
+/// `test_error_private_access`.
 #[test]
-fn test_error_subclass_cannot_access_parent_private_property() {
-    // private properties are invisible to child classes; accessing them via `$this` is an error.
-    expect_error(
+fn test_subclass_read_of_parent_private_property_is_not_an_access_error() {
+    expect_no_error(
         "<?php class Base { private $value = 1; } class Child extends Base { public function read() { return $this->value; } } $c = new Child(); echo $c->read();",
-        "Cannot access private property: Child::value",
     );
 }
 

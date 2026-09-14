@@ -88,6 +88,27 @@ pub(super) fn lower_prop_get_nonnull(
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
     }
+    // The physical layout still carries a strict ancestor's PRIVATE slot under this plain name,
+    // so the slot lookup below would read storage php makes invisible here. php answers this name
+    // from the per-instance hash instead, or from `__get` on a class that declares one, and the
+    // name only reaches lowering at all because the checker resolves it the same way.
+    if let Some(class_name) = scope_dynamic_property_class_for_object(ctx, object, property)? {
+        let mode = property_fetch_mode(inst);
+        match resolve_property_read_arm(ctx, &class_name, property, mode, inst)? {
+            Some(PropertyNameArm::MagicDeferred { .. }) => {
+                emit_dynamic_property_miss_result(ctx, inst);
+                return store_if_result(ctx, inst);
+            }
+            _ => {
+                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+                ctx.load_value_to_reg(object, base_reg)?;
+                emit_scope_dynamic_property_read(
+                    ctx, inst, &class_name, property, base_reg, mode,
+                )?;
+                return store_if_result(ctx, inst);
+            }
+        }
+    }
     if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, property)? {
         return lower_allow_dynamic_prop_get(ctx, inst, object, property, offset);
     }
@@ -190,11 +211,7 @@ fn lower_mixed_load_prop_ref_cell_checked(
     property: &str,
     expected: &PhpType,
 ) -> Result<()> {
-    let candidates: Vec<MixedPropertyCandidate> =
-        declared_mixed_property_candidates(ctx, property, inst)?
-            .into_iter()
-            .filter(|candidate| candidate.slot.is_reference)
-            .collect();
+    let candidates = declared_mixed_reference_property_candidates(ctx, property, inst)?;
     if candidates.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "load_prop_ref_cell_checked on Mixed receiver for property ${} with no \
@@ -278,11 +295,7 @@ pub(super) fn lower_mixed_load_prop_ref_cell(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
-    let candidates: Vec<MixedPropertyCandidate> =
-        declared_mixed_property_candidates(ctx, property, inst)?
-            .into_iter()
-            .filter(|candidate| candidate.slot.is_reference)
-            .collect();
+    let candidates = declared_mixed_reference_property_candidates(ctx, property, inst)?;
     if candidates.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "load_prop_ref_cell on Mixed receiver for property ${} with no reference-property class",
@@ -535,6 +548,67 @@ pub(super) fn lower_allow_dynamic_prop_get(
     ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
+}
+
+/// Reads a name php resolves to a DYNAMIC property on a statically known class.
+///
+/// php 7.4 removed shadow properties: a strict ancestor's private slot lives under a mangled key,
+/// so outside the class that declared it the plain name belongs to the per-instance hash and the
+/// private slot keeps its own value. A class that reserves no hash can never hold such an entry,
+/// so the name is simply php `null`.
+///
+/// Both the class and the name are compile-time constants here, so a READ's `Undefined property`
+/// warning is one static line. A PROBE stays silent: `isset()`, `empty()` and `??` never report
+/// it. The result is left in the instruction's result representation for the caller's shared
+/// `store_if_result`.
+pub(super) fn emit_scope_dynamic_property_read(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    property: &str,
+    object_reg: &str,
+    mode: PropertyFetchMode,
+) -> Result<()> {
+    let Some(hash_offset) = dynamic_property_hash_offset_for_class(ctx, class_name, property)?
+    else {
+        if mode.is_read() {
+            emit_undefined_property_warning(ctx, class_name, property);
+        }
+        emit_boxed_null(ctx);
+        return cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr());
+    };
+    let target = ctx.emitter.target;
+    let (label, key_len) = ctx.data.add_string(property.as_bytes());
+    let miss_label = ctx.next_label("scope_dynamic_prop_miss");
+    let done_label = ctx.next_label("scope_dynamic_prop_done");
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        object_reg,
+        hash_offset,
+    );
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &miss_label);
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
+        }
+    }
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    if mode.is_read() {
+        emit_undefined_property_warning(ctx, class_name, property);
+    }
+    emit_boxed_null(ctx);
+    ctx.emitter.label(&done_label);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
 }
 
 /// Reads a RUNTIME-name undeclared property from the receiver's dynamic-property hash.

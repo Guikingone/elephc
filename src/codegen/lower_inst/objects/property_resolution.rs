@@ -131,6 +131,28 @@ pub(super) enum PropertyNameArm {
         /// php 8.5's verbatim wording, e.g. `Cannot access private property D::$n`.
         message: String,
     },
+    /// php resolves the name to a DYNAMIC property here, so it answers from the instance hash.
+    ///
+    /// Only a READ builds this arm. A strict ancestor's private slot still occupies the physical
+    /// layout under this plain name, so the arm exists to keep the name away from that slot and
+    /// send it to the per-instance hash, or to php `null` when the class reserves no hash.
+    ScopeDynamic {
+        /// Property name the runtime string must equal for this arm to run.
+        property: String,
+    },
+    /// php would answer this name from `__get` or `__isset`, which is not dispatchable yet.
+    ///
+    /// The class declares the accessor php consults BEFORE it reports anything, so neither the
+    /// access `Error` nor the `Undefined property` warning may be emitted here: php reports
+    /// neither. This compiler cannot call the accessor with a runtime name yet, so the arm answers
+    /// php `null` and, above all, never reads the slot. The slot holds private storage this scope
+    /// may not see, and handing it back would be a storage escape dressed up as a value.
+    ///
+    /// The php-correct value arrives with the dedicated runtime-name magic dispatch phase.
+    MagicDeferred {
+        /// Property name the runtime string must equal for this arm to run.
+        property: String,
+    },
 }
 
 impl PropertyNameArm {
@@ -138,8 +160,21 @@ impl PropertyNameArm {
     pub(super) fn property(&self) -> &str {
         match self {
             Self::Slot(slot) => &slot.property,
-            Self::Refuse { property, .. } => property,
+            Self::Refuse { property, .. }
+            | Self::ScopeDynamic { property }
+            | Self::MagicDeferred { property } => property,
         }
+    }
+}
+
+/// Returns php's fetch mode for one property-read instruction, defaulting to a value read.
+///
+/// A missing immediate means `Read`, the raising and warning variant, so an emitter that forgets
+/// the immediate cannot silently downgrade a value read into a silent probe.
+pub(super) fn property_fetch_mode(inst: &Instruction) -> PropertyFetchMode {
+    match inst.immediate {
+        Some(Immediate::PropertyFetchMode(mode)) => mode,
+        _ => PropertyFetchMode::Read,
     }
 }
 
@@ -175,13 +210,79 @@ pub(super) fn resolve_property_write_arm(
     }
 }
 
-/// Resolves the ladder slot one property name takes on a READ, or `None` when it is dynamic.
+/// Resolves the ladder arm one property name takes on a READ, or `None` when it drops out.
 ///
-/// `Inaccessible` deliberately keeps today's slot arm. php raises `Cannot access private property`
-/// for a value read but answers `false` for `isset()`, and there is no `DynamicPropIsset` opcode:
-/// `isset($o->{$k})` lowers to `DynamicPropGet` plus a null test, so refusing here would make
-/// `isset()` throw. The read-side refusal lands with the isset discriminator, not here.
-pub(super) fn resolve_property_read_slot(
+/// The FETCH MODE is what separates php's two answers for a name this scope may not reach.
+/// A value read raises the catchable `Error`; `isset()`, `empty()` and `??` answer `null` in
+/// silence, so their arm is dropped and the name falls into the caller's miss path. That is the
+/// whole reason `Op::DynamicPropGet` carries `PropertyFetchMode`: without it, refusing here would
+/// have made `isset($o->{$k})` throw, and accepting here let an unrelated scope read private
+/// storage.
+pub(super) fn resolve_property_read_arm(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    mode: PropertyFetchMode,
+    inst: &Instruction,
+) -> Result<Option<PropertyNameArm>> {
+    let normalized = class_name.trim_start_matches('\\');
+    let resolution = resolve_property_name_in_current_scope(ctx, normalized, property);
+    // php consults the magic accessor BEFORE it reports either diagnostic: a private property
+    // reached from an unrelated scope on a class that declares `__get` answers `__get`, not
+    // `Cannot access private property`, and `isset()` there answers `__isset`. This compiler does
+    // not dispatch magic for a runtime name yet, so neither the refusal nor the undefined-property
+    // warning may be emitted for such a class: both would be diagnostics php never reports.
+    if class_declares_property_magic(ctx, normalized, mode)
+        && !matches!(resolution, PropertyNameResolution::Visible)
+    {
+        return Ok(Some(PropertyNameArm::MagicDeferred {
+            property: property.to_string(),
+        }));
+    }
+    match resolution {
+        PropertyNameResolution::Visible => {
+            resolve_property_slot_for_class(ctx, normalized, property, inst)
+                .map(|slot| Some(PropertyNameArm::Slot(slot)))
+        }
+        PropertyNameResolution::ScopePrivate { scope, index } => {
+            resolve_scope_private_property_slot(ctx, &scope, index, property, inst)
+                .map(|slot| Some(PropertyNameArm::Slot(slot)))
+        }
+        PropertyNameResolution::Dynamic => Ok(Some(PropertyNameArm::ScopeDynamic {
+            property: property.to_string(),
+        })),
+        PropertyNameResolution::Inaccessible(visibility) => Ok(mode.is_read().then(|| {
+            PropertyNameArm::Refuse {
+                property: property.to_string(),
+                message: property_access_error_message(&visibility, normalized, property),
+            }
+        })),
+    }
+}
+
+/// Returns whether the class declares the magic accessor php would consult in this fetch mode.
+///
+/// `__get` for a value read, `__isset` for a probe. `ClassInfo::methods` is already flattened over
+/// the ancestry, so an inherited accessor counts, exactly as `magic_get_receiver_class` reads it.
+fn class_declares_property_magic(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    mode: PropertyFetchMode,
+) -> bool {
+    let magic = if mode.is_read() { "__get" } else { "__isset" };
+    ctx.module
+        .class_infos
+        .get(class_name)
+        .is_some_and(|class_info| class_info.methods.contains_key(&php_symbol_key(magic)))
+}
+
+/// Resolves the slot a property name addresses for a REFERENCE binding, ignoring accessibility.
+///
+/// `$x = &$mixed->p` and a by-reference return are writes as much as reads, and php's refusal for
+/// them is phase B2's subject. This keeps the pre-B1 answer verbatim so the reference paths do not
+/// change behaviour in a phase that owns reads: `Dynamic` has no slot, everything else takes the
+/// scope-selected one.
+pub(super) fn resolve_property_reference_slot(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     property: &str,
@@ -251,6 +352,45 @@ fn resolve_scope_private_property_slot(
         is_packed: false,
         is_reference: class_info.property_slot_is_reference(index, slot_property),
     })
+}
+
+/// Returns whether the physical layout carries `property` but php resolves it to a DYNAMIC
+/// property in this scope.
+///
+/// The physical-slot test is what keeps this narrow. `resolve_property_name` answers `Dynamic`
+/// for every name a class does not declare, so without it an ordinary undeclared name on an
+/// `#[\AllowDynamicProperties]` class would take the scope-dynamic route as well. Only a strict
+/// ancestor's private slot is both present in the layout and invisible by name.
+pub(super) fn property_name_is_scope_dynamic(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    ctx.module
+        .class_infos
+        .get(normalized)
+        .is_some_and(|class_info| {
+            class_info
+                .properties
+                .iter()
+                .any(|(name, _)| name == property)
+        })
+        && resolve_property_name_in_current_scope(ctx, normalized, property)
+            == PropertyNameResolution::Dynamic
+}
+
+/// Returns the receiver's class when `property` is a scope-dynamic name on it.
+pub(super) fn scope_dynamic_property_class_for_object(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+) -> Result<Option<String>> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)? else {
+        return Ok(None);
+    };
+    let normalized = class_name.trim_start_matches('\\').to_string();
+    Ok(property_name_is_scope_dynamic(ctx, &normalized, property).then_some(normalized))
 }
 
 /// Returns the dynamic-property hash slot offset for a known class and property name.

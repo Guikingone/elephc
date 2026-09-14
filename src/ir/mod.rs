@@ -43,7 +43,8 @@ pub use function::{
 };
 pub use instr::{
     BuiltinId, CheckedNumericChainImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,
-    InstId, Instruction, MixedNumericOp, Op, PassOrigin, PhpTypePredicate, RuntimeId,
+    InstId, Instruction, MixedNumericOp, Op, PassOrigin, PhpTypePredicate, PropertyFetchMode,
+    RuntimeId,
 };
 pub use module::{
     ClassTable, CloneOverrideApplicator, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,

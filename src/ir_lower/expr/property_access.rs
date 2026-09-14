@@ -263,6 +263,19 @@ pub(super) fn property_get_result_type(
             property_ty
         };
     }
+    // `visible_property` still answers for a strict ancestor's PRIVATE slot, which php resolves
+    // to a dynamic property everywhere but the class that declared it. Typing the read from that
+    // slot handed the backend a non-null-capable result for a name whose answer is the dynamic
+    // hash, or php `null`.
+    if class_info.visible_property(property).is_some()
+        && property_name_is_dynamic_in_scope(ctx, normalized, property)
+    {
+        return if nullable {
+            nullable_result_type(PhpType::Mixed)
+        } else {
+            PhpType::Mixed
+        };
+    }
     let Some((_, (_, property_ty))) = class_info.visible_property(property) else {
         if let Some(magic_ty) = magic_get_result_type(ctx, normalized) {
             return if nullable {
@@ -665,15 +678,37 @@ pub(super) fn class_extends_class(
 
 /// Lowers a dynamic property read.
 pub(super) fn lower_dynamic_property_get(ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &Expr, expr: &Expr) -> LoweredValue {
-    let object = lower_expr(ctx, object);
-    lower_dynamic_property_get_from_value(ctx, object, property, expr)
+    lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Read, expr)
 }
 
-/// Lowers a dynamic property read once the receiver is already evaluated.
-pub(super) fn lower_dynamic_property_get_from_value(
+/// Lowers a dynamic property fetch in php's read or silent-probe mode.
+pub(super) fn lower_dynamic_property_fetch(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+    mode: PropertyFetchMode,
+    expr: &Expr,
+) -> LoweredValue {
+    let object = lower_expr(ctx, object);
+    lower_dynamic_property_fetch_from_value(ctx, object, property, mode, expr)
+}
+
+/// Lowers a dynamic property fetch, in either mode, once the receiver is already evaluated.
+///
+/// The mode travels on the instruction because php's answer for a name this scope may not reach,
+/// or that has never been created, depends on it and on nothing the backend can recover later:
+/// a value read raises `Cannot access private property D::$n` or warns `Undefined property`,
+/// while `isset()`, `empty()` and `??` answer `null` in silence.
+///
+/// The mode is NOT an effect narrowing. It suppresses php's own access and miss diagnostics only;
+/// a probe still reaches `__isset`, `__get` and property hooks, which are user code that can throw
+/// or warn. php 8.5 propagates an exception thrown from `__isset` straight out of `isset()`, so
+/// both modes keep the opcode's conservative contract.
+pub(super) fn lower_dynamic_property_fetch_from_value(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
     property: &Expr,
+    mode: PropertyFetchMode,
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
@@ -681,12 +716,65 @@ pub(super) fn lower_dynamic_property_get_from_value(
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
-        None,
+        Some(Immediate::PropertyFetchMode(mode)),
         result_type,
         Op::DynamicPropGet.default_effects(),
         Some(expr.span),
     );
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
+}
+
+/// Lowers `$object->name` as a silent probe by reusing the runtime-name fetch with a literal name.
+///
+/// `Op::PropGet` already spends its immediate on the property name, so the probe distinction
+/// cannot ride along with it. A literal-name `DynamicPropGet` reaches exactly the same backend
+/// ladders (`lower_const_dynamic_prop_get` dispatches to the same stdClass, magic, hash and
+/// declared-slot lowerings `lower_prop_get_nonnull` does) with the same result type, ownership
+/// and effects, so routing the probe through it keeps one set of read semantics.
+pub(super) fn lower_property_probe_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+    lower_dynamic_property_fetch_from_value(ctx, object, &name, PropertyFetchMode::Probe, expr)
+}
+
+/// Returns whether `$object->name` must be probed through the runtime-name form.
+///
+/// Only a receiver whose class is unknown at compile time needs it: `property_isset_action`
+/// answers for every singular object class, and a name the checker refused never reaches
+/// lowering. A boxed `Mixed` receiver has neither, so its declared-slot ladder is the one place
+/// where a probe would otherwise take the raising value-read arm.
+pub(super) fn property_probe_needs_runtime_name_form(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> bool {
+    if isset_object_expr_class(ctx, object).is_some() {
+        return false;
+    }
+    property_probe_needs_runtime_name_form_for_type(&expr_receiver_type_for_probe(ctx, object))
+}
+
+/// The receiver-TYPE half of the decision above, for a receiver already lowered to a value.
+///
+/// A nullable or union receiver that still resolves to one object class keeps the ordinary named
+/// read: its declared slot is known and the checker has already ruled on the name.
+pub(super) fn property_probe_needs_runtime_name_form_for_type(receiver_ty: &PhpType) -> bool {
+    singular_object_class(receiver_ty).is_none()
+        && matches!(
+            receiver_ty.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+}
+
+/// Returns the lowering-visible PHP type of a probe receiver expression.
+fn expr_receiver_type_for_probe(ctx: &LoweringContext<'_, '_>, object: &Expr) -> PhpType {
+    match &object.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => infer_expr_type_syntactic(object),
+    }
 }
 
 /// Returns precise metadata for dynamic property reads when class slots are statically known.
@@ -722,7 +810,12 @@ pub(super) fn dynamic_property_get_result_type(
     // declared-slot union below would describe the wrong storage: the hash holds boxed `mixed`.
     // Reading the union type instead re-interpreted a boxed cell as the single declared slot type,
     // which printed the null sentinel as an int for `clone($plain, ["zz" => "x"])`.
-    if class_info.dynamic_property_hash_is_name_addressable() {
+    // A name this scope resolves to a DYNAMIC property is dropped from the backend's declared-slot
+    // ladder, so the runtime name can miss and answer php `null`. Typing the read from the
+    // remaining declared slots printed the backend's own miss sentinel as an ordinary value.
+    if class_info.dynamic_property_hash_is_name_addressable()
+        || class_runtime_name_read_can_miss(ctx, normalized)
+    {
         return if nullable {
             nullable_result_type(PhpType::Mixed)
         } else {
@@ -742,6 +835,50 @@ pub(super) fn dynamic_property_get_result_type(
         })
         .collect::<Vec<_>>();
     normalize_union_members(members).unwrap_or_else(|| fallback_expr_type(expr))
+}
+
+/// Returns whether php resolves `property` on `class_name` to a DYNAMIC property in this scope.
+///
+/// `crate::types::resolve_property_name` is the authority: `ClassInfo::properties` is the
+/// PHYSICAL slot table, so it still carries a strict ancestor's private slot under its plain
+/// name even though php 7.4 removed shadow properties and the child's by-name table no longer
+/// contains it. The lowering scope is the same one `ir_can_access_member` uses.
+pub(super) fn property_name_is_dynamic_in_scope(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    crate::types::resolve_property_name(
+        ctx.classes,
+        class_name.trim_start_matches('\\'),
+        property,
+        ctx.current_class.as_deref(),
+    ) == crate::types::PropertyNameResolution::Dynamic
+}
+
+/// Returns whether a RUNTIME name on `class_name` can miss every slot the backend will dispatch.
+///
+/// A name this scope resolves to a dynamic property answers from the per-instance hash, and one
+/// php refuses is dropped from a silent probe's ladder. Both reach the ladder's miss arm, whose
+/// answer is php `null`, so a result type built only from the remaining declared slots would
+/// describe storage the read never produced.
+fn class_runtime_name_read_can_miss(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.classes.get(normalized) else {
+        return false;
+    };
+    class_info.properties.iter().any(|(name, _)| {
+        !matches!(
+            crate::types::resolve_property_name(
+                ctx.classes,
+                normalized,
+                name,
+                ctx.current_class.as_deref(),
+            ),
+            crate::types::PropertyNameResolution::Visible
+                | crate::types::PropertyNameResolution::ScopePrivate { .. }
+        )
+    })
 }
 
 /// Returns true when the normalized class name refers to PHP's builtin stdClass.

@@ -163,6 +163,12 @@ pub enum Immediate {
     TypeName(DataId),
     Capacity(u32),
     WidthBytes(u8),
+    /// Selects php's read-vs-probe fetch semantics for one runtime-name property read.
+    ///
+    /// Carried by `Op::DynamicPropGet`. Absent means `PropertyFetchMode::Read`, which is the
+    /// raising, warning variant, so an emitter that forgets the immediate cannot silently turn a
+    /// value read into a silent probe.
+    PropertyFetchMode(PropertyFetchMode),
     /// Metadata for `Op::IterStart`: by-reference binding and optional Mixed owner.
     ///
     /// `owner` is the OwnedTemp Mixed slot that holds a successful
@@ -202,6 +208,36 @@ pub enum MixedNumericOp {
     Sub,
     Mul,
     Pow,
+}
+
+/// php's fetch mode for one object property access, php-src's `BP_VAR_R` vs `BP_VAR_IS`.
+///
+/// The two differ ONLY in how they answer a name the scope may not reach or has not created:
+/// a value read raises `Cannot access private property D::$n` and warns `Undefined property`,
+/// while `isset()`, `empty()` and the left operand of `??` / `??=` answer `null` in silence.
+/// php never reports either diagnostic from a probe, so the mode has to travel with the read
+/// rather than be re-derived by each consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PropertyFetchMode {
+    /// An ordinary value read: refuse an inaccessible name, warn on an undefined one.
+    Read,
+    /// A silent existence probe: an inaccessible or undefined name answers `null`.
+    Probe,
+}
+
+impl PropertyFetchMode {
+    /// Returns the stable textual spelling used by the EIR printer.
+    pub const fn as_eir(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Probe => "probe",
+        }
+    }
+
+    /// Returns whether this mode may raise or warn about the name it fetches.
+    pub const fn is_read(self) -> bool {
+        matches!(self, Self::Read)
+    }
 }
 
 /// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
@@ -776,6 +812,8 @@ pub enum Op {
     /// Operand: addressed local/property; immediate: ReturnRefCell cleanup slot. Active bounded
     /// borrows publish a zero owner, never their interior address, into that cleanup slot.
     AcquireRefCell,
+    /// Reads a property whose name is only known at run time. Operands: receiver, name.
+    /// Immediate: `PropertyFetchMode`, php's read-vs-probe distinction; absent means `Read`.
     DynamicPropGet,
     DynamicPropSet,
     NullsafePropGet,

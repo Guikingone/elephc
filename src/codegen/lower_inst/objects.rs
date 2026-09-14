@@ -25,7 +25,9 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, runtime_value_tag,
 };
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{
+    Immediate, Instruction, LocalSlotId, Op, PropertyFetchMode, ValueDef, ValueId,
+};
 use crate::codegen_support::dynamic_new::known_dynamic_new_builtin_class_names;
 use crate::names::{label_fragment, method_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
@@ -76,6 +78,33 @@ pub(super) struct PropertySlot {
 struct MixedPropertyCandidate {
     class_id: u64,
     slot: PropertySlot,
+}
+
+/// One arm of a `Mixed` receiver's property READ dispatch.
+///
+/// The slot still selects the arm, because the dispatch is on the runtime class id, but a class
+/// whose scope may not reach the name answers php's catchable `Error` instead of the storage.
+struct MixedPropertyReadCandidate {
+    /// Class id and slot the arm matches on. The slot selects the arm even when it is never read.
+    candidate: MixedPropertyCandidate,
+    /// What the arm does once its class id and name have matched.
+    kind: MixedPropertyReadKind,
+}
+
+/// What one `Mixed` receiver READ arm does once its class id and property name have matched.
+///
+/// The arm is selected by the receiver's runtime class id and the name, but only `Slot` reads
+/// storage. The other three are php's scope-dependent answers for the same name, and each of them
+/// exists precisely so the declared slot is NOT read.
+enum MixedPropertyReadKind {
+    /// Read the declared slot.
+    Slot,
+    /// Raise php's catchable access `Error` carrying this verbatim message.
+    Refuse(String),
+    /// Answer from the per-instance dynamic hash, warning `Undefined property` on a READ miss.
+    ScopeDynamic,
+    /// Answer php `null` silently until runtime-name `__get` / `__isset` dispatch lands.
+    MagicDeferred,
 }
 
 /// Resolved object property default metadata for fixed-offset initialization.

@@ -211,6 +211,21 @@ impl Checker {
         }
         if let Some(class_info) = self.classes.get(class_name) {
             if let Some(visibility) = class_info.property_visibilities.get(property) {
+                // `property_visibilities` answers for the PHYSICAL slot table, which still carries
+                // a strict ancestor's private slot under its plain name. php 7.4 removed shadow
+                // properties, so outside the class that declared it that name is a DYNAMIC
+                // property: a read warns `Undefined property` and answers null rather than being
+                // an access error. `resolve_property_name` is the authority for which of the two
+                // this is, so the refusal below stays exactly where php raises it.
+                let resolution = crate::types::resolve_property_name(
+                    &self.classes,
+                    class_name,
+                    property,
+                    self.current_class.as_deref(),
+                );
+                if resolution == crate::types::PropertyNameResolution::Dynamic {
+                    return Ok(PhpType::Mixed);
+                }
                 let declaring_class = class_info
                     .property_declaring_classes
                     .get(property)

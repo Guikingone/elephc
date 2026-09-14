@@ -42,11 +42,12 @@ pub(super) fn lower_runtime_dynamic_declared_prop_get(
     let class_name = dynamic_property_object_class(ctx, object, inst)?;
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
-    let slots = declared_dynamic_property_slots(ctx, &class_name, inst)?;
-    ensure_dynamic_property_slot_results_supported(&slots, inst)?;
-    let match_labels = slots
+    let mode = property_fetch_mode(inst);
+    let arms = declared_dynamic_property_read_arms(ctx, &class_name, mode, inst)?;
+    ensure_dynamic_property_arm_results_supported(&arms, inst)?;
+    let match_labels = arms
         .iter()
-        .map(|slot| ctx.next_label(&format!("dyn_prop_{}", label_fragment(&slot.property))))
+        .map(|arm| ctx.next_label(&format!("dyn_prop_{}", label_fragment(arm.property()))))
         .collect::<Vec<_>>();
     let miss_label = ctx.next_label("dyn_prop_miss");
     let done_label = ctx.next_label("dyn_prop_done");
@@ -58,21 +59,49 @@ pub(super) fn lower_runtime_dynamic_declared_prop_get(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (slot, label) in slots.iter().zip(match_labels.iter()) {
-        emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
+    for (arm, label) in arms.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, arm.property(), label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
-    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+    for (arm, label) in arms.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-        if slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
+        match arm {
+            PropertyNameArm::Slot(slot) => {
+                if slot.is_declared {
+                    emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
+                }
+                emit_property_load(ctx, slot, base_reg)?;
+                materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+            }
+            // php makes the name invisible here, so it answers from the per-instance hash and the
+            // ancestor's private slot keeps its value. The receiver is read out of the temporary
+            // block first, then the block is released, so the arm reaches `done` with the same
+            // stack pointer as every other one.
+            PropertyNameArm::ScopeDynamic { property } => {
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                emit_scope_dynamic_property_read(
+                    ctx, inst, &class_name, property, base_reg, mode,
+                )?;
+            }
+            // php refuses the read outright. The temporary block is released BEFORE the raise,
+            // which is what keeps the unwinder's stack pointer consistent with every other arm.
+            PropertyNameArm::Refuse { message, .. } => {
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                super::super::exceptions::emit_error(ctx, message);
+            }
+            // php would answer `__get` or `__isset` here. Until a runtime name can reach the
+            // accessor, the arm answers php `null`: it must not read the slot, which holds
+            // private storage this scope may not see, and it must not report a diagnostic php
+            // does not report either.
+            PropertyNameArm::MagicDeferred { .. } => {
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                emit_dynamic_property_miss_result(ctx, inst);
+            }
         }
-        emit_property_load(ctx, slot, base_reg)?;
-        materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
-        abi::emit_release_temporary_stack(ctx.emitter, 32);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
@@ -127,17 +156,20 @@ pub(super) fn ensure_runtime_dynamic_property_name(
     )))
 }
 
-/// Resolves all declared property slots that a runtime dynamic property read may match.
+/// Resolves the arm every declared property name takes on a runtime-name read.
 ///
-/// A name the LEXICAL scope resolves to a DYNAMIC property is left out, so the ladder falls
-/// through to the miss arm and the name is answered from the per-instance hash instead. That is
-/// what php does with a strict ancestor's private property: outside the class that declared it,
-/// the name is a dynamic property and the private slot keeps its own value.
-pub(super) fn declared_dynamic_property_slots(
+/// A name the LEXICAL scope resolves to a DYNAMIC property becomes a `ScopeDynamic` arm, which
+/// answers from the per-instance hash instead of the physical slot. That is what php does with a
+/// strict ancestor's private property: outside the class that declared it, the name is a dynamic
+/// property and the private slot keeps its own value. A name php refuses becomes a `Refuse` arm
+/// for a value read and is dropped for a silent probe, which then answers `null` from the miss
+/// arm exactly as php's `isset()` does.
+pub(super) fn declared_dynamic_property_read_arms(
     ctx: &FunctionContext<'_>,
     class_name: &str,
+    mode: PropertyFetchMode,
     inst: &Instruction,
-) -> Result<Vec<PropertySlot>> {
+) -> Result<Vec<PropertyNameArm>> {
     let normalized = class_name.trim_start_matches('\\');
     let property_names = {
         let class_info =
@@ -150,20 +182,25 @@ pub(super) fn declared_dynamic_property_slots(
             .map(|(property, _)| property.clone())
             .collect::<Vec<_>>()
     };
-    let mut slots = Vec::with_capacity(property_names.len());
+    let mut arms = Vec::with_capacity(property_names.len());
     for property in &property_names {
-        if let Some(slot) = resolve_property_read_slot(ctx, normalized, property, inst)? {
-            slots.push(slot);
+        if let Some(arm) = resolve_property_read_arm(ctx, normalized, property, mode, inst)? {
+            arms.push(arm);
         }
     }
-    Ok(slots)
+    Ok(arms)
 }
 
 /// Collects declared-property candidates readable from a boxed Mixed receiver.
+///
+/// A name php refuses on one of those classes keeps its arm, because the ladder dispatches on the
+/// receiver's runtime class id and name, but the arm raises instead of reading. A silent probe
+/// drops the arm so the name lands in the miss path and answers `null`.
 pub(super) fn declared_mixed_property_get_candidates(
     ctx: &FunctionContext<'_>,
+    mode: PropertyFetchMode,
     inst: &Instruction,
-) -> Result<Vec<MixedPropertyCandidate>> {
+) -> Result<Vec<MixedPropertyReadCandidate>> {
     let mut candidates = Vec::new();
     let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
@@ -172,21 +209,74 @@ pub(super) fn declared_mixed_property_get_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
-            let Ok(Some(slot)) = resolve_property_read_slot(ctx, class_name, property, inst) else {
-                continue;
-            };
-            candidates.push(MixedPropertyCandidate {
-                class_id: class_info.class_id,
-                slot,
+            let (slot, kind) =
+                match resolve_property_read_arm(ctx, class_name, property, mode, inst) {
+                    Ok(Some(PropertyNameArm::Slot(slot))) => (slot, MixedPropertyReadKind::Slot),
+                    Ok(Some(PropertyNameArm::Refuse { message, .. })) => {
+                        let Ok(slot) =
+                            resolve_property_slot_for_class(ctx, class_name, property, inst)
+                        else {
+                            continue;
+                        };
+                        (slot, MixedPropertyReadKind::Refuse(message))
+                    }
+                    // The arm exists so the class id and name still dispatch here, but it answers
+                    // from the per-instance hash and warns on a READ miss instead of reading the
+                    // slot. Dropping it sent the name to the shared miss arm, which is silent.
+                    Ok(Some(PropertyNameArm::ScopeDynamic { .. })) => {
+                        let Ok(slot) =
+                            resolve_property_slot_for_class(ctx, class_name, property, inst)
+                        else {
+                            continue;
+                        };
+                        (slot, MixedPropertyReadKind::ScopeDynamic)
+                    }
+                    Ok(Some(PropertyNameArm::MagicDeferred { .. })) => {
+                        let Ok(slot) =
+                            resolve_property_slot_for_class(ctx, class_name, property, inst)
+                        else {
+                            continue;
+                        };
+                        (slot, MixedPropertyReadKind::MagicDeferred)
+                    }
+                    _ => continue,
+                };
+            candidates.push(MixedPropertyReadCandidate {
+                candidate: MixedPropertyCandidate {
+                    class_id: class_info.class_id,
+                    slot,
+                },
+                kind,
             });
         }
     }
     candidates.sort_by(|left, right| {
-        left.class_id
-            .cmp(&right.class_id)
-            .then_with(|| left.slot.property.cmp(&right.slot.property))
+        left.candidate
+            .class_id
+            .cmp(&right.candidate.class_id)
+            .then_with(|| {
+                left.candidate
+                    .slot
+                    .property
+                    .cmp(&right.candidate.slot.property)
+            })
     });
     Ok(candidates)
+}
+
+/// Verifies that the EIR result type can receive every declared property arm.
+pub(super) fn ensure_dynamic_property_arm_results_supported(
+    arms: &[PropertyNameArm],
+    inst: &Instruction,
+) -> Result<()> {
+    let slots = arms
+        .iter()
+        .filter_map(|arm| match arm {
+            PropertyNameArm::Slot(slot) => Some(slot.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    ensure_dynamic_property_slot_results_supported(&slots, inst)
 }
 
 /// Verifies that the EIR result type can receive every declared property candidate.

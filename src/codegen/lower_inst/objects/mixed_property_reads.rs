@@ -45,9 +45,10 @@ pub(super) fn lower_mixed_prop_get(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
-    let candidates = declared_mixed_property_candidates(ctx, property, inst)?;
+    let mode = property_fetch_mode(inst);
+    let candidates = declared_mixed_property_candidates(ctx, property, mode, inst)?;
     if !candidates.is_empty() {
-        return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates);
+        return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
     }
     lower_runtime_mixed_prop_get(ctx, inst, object, property)
 }
@@ -58,7 +59,8 @@ pub(super) fn lower_declared_mixed_prop_get(
     inst: &Instruction,
     object: ValueId,
     property: &str,
-    candidates: Vec<MixedPropertyCandidate>,
+    candidates: Vec<MixedPropertyReadCandidate>,
+    mode: PropertyFetchMode,
 ) -> Result<()> {
     let null_label = ctx.next_label("mixed_prop_null");
     let miss_label = ctx.next_label("mixed_prop_miss");
@@ -69,8 +71,15 @@ pub(super) fn lower_declared_mixed_prop_get(
         .map(|candidate| {
             ctx.next_label(&format!(
                 "mixed_prop_{}",
-                label_fragment(&candidate.slot.class_name)
+                label_fragment(&candidate.candidate.slot.class_name)
             ))
+        })
+        .collect::<Vec<_>>();
+    let dispatch = candidates
+        .iter()
+        .map(|candidate| MixedPropertyCandidate {
+            class_id: candidate.candidate.class_id,
+            slot: candidate.candidate.slot.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -79,7 +88,7 @@ pub(super) fn lower_declared_mixed_prop_get(
     emit_mixed_object_payload_or_null(ctx, &null_label);
     emit_mixed_property_class_dispatch(
         ctx,
-        &candidates,
+        &dispatch,
         &match_labels,
         &stdclass_label,
         &miss_label,
@@ -87,12 +96,28 @@ pub(super) fn lower_declared_mixed_prop_get(
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        let base_reg = abi::int_result_reg(ctx.emitter);
-        if candidate.slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+        // Only `Slot` touches storage. php refuses the read from this scope, or answers an
+        // accessor this compiler cannot dispatch for a runtime name yet; either way the private
+        // slot stays unread. Only a value read raises: the probes answer null in silence.
+        match &candidate.kind {
+            MixedPropertyReadKind::Refuse(message) => {
+                super::super::exceptions::emit_error(ctx, message);
+                continue;
+            }
+            MixedPropertyReadKind::MagicDeferred | MixedPropertyReadKind::ScopeDynamic => {
+                emit_boxed_null(ctx);
+                abi::emit_jump(ctx.emitter, &done_label);
+                continue;
+            }
+            MixedPropertyReadKind::Slot => {}
         }
-        emit_property_load(ctx, &candidate.slot, base_reg)?;
-        box_mixed_property_candidate_result(ctx, &candidate.slot.php_type);
+        let slot = &candidate.candidate.slot;
+        let base_reg = abi::int_result_reg(ctx.emitter);
+        if slot.is_declared {
+            emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
+        }
+        emit_property_load(ctx, slot, base_reg)?;
+        box_mixed_property_candidate_result(ctx, &slot.php_type);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
@@ -101,7 +126,9 @@ pub(super) fn lower_declared_mixed_prop_get(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
-    emit_undefined_property_warning_for_loaded_object(ctx, property);
+    if mode.is_read() {
+        emit_undefined_property_warning_for_loaded_object(ctx, property);
+    }
     emit_boxed_null(ctx);
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -138,8 +165,11 @@ pub(super) fn lower_runtime_mixed_prop_get(
     store_if_result(ctx, inst)
 }
 
-/// Collects declared-property candidates for a property read on an unknown `Mixed` object.
-pub(super) fn declared_mixed_property_candidates(
+/// Collects the REFERENCE-property candidates a `Mixed` receiver can alias by name.
+///
+/// Reference binding is phase B2's subject, so this keeps the pre-B1 slot answer and does not
+/// refuse an inaccessible name yet.
+pub(super) fn declared_mixed_reference_property_candidates(
     ctx: &FunctionContext<'_>,
     property: &str,
     inst: &Instruction,
@@ -156,17 +186,79 @@ pub(super) fn declared_mixed_property_candidates(
         {
             continue;
         }
-        // A strict ancestor's private slot is not addressable by this name from anywhere but the
-        // class that declared it, so this receiver class is not a candidate for the read.
-        let Some(slot) = resolve_property_read_slot(ctx, class_name, property, inst)? else {
+        let Some(slot) = resolve_property_reference_slot(ctx, class_name, property, inst)? else {
             continue;
         };
+        if !slot.is_reference {
+            continue;
+        }
         candidates.push(MixedPropertyCandidate {
             class_id: class_info.class_id,
             slot,
         });
     }
     candidates.sort_by_key(|candidate| candidate.class_id);
+    Ok(candidates)
+}
+
+/// Collects declared-property candidates for a property read on an unknown `Mixed` object.
+pub(super) fn declared_mixed_property_candidates(
+    ctx: &FunctionContext<'_>,
+    property: &str,
+    mode: PropertyFetchMode,
+    inst: &Instruction,
+) -> Result<Vec<MixedPropertyReadCandidate>> {
+    let mut candidates = Vec::new();
+    for (class_name, class_info) in &ctx.module.class_infos {
+        if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+            continue;
+        }
+        if !class_info
+            .properties
+            .iter()
+            .any(|(name, _)| name == property)
+        {
+            continue;
+        }
+        // A strict ancestor's private slot is not addressable by this name from anywhere but the
+        // class that declared it, so this receiver class is not a candidate for the read and the
+        // name falls into the miss arm, which is php's dynamic-property answer.
+        //
+        // A name php REFUSES is a different answer again: the arm exists so the class id still
+        // dispatches here, but it raises instead of reading. Without it a boxed receiver was the
+        // one remaining way to read private storage from an unrelated scope by plain name.
+        let arm = resolve_property_read_arm(ctx, class_name, property, mode, inst)?;
+        let (slot, kind) = match arm {
+            Some(PropertyNameArm::Slot(slot)) => (slot, MixedPropertyReadKind::Slot),
+            Some(PropertyNameArm::Refuse { message, .. }) => {
+                let Ok(slot) = resolve_property_slot_for_class(ctx, class_name, property, inst)
+                else {
+                    continue;
+                };
+                (slot, MixedPropertyReadKind::Refuse(message))
+            }
+            // php answers the accessor here, so the arm must exist and must NOT read the slot.
+            // Dropping it would send the name to the miss arm, which warns for a value read.
+            Some(PropertyNameArm::MagicDeferred { .. }) => {
+                let Ok(slot) = resolve_property_slot_for_class(ctx, class_name, property, inst)
+                else {
+                    continue;
+                };
+                (slot, MixedPropertyReadKind::MagicDeferred)
+            }
+            // A literal name resolving to a dynamic property keeps today's route: the miss arm
+            // below already answers it, and warns for a value read.
+            _ => continue,
+        };
+        candidates.push(MixedPropertyReadCandidate {
+            candidate: MixedPropertyCandidate {
+                class_id: class_info.class_id,
+                slot,
+            },
+            kind,
+        });
+    }
+    candidates.sort_by_key(|candidate| candidate.candidate.class_id);
     Ok(candidates)
 }
 
@@ -340,18 +432,40 @@ pub(super) fn emit_property_on_null_warning(ctx: &mut FunctionContext<'_>, prope
         "Warning: Attempt to read property \"{}\" on null\n",
         property
     );
+    emit_static_property_warning(ctx, &message);
+}
+
+/// Emits `Warning: Undefined property: Class::$name` when both names are compile-time constants.
+///
+/// The runtime-class sibling below exists for a receiver whose class is only known at run time.
+/// A scope-resolved dynamic name has both halves statically, so it needs no fragment assembly.
+pub(super) fn emit_undefined_property_warning(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) {
+    let message = format!(
+        "Warning: Undefined property: {}::${}\n",
+        class_name.trim_start_matches('\\'),
+        property
+    );
+    emit_static_property_warning(ctx, &message);
+}
+
+/// Writes one fully formed warning line through the suppressible PHP warning channel.
+fn emit_static_property_warning(ctx: &mut FunctionContext<'_>, message: &str) {
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the property-on-null warning byte length
+                .instruction(&format!("mov x2, #{}", message_len)); // pass the warning line byte length
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "rdi", &message_label);
             ctx.emitter
-                .instruction(&format!("mov esi, {}", message_len)); // pass the property-on-null warning byte length
+                .instruction(&format!("mov esi, {}", message_len)); // pass the warning line byte length
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
