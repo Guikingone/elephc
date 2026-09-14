@@ -46,13 +46,13 @@ The produced binary accepts these arguments at runtime:
 |---|---|---|---|
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of worker processes to prefork. Minimum 1. |
-| `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; `0` means unlimited. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. |
+| `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. `0` removes the cap in `worker` only: `pool` and `request` hand the body to a separate handler process over the broker protocol, which refuses anything above its own 64 MiB frame limit with the same `413`. |
 | `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests. It stops accepting, drains active HTTP connections, and exits after isolated handlers/brokers are reaped; the master then respawns it. |
 | `--access-log` | No | off | Log one line per request to stderr (`<ip> "<method> <path>" <status> <ms>`). |
 | `--max-execution-time N` | No | `0` (none) | In `worker`, terminate and respawn the worker. In `pool`/`request`, terminate only the timed-out handler process. |
 | `--handler-concurrency N` | No | `1` | Handler processes per web worker. Available only in `pool` and `request`. |
 | `--max-handler-requests N` | No | `1000` | Requests served by one persistent handler before replacement; `0` disables recycling. Available only in `pool`. |
-| `--body-read-timeout N` | No | `30` | Seconds allowed to receive a request body; `0` means unlimited. Available only in `pool` and `request`. |
+| `--body-read-timeout N` | No | `30` | Seconds allowed to receive a request body; `0` means unlimited. Enforced in every isolation mode, including the default `worker`. Expiry answers `408 Request Timeout` and closes the connection. |
 | `--response-write-timeout N` | No | `30` | Seconds an isolated response may remain blocked by client backpressure; `0` means unlimited. Available only in `pool` and `request`. |
 | `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--help`, `--version` | No | — | Print usage / version and exit 0. |

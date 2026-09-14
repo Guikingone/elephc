@@ -2398,3 +2398,148 @@ fn web_opcache_gate_ignores_enable_cli() {
         assert!(resp.ends_with(expected), "{why}; response was {resp:?}");
     }
 }
+
+/// Issue #887: a client that completes its headers and then STALLS on the declared body is
+/// terminated by `--body-read-timeout` in the DEFAULT worker isolation, answering 408.
+///
+/// The worker configured only a header-read timeout, so the body had no deadline: a size cap
+/// bounds the bytes that arrive, never the connection's lifetime, and enough such
+/// connections exhaust a worker's descriptors and task slots. The flag that would have set a
+/// deadline was itself rejected in this isolation mode.
+///
+/// THE REQUEST IS DELIBERATELY KEEP-ALIVE. A `Connection: close` in the REQUEST would make
+/// the client's own EOF indistinguishable from the server releasing the connection, so the
+/// half of the fix that matters for exhaustion — the 408 carrying `Connection: close`
+/// instead of leaving a timed-out connection parked in the pool — would go unproven.
+#[test]
+fn web_worker_body_read_timeout_terminates_a_stalled_body() {
+    let dir = make_test_dir("web_body_read_timeout_stall");
+    let bin = compile_web(&dir, "<?php echo \"never\";", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--body-read-timeout", "1"]);
+
+    // Headers announce a body that never arrives, on a connection the client never offers
+    // to close.
+    let mut stream = TcpStream::connect(&addr).unwrap();
+    // A read deadline well past the server's: without it, a regression that never closes
+    // the connection would hang this test instead of failing it.
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let head = format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: 1024\r\n\r\n",
+        addr
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    stream.flush().unwrap();
+
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_body_read_timeout_closed(&response, "a stalled body");
+}
+
+/// The same deadline covers a client that sends the body SLOWLY rather than not at all —
+/// partial frames keep arriving, so any per-frame idle check would be satisfied while the
+/// connection still never completes.
+#[test]
+fn web_worker_body_read_timeout_terminates_a_slow_trickle() {
+    let dir = make_test_dir("web_body_read_timeout_trickle");
+    let bin = compile_web(&dir, "<?php echo \"never\";", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--body-read-timeout", "1"]);
+
+    let mut stream = TcpStream::connect(&addr).unwrap();
+    // Set before the trickle: once the server has closed, the socket no longer accepts the
+    // option at all (`EINVAL`), and the deadline is only useful if it is already in place.
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let head = format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: 4096\r\n\r\n",
+        addr
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    stream.flush().unwrap();
+    // Trickle well past the deadline without ever reaching Content-Length.
+    for _ in 0..20 {
+        if stream.write_all(b"x").is_err() {
+            break;
+        }
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_body_read_timeout_closed(&response, "a trickled body");
+}
+
+/// Asserts the 408 a body-read timeout produces, INCLUDING the `Connection: close` that
+/// releases the connection.
+///
+/// Both halves are load-bearing and neither implies the other. The status line is what only
+/// the timeout produces — a client-side close cannot fabricate it. The header is the half
+/// that answers the exhaustion the issue is about: a 408 on a keep-alive connection that
+/// stays parked has freed nothing. `isolated_worker.rs` already did this for pool and
+/// request isolation, which is why the assertion is worth pinning rather than assuming.
+fn assert_body_read_timeout_closed(response: &str, what: &str) {
+    assert!(
+        response.starts_with("HTTP/1.1 408"),
+        "{what} must be answered with 408; response was {response:?}"
+    );
+    let headers = response
+        .split_once("\r\n\r\n")
+        .map(|(head, _)| head)
+        .unwrap_or(response)
+        .to_ascii_lowercase();
+    assert!(
+        headers.contains("connection: close"),
+        "{what} must be answered with a server-directed close, not left keep-alive; \
+         response was {response:?}"
+    );
+}
+
+/// A body that arrives WITHIN the deadline is unaffected: the timeout must bound the stalled
+/// case without truncating a legitimate upload.
+#[test]
+fn web_worker_body_read_timeout_leaves_a_prompt_body_alone() {
+    let dir = make_test_dir("web_body_read_timeout_ok");
+    let bin = compile_web(
+        &dir,
+        "<?php echo strlen(file_get_contents(\"php://input\"));",
+        "app",
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--body-read-timeout", "10"]);
+
+    let mut stream = TcpStream::connect(&addr).unwrap();
+    let payload = "y".repeat(64);
+    let req = format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        addr,
+        payload.len(),
+        payload
+    );
+    stream.write_all(req.as_bytes()).unwrap();
+    stream.flush().unwrap();
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let response = normalize_complete_http_response(response);
+    assert!(
+        response.starts_with("HTTP/1.1 200") && response.ends_with("64"),
+        "a prompt body must be served normally; response was {response:?}"
+    );
+}

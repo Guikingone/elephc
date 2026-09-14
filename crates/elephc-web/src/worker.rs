@@ -104,6 +104,14 @@ pub struct WorkerConfig {
     pub max_exec_secs: u32,
     /// gzip the response body when the client sent `Accept-Encoding: gzip`.
     pub gzip: bool,
+    /// Deadline for RECEIVING the whole request body, in seconds; `0` = no limit.
+    ///
+    /// The header-read timeout below bounds only the head of the request. Without this a
+    /// client could finish its headers and then send a declared body indefinitely slowly:
+    /// the size cap applies to bytes that have ARRIVED, so it bounds memory but not
+    /// connection lifetime, and enough such connections exhaust a worker's descriptors and
+    /// task slots (issue #887).
+    pub body_read_secs: u64,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
@@ -120,6 +128,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         access_log,
         max_exec_secs,
         gzip,
+        body_read_secs,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -232,20 +241,42 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     // is drained frame-by-frame so progress can be written to the session
                     // file as bytes arrive, while still buffering the complete body the
                     // handler sees. Non-tracked requests keep the simple fast path.
-                    let collected = if let Some(mut tracker) = upload_progress::begin(&headers, &query) {
-                        drain_with_progress(req.into_body(), max_body, &mut tracker).await
-                    } else if max_body == 0 {
-                        req.into_body().collect().await.map(|c| c.to_bytes().to_vec()).map_err(|_| ())
+                    //
+                    // THE WHOLE COLLECTION IS UNDER ONE DEADLINE, every path included: a
+                    // stalled plain body, a size-limited one, and a tracked multipart upload
+                    // are all ways to hold a connection open forever otherwise (issue #887).
+                    // Expiry answers 408 and does not keep the connection alive.
+                    let collect_body = async {
+                        if let Some(mut tracker) = upload_progress::begin(&headers, &query) {
+                            drain_with_progress(req.into_body(), max_body, &mut tracker).await
+                        } else if max_body == 0 {
+                            req.into_body().collect().await.map(|c| c.to_bytes().to_vec()).map_err(|_| ())
+                        } else {
+                            Limited::new(req.into_body(), max_body)
+                                .collect()
+                                .await
+                                .map(|c| c.to_bytes().to_vec())
+                                .map_err(|_| ())
+                        }
+                    };
+                    let collected = if body_read_secs == 0 {
+                        Ok(collect_body.await)
                     } else {
-                        Limited::new(req.into_body(), max_body)
-                            .collect()
+                        tokio::time::timeout(Duration::from_secs(body_read_secs), collect_body)
                             .await
-                            .map(|c| c.to_bytes().to_vec())
                             .map_err(|_| ())
                     };
                     let body = match collected {
-                        Ok(b) => b,
-                        Err(_) => {
+                        Ok(Ok(b)) => b,
+                        Err(()) => {
+                            let resp = Response::builder()
+                                .status(408)
+                                .header(hyper::header::CONNECTION, "close")
+                                .body(Full::new(Bytes::from_static(b"Request Timeout")))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b""))));
+                            return Ok::<_, Infallible>(resp);
+                        }
+                        Ok(Err(_)) => {
                             let resp = Response::builder()
                                 .status(413)
                                 .body(Full::new(Bytes::from_static(b"Payload Too Large")))
