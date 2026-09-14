@@ -53,7 +53,15 @@ fn eval_curl_unescape_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let raw = eval_curl_easy_raw("curl_unescape", handle, context, values)?;
-    let string = values.cast_string(string)?;
+    let string = eval_curl_string_argument(
+        "curl_unescape",
+        2,
+        "string",
+        "string",
+        string,
+        context,
+        values,
+    )?;
     let bytes = values.string_bytes(string)?;
     match ffi::easy_str_op(raw, ffi::STR_OP_UNESCAPE, &bytes, 0) {
         Some(unescaped) => values.string_bytes_value(&unescaped),

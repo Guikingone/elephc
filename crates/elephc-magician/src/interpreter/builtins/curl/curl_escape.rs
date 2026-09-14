@@ -53,7 +53,8 @@ fn eval_curl_escape_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let raw = eval_curl_easy_raw("curl_escape", handle, context, values)?;
-    let string = values.cast_string(string)?;
+    let string =
+        eval_curl_string_argument("curl_escape", 2, "string", "string", string, context, values)?;
     let bytes = values.string_bytes(string)?;
     match ffi::easy_str_op(raw, ffi::STR_OP_ESCAPE, &bytes, 0) {
         Some(escaped) => values.string_bytes_value(&escaped),
