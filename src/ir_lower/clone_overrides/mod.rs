@@ -424,7 +424,13 @@ fn candidate_classes(module: &Module, sites: &CloneOverrideSites) -> Vec<String>
         // the same authority `reserve_eval_subclass_property_storage` consults, and it already
         // contains every builtin reflection class this filter used to name one at a time.
         // A user subclass of a builtin is absent from the catalog, so it stays eligible.
-        .filter(|name| elephc_builtin_contract::lookup_class(name).is_none())
+        // `stdClass` is the intentional builtin exception: its authoritative representation is
+        // the dynamic-property hash itself, and clone overrides must synthesize an applicator so
+        // unknown keys reach that hash instead of the generic unsupported fallback.
+        .filter(|name| {
+            elephc_builtin_contract::lookup_class(name).is_none()
+                || crate::types::checker::builtin_stdclass::is_stdclass(name)
+        })
         .collect()
 }
 
