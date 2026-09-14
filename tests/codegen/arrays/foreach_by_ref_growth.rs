@@ -9,14 +9,28 @@
 //! - A hash entry that joins a PHP reference set carries runtime value tag 11 and a managed
 //!   reference cell in `value_lo`, so the alias is a real heap allocation rather than an
 //!   interior pointer into the table. Growth relocates the table but never the cell.
-//! - `IterNext` reloads the live container from the iterator's origin local and compares it
-//!   against the table snapshot. A mismatch rebuilds the cursor from the last yielded key,
-//!   because rehashing permutes slot indices and the old table is freed.
+//! - `IterNext` reloads the live container from the iterator's origin local and validates the
+//!   cursor from owned successor keys. This covers both table relocation and physical tombstone
+//!   reuse, which can preserve the table pointer while changing a slot's logical identity.
 //! - Expected values follow reference PHP semantics for by-reference `foreach`: appended
 //!   elements ARE visited, `$a[$k] = x` on a referenced entry writes through, and copying an
 //!   array that holds a reference element keeps that element shared.
 
 use crate::support::*;
+
+/// Replacing ordinary heap-backed values must return to the normal entry write path after release.
+#[test]
+fn overwriting_ordinary_heap_backed_hash_values_does_not_enter_reference_write_through() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["text" => "old", "nested" => [1, 2]];
+$a["text"] = "new";
+$a["nested"] = [3, 4];
+echo $a["text"], "|", implode(",", $a["nested"]);
+"#,
+    );
+    assert_eq!(out, "new|3,4");
+}
 
 /// Appending inside a by-reference `foreach` forces several hash grows while the loop is live.
 ///
@@ -169,6 +183,47 @@ echo count($a), "|", $a["a"], "|", $a["b"];
     assert_eq!(out, "2|1|2");
 }
 
+/// A stable-table resume follows the tombstone's preserved next link instead of yielding it.
+#[test]
+fn deleting_the_immediate_successor_without_growth_skips_the_tombstone() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["a" => 1, "b" => 2, "c" => 3];
+$seen = "";
+foreach ($a as $k => &$v) {
+    $seen = $seen . $k;
+    if ($k === "a") {
+        unset($a["b"]);
+    }
+}
+unset($v);
+echo $seen;
+"#,
+    );
+    assert_eq!(out, "ac");
+}
+
+/// Reusing the deleted successor's bucket must not make the replacement appear out of order.
+#[test]
+fn reusing_the_immediate_successor_tombstone_validates_key_identity() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [0 => 1, 1 => 2, 2 => 3];
+$seen = [];
+foreach ($a as $k => &$v) {
+    $seen[] = $k;
+    if ($k === 0) {
+        unset($a[1]);
+        $a[9] = 10;
+    }
+}
+unset($v);
+echo implode(",", $seen);
+"#,
+    );
+    assert_eq!(out, "0,2,9");
+}
+
 /// Deleting the CURRENT key and then relocating the table still resumes on the successor.
 ///
 /// This is the case the yielded-key anchor could not recover: the key the resync would have
@@ -217,4 +272,27 @@ echo substr($seen, 0, 3), "|", count($a);
 "#,
     );
     assert_eq!(out, "abd|43");
+}
+
+/// Deleting the immediate successor uses the owned fallback anchor after the table grows.
+#[test]
+fn deleting_the_immediate_successor_then_relocating_resumes_after_the_tombstone() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["a" => 1, "b" => 2, "c" => 3, "d" => 4];
+$seen = "";
+foreach ($a as $k => &$v) {
+    $seen = $seen . $k;
+    if ($k === "a") {
+        unset($a["b"]);
+        for ($i = 0; $i < 40; $i = $i + 1) {
+            $a["g" . $i] = 0;
+        }
+    }
+}
+unset($v);
+echo substr($seen, 0, 3), "|", count($a);
+"#,
+    );
+    assert_eq!(out, "acd|43");
 }

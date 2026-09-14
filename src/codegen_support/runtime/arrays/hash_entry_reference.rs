@@ -208,18 +208,18 @@ fn emit_iter_next_value(emitter: &mut Emitter) {
 /// Emits `__rt_hash_iter_resync`, which rebuilds an insertion-order cursor after the table
 /// backing a live iteration was replaced by growth or copy-on-write.
 ///
-/// The anchor is the SUCCESSOR key, the key of the entry the cursor was about to yield, not the
-/// key that was last yielded. That is what lets iteration continue when the loop body deleted the
-/// current key and then relocated the table: deleting the current entry does not touch its
-/// successor, so the anchor survives. Anchoring on the yielded key instead would probe for an
-/// entry that no longer exists and stop the loop.
+/// The primary anchor is the SUCCESSOR key, the key of the entry the cursor was about to yield,
+/// not the key that was last yielded. A second anchor names the following entry. If the loop body
+/// deletes the immediate successor before relocating the table, the fallback lets iteration skip
+/// that removed entry and continue in insertion order.
 ///
 /// Rehashing permutes slot indices, so the resumed cursor is derived from where the anchor
 /// actually landed in the live table: `(entry - table - header) / entry_size + 1`, which is the
 /// same "slot index plus one" encoding `__rt_hash_iter_next` returns.
 ///
 /// Input: argument 0 = live table pointer, argument 1 = successor key low word,
-/// argument 2 = successor key high word (-1 marks an integer key, -2 marks no successor).
+/// argument 2 = successor key high word, arguments 3 and 4 = fallback key low/high words.
+/// A high word of -1 marks an integer key and -2 marks an absent anchor.
 /// Output: integer result register = resumed cursor, `-1` when there is nothing to resume from.
 fn emit_iter_resync(emitter: &mut Emitter) {
     emitter.blank();
@@ -229,21 +229,31 @@ fn emit_iter_resync(emitter: &mut Emitter) {
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp x2, #{NO_SUCCESSOR_KEY_MARKER}")); // did the walk already pass its last entry?
             emitter.instruction("b.eq __rt_hash_iter_resync_done");             // there is no successor to resume from
-            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // save frame pointer and return address across the probe
+            emitter.instruction("stp x29, x30, [sp, #-48]!");                   // save frame pointer and reserve aligned anchor spills
             emitter.instruction("mov x29, sp");                                 // establish the resync frame
             emitter.instruction("str x0, [sp, #16]");                           // save the live table base for the slot computation
-            emitter.instruction("bl __rt_hash_get");                            // probe the live table for the successor key
-            emitter.instruction("cbz x0, __rt_hash_iter_resync_missing");       // a vanished anchor key ends the iteration safely
+            emitter.instruction("str x3, [sp, #24]");                           // save the fallback key low word across the primary probe
+            emitter.instruction("str x4, [sp, #32]");                           // save the fallback key high word across the primary probe
+            emitter.instruction("bl __rt_hash_get");                            // probe the live table for the primary successor key
+            emitter.instruction("cbnz x0, __rt_hash_iter_resync_found");        // a surviving primary anchor is the next entry to yield
+            emitter.instruction("ldr x2, [sp, #32]");                           // reload the fallback key high word
+            emitter.instruction(&format!("cmp x2, #{NO_SUCCESSOR_KEY_MARKER}")); // was there an entry after the primary anchor?
+            emitter.instruction("b.eq __rt_hash_iter_resync_missing");          // both anchors vanished, so the walk is safely complete
+            emitter.instruction("ldr x0, [sp, #16]");                           // reload the live table for the fallback probe
+            emitter.instruction("ldr x1, [sp, #24]");                           // reload the fallback key low word
+            emitter.instruction("bl __rt_hash_get");                            // probe the entry after the deleted primary anchor
+            emitter.instruction("cbz x0, __rt_hash_iter_resync_missing");       // neither owned anchor survived in the live table
+            emitter.label("__rt_hash_iter_resync_found");
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the live table base
             emitter.instruction("sub x0, x4, x9");                              // byte offset of the anchor entry inside the table
             emitter.instruction("sub x0, x0, #40");                             // discount the fixed 40-byte hash header
             emitter.instruction("lsr x0, x0, #6");                              // 64 bytes per entry gives the slot index
             emitter.instruction("add x0, x0, #1");                              // encode the resumed cursor as slot index plus one
-            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore frame pointer and return address
+            emitter.instruction("ldp x29, x30, [sp], #48");                     // restore frame pointer and release anchor spills
             emitter.instruction("ret");                                         // return the resumed cursor to the iterator
             emitter.label("__rt_hash_iter_resync_missing");
-            emitter.instruction("mov x0, #-1");                                 // the anchor key is gone, so stop rather than read a stale slot
-            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore frame pointer and return address
+            emitter.instruction("mov x0, #-1");                                 // neither anchor survived, so stop without reading stale storage
+            emitter.instruction("ldp x29, x30, [sp], #48");                     // restore frame pointer and release anchor spills
             emitter.instruction("ret");                                         // return the done cursor to the iterator
             emitter.label("__rt_hash_iter_resync_done");
             emitter.instruction("mov x0, #-1");                                 // a walk with no successor is already finished
@@ -254,23 +264,34 @@ fn emit_iter_resync(emitter: &mut Emitter) {
             emitter.instruction("je __rt_hash_iter_resync_done");               // there is no successor to resume from
             emitter.instruction("push rbp");                                    // preserve the caller frame pointer across the probe
             emitter.instruction("mov rbp, rsp");                                // establish the resync frame
-            emitter.instruction("sub rsp, 16");                                 // reserve one aligned slot for the live table base
+            emitter.instruction("sub rsp, 32");                                 // reserve aligned table and fallback-key spills
             emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // save the live table base for the slot computation
-            emitter.instruction("call __rt_hash_get");                          // probe the live table for the successor key
+            emitter.instruction("mov QWORD PTR [rbp - 16], rcx");               // save the fallback key low word across the primary probe
+            emitter.instruction("mov QWORD PTR [rbp - 24], r8");                // save the fallback key high word across the primary probe
+            emitter.instruction("call __rt_hash_get");                          // probe the live table for the primary successor key
             emitter.instruction("test rax, rax");                               // did the live table still contain the anchor key?
-            emitter.instruction("jz __rt_hash_iter_resync_missing");            // a vanished anchor key ends the iteration safely
+            emitter.instruction("jnz __rt_hash_iter_resync_found");             // a surviving primary anchor is the next entry to yield
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");               // reload the fallback key high word
+            emitter.instruction(&format!("cmp rdx, {NO_SUCCESSOR_KEY_MARKER}")); // was there an entry after the primary anchor?
+            emitter.instruction("je __rt_hash_iter_resync_missing");            // both anchors vanished, so the walk is safely complete
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // reload the live table for the fallback probe
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");               // reload the fallback key low word
+            emitter.instruction("call __rt_hash_get");                          // probe the entry after the deleted primary anchor
+            emitter.instruction("test rax, rax");                               // did the fallback survive in the live table?
+            emitter.instruction("jz __rt_hash_iter_resync_missing");            // neither owned anchor survived in the live table
+            emitter.label("__rt_hash_iter_resync_found");
             emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                // reload the live table base
             emitter.instruction("mov rax, r8");                                 // the probe returned the matching entry address
             emitter.instruction("sub rax, rcx");                                // byte offset of the anchor entry inside the table
             emitter.instruction("sub rax, 40");                                 // discount the fixed 40-byte hash header
             emitter.instruction("shr rax, 6");                                  // 64 bytes per entry gives the slot index
             emitter.instruction("add rax, 1");                                  // encode the resumed cursor as slot index plus one
-            emitter.instruction("add rsp, 16");                                 // release the resync frame
+            emitter.instruction("add rsp, 32");                                 // release table and fallback-key spills
             emitter.instruction("pop rbp");                                     // restore the caller frame pointer
             emitter.instruction("ret");                                         // return the resumed cursor to the iterator
             emitter.label("__rt_hash_iter_resync_missing");
-            emitter.instruction("mov rax, -1");                                 // the anchor key is gone, so stop rather than read a stale slot
-            emitter.instruction("add rsp, 16");                                 // release the resync frame
+            emitter.instruction("mov rax, -1");                                 // neither anchor survived, so stop without reading stale storage
+            emitter.instruction("add rsp, 32");                                 // release table and fallback-key spills
             emitter.instruction("pop rbp");                                     // restore the caller frame pointer
             emitter.instruction("ret");                                         // return the done cursor to the iterator
             emitter.label("__rt_hash_iter_resync_done");

@@ -100,6 +100,15 @@ fn array_projection_effects_preserve_heap_reads_and_failures() {
     }
 }
 
+/// Iterator cleanup releases owned string anchors and must survive dead-code elimination.
+#[test]
+fn iter_end_effects_include_refcount_cleanup() {
+    assert_eq!(
+        Op::IterEnd.default_effects(),
+        Effects::READS_HEAP | Effects::WRITES_HEAP | Effects::REFCOUNT_OP | Effects::MAY_DEOPT
+    );
+}
+
 /// Warning-capable operations must not be reordered across state accessed by a user handler.
 #[test]
 fn warning_handlers_observe_and_mutate_program_state() {

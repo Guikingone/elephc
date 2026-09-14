@@ -251,6 +251,10 @@ pub(super) fn lower_foreach(
         source_owner: source_owner.map(|slot| (slot, array.span)),
         source_pin,
         iterator_owner: iterator_owner.map(|slot| (slot, array.span)),
+        iterator_cleanup: by_ref_origin.map(|_| LoopCleanup {
+            value: iterator,
+            span: array.span,
+        }),
     });
     if let Some(key_var) = key_var {
         let key = ctx.emit_value(
@@ -292,6 +296,15 @@ pub(super) fn lower_foreach(
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
+    if by_ref_origin.is_some() {
+        ctx.emit_void(
+            Op::IterEnd,
+            vec![iterator.value],
+            None,
+            Op::IterEnd.default_effects(),
+            Some(array.span),
+        );
+    }
     // Release the source when it is a fresh owning temporary (e.g. `foreach
     // (explode(...) as $p)` or a literal array): the iterator borrows it for the
     // duration of the loop, so nothing else frees it once iteration ends. (For an

@@ -217,6 +217,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
     emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
     emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
+    emitter.instruction("b __rt_hash_set_write_value");                         // ordinary released payloads must not fall into reference-cell write-through
 
     // -- write through an existing PHP reference set instead of replacing the entry --
     emitter.label("__rt_hash_set_reference_write");
@@ -474,6 +475,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl r12, 6");                                          // convert the probe index into a 64-byte hash-entry offset
     emitter.instruction("add r12, r10");                                        // advance from the hash-table base pointer to the selected entry block
     emitter.instruction("add r12, 40");                                         // skip the fixed hash header to land on the selected entry
+    emitter.instruction("jmp __rt_hash_set_write_value_x");                     // ordinary released payloads must not fall into reference-cell write-through
 
     emitter.label("__rt_hash_set_reference_write_x");
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag

@@ -796,7 +796,7 @@ fn validate_opcode_rules(
                 }),
             }
         }
-        IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
+        IterCurrentValueRef | IterEnd => check_count(inst_id, inst, 1, "1"),
         ArrayKeyExists | OffsetExists => check_count_at_least(inst_id, inst, 1, "at least 1"),
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")

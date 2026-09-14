@@ -593,8 +593,17 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
         .copied()
         .collect::<Vec<_>>();
     for frame in frames {
-        // Retire the getIterator Mixed owner first so a destructor on that
-        // iterator still observes the loop's aggregate retain.
+        if let Some(cleanup) = frame.iterator_cleanup {
+            ctx.emit_void(
+                Op::IterEnd,
+                vec![cleanup.value.value],
+                None,
+                Op::IterEnd.default_effects(),
+                Some(cleanup.span),
+            );
+        }
+        // After retiring the iterator's private anchors, retire the getIterator Mixed owner so a
+        // destructor on that iterator still observes the loop's aggregate retain.
         if let Some((slot, span)) = frame.iterator_owner {
             ctx.retire_iter_start_owner(slot, span);
         }

@@ -54,6 +54,8 @@ pub(crate) struct LoopFrame {
     /// Innermost `break` and `continue` must not retire it here: they keep using
     /// the iterator, and the exit block owns the normal-completion retire.
     pub iterator_owner: Option<(LocalSlotId, Span)>,
+    /// Stack-resident iterator state whose owned relocation anchors need `IterEnd` cleanup.
+    pub iterator_cleanup: Option<LoopCleanup>,
 }
 
 /// Cleanup that must run when control leaves a loop without visiting its exit block.

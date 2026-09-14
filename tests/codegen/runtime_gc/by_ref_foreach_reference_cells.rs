@@ -183,3 +183,79 @@ echo substr($seen, 0, 3), "|", $a["a"], "|", $a["b"], "|", $a["c"], "\n";
     );
     assert_clean(out, "abc|2|3|4\n");
 }
+
+/// Owned string anchors survive immediate-successor deletion and are released after resync.
+#[test]
+fn deleted_immediate_successor_anchor_is_safe_and_balanced_across_growth() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ["a" => 1, "b" => 2, "c" => 3, "d" => 4];
+$seen = "";
+foreach ($a as $k => &$v) {
+    $seen = $seen . $k;
+    if ($k === "a") {
+        unset($a["b"]);
+        for ($i = 0; $i < 40; $i = $i + 1) {
+            $a["g" . $i] = 0;
+        }
+    }
+}
+unset($v);
+echo substr($seen, 0, 3), "\n";
+"#,
+    );
+    assert_clean(out, "acd\n");
+}
+
+/// Breaking while string anchors are populated runs `IterEnd` and releases both retains.
+#[test]
+fn by_ref_foreach_break_releases_owned_string_anchors() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ["a" => 1, "b" => 2, "c" => 3];
+foreach ($a as $k => &$v) {
+    break;
+}
+unset($v);
+unset($a);
+echo "done\n";
+"#,
+    );
+    assert_clean(out, "done\n");
+}
+
+/// Re-entering one lowered foreach state repeatedly starts from anchors cleared by `IterEnd`.
+#[test]
+fn repeated_foreach_state_reuse_keeps_string_anchor_ownership_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ["a" => 1, "b" => 2, "c" => 3];
+for ($i = 0; $i < 8; $i = $i + 1) {
+    foreach ($a as $k => &$v) {
+        break;
+    }
+    unset($v);
+}
+unset($a);
+echo "done\n";
+"#,
+    );
+    assert_clean(out, "done\n");
+}
+
+/// Returning from inside the loop runs the loop-frame `IterEnd` cleanup before function exit.
+#[test]
+fn by_ref_foreach_return_releases_owned_string_anchors() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function first(array $a): int {
+    foreach ($a as $k => &$v) {
+        return $v;
+    }
+    return 0;
+}
+echo first(["a" => 1, "b" => 2, "c" => 3]), "\n";
+"#,
+    );
+    assert_clean(out, "1\n");
+}
