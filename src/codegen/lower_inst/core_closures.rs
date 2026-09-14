@@ -253,10 +253,21 @@ pub(super) fn promote_local_slot_for_ref_capture(
     capture_ty: &PhpType,
     release_replaced_value: bool,
 ) -> Result<()> {
-    if local_slot_stores_ref_cell_pointer(ctx, slot) {
-        let Some(state_offset) = ctx.ref_cell_state_offset(slot) else {
-            return Ok(());
-        };
+    // A by-reference parameter or another definitely aliased local already stores the caller's
+    // cell pointer. It may now have a bookkeeping word for hash-entry provenance, but a zero in
+    // that word does not make the local raw. Wrapping the pointer in a second cell makes escaping
+    // closures read and write the pointer value instead of the caller's payload (PDO bind output
+    // parameters exposed this as silently unchanged destinations).
+    if ctx.local_ref_cell_representation_is_definite(slot) {
+        return Ok(());
+    }
+    if ctx.local_ref_cell_representation_is_dynamic(slot) {
+        let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
+            CodegenIrError::invalid_module(format!(
+                "dynamic ref-cell slot {} has no representation flag",
+                slot.as_raw()
+            ))
+        })?;
         let promote = ctx.next_label("promote_local_ref_cell");
         let done = ctx.next_label("promote_local_ref_cell_done");
         let state_reg = abi::int_result_reg(ctx.emitter);
