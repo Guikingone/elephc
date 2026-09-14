@@ -46,7 +46,7 @@ The produced binary accepts these arguments at runtime:
 |---|---|---|---|
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of worker processes to prefork. Minimum 1. |
-| `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; `0` means unlimited. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. |
+| `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. `0` removes the cap in `worker` only: `pool` and `request` hand the body to a separate handler process over the broker protocol, which refuses anything above its own 64 MiB frame limit with the same `413`. |
 | `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests. It stops accepting, drains active HTTP connections, and exits after isolated handlers/brokers are reaped; the master then respawns it. |
 | `--access-log` | No | off | Log one line per request to stderr (`<ip> "<method> <path>" <status> <ms>`). |
 | `--max-execution-time N` | No | `0` (none) | In `worker`, terminate and respawn the worker. In `pool`/`request`, terminate only the timed-out handler process. |

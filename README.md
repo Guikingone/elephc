@@ -351,7 +351,10 @@ elephc --web --web-isolation=request app.php  # discard all native state after e
 ./app --listen 0.0.0.0:8080 --workers 4
 
 # Bound what one request may cost: bytes, and the time it may take to send them.
-# Both apply in every isolation mode; 0 means unlimited.
+# Both apply in every isolation mode. `--body-read-timeout 0` removes the deadline
+# everywhere; `--max-body-size 0` removes the cap only in the default worker
+# isolation, since `pool` and `request` still refuse a body over the 64 MiB the
+# broker protocol carries to the handler process.
 ./app --listen 0.0.0.0:8080 --max-body-size 1048576 --body-read-timeout 10
 ```
 
