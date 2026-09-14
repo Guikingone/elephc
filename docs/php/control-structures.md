@@ -109,6 +109,44 @@ for ($i = 0; $i < 10; $i++) {
 }
 ```
 
+The **init** and **update** clauses take any PHP expression, not just an assignment or an
+increment — an array push, an indexed or property assignment, a call — and either may be a
+comma-separated list, which PHP evaluates left to right:
+
+```php
+<?php
+$squares = [];
+for ($i = 0, $limit = 4; $i < $limit; $i++, $squares[] = $i * $i) {
+    // ...
+}
+
+$box = new Box();
+for ($i = 0; $i < 4; $box->total = $i) {
+    $i++;
+}
+```
+
+A comma inside a call's argument list, an array literal or a closure body is **not** a clause
+separator, so `for ($i = max(0, 1); …)` and a closure with its own `;` both parse as one
+member:
+
+```php
+<?php
+for ($fmt = function (int $n): string { return "#$n"; }, $i = 0; $i < 3; $i++) {
+    echo $fmt($i);
+}
+```
+
+Two limits, both matching PHP where noted:
+
+- The clauses accept **expressions only**. `for (echo "x"; …)` is a parse error, as it is in
+  PHP; so is a named declaration (`function f() {}`), which PHP rejects because it reads
+  `function` in that position as the start of a closure.
+- The **condition** clause does not yet accept a comma-separated list. PHP evaluates every
+  expression there and uses the last one's value, but elephc has no sequence expression to
+  hold the list and the condition re-runs each iteration, so it reports a diagnostic naming
+  the limitation rather than mis-parsing.
+
 ## foreach
 
 ```php
