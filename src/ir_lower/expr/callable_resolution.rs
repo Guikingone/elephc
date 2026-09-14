@@ -495,7 +495,7 @@ pub(super) fn build_bound_closure_binding(
         return None;
     };
     let forwards_called_class = ctx.current_class.is_some()
-        && (ctx.local_slots.contains_key("__elephc_called_class_id")
+        && (ctx.local_slots.contains_key(crate::names::CALLED_CLASS_ID_LOCAL)
             || ctx.local_slots.contains_key("this"));
     let expected_capture_count = 1 + usize::from(forwards_called_class);
     if captures.len() != expected_capture_count {

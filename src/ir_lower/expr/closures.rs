@@ -10,8 +10,7 @@
 //!   `static::` keeps late-static semantics after the enclosing method returns.
 
 use super::*;
-
-const CALLED_CLASS_ID_CAPTURE: &str = "__elephc_called_class_id";
+use crate::names::CALLED_CLASS_ID_LOCAL as CALLED_CLASS_ID_CAPTURE;
 
 /// Lowers a closure expression into a callable descriptor backed by an EIR closure function.
 pub(super) fn lower_closure(
