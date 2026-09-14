@@ -95,6 +95,9 @@ pub(super) fn lower_reflection_property_get_value(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let object_arg = reflection_property_get_value_arg(args)?;
+    if !reflection_property_physical_receiver_is_compatible(ctx, &object_arg, declaring_class) {
+        return None;
+    }
     let object = lower_expr(ctx, &object_arg);
     let slot = reflection_property_physical_ref(ctx, declaring_class, property)?;
     let result = ctx.emit_value(
@@ -123,6 +126,9 @@ pub(super) fn lower_reflection_property_set_value(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let (object_arg, value_arg) = reflection_property_set_value_args(args)?;
+    if !reflection_property_physical_receiver_is_compatible(ctx, &object_arg, declaring_class) {
+        return None;
+    }
     let object = lower_expr(ctx, &object_arg);
     let value = lower_expr(ctx, &value_arg);
     let value = crate::ir_lower::stmt::contextualize_property_array_value(
@@ -172,6 +178,27 @@ fn reflection_property_physical_ref(
         class: u32::try_from(info.class_id).ok()?,
         property: u32::try_from(index).ok()?,
     })
+}
+
+/// Returns whether an instance-property reflection call can safely name one physical slot.
+///
+/// Runtime-shaped and incompatible receivers must stay on ReflectionProperty's ordinary method
+/// path, which performs the existing runtime object checks and name dispatch. The physical
+/// immediate is reserved for a concrete receiver whose layout is proven to contain the reflected
+/// class's prefix.
+fn reflection_property_physical_receiver_is_compatible(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    declaring_class: &str,
+) -> bool {
+    let object_ty = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => infer_expr_type_syntactic(object),
+    };
+    let PhpType::Object(receiver_class) = object_ty.codegen_repr() else {
+        return false;
+    };
+    class_extends_class(ctx, &receiver_class, declaring_class)
 }
 
 /// Lowers `ReflectionProperty::isInitialized($object)` to a direct slot probe.
