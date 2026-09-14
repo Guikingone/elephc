@@ -13,8 +13,8 @@
 //!   case-sensitive. Missing class-like types or members yield `false`.
 //! - Existence is scope-aware: public is visible, private only from the
 //!   declaring class, and protected from the declaring class's inheritance family.
-//! - `self::` and `parent::` use the lexical class scope. `static::` is left
-//!   unresolved so AOT does not fake late static binding.
+//! - `self::` and `parent::` use the lexical class scope. `static::` is detected
+//!   separately and lowered through runtime called-class dispatch.
 //! - Relative receivers without their required class or parent scope raise
 //!   catchable PHP `Error`s instead of becoming ordinary misses.
 
@@ -27,8 +27,9 @@ use crate::types::{ClassInfo, EnumInfo, InterfaceInfo};
 /// Returns true when `name` is a `Class::CONST` form visible from `current_class`.
 ///
 /// `current_class` is the lexical class scope (`None` in global functions).
-/// Inheritance and implemented-interface constants are included. Trait-only
-/// constants and `static::` late binding are not modeled here.
+/// Inheritance and implemented-interface constants are included. EIR metadata
+/// composes trait constants into using classes before this lookup. `static::`
+/// is handled by the late-static lowering path before this helper is called.
 pub(crate) fn class_like_constant_is_defined(
     classes: &HashMap<String, ClassInfo>,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -85,6 +86,15 @@ pub(crate) fn class_like_constant_scope_error(
     }
 }
 
+/// Returns the case-sensitive member from a `defined('static::MEMBER')` literal.
+///
+/// The relative receiver itself is case-insensitive. Other class-like forms and
+/// malformed names return `None`.
+pub(crate) fn defined_late_static_member(name: &str) -> Option<&str> {
+    let (class_name, member_name) = split_class_const_name(name)?;
+    (php_symbol_key(class_name) == "static").then_some(member_name)
+}
+
 /// Splits a `Class::CONST` string into `(class, member)` after stripping a leading `\`.
 ///
 /// Uses the last `::` so namespaced class names such as `Foo\Bar::BAZ` stay intact.
@@ -98,10 +108,10 @@ fn split_class_const_name(name: &str) -> Option<(&str, &str)> {
     Some((class_name, member_name))
 }
 
-/// Resolves `self::` / `parent::` against the lexical class; leaves `static::` unresolved.
+/// Resolves `self::` / `parent::` against the lexical class; leaves `static::` for runtime lowering.
 ///
-/// Relative receivers are case-insensitive, matching PHP. `static` is not rewritten
-/// to the lexical class so AOT does not invent a late-static answer.
+/// Relative receivers are case-insensitive, matching PHP. `static` is not
+/// rewritten to the lexical class because its answer depends on the called class.
 fn resolve_defined_receiver<'a>(
     classes: &'a HashMap<String, ClassInfo>,
     class_name: &'a str,

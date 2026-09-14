@@ -629,3 +629,78 @@ Cannot access \"static\" when no class scope is active|\
 Cannot access \"parent\" when current class scope has no parent"
     );
 }
+
+/// Verifies `defined('static::CONST')` dispatches against the runtime called class.
+#[test]
+fn test_defined_literal_late_static_class_constants() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public const BASE = 1;
+    protected const BASE_PROT = 2;
+    private const BASE_PRIV = 3;
+
+    public static function probe(): string {
+        return (defined('STATIC::BASE') ? '1' : '0')
+            . (defined('static::CHILD') ? '1' : '0')
+            . (defined('static::CHILD_PROT') ? '1' : '0')
+            . (defined('static::CHILD_PRIV') ? '1' : '0')
+            . (defined('static::BASE_PROT') ? '1' : '0')
+            . (defined('static::BASE_PRIV') ? '1' : '0');
+    }
+}
+class Child extends Base {
+    public const CHILD = 4;
+    protected const CHILD_PROT = 5;
+    private const CHILD_PRIV = 6;
+}
+class Grand extends Child {}
+echo Base::probe(), "|", Child::probe(), "|", Grand::probe();
+"#,
+    );
+    assert_eq!(out, "100011|111010|111010");
+}
+
+/// Verifies trait constants are exposed through using classes, but not the trait receiver itself.
+#[test]
+fn test_defined_literal_trait_imported_constants() {
+    let out = compile_and_run(
+        r#"<?php
+trait T {
+    public const PUB = 1;
+    protected const PROT = 2;
+    private const PRIV = 3;
+}
+trait Outer {
+    use T;
+    public const OWN = 4;
+}
+class UsesT {
+    use T;
+    public static function inside(): string {
+        return (defined('self::PUB') ? '1' : '0')
+            . (defined('self::PROT') ? '1' : '0')
+            . (defined('self::PRIV') ? '1' : '0');
+    }
+}
+class ChildOfUsesT extends UsesT {
+    public static function inside(): string {
+        return (defined('self::PUB') ? '1' : '0')
+            . (defined('self::PROT') ? '1' : '0')
+            . (defined('self::PRIV') ? '1' : '0');
+    }
+}
+class UsesOuter {
+    use Outer;
+}
+echo defined('T::PUB') ? '1' : '0';
+echo defined('UsesT::PUB') ? '1' : '0';
+echo defined('UsesT::PROT') ? '1' : '0';
+echo defined('UsesT::PRIV') ? '1' : '0';
+echo "|", UsesT::inside(), "|", ChildOfUsesT::inside(), "|";
+echo defined('UsesOuter::PUB') ? '1' : '0';
+echo defined('UsesOuter::OWN') ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "0100|111|110|11");
+}

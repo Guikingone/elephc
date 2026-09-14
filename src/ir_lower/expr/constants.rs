@@ -66,6 +66,13 @@ pub(super) fn lower_static_defined_call(
             expr.span,
         ));
     }
+    if let Some(member_name) = crate::types::defined_late_static_member(constant_name) {
+        return Some(super::scoped_values::lower_late_static_defined(
+            ctx,
+            member_name,
+            expr,
+        ));
+    }
     let exists = literal_constant_is_defined(ctx, constant_name);
     if !exists && (ctx.has_eval_barrier() || ctx.eval_executed()) {
         // Barrier-free AOT evals can still define constants dynamically; the
