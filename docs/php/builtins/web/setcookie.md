@@ -2,7 +2,7 @@
 title: "setcookie()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 934
+  order: 937
 ---
 
 ## setcookie()

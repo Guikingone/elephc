@@ -2,7 +2,7 @@
 title: "posix_setsid() - internals"
 description: "Compiler internals for posix_setsid(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 677
+  order: 680
 ---
 
 ## `posix_setsid()` - internals

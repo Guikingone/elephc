@@ -2,7 +2,7 @@
 title: "session_start()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 930
+  order: 933
 ---
 
 ## session_start()

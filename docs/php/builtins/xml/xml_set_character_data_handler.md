@@ -2,7 +2,7 @@
 title: "xml_set_character_data_handler()"
 description: "Sets the character data handler."
 sidebar:
-  order: 948
+  order: 951
 ---
 
 ## xml_set_character_data_handler()

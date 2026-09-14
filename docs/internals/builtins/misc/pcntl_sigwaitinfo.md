@@ -2,7 +2,7 @@
 title: "pcntl_sigwaitinfo() - internals"
 description: "Compiler internals for pcntl_sigwaitinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 660
+  order: 663
 ---
 
 ## `pcntl_sigwaitinfo()` - internals

@@ -613,6 +613,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`sqrt()`](./builtins/math/sqrt.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`tan()`](./builtins/math/tan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`tanh()`](./builtins/math/tanh.md) | `(float $num): float` | `float` | ✓ | ✓ |
+| [`clone()`](./builtins/misc/clone.md) | `(object $object, array $withProperties = []): object` | `object` | ✓ | ✓ |
 | [`constant()`](./builtins/misc/constant.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
 | [`debug_backtrace()`](./builtins/misc/debug_backtrace.md) | `(int $options = 1, int $limit = 0): array` | `array` | ✓ | ✓ |
 | [`debug_print_backtrace()`](./builtins/misc/debug_print_backtrace.md) | `(int $options = 0, int $limit = 0): void` | `void` | ✓ | ✓ |
@@ -633,6 +634,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`get_defined_constants()`](./builtins/misc/get_defined_constants.md) | `(bool $categorize = false): array` | `array` | ✓ | ✓ |
 | [`get_defined_functions()`](./builtins/misc/get_defined_functions.md) | `(bool $exclude_disabled = true): array` | `array` | ✓ | ✓ |
 | [`get_defined_vars()`](./builtins/misc/get_defined_vars.md) | `(): array` | `array` | ✓ | ✓ |
+| [`get_error_handler()`](./builtins/misc/get_error_handler.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`get_exception_handler()`](./builtins/misc/get_exception_handler.md) | `(): mixed` | `mixed` | ✓ | ✓ |
 | [`get_extension_funcs()`](./builtins/misc/get_extension_funcs.md) | `(string $extension): mixed` | `mixed` | ✓ | ✓ |
 | [`get_included_files()`](./builtins/misc/get_included_files.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_loaded_extensions()`](./builtins/misc/get_loaded_extensions.md) | `(bool $zend_extensions = false): array` | `array` | ✓ | ✓ |

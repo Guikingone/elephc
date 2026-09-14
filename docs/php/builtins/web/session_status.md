@@ -2,7 +2,7 @@
 title: "session_status()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 931
+  order: 934
 ---
 
 ## session_status()

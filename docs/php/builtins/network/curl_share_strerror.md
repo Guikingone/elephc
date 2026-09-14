@@ -2,7 +2,7 @@
 title: "curl_share_strerror()"
 description: "Returns string describing the given error code."
 sidebar:
-  order: 719
+  order: 722
 ---
 
 ## curl_share_strerror()

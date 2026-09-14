@@ -2,7 +2,7 @@
 title: "iconv_strlen() - internals"
 description: "Compiler internals for iconv_strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 812
+  order: 815
 ---
 
 ## `iconv_strlen()` - internals

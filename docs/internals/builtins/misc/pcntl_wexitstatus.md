@@ -2,7 +2,7 @@
 title: "pcntl_wexitstatus() - internals"
 description: "Compiler internals for pcntl_wexitstatus(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 666
+  order: 669
 ---
 
 ## `pcntl_wexitstatus()` - internals

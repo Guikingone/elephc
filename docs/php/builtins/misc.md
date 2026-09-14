@@ -9,6 +9,7 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
+| [`clone()`](./misc/clone.md) | `(object $object, array $withProperties = []): object` | `object` | ✓ | ✓ |
 | [`constant()`](./misc/constant.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
 | [`debug_backtrace()`](./misc/debug_backtrace.md) | `(int $options = 1, int $limit = 0): array` | `array` | ✓ | ✓ |
 | [`debug_print_backtrace()`](./misc/debug_print_backtrace.md) | `(int $options = 0, int $limit = 0): void` | `void` | ✓ | ✓ |
@@ -29,6 +30,8 @@ sidebar:
 | [`get_defined_constants()`](./misc/get_defined_constants.md) | `(bool $categorize = false): array` | `array` | ✓ | ✓ |
 | [`get_defined_functions()`](./misc/get_defined_functions.md) | `(bool $exclude_disabled = true): array` | `array` | ✓ | ✓ |
 | [`get_defined_vars()`](./misc/get_defined_vars.md) | `(): array` | `array` | ✓ | ✓ |
+| [`get_error_handler()`](./misc/get_error_handler.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`get_exception_handler()`](./misc/get_exception_handler.md) | `(): mixed` | `mixed` | ✓ | ✓ |
 | [`get_extension_funcs()`](./misc/get_extension_funcs.md) | `(string $extension): mixed` | `mixed` | ✓ | ✓ |
 | [`get_included_files()`](./misc/get_included_files.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_loaded_extensions()`](./misc/get_loaded_extensions.md) | `(bool $zend_extensions = false): array` | `array` | ✓ | ✓ |

@@ -2,7 +2,7 @@
 title: "is_resource() - internals"
 description: "Compiler internals for is_resource(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 901
+  order: 904
 ---
 
 ## `is_resource()` - internals

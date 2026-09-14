@@ -2,7 +2,7 @@
 title: "xmlwriter_write_cdata()"
 description: "Writes a complete CDATA section."
 sidebar:
-  order: 990
+  order: 993
 ---
 
 ## xmlwriter_write_cdata()

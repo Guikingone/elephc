@@ -2,7 +2,7 @@
 title: "xmlwriter_end_element()"
 description: "Ends the current element, using the short form when it has no content."
 sidebar:
-  order: 966
+  order: 969
 ---
 
 ## xmlwriter_end_element()

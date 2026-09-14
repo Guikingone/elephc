@@ -2,7 +2,7 @@
 title: "session_write_close()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 933
+  order: 936
 ---
 
 ## session_write_close()

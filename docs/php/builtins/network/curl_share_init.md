@@ -2,7 +2,7 @@
 title: "curl_share_init()"
 description: "Initializes a cURL share handle."
 sidebar:
-  order: 716
+  order: 719
 ---
 
 ## curl_share_init()

@@ -2,7 +2,7 @@
 title: "pcntl_getcpuaffinity() - internals"
 description: "Compiler internals for pcntl_getcpuaffinity(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 648
+  order: 651
 ---
 
 ## `pcntl_getcpuaffinity()` - internals

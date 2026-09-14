@@ -2,7 +2,7 @@
 title: "pcntl_sigwaitinfo()"
 description: "Waits synchronously for one selected Linux signal and returns its number or false."
 sidebar:
-  order: 660
+  order: 663
 ---
 
 ## pcntl_sigwaitinfo()

@@ -2,7 +2,7 @@
 title: "__elephc_invoke_pdo_statement_constructor() - internals"
 description: "Compiler internals for __elephc_invoke_pdo_statement_constructor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1051
+  order: 1054
 ---
 
 ## `__elephc_invoke_pdo_statement_constructor()` - internals

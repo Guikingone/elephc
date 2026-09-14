@@ -2,7 +2,7 @@
 title: "pcntl_signal_dispatch() - internals"
 description: "Compiler internals for pcntl_signal_dispatch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 656
+  order: 659
 ---
 
 ## `pcntl_signal_dispatch()` - internals

@@ -2,7 +2,7 @@
 title: "http_response_code() - internals"
 description: "Compiler internals for http_response_code(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 629
+  order: 632
 ---
 
 ## `http_response_code()` - internals

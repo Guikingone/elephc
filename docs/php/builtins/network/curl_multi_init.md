@@ -2,7 +2,7 @@
 title: "curl_multi_init()"
 description: "Returns a new cURL multi handle."
 sidebar:
-  order: 705
+  order: 708
 ---
 
 ## curl_multi_init()

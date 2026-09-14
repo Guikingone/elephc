@@ -2,7 +2,7 @@
 title: "session_destroy() - internals"
 description: "Compiler internals for session_destroy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 917
+  order: 920
 ---
 
 ## `session_destroy()` - internals

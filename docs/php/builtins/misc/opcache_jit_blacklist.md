@@ -2,7 +2,7 @@
 title: "opcache_jit_blacklist()"
 description: "Implemented by the compiler-injected OPcache prelude."
 sidebar:
-  order: 638
+  order: 641
 ---
 
 ## opcache_jit_blacklist()

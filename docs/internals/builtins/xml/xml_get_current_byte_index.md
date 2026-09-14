@@ -2,7 +2,7 @@
 title: "xml_get_current_byte_index() - internals"
 description: "Compiler internals for xml_get_current_byte_index(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 937
+  order: 940
 ---
 
 ## `xml_get_current_byte_index()` - internals

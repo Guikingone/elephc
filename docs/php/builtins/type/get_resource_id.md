@@ -2,7 +2,7 @@
 title: "get_resource_id()"
 description: "Returns an integer identifier for the given resource."
 sidebar:
-  order: 884
+  order: 887
 ---
 
 ## get_resource_id()

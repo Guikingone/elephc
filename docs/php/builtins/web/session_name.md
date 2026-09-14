@@ -2,7 +2,7 @@
 title: "session_name()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 923
+  order: 926
 ---
 
 ## session_name()

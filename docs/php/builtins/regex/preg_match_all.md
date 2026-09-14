@@ -2,7 +2,7 @@
 title: "preg_match_all()"
 description: "Performs a global regular expression match and returns the number of matches."
 sidebar:
-  order: 757
+  order: 760
 ---
 
 ## preg_match_all()

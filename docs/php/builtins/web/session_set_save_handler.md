@@ -2,7 +2,7 @@
 title: "session_set_save_handler()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 929
+  order: 932
 ---
 
 ## session_set_save_handler()

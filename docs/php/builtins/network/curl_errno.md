@@ -2,7 +2,7 @@
 title: "curl_errno()"
 description: "Returns the last error number for a cURL session."
 sidebar:
-  order: 692
+  order: 695
 ---
 
 ## curl_errno()

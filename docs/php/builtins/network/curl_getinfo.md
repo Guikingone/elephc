@@ -2,7 +2,7 @@
 title: "curl_getinfo()"
 description: "Gets information about the last transfer."
 sidebar:
-  order: 696
+  order: 699
 ---
 
 ## curl_getinfo()

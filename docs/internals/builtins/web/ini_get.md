@@ -2,7 +2,7 @@
 title: "ini_get() - internals"
 description: "Compiler internals for ini_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 908
+  order: 911
 ---
 
 ## `ini_get()` - internals

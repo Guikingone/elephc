@@ -2,7 +2,7 @@
 title: "opcache_invalidate()"
 description: "Implemented by the compiler-injected OPcache prelude."
 sidebar:
-  order: 635
+  order: 638
 ---
 
 ## opcache_invalidate()

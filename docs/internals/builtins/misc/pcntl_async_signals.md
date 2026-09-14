@@ -2,7 +2,7 @@
 title: "pcntl_async_signals() - internals"
 description: "Compiler internals for pcntl_async_signals(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 641
+  order: 644
 ---
 
 ## `pcntl_async_signals()` - internals

@@ -417,9 +417,9 @@ def render(
         "inside `eval()` are listed separately below. `—` marks a kind the module does not have.",
         "",
         "The 62/62 Core inventory claim refers to elephc's own contract inventory, returned "
-        "by `get_extension_funcs(\"core\")` and enumerated by `CORE_FUNCTION_NAMES`. All 62 "
-        "names match the PHP 8.5 Core baseline. The comparison numerator also reports all "
-        "62 names, including `die` and `exit` as language constructs.",
+        "by `get_extension_funcs(\"core\")` and enumerated by `CORE_FUNCTION_NAMES`. It covers "
+        "all 60 functions in the PHP 8.5 Core baseline plus the `die` and `exit` language "
+        "constructs. The comparison row counts functions only, so its numerator is 60.",
         "",
         "| PHP module | Functions | Classes | Constants |",
         "|---|---|---|---|",

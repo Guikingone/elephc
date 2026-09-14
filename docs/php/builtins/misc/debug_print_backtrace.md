@@ -2,7 +2,7 @@
 title: "debug_print_backtrace()"
 description: "Prints a PHP backtrace for the active call stack."
 sidebar:
-  order: 604
+  order: 605
 ---
 
 ## debug_print_backtrace()

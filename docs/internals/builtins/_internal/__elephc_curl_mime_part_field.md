@@ -2,7 +2,7 @@
 title: "__elephc_curl_mime_part_field() - internals"
 description: "Compiler internals for __elephc_curl_mime_part_field(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1024
+  order: 1027
 ---
 
 ## `__elephc_curl_mime_part_field()` - internals
