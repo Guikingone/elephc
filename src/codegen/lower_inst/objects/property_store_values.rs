@@ -187,7 +187,7 @@ fn emit_mixed_iterable_for_property_store(ctx: &mut FunctionContext<'_>) {
 /// `value_can_own_mixed_box_source()` is EIR's promise that this consumer takes the box over, so
 /// EIR emits no cleanup of its own for it. A slot that copies the payload instead of storing the
 /// box has to end that ownership here.
-pub(super) fn release_adopted_mixed_source(
+pub(in crate::codegen::lower_inst) fn release_adopted_mixed_source(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
     result_ty: &PhpType,

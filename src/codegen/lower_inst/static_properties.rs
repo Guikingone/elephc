@@ -23,7 +23,7 @@ use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
 use super::{
-    builtins, expect_data, expect_operand, load_value_to_first_int_arg, property_values,
+    builtins, expect_data, expect_operand, load_value_to_first_int_arg, objects, property_values,
     store_if_result,
 };
 use crate::codegen::{CodegenIrError, Result};
@@ -840,8 +840,12 @@ fn load_static_property_store_value_to_result(
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
+            // An object slot stores the unboxed object POINTER, retained on its own, so the
+            // adopted cell keeps no owner here. Without this release a declared static object
+            // property leaked one boxed cell and its payload owner per runtime-shaped write.
             PhpType::Object(_) => {
-                property_values::emit_mixed_object_for_property_store(ctx)
+                property_values::emit_mixed_object_for_property_store(ctx);
+                objects::release_adopted_mixed_source(ctx, value, &PhpType::Object(String::new()))?;
             }
             _ => {}
         }
