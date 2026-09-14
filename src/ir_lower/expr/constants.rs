@@ -41,6 +41,8 @@ pub(super) fn register_static_define_call(
 /// Global names use prescanned `define()`/`const` metadata. `Class::CONST`
 /// strings also succeed when the member is visible from the current lexical
 /// class scope, including inherited and implemented-interface constants.
+/// Relative receivers without a valid class or parent scope throw a catchable
+/// PHP `Error`.
 pub(super) fn lower_static_defined_call(
     ctx: &mut LoweringContext<'_, '_>,
     name: &Name,
@@ -53,6 +55,17 @@ pub(super) fn lower_static_defined_call(
     let ExprKind::StringLiteral(constant_name) = &args[0].kind else {
         return None;
     };
+    if let Some(message) = crate::types::class_like_constant_scope_error(
+        ctx.classes,
+        constant_name,
+        ctx.current_class.as_deref(),
+    ) {
+        return Some(crate::ir_lower::stmt::lower_throw_access_error_expr(
+            ctx,
+            &message,
+            expr.span,
+        ));
+    }
     let exists = literal_constant_is_defined(ctx, constant_name);
     if !exists && (ctx.has_eval_barrier() || ctx.eval_executed()) {
         // Barrier-free AOT evals can still define constants dynamically; the

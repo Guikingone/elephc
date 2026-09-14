@@ -72,7 +72,9 @@ pub use schema::{
     PackedFieldInfo, PropertyHookContract,
 };
 pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
-pub(crate) use defined::class_like_constant_is_defined;
+pub(crate) use defined::{
+    class_like_constant_is_defined, class_like_constant_scope_error,
+};
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };

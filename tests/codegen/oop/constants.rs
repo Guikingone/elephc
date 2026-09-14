@@ -587,3 +587,45 @@ echo defined('Base::PRIV') ? '1' : '0';
     );
     assert_eq!(out, "10");
 }
+
+/// Verifies invalid relative `defined()` receivers raise PHP-compatible catchable `Error`s.
+#[test]
+fn test_defined_literal_invalid_relative_scope_throws_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo defined('SELF::X') ? 'bad' : 'bad';
+} catch (\Error $e) {
+    echo $e->getMessage(), "|";
+}
+try {
+    defined('Parent::X');
+} catch (\Error $e) {
+    echo $e->getMessage(), "|";
+}
+try {
+    defined('STATIC::X');
+} catch (\Error $e) {
+    echo $e->getMessage(), "|";
+}
+class Root {
+    public static function probe(): string {
+        try {
+            defined('PARENT::X');
+        } catch (\Error $e) {
+            return $e->getMessage();
+        }
+        return 'bad';
+    }
+}
+echo Root::probe();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot access \"self\" when no class scope is active|\
+Cannot access \"parent\" when no class scope is active|\
+Cannot access \"static\" when no class scope is active|\
+Cannot access \"parent\" when current class scope has no parent"
+    );
+}

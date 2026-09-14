@@ -15,6 +15,8 @@
 //!   declaring class, and protected from the declaring class's inheritance family.
 //! - `self::` and `parent::` use the lexical class scope. `static::` is left
 //!   unresolved so AOT does not fake late static binding.
+//! - Relative receivers without their required class or parent scope raise
+//!   catchable PHP `Error`s instead of becoming ordinary misses.
 
 use std::collections::{HashMap, HashSet};
 
@@ -47,6 +49,40 @@ pub(crate) fn class_like_constant_is_defined(
         return true;
     }
     interface_constant_is_defined(interfaces, class_name, member_name)
+}
+
+/// Returns PHP's `Error` message for a relative `defined()` receiver used in an invalid scope.
+///
+/// `self::` and `static::` require a lexical class. `parent::` additionally
+/// requires that class to have a parent. Valid relative receivers and ordinary
+/// class-like names return `None`.
+pub(crate) fn class_like_constant_scope_error(
+    classes: &HashMap<String, ClassInfo>,
+    name: &str,
+    current_class: Option<&str>,
+) -> Option<String> {
+    let (class_name, _) = split_class_const_name(name)?;
+    let receiver = php_symbol_key(class_name);
+    match receiver.as_str() {
+        "self" | "static" if current_class.is_none() => Some(format!(
+            "Cannot access \"{}\" when no class scope is active",
+            receiver
+        )),
+        "parent" => {
+            let Some(current) = current_class else {
+                return Some(
+                    "Cannot access \"parent\" when no class scope is active".to_string(),
+                );
+            };
+            let has_parent = lookup_ci(classes, current)
+                .and_then(|(_, info)| info.parent.as_ref())
+                .is_some();
+            (!has_parent).then(|| {
+                "Cannot access \"parent\" when current class scope has no parent".to_string()
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Splits a `Class::CONST` string into `(class, member)` after stripping a leading `\`.
