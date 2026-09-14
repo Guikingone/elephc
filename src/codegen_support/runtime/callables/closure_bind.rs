@@ -289,7 +289,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::{Platform, Target};
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
 
     /// Verifies both supported architectures validate and copy the optional
     /// called-class capture while retaining the top-level `$this`-only size.
@@ -297,6 +297,8 @@ mod tests {
     fn test_closure_bind_emits_both_supported_descriptor_sizes() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
             Target::new(Platform::Linux, Arch::AArch64),
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
