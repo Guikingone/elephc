@@ -50,6 +50,28 @@ pub struct TraitMethodInfo {
     pub is_abstract: bool,
 }
 
+/// One generated PHP 8.5 `clone()` property-override applicator.
+///
+/// Each entry names the synthetic EIR function that applies an override array to a clone of
+/// exactly one runtime class, resolved from one profile of PHP invocation scopes. Backend clone
+/// lowering dispatches on the clone's runtime class id and the invocation-site scope id and then
+/// calls `function_name` with `(clone, overrides)`.
+#[derive(Debug, Clone)]
+pub struct CloneOverrideApplicator {
+    /// Dense runtime class id of the cloned object this applicator serves.
+    pub class_id: u64,
+    /// PHP class name matching `class_id`, used for receiver typing in backend call staging.
+    pub class_name: String,
+    /// Dense class ids of the invocation scopes this applicator body is exact for.
+    ///
+    /// Several scopes share one body whenever they resolve every override name identically.
+    pub scope_class_ids: Vec<u64>,
+    /// Whether this body also serves global scope and every scope unrelated to `class_name`.
+    pub is_default_scope: bool,
+    /// EIR function name of the applicator body.
+    pub function_name: String,
+}
+
 /// Complete EIR module for one compile target.
 #[derive(Debug, Clone)]
 pub struct Module {
@@ -110,6 +132,8 @@ pub struct Module {
     /// those names, so a non-web read/write must not assume a live Hash
     /// pointer is already there.
     pub web: bool,
+    /// Generated `clone()` property-override applicators, sorted by class id then scope id.
+    pub clone_override_applicators: Vec<CloneOverrideApplicator>,
 }
 
 impl Module {
@@ -159,6 +183,7 @@ impl Module {
             extern_globals: HashMap::new(),
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
+            clone_override_applicators: Vec::new(),
         }
     }
 

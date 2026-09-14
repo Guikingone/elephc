@@ -21,9 +21,10 @@
 //!   cannot: it reads the trailing hidden ABI operand and compares it against the statically
 //!   computed set of scopes the hook is visible from, so one escaped `clone(...)` reports
 //!   `global scope` and `scope X` at the two places it is invoked from.
-//! - This slice REFUSES a non-empty `$withProperties`, at compile time when the operand is a
-//!   literal `[]` and at run time otherwise. Overrides are never silently dropped. An omitted
-//!   second operand needs no guard at all: it is the empty array by definition.
+//! - `$withProperties` is applied by `overrides`, after `__clone()` and while the clone is still
+//!   an unwind-visible owner. A literal `[]` needs no code at all, and an omitted second operand
+//!   IS the empty array by definition. A runtime class this program generated no applicator for
+//!   still REPORTS rather than dropping the write.
 
 use crate::codegen::abi;
 use crate::codegen::context::FunctionContext;
@@ -33,6 +34,8 @@ use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::parser::ast::Visibility;
 use crate::types::PhpType;
+
+mod overrides;
 
 use super::super::{
     direct_call_stack_pad_bytes, emit_call_arg_temp_cleanups, emit_ref_arg_writebacks,
@@ -51,9 +54,9 @@ struct CloneHookCandidate {
     target: MethodCallTarget,
 }
 
-/// The message PHP-facing code sees when this slice meets property overrides it cannot apply.
+/// The message PHP-facing code sees when no generated applicator serves the clone's class.
 const PROPERTY_OVERRIDE_MESSAGE: &str =
-    "clone(): Argument #2 ($withProperties) property overrides are not supported yet";
+    "clone(): Argument #2 ($withProperties) property overrides are not supported for this class";
 
 /// Clones a runtime object and invokes its visible `__clone()` hook.
 pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -82,10 +85,6 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
         return super::store_if_result(ctx, inst);
     }
 
-    // An omitted second argument IS the empty override array, so there is nothing to refuse.
-    if let Some(properties) = inst.operands.get(1).copied() {
-        emit_property_override_guard(ctx, properties)?;
-    }
     emit_boxed_shallow_clone(ctx, object)?;
     emit_uncloneable_guard(ctx);
 
@@ -96,7 +95,17 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_temporary_stack_address(ctx.emitter, &owner_addr, 0);
     abi::emit_link_call_operand_owner_at_stack(ctx.emitter, &owner_addr, false, 16);
 
+    emit_enum_uncloneable_guard(ctx);
     emit_clone_hook(ctx, object, inst.operands.get(2).copied())?;
+    // An omitted second argument IS the empty override array, so there is nothing to apply.
+    if let Some(properties) = inst.operands.get(1).copied() {
+        overrides::emit_property_overrides(
+            ctx,
+            properties,
+            inst.operands.get(2).copied(),
+            0,
+        )?;
+    }
 
     abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, 16);
     abi::emit_load_temporary_stack_slot(ctx.emitter, &clone_box, 0);
@@ -104,8 +113,8 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_clone_result(ctx, inst)
 }
 
-/// Refuses property overrides this slice cannot apply, as early as the operand allows.
-fn emit_property_override_guard(
+/// Refuses property overrides no generated applicator can apply, as early as the operand allows.
+pub(super) fn emit_property_override_guard(
     ctx: &mut FunctionContext<'_>,
     properties: ValueId,
 ) -> Result<()> {
@@ -234,6 +243,51 @@ fn emit_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
     emit_branch_if_nonzero(ctx, &clone_box, &cloned_label);
     super::super::exceptions::emit_error(ctx, "Trying to clone an uncloneable object");
     ctx.emitter.label(&cloned_label);
+}
+
+/// Refuses an enum case, which php forbids cloning, naming the enum the way php-src does.
+///
+/// The shared shallow-copy adapter happily copies an enum case, so the refusal is decided here
+/// from the clone's own runtime class id. It runs INSIDE the owner window, so the copy the
+/// adapter already made is released by the unwinder instead of leaking.
+fn emit_enum_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
+    let mut enums = ctx
+        .module
+        .enum_infos
+        .keys()
+        .filter_map(|name| {
+            ctx.module
+                .class_infos
+                .get(name)
+                .map(|info| (info.class_id as i64, name.clone()))
+        })
+        .collect::<Vec<_>>();
+    if enums.is_empty() {
+        return;
+    }
+    enums.sort_by(|left, right| left.0.cmp(&right.0));
+    let cloneable = ctx.next_label("clone_not_an_enum");
+    let labels = enums
+        .iter()
+        .map(|(class_id, _)| ctx.next_label(&format!("clone_enum_{class_id}")))
+        .collect::<Vec<_>>();
+    let class_id_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    abi::emit_load_from_address(ctx.emitter, &class_id_reg, payload_reg, 0);
+    for ((class_id, _), label) in enums.iter().zip(labels.iter()) {
+        emit_branch_if_reg_equals_immediate(ctx, &class_id_reg, *class_id, label);
+    }
+    abi::emit_jump(ctx.emitter, &cloneable);
+    for ((_, name), label) in enums.iter().zip(labels.iter()) {
+        ctx.emitter.label(label);
+        super::super::exceptions::emit_error(
+            ctx,
+            &format!("Trying to clone an uncloneable object of class {name}"),
+        );
+    }
+    ctx.emitter.label(&cloneable);
 }
 
 /// Dispatches `__clone()` by runtime class id, or does nothing when the class has no hook.
@@ -476,7 +530,7 @@ fn emit_runtime_clone_hook_visibility_error(
 }
 
 /// Branches when a transported dense class id equals one compile-time id.
-fn emit_branch_if_reg_equals_immediate(
+pub(super) fn emit_branch_if_reg_equals_immediate(
     ctx: &mut FunctionContext<'_>,
     reg: &str,
     value: i64,
@@ -525,7 +579,7 @@ fn store_clone_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
 }
 
 /// Returns whether the operand is a literal empty array the frontend materialized inline.
-fn value_is_empty_array_literal(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+pub(super) fn value_is_empty_array_literal(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
     let mut value = value;
     loop {
         let Some(value_ref) = ctx.function.value(value) else {

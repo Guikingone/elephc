@@ -136,6 +136,14 @@ pub(crate) fn lower(
         &fiber_return_sigs,
     );
     include_lowered_runtime_features(&mut module);
+    // Applicators are planned from the LOWERED module: their candidate classes and invocation
+    // scopes come from the `RuntimeFnId::CloneWith` sites this program actually contains.
+    super::clone_overrides::lower_clone_override_applicators(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    );
     super::effect_refinement::refine_module(&mut module);
     reserve_eval_subclass_property_storage(&mut module);
     // A refused shape is reported before validation: the placeholder EIR those sites emit

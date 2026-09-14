@@ -834,7 +834,17 @@ impl GraphState {
 }
 
 /// Returns whether an instantiated class must retain the declared PHP magic method.
+///
+/// Property HOOK accessors count. The parser compiles `set { … }` into `__propset_<p>` and
+/// `get { … }` into `__propget_<p>`, and the only thing that used to mark one reachable was a
+/// literal `$obj->p = …` statement somewhere in the source. Every other route to the same hook
+/// PHP 8.5's `clone($obj, ["p" => …])` above all, whose write is synthesized after this pass
+/// runs, found the accessor pruned and silently wrote the BACKING SLOT instead, skipping the
+/// hook body entirely. An instantiated class keeps its own hooks.
 fn is_magic_method(method: &str) -> bool {
+    if method.starts_with("__propget_") || method.starts_with("__propset_") {
+        return true;
+    }
     matches!(
         method,
         "__construct"

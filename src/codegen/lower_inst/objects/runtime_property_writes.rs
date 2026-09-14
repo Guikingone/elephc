@@ -177,7 +177,14 @@ pub(super) fn lower_runtime_object_prop_set(
     }
 
     ctx.emitter.label(&miss_label);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    // A class with per-instance hash storage takes the undeclared name there. Falling straight
+    // through instead DROPPED the write, with no diagnostic anywhere.
+    match dynamic_property_hash_offset_for_class(ctx, class_name, "")? {
+        Some(hash_offset) => {
+            lower_runtime_allow_dynamic_prop_set(ctx, value, hash_offset, 16, 0, 32)?;
+        }
+        None => abi::emit_release_temporary_stack(ctx.emitter, 32),
+    }
     ctx.emitter.label(&done_label);
     Ok(())
 }

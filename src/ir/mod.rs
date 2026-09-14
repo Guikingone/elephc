@@ -46,8 +46,8 @@ pub use instr::{
     InstId, Instruction, MixedNumericOp, Op, PassOrigin, PhpTypePredicate, RuntimeId,
 };
 pub use module::{
-    ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
-    Module, PackedLayoutTable, TraitMethodInfo,
+    ClassTable, CloneOverrideApplicator, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,
+    InterfaceTable, Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use pcntl_runtime::{PcntlRuntime, PcntlTargetSupport};
 pub use print::{print_function, print_module};

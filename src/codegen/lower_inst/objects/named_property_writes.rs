@@ -127,6 +127,65 @@ pub(super) fn lower_allow_dynamic_prop_set(
     Ok(())
 }
 
+/// Lowers a RUNTIME-name write to an undeclared property on an allow-dynamic class.
+///
+/// The static-name sibling interns the key in the data pool. A name only known at run time has
+/// no such label, so the pointer/length pair is taken from the caller's temporary stack frame,
+/// the same frame `lower_runtime_object_prop_set` already staged the receiver and the name in.
+///
+/// Without this the declared-slot ladder's MISS arm fell off the end and the write vanished:
+/// `$dyn->{$name} = $v` on an `#[\AllowDynamicProperties]` class stored nothing at all, which is
+/// also what `clone($dyn, [$name => $v])` would have done for every undeclared key.
+///
+/// `frame_bytes` is the caller's reserved block: the receiver sits at `receiver_offset`, the
+/// name pointer at `name_offset` and its length at `name_offset + 8`. The block is released here.
+pub(super) fn lower_runtime_allow_dynamic_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    hash_offset: usize,
+    receiver_offset: usize,
+    name_offset: usize,
+    frame_bytes: usize,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let boxed_reg = abi::secondary_scratch_reg(ctx.emitter).to_string();
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
+    let target = ctx.emitter.target;
+    materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+    abi::emit_reg_move(ctx.emitter, &boxed_reg, abi::int_result_reg(ctx.emitter));
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        &object_reg,
+        hash_offset,
+    );
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), name_offset);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 2),
+        name_offset + 8,
+    );
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(target, 3), &boxed_reg);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 4), 0);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 5),
+        runtime_value_tag(&PhpType::Mixed) as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    // The helper can reallocate, so the receiver is reloaded and the fresh table stored back.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &object_reg,
+        hash_offset,
+    );
+    abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
+    Ok(())
+}
+
 /// Materializes a property value as an owned boxed `Mixed` cell in the result register.
 pub(super) fn materialize_dynamic_property_mixed_value(
     ctx: &mut FunctionContext<'_>,

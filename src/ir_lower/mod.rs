@@ -12,6 +12,7 @@
 
 mod array_pointer_scan;
 mod builtin_datetime;
+mod clone_overrides;
 mod context;
 mod diagnostics;
 mod effect_refinement;

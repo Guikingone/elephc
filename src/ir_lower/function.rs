@@ -1043,6 +1043,118 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     module.add_function(function);
 }
 
+/// Lowers one synthetic function belonging to the PHP 8.5 `clone()` override engine.
+///
+/// Both shapes go through here: the per-`(runtime class, invocation scope)` applicator, whose
+/// parameters are `(this: Object(<clone class>), __elephc_clone_overrides: mixed)`, and the
+/// per-`(declaring class, property)` scoped setter helper, whose `this` is typed with the
+/// ancestor that owns the private slot the scope selects.
+///
+/// `scope` becomes the body's lexical class, so property-slot resolution, set-hook routing and
+/// `__set()` selection inside the body see the PHP scope the statements were synthesized for.
+/// Visibility itself is decided BEFORE lowering, in `crate::ir_lower::clone_overrides::arms`,
+/// and is already baked into the statements as explicit assignment or denial arms.
+///
+/// The statements carry `Span::dummy()`. `CheckResult::throw_access_sites` is keyed by source
+/// span, so the checker's statically decided readonly REFUSAL never applies to these
+/// engine-owned stores, which is exactly the reinitialization `clone()` is specified to
+/// perform, while no process-global or fiber-visible allowance state is introduced anywhere.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lower_clone_override_function(
+    function_name: &str,
+    params: &[(String, PhpType)],
+    scope: Option<&str>,
+    body: &[Stmt],
+    module: &mut Module,
+    check_result: &CheckResult,
+    functions: &std::collections::HashMap<String, FunctionSig>,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) -> FunctionSig {
+    let sig = FunctionSig {
+        params: params.to_vec(),
+        param_type_exprs: vec![None; params.len()],
+        param_attributes: Vec::new(),
+        defaults: vec![None; params.len()],
+        return_type: PhpType::Void,
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: vec![false; params.len()],
+        declared_params: vec![false; params.len()],
+        variadic: None,
+        deprecation: None,
+    };
+    if module
+        .functions
+        .iter()
+        .any(|function| function.name == function_name)
+    {
+        return sig;
+    }
+    let mut function = Function::new(function_name.to_string(), IrType::Void, PhpType::Void);
+    function.flags.is_synthetic = true;
+    for (name, php_type) in params {
+        function.params.push(FunctionParam {
+            name: name.clone(),
+            ir_type: value_ir_type(php_type),
+            php_type: php_type.clone(),
+            by_ref: false,
+            variadic: false,
+        });
+    }
+    function.source_signature = Some(source_signature(function_name, &sig));
+    function.signature = Some(eir_runtime_metadata_signature(&sig));
+    let mut env = TypeEnv::new();
+    for (name, php_type) in params {
+        env.insert(name.clone(), php_type.clone());
+    }
+    let web = module.web;
+    let closures = lower_body_into_function(
+        &mut function,
+        None,
+        &mut module.data,
+        body,
+        env,
+        web_gated_global_env(&check_result.global_env, web),
+        functions,
+        &check_result.extern_functions,
+        &check_result.extern_globals,
+        &check_result.callable_param_sigs,
+        &check_result.return_alias_summaries,
+        fiber_return_sigs,
+        &module.class_infos,
+        &check_result.enums,
+        &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
+        &check_result.packed_classes,
+        &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
+        &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
+        &check_result.local_retype_sites,
+        &check_result.mixed_storage_store_sites,
+        function_name.to_string(),
+        constants,
+        scope.map(str::to_string),
+        PhpType::Void,
+        false,
+        params,
+        None,
+        false,
+        std::collections::HashSet::new(),
+        module.source_path.clone(),
+        None,
+        web,
+    );
+    add_closures(module, closures);
+    module.add_function(function);
+    sig
+}
+
 /// The symbol a dynamic-new candidate calls when it has to pad the constructor with defaults.
 pub(crate) fn dynamic_constructor_thunk_name(class_id: u64, provided_args: usize) -> String {
     format!("_class_ctor_{}_{}", class_id, provided_args)

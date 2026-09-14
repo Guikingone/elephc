@@ -111,6 +111,10 @@ fn parse_stmt_dispatch(
     match &tokens[*pos].0 {
         Token::Echo => simple::parse_echo(tokens, pos, span),
         Token::Print => simple::parse_expr_stmt(tokens, pos, span),
+        // `clone $o;` and PHP 8.5's `clone($o, $overrides);` are ordinary expression statements
+        // whose result is discarded. Without an arm here the leading keyword reached the
+        // catch-all below and a standalone clone was a parse error rather than a no-op copy.
+        Token::Clone => simple::parse_expr_stmt(tokens, pos, span),
         Token::At => simple::parse_error_suppressed_stmt(tokens, pos, span),
         Token::Variable(_) => assign::parse_variable_stmt(tokens, pos, span),
         Token::This => simple::parse_this_stmt(tokens, pos, span),

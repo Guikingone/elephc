@@ -576,7 +576,10 @@ fn emit_string_into_int_diagnostics(
                 .instruction(&format!("jne {}", numeric_label)); // only a fully numeric string can reach an int property
         }
     }
-    abi::emit_release_temporary_stack(ctx.emitter, STRING_TO_INT_FRAME_BYTES);
+    // `refuse_label` owns the release. Releasing here TOO popped the diagnostic frame twice, so
+    // a non-numeric string left the stack pointer above the caller's live call-operand owner
+    // record; the throw that follows then overwrote that record's cleanup pointer with a return
+    // address and unwinding jumped into the stack. Reached as `clone($o, ["intProp" => "abc"])`.
     abi::emit_jump(ctx.emitter, &refuse_label);
 
     ctx.emitter.label(&numeric_label);
