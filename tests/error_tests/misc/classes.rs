@@ -1134,3 +1134,12 @@ fn test_error_asymmetric_visibility_on_static_property() {
         "Static property may not declare asymmetric visibility",
     );
 }
+
+/// Verifies incompatible same-named constants from multiple traits reject class composition.
+#[test]
+fn test_error_incompatible_trait_constant_composition() {
+    expect_error(
+        "<?php trait Left { public const VALUE = 1; } trait Right { public const VALUE = 2; } class UsesBoth { use Left, Right; }",
+        "class UsesBoth has incompatible duplicate trait constant 'VALUE'",
+    );
+}

@@ -5,8 +5,7 @@
 //! - `crate::ir_lower::program`.
 //!
 //! Key details:
-//! - Keeps program metadata deterministic and composes trait constants into
-//!   each using class before expression lowering.
+//! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
 
 use super::*;
 
@@ -41,7 +40,6 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         collect_declared_trait_constant_visibilities(program);
     module.declared_trait_final_constants = collect_declared_trait_final_constants(program);
     module.class_infos = check_result.classes.clone();
-    compose_trait_constants_into_classes(module);
     normalize_class_method_signatures_for_eir(module, &check_result.callable_param_sigs);
     module.interface_infos = check_result.interfaces.clone();
     module.enum_infos = check_result.enums.clone();
@@ -71,130 +69,6 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         .collect();
     module.required_runtime_features =
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
-}
-
-/// Composes constants from directly and transitively used traits into each EIR class schema.
-///
-/// PHP exposes a trait constant through the class or enum using the trait, while
-/// the trait name itself is not a valid constant receiver. Class-declared
-/// constants keep precedence; trait metadata fills only otherwise-absent names.
-fn compose_trait_constants_into_classes(module: &mut Module) {
-    let composed = module
-        .class_infos
-        .iter()
-        .map(|(class_name, class_info)| {
-            let mut constants = HashMap::new();
-            let mut types = HashMap::new();
-            let mut visibilities = HashMap::new();
-            let mut finals = HashSet::new();
-            let mut visiting = HashSet::new();
-            for trait_name in &class_info.used_traits {
-                collect_trait_constant_metadata(
-                    module,
-                    trait_name,
-                    &mut visiting,
-                    &mut constants,
-                    &mut types,
-                    &mut visibilities,
-                    &mut finals,
-                );
-            }
-            (
-                class_name.clone(),
-                constants,
-                types,
-                visibilities,
-                finals,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    for (class_name, constants, types, visibilities, finals) in composed {
-        let Some(class_info) = module.class_infos.get_mut(&class_name) else {
-            continue;
-        };
-        for (constant_name, value) in constants {
-            if class_info.constants.contains_key(&constant_name) {
-                continue;
-            }
-            class_info.constants.insert(constant_name.clone(), value);
-            if let Some(type_expr) = types.get(&constant_name) {
-                class_info
-                    .constant_types
-                    .insert(constant_name.clone(), type_expr.clone());
-            }
-            class_info.constant_visibilities.insert(
-                constant_name.clone(),
-                visibilities
-                    .get(&constant_name)
-                    .cloned()
-                    .unwrap_or(Visibility::Public),
-            );
-            if finals.contains(&constant_name) {
-                class_info.final_constants.insert(constant_name);
-            }
-        }
-    }
-}
-
-/// Recursively collects one trait's effective constant metadata, with child traits overriding parents.
-fn collect_trait_constant_metadata(
-    module: &Module,
-    trait_name: &str,
-    visiting: &mut HashSet<String>,
-    constants: &mut HashMap<String, Expr>,
-    types: &mut HashMap<String, crate::parser::ast::TypeExpr>,
-    visibilities: &mut HashMap<String, Visibility>,
-    finals: &mut HashSet<String>,
-) {
-    let key = php_symbol_key(trait_name.trim_start_matches('\\'));
-    if !visiting.insert(key) {
-        return;
-    }
-    if let Some(used_traits) = module.declared_trait_uses.get(trait_name) {
-        for used_trait in used_traits {
-            collect_trait_constant_metadata(
-                module,
-                used_trait,
-                visiting,
-                constants,
-                types,
-                visibilities,
-                finals,
-            );
-        }
-    }
-    if let Some(declared) = module.declared_trait_constants.get(trait_name) {
-        for (constant_name, value) in declared {
-            constants.insert(constant_name.clone(), value.clone());
-            if let Some(type_expr) = module
-                .declared_trait_constant_types
-                .get(trait_name)
-                .and_then(|declared_types| declared_types.get(constant_name))
-            {
-                types.insert(constant_name.clone(), type_expr.clone());
-            } else {
-                types.remove(constant_name);
-            }
-            let visibility = module
-                .declared_trait_constant_visibilities
-                .get(trait_name)
-                .and_then(|declared_visibilities| declared_visibilities.get(constant_name))
-                .cloned()
-                .unwrap_or(Visibility::Public);
-            visibilities.insert(constant_name.clone(), visibility);
-            if module
-                .declared_trait_final_constants
-                .get(trait_name)
-                .is_some_and(|declared_finals| declared_finals.contains(constant_name))
-            {
-                finals.insert(constant_name.clone());
-            } else {
-                finals.remove(constant_name);
-            }
-        }
-    }
-    visiting.remove(&php_symbol_key(trait_name.trim_start_matches('\\')));
 }
 
 /// Normalizes class method metadata to the ABI contracts emitted in EIR.

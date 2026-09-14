@@ -711,6 +711,15 @@ class ChildOfUsesT extends UsesT {
 class UsesOuter {
     use Outer;
 }
+trait SameLeft {
+    public const SAME = 7;
+}
+trait SameRight {
+    public const SAME = 7;
+}
+class UsesCompatibleConstants {
+    use SameLeft, SameRight;
+}
 echo defined('T::PUB') ? '1' : '0';
 echo defined('UsesT::PUB') ? '1' : '0';
 echo defined('UsesT::PROT') ? '1' : '0';
@@ -718,7 +727,10 @@ echo defined('UsesT::PRIV') ? '1' : '0';
 echo "|", UsesT::inside(), "|", ChildOfUsesT::inside(), "|";
 echo defined('UsesOuter::PUB') ? '1' : '0';
 echo defined('UsesOuter::OWN') ? '1' : '0';
+echo "|", UsesT::PUB, UsesOuter::PUB, UsesOuter::OWN;
+echo "|", defined('UsesCompatibleConstants::SAME') ? '1' : '0';
+echo UsesCompatibleConstants::SAME;
 "#,
     );
-    assert_eq!(out, "0100|111|110|11");
+    assert_eq!(out, "0100|111|110|11|114|17");
 }

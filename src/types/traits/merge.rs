@@ -12,7 +12,7 @@ use std::collections::HashSet;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, ClassProperty};
+use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty};
 use crate::span::Span;
 
 use super::validation::validate_direct_method_duplicates;
@@ -150,6 +150,74 @@ pub(super) fn merge_imported_method_set(
             ));
         }
         existing.push(method);
+    }
+    Ok(())
+}
+
+/// Merges imported trait constants with constants declared directly by a class or trait.
+///
+/// PHP permits duplicate trait constants only when their complete declarations
+/// are compatible. A differing value, visibility, final flag, type, or
+/// attribute is a composition error; compatible local declarations replace
+/// the imported copy.
+pub(super) fn merge_constants(
+    imported: &[ClassConst],
+    local: &[ClassConst],
+    span: Span,
+    owner_label: &str,
+) -> Result<Vec<ClassConst>, CompileError> {
+    let mut merged = imported.to_vec();
+    for constant in local {
+        merge_constant_into(
+            &mut merged,
+            constant.clone(),
+            span,
+            owner_label,
+            true,
+        )?;
+    }
+    Ok(merged)
+}
+
+/// Adds constants imported from another trait, rejecting incompatible duplicate declarations.
+pub(super) fn merge_imported_constant_set(
+    existing: &mut Vec<ClassConst>,
+    incoming: Vec<ClassConst>,
+    span: Span,
+    owner_label: &str,
+) -> Result<(), CompileError> {
+    for constant in incoming {
+        merge_constant_into(existing, constant, span, owner_label, false)?;
+    }
+    Ok(())
+}
+
+/// Inserts one trait constant or validates it against an existing same-named declaration.
+fn merge_constant_into(
+    merged: &mut Vec<ClassConst>,
+    constant: ClassConst,
+    span: Span,
+    owner_label: &str,
+    replace_compatible_existing: bool,
+) -> Result<(), CompileError> {
+    let Some(index) = merged
+        .iter()
+        .position(|existing| existing.name == constant.name)
+    else {
+        merged.push(constant);
+        return Ok(());
+    };
+    if merged[index] != constant {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "{} has incompatible duplicate trait constant '{}'",
+                owner_label, constant.name
+            ),
+        ));
+    }
+    if replace_compatible_existing {
+        merged[index] = constant;
     }
     Ok(())
 }
