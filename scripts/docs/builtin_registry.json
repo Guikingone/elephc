@@ -38734,7 +38734,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_global"
+          "reads_global",
+          "may_throw"
         ]
       },
       "lowering": {
