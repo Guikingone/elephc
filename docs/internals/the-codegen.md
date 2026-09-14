@@ -214,6 +214,43 @@ in the high 32 bits of the kind word: every stamp goes through the shared
 `x86_64_heap_kind_word` helper and every check compares against
 `X86_64_HEAP_MAGIC_HI32` — local copies of either constant are forbidden.
 
+### Nullable optional string lengths
+
+`substr()`, `substr_replace()`, and `substr_count()` share one PHP contract for
+their optional `$length`: omission and `null` mean “through the end”, while `0`
+means an empty window (or pure insertion for `substr_replace()`) and a negative
+integer keeps its PHP end-relative meaning. The backend must therefore inspect
+null before applying the ordinary weak integer conversion, because PHP's
+general `(int) null` result of `0` is not the argument contract for these
+builtins.
+
+Named-argument planning can materialize an omitted nullable default as a null
+EIR operand, so operand count alone is not authoritative. String builtin
+lowering classifies the operand as absent/static null, concrete, inline
+`TaggedScalar`, or boxed `Mixed`/union. Runtime-null tagged and boxed values are
+mapped to the through-end path; concrete zero and negative payloads continue
+through numeric length normalization unchanged.
+
+The three builtins use different final encodings:
+
+- `substr()` is lowered inline and maps runtime null to a saturating positive
+  length before clamping it to the remaining string.
+- `substr_replace()` passes `i64::MAX` to `__rt_substr_replace` for omitted or
+  null length. `-1` is never an omission sentinel because it is a real PHP
+  negative length.
+- `substr_count()` cannot use the saturating value because its explicit-length
+  bounds check would raise `ValueError`. It preserves null status separately
+  and selects `subject_length - resolved_offset` before validating concrete
+  lengths.
+
+For boxed values, the weak-integer helper keeps the original `Mixed` cell
+pointer in an aligned temporary stack slot across `__rt_mixed_unbox` and
+`__rt_mixed_cast_int`, preserving existing float-coercion diagnostics. The
+normalized payload and null/int tag use `x0`/`x1` on AArch64 and `rax`/`rdx` on
+x86_64. `substr_count()` copies the tag to `x7` or `r11` only after conversion
+calls have finished, then restores the subject, needle, and offset ABI
+registers before window validation.
+
 ## Backend Contract
 
 - PHP-visible behavior belongs in `src/ir_lower/` and `src/codegen/`.
