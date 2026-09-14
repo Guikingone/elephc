@@ -8,7 +8,7 @@
 //! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
 
 use super::*;
-use crate::ir::ResourceCleanupKind;
+use crate::ir::{CoreBuiltinOp, ResourceCleanupKind, RuntimeFnId};
 
 /// Adds optional runtime features referenced by synthetic or lowered EIR functions.
 pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module) {
