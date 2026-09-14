@@ -122,6 +122,14 @@ use descriptor_unpack::*;
 use static_array_callbacks::*;
 use callable_tracking::*;
 use callable_resolution::*;
+
+/// Resolves the statically known receiver class for sibling statement lowering.
+pub(in crate::ir_lower) fn instance_object_class_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> Option<String> {
+    callable_resolution::instance_callable_object_class(ctx, object)
+}
 use unset::*;
 use array_builtin_args::*;
 use builtin_special_args::*;

@@ -47,7 +47,11 @@ pub(super) fn lower_mixed_prop_get(
 ) -> Result<()> {
     let mode = property_fetch_mode(inst);
     let candidates = declared_mixed_property_candidates(ctx, property, mode, inst)?;
-    if !candidates.is_empty() {
+    // A user class may answer this name exclusively from its per-instance property hash. Such
+    // a class contributes no declared candidate, but still needs the class-id ladder below. A
+    // direct fallback to the stdClass-shaped helper would lose that class altogether.
+    let has_hash_arms = !mixed_class_hash_arms(ctx, property, &[])?.is_empty();
+    if !candidates.is_empty() || has_hash_arms {
         return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
     }
     lower_runtime_mixed_prop_get(ctx, inst, object, property)

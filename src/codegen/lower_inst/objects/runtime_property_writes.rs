@@ -346,7 +346,8 @@ pub(super) struct MixedPropertyWriteCandidate {
 enum MixedPropertyWriteAction {
     /// Store into this class's declared slot.
     Slot(PropertySlot),
-    /// php refuses the write from this scope: raise the catchable `Error` and store nothing.
+    /// Raise a catchable `Error` and store nothing, either for PHP visibility or because this
+    /// backend cannot safely change a refined untyped slot's physical representation at runtime.
     Refuse(String),
     /// php resolves the name to a DYNAMIC property here, so the arm stores into this class's
     /// per-instance hash instead of into any slot.
@@ -394,6 +395,11 @@ fn emit_runtime_name_stacked_write_arm(
             // This runtime class declares the name, so php stores into its own slot.
             PropertyRuntimeAction::Slot(slot) => {
                 let value_ty = ctx.value_php_type(value)?;
+                if let Some(message) = refined_untyped_mixed_write_refusal(slot, &value_ty) {
+                    abi::emit_release_temporary_stack(ctx.emitter, 32);
+                    super::super::exceptions::emit_error(ctx, &message);
+                    return Ok(());
+                }
                 ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
@@ -537,8 +543,12 @@ fn mixed_property_write_candidate(
             {
                 return Ok(None);
             }
-            ensure_property_value_supported(ctx, &slot, value, value_ty, inst)?;
-            MixedPropertyWriteAction::Slot(slot)
+            if let Some(message) = refined_untyped_mixed_write_refusal(&slot, value_ty) {
+                MixedPropertyWriteAction::Refuse(message)
+            } else {
+                ensure_property_value_supported(ctx, &slot, value, value_ty, inst)?;
+                MixedPropertyWriteAction::Slot(slot)
+            }
         }
         PropertyRuntimeAction::Refuse { message } => MixedPropertyWriteAction::Refuse(message),
         PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
@@ -562,6 +572,31 @@ fn mixed_property_write_candidate(
         property: property.to_string(),
         action,
     }))
+}
+
+/// Refuses a runtime-shaped write into an untyped slot whose inferred storage is specialized.
+///
+/// PHP's untyped property accepts the value, but this backend cannot replace a raw array, string
+/// or object pointer slot with a boxed Mixed cell without changing every aliasing load and store.
+/// Keeping the class arm and raising only after it matches avoids making an unrelated refined
+/// property reject compilation, while also avoiding a representation-unsafe store.
+fn refined_untyped_mixed_write_refusal(
+    slot: &PropertySlot,
+    value_ty: &PhpType,
+) -> Option<String> {
+    if slot.is_declared || !matches!(value_ty.codegen_repr(), PhpType::Mixed) {
+        return None;
+    }
+    if matches!(
+        slot.php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Void | PhpType::Never
+    ) {
+        return None;
+    }
+    Some(format!(
+        "Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property {}::${}",
+        slot.class_name, slot.property
+    ))
 }
 
 /// Branches to `matched_label` when a stacked object payload has the given class id.

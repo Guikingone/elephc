@@ -263,6 +263,25 @@ fn property_reference_return_payload_matches(
     if !receiver_class_is_statically_decided(ctx, object) {
         return true;
     }
+    let Some(class_name) = crate::ir_lower::expr::instance_object_class_for_ir(ctx, object)
+    else {
+        return true;
+    };
+    if !matches!(
+        crate::types::resolve_property_name(
+            ctx.classes,
+            class_name.trim_start_matches('\\'),
+            property,
+            ctx.current_class.as_deref(),
+        ),
+        crate::types::PropertyNameResolution::Visible
+            | crate::types::PropertyNameResolution::ScopePrivate { .. }
+    ) {
+        // A dynamic, missing, magic or inaccessible name does not address the physical slot
+        // whose inferred payload type the expression helper can still see. Leave it to the
+        // checked backend operation, which diagnoses the actual runtime property resolution.
+        return true;
+    }
     let Some(property_ty) = crate::ir_lower::expr::property_access_expr_type_for_ir(ctx, object, property)
     else {
         return true;

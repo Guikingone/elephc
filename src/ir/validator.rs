@@ -375,7 +375,7 @@ mod instruction_effect_tests {
             let id = InstId::from_raw(0);
             assert_eq!(validate_instruction_immediate(id, &instruction), Ok(()));
             assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
-            instruction.effects |= Effects::ALLOC_HEAP;
+            instruction.effects |= Effects::OUTPUT;
             if op == Op::PropSet {
                 assert!(matches!(
                     validate_instruction_effects(id, &instruction),
