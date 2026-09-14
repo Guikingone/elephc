@@ -18,10 +18,17 @@
 //!   assignment, but it is SYNTHESIZED after checking, so nothing ever widened the slot for it:
 //!   an inferred `int` slot silently coerced `"hello"` to `int(0)`, and an inferred `null` slot
 //!   failed the whole build with `prop_set assigning PHP type Mixed to U::$u with PHP type Void`.
-//! - The widening is applied to DESTINATION classes only, never to every class in the program.
-//!   The `clone` check hook knows the first argument's inferred type, so `clone($item, [...])`
-//!   widens `Item` and its subclasses and leaves every unrelated class alone. Only a call whose
-//!   object type is runtime-shaped widens every user class.
+//! - The widening is selected from DESTINATION classes only, never from every class in the
+//!   program. The `clone` check hook knows the first argument's inferred type, so
+//!   `clone($item, [...])` selects the slots of `Item` and its subclasses and leaves every
+//!   unrelated class alone. Only a call whose object type is runtime-shaped selects every user
+//!   class.
+//! - What is selected is a physical SLOT, `(declaring class, slot index)`, not a class. One slot is
+//!   a single piece of storage that several `ClassInfo` copies describe, so it is stamped in the
+//!   class that declared it and in every class that inherits it. Stamping the destination's copy
+//!   alone left the declaring class reading the same bytes with its older inferred type, which
+//!   turned a boxed value back into a raw pointer and crashed on an object-valued slot. Two
+//!   siblings' OWN slots that merely share an index are different storage and never propagate.
 //! - Declared slots keep their declared type. PHP applies weak-mode property typing to them, and
 //!   `mixed_property_type_guard` already implements it for runtime-shaped values.
 //! - Packed/extern classes are left alone: their slot holds a packed field rather than a value, so
@@ -35,11 +42,11 @@
 //!   never consults `has_property_hash_storage()`, so `$ordinary->undeclared = 1` keeps its
 //!   compile-time refusal.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{ClassInfo, PhpType, TypeEnv};
 
 use super::Checker;
 
@@ -111,8 +118,9 @@ pub(in crate::types::checker) fn record_callable_clone_override_destination(
 /// `clone($object, [...])` whose first argument type is boxed.
 ///
 /// The widening it requests is PHP-correct on its own terms: it only re-stamps property slots that
-/// carry no declared type, and a PHP property without a declared type IS `mixed`. A declared slot,
-/// a packed class and a checker-injected class are all left alone by `widen_class`.
+/// carry no declared type, and a PHP property without a declared type IS `mixed`. A declared slot
+/// is left alone by `slot_is_widenable`, and a packed class, an enum and a checker-injected class
+/// by `owns_physical_layout`.
 ///
 /// A one-argument invocation can never write a property, so it records nothing.
 pub(in crate::types::checker) fn record_runtime_callable_clone_override_destination(
@@ -149,10 +157,151 @@ pub(super) fn widen_clone_override_property_storage(checker: &mut Checker) {
         return;
     }
     let sel = destination_classes(checker, &destinations);
-    for class_name in sel {
-        reserve_property_hash_storage(checker, &class_name);
-        widen_class(checker, &class_name);
+    for class_name in &sel {
+        reserve_property_hash_storage(checker, class_name);
     }
+    // The hash reservation stays on the destinations, but the WIDENING has to follow the physical
+    // SLOT. One slot is a single piece of storage seen through several `ClassInfo` copies, so
+    // restamping the destination's copy alone leaves the class that DECLARED it reading and writing
+    // the same bytes with the type it inferred before: an inherited `private $n = 1;` became
+    // `Mixed` on the child and stayed `Int` on the parent, so the parent's own accessor read the
+    // child's boxed value back as a raw pointer and a closure-valued slot crashed the process.
+    let views = layout_views(checker);
+    for (owner, slot) in widened_slots(&views, &sel) {
+        for target in slot_inheritors(&views, &owner, slot) {
+            if let Some(info) = checker.classes.get_mut(&target) {
+                info.properties[slot].1 = PhpType::Mixed;
+            }
+        }
+    }
+}
+
+/// One class's layout facts the slot selection needs.
+///
+/// Lifted out of `ClassInfo` so the selection rule itself is a pure function over a small graph,
+/// which is what the unit tests at the bottom of this file exercise directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LayoutView {
+    /// Declared parent, which owns the FIRST entries of this class's physical layout.
+    parent: Option<String>,
+    /// Per physical slot index, whether the clone-override widening may restamp it here.
+    widenable: Vec<bool>,
+    /// Whether this class's layout is owned elsewhere and must never be restamped.
+    owns_layout: bool,
+}
+
+/// Lifts the layout facts of every class the checker knows.
+fn layout_views(checker: &Checker) -> BTreeMap<String, LayoutView> {
+    checker
+        .classes
+        .iter()
+        .map(|(class_name, info)| {
+            let view = LayoutView {
+                parent: info.parent.clone(),
+                widenable: (0..info.properties.len())
+                    .map(|slot| slot_is_widenable(info, slot))
+                    .collect(),
+                owns_layout: owns_physical_layout(checker, class_name),
+            };
+            (class_name.clone(), view)
+        })
+        .collect()
+}
+
+/// Selects the exact PHYSICAL slots a `clone()` override on these destinations can write.
+///
+/// Keyed by `(declaring class, slot index)` rather than by class on purpose. `ChildA`'s own slot 1
+/// and `ChildB`'s own slot 1 are DIFFERENT storage that merely share an index, so widening one must
+/// never reach the other; only a slot an ancestor really declared is shared. Resolving the owner by
+/// index rather than by name matters too: a child that redeclares a parent's PRIVATE property gets
+/// a fresh slot appended after the parent's and both carry the same name, so a name lookup would
+/// report the child for the parent's slot.
+fn widened_slots(
+    views: &BTreeMap<String, LayoutView>,
+    destinations: &[String],
+) -> BTreeSet<(String, usize)> {
+    let mut slots = BTreeSet::new();
+    for class_name in destinations {
+        let Some(view) = views.get(class_name) else {
+            continue;
+        };
+        if view.owns_layout {
+            continue;
+        }
+        for (slot, widenable) in view.widenable.iter().enumerate() {
+            if !widenable {
+                continue;
+            }
+            let owner = slot_declaring_class(views, class_name, slot);
+            // A catalog builtin, a packed class and an enum own their layout together with the code
+            // that reads it, so a user subclass must not restamp a slot it merely INHERITED from
+            // one of them: the subclass is widened itself, its inherited storage is not.
+            if views.get(&owner).is_some_and(|owner| owner.owns_layout) {
+                continue;
+            }
+            slots.insert((owner, slot));
+        }
+    }
+    slots
+}
+
+/// Returns the class that DECLARED one physical slot index of `class_name`.
+///
+/// `ClassBuildState::inherit_properties` pushes the parent's slots first and in order, so the
+/// root-most ancestor that still HAS this index is the class the storage belongs to.
+fn slot_declaring_class(
+    views: &BTreeMap<String, LayoutView>,
+    class_name: &str,
+    slot: usize,
+) -> String {
+    let mut owner = class_name.to_string();
+    let mut current = class_name.to_string();
+    for _ in 0..=views.len() {
+        let Some(parent) = views.get(&current).and_then(|view| view.parent.clone()) else {
+            break;
+        };
+        match views.get(&parent) {
+            Some(view) if slot < view.widenable.len() => owner = parent.clone(),
+            _ => break,
+        }
+        current = parent;
+    }
+    owner
+}
+
+/// Returns the declaring class plus every class that INHERITS that one physical slot.
+///
+/// A class that redeclares the slot with a declared type is skipped rather than restamped, which
+/// is the same rule `slot_is_widenable` applies to the destination itself.
+fn slot_inheritors(
+    views: &BTreeMap<String, LayoutView>,
+    owner: &str,
+    slot: usize,
+) -> BTreeSet<String> {
+    views
+        .iter()
+        .filter(|(class_name, view)| {
+            !view.owns_layout
+                && view.widenable.get(slot).copied().unwrap_or(false)
+                && (class_name.as_str() == owner || inherits_from(views, class_name, owner))
+        })
+        .map(|(class_name, _)| class_name.clone())
+        .collect()
+}
+
+/// Returns whether `child` reaches `ancestor` through the declared parent chain.
+fn inherits_from(views: &BTreeMap<String, LayoutView>, child: &str, ancestor: &str) -> bool {
+    let mut current = views.get(child).and_then(|view| view.parent.clone());
+    for _ in 0..=views.len() {
+        let Some(name) = current else {
+            return false;
+        };
+        if name == ancestor {
+            return true;
+        }
+        current = views.get(&name).and_then(|view| view.parent.clone());
+    }
+    false
 }
 
 /// Reserves the per-instance property hash one class needs for an UNKNOWN override key.
@@ -209,54 +358,51 @@ fn destination_classes(checker: &Checker, destinations: &CloneOverrideDestinatio
     names.into_iter().collect()
 }
 
-/// Stamps one class's undeclared, non-reference instance property slots as `mixed`.
-fn widen_class(checker: &mut Checker, class_name: &str) {
-    // Only a class this program DECLARES is widened. A checker-injected builtin (SPL, Reflection,
-    // DateTime, the throwables) owns its slot representation together with the code that reads it,
-    // and `clone()` on one of those is refused by the applicator planner anyway.
-    //
-    // The builtin catalog is what decides that, because `declared_classes` cannot: the driver
-    // repopulates it from the class map AFTER builtin injection, so the injected classes are in
-    // it. Without this gate a runtime-shaped two-argument `clone()` restamped builtin slots and
-    // an SPL constructor then refused to lower its own declared `callable` parameter into its own
-    // `Callable` slot. A user subclass of a builtin is absent from the catalog and stays eligible.
-    if elephc_builtin_contract::lookup_class(class_name).is_some()
+/// Returns whether one physical slot of a class may be restamped as `mixed`.
+fn slot_is_widenable(info: &ClassInfo, slot: usize) -> bool {
+    let Some((property, _)) = info.properties.get(slot) else {
+        return false;
+    };
+    let declared = info
+        .property_declared_slots
+        .get(slot)
+        .copied()
+        .unwrap_or_else(|| info.declared_properties.contains(property));
+    if declared {
+        return false;
+    }
+    // A reference slot is NOT skipped. `property_reference_slots` says the slot physically
+    // holds a shared cell, while `properties[slot].1` says what that cell's PAYLOAD is, and an
+    // undeclared property's payload is `mixed` whether or not an alias exists. Skipping it made
+    // `$alias = &$o->u; clone($o, ["u" => "hello"]);` coerce the override back to the payload
+    // type the default happened to infer. Declared slots already left above, so a declared typed
+    // reference property keeps its declared payload type and its PHP weak-mode coercion and
+    // type-error behavior.
+    // A hooked property has no backing value of its own to widen, and its accessors carry
+    // their own declared types.
+    !info
+        .property_hooks
+        .get(property)
+        .is_some_and(|hooks| hooks.any())
+}
+
+/// Returns whether a class owns its physical layout and must never be restamped.
+///
+/// Only a class this program DECLARES is widened. A checker-injected builtin (SPL, Reflection,
+/// DateTime, the throwables) owns its slot representation together with the code that reads it,
+/// and `clone()` on one of those is refused by the applicator planner anyway. Without this gate a
+/// runtime-shaped two-argument `clone()` restamped builtin slots and an SPL constructor then
+/// refused to lower its own declared `callable` parameter into its own `Callable` slot.
+///
+/// The builtin catalog, NOT `declared_classes`, is the authority for the injected classes: the
+/// driver repopulates `declared_classes` from the class map AFTER builtin injection, so that set
+/// contains the injected SPL, Reflection, DateTime and throwable classes too. A user subclass of a
+/// builtin is absent from the catalog and stays eligible.
+fn owns_physical_layout(checker: &Checker, class_name: &str) -> bool {
+    elephc_builtin_contract::lookup_class(class_name).is_some()
         || !checker.declared_classes.contains(class_name)
         || checker.packed_classes.contains_key(class_name)
         || checker.enums.contains_key(class_name)
-    {
-        return;
-    }
-    let Some(info) = checker.classes.get_mut(class_name) else {
-        return;
-    };
-    for slot in 0..info.properties.len() {
-        let declared = info
-            .property_declared_slots
-            .get(slot)
-            .copied()
-            .unwrap_or_else(|| info.declared_properties.contains(&info.properties[slot].0));
-        if declared {
-            continue;
-        }
-        // A reference slot is NOT skipped. `property_reference_slots` says the slot physically
-        // holds a shared cell, while `properties[slot].1` says what that cell's PAYLOAD is, and an
-        // undeclared property's payload is `mixed` whether or not an alias exists. Skipping it made
-        // `$alias = &$o->u; clone($o, ["u" => "hello"]);` coerce the override back to the payload
-        // type the default happened to infer. Declared slots already left this loop above, so a
-        // declared typed reference property keeps its declared payload type and its PHP weak-mode
-        // coercion and type-error behavior.
-        // A hooked property has no backing value of its own to widen, and its accessors carry
-        // their own declared types.
-        if info
-            .property_hooks
-            .get(&info.properties[slot].0)
-            .is_some_and(|hooks| hooks.any())
-        {
-            continue;
-        }
-        info.properties[slot].1 = PhpType::Mixed;
-    }
 }
 
 #[cfg(test)]
@@ -306,5 +452,83 @@ mod tests {
             "withProperties",
             Expr::var("overrides")
         )]));
+    }
+
+    /// Builds one layout view whose every slot is widenable.
+    fn view(parent: Option<&str>, slot_count: usize) -> LayoutView {
+        LayoutView {
+            parent: parent.map(str::to_string),
+            widenable: vec![true; slot_count],
+            owns_layout: false,
+        }
+    }
+
+    /// Builds `Root` with one slot, two children that each add one, and one grandchild under the
+    /// first child. `ChildA` and `ChildB` both have a slot at index 1, and they are NOT the same
+    /// storage: one belongs to `ChildA`, the other to `ChildB`.
+    fn sibling_views() -> BTreeMap<String, LayoutView> {
+        BTreeMap::from([
+            ("Root".to_string(), view(None, 1)),
+            ("ChildA".to_string(), view(Some("Root"), 2)),
+            ("ChildB".to_string(), view(Some("Root"), 2)),
+            ("GrandA".to_string(), view(Some("ChildA"), 3)),
+        ])
+    }
+
+    /// Verifies a destination selects its slots by their DECLARING owner, so a sibling's own slot
+    /// at the same index is never selected.
+    #[test]
+    fn widening_selects_slots_by_declaring_owner_not_by_index_alone() {
+        let selected = widened_slots(&sibling_views(), &["ChildA".to_string()]);
+        assert_eq!(
+            selected,
+            BTreeSet::from([("Root".to_string(), 0), ("ChildA".to_string(), 1)])
+        );
+        assert!(
+            !selected.iter().any(|(owner, _)| owner == "ChildB"),
+            "a sibling's own storage must never be selected: {:?}",
+            selected
+        );
+    }
+
+    /// Verifies a shared ancestor slot reaches the whole subtree while a child's OWN slot stays in
+    /// its own branch, which is what keeps `ChildB`'s unrelated slot 1 untouched.
+    #[test]
+    fn widening_propagates_a_shared_slot_but_not_a_branch_local_one() {
+        let views = sibling_views();
+        assert_eq!(
+            slot_inheritors(&views, "Root", 0),
+            BTreeSet::from([
+                "ChildA".to_string(),
+                "ChildB".to_string(),
+                "GrandA".to_string(),
+                "Root".to_string(),
+            ])
+        );
+        assert_eq!(
+            slot_inheritors(&views, "ChildA", 1),
+            BTreeSet::from(["ChildA".to_string(), "GrandA".to_string()])
+        );
+    }
+
+    /// Verifies a slot inherited from a class that owns its layout is never selected, so a user
+    /// subclass of a catalog builtin widens its OWN slots and leaves the builtin's storage alone.
+    #[test]
+    fn widening_never_selects_a_slot_owned_by_an_authoritative_layout() {
+        let views = BTreeMap::from([
+            (
+                "Catalog".to_string(),
+                LayoutView {
+                    parent: None,
+                    widenable: vec![true],
+                    owns_layout: true,
+                },
+            ),
+            ("UserSub".to_string(), view(Some("Catalog"), 2)),
+        ]);
+        assert_eq!(
+            widened_slots(&views, &["UserSub".to_string()]),
+            BTreeSet::from([("UserSub".to_string(), 1)])
+        );
     }
 }

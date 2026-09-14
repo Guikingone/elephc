@@ -2153,3 +2153,77 @@ echo count($box);
         "caught:clone(): Argument #2 ($withProperties) property overrides are not supported for this class;2"
     );
 }
+
+/// Verifies an inherited UNTYPED parent slot is described by ONE type in the parent and the child.
+///
+/// The override widening used to restamp the destination class and its subclasses only, so an
+/// inherited `private $n = 1;` became `mixed` in `C` and stayed `int` in `P` while both named the
+/// SAME physical storage. `P`'s own accessor then read the child-written box back as a raw
+/// pointer, and the untouched SOURCE object answered a pointer too because its slot had been
+/// initialized through the child's widened view. Expected output is real `LC_ALL=C php` 8.5 output.
+#[test]
+fn test_clone_function_widens_inherited_untyped_slots_consistently() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    private $n = 1;
+    public function readN(): string { return gettype($this->n) . "(" . var_export($this->n, true) . ")"; }
+    public static function fromP(C $o, array $ov): void { $r = clone($o, $ov); echo "clone:" . $r->readN() . ";"; }
+}
+class C extends P {}
+$c = new C();
+P::fromP($c, ["n" => "x"]);
+echo "src:" . $c->readN() . ";";
+"#,
+    );
+    assert_eq!(out, "clone:string('x');src:integer(1);");
+}
+
+/// Verifies the same inherited slot holds an OBJECT value without the process crashing.
+///
+/// A closure in an inherited untyped parent slot is the shape where the two disagreeing views were
+/// fatal rather than merely wrong: the parent stored a bare object pointer, the child's widened
+/// view released it as a boxed value, and the produced binary died with SIGSEGV before printing
+/// anything. Expected output is real `LC_ALL=C php` 8.5 output.
+#[test]
+fn test_clone_function_keeps_inherited_object_valued_untyped_slots_alive() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    private $cb;
+    public function __construct() { $this->cb = strlen(...); }
+    public function kind(): string { return gettype($this->cb); }
+    public static function fromP(C $o, array $ov): void { $r = clone($o, $ov); echo "clone:" . $r->kind() . ";"; }
+}
+class C extends P {}
+$c = new C();
+P::fromP($c, ["cb" => "x"]);
+echo "src:" . $c->kind() . ";";
+"#,
+    );
+    assert_eq!(out, "clone:string;src:object;");
+}
+
+/// Verifies a USER subclass of a catalog builtin still clones with overrides, layout untouched.
+///
+/// Slot propagation can reach inherited storage rooted at `ArrayObject`. The catalog owns that
+/// storage, so the subclass must keep its own slot widened and leave every slot it merely INHERITED
+/// from the builtin exactly as the catalog laid it out. `count($r)` and `count($b)` read the
+/// builtin's own storage through its own accessor, which is what a restamped inherited slot would
+/// break. Expected output is real `LC_ALL=C php` 8.5 output.
+#[test]
+fn test_clone_function_preserves_builtin_layout_for_user_subclasses() {
+    let out = compile_and_run(
+        r#"<?php
+class MyBox extends ArrayObject {
+    public int $tag = 1;
+    public static function copyWith(MyBox $o, array $ov): MyBox { return clone($o, $ov); }
+}
+$b = new MyBox([1, 2]);
+try { $r = MyBox::copyWith($b, ["tag" => 5]); echo "ok:" . $r->tag . ":" . count($r) . ";"; }
+catch (Error $e) { echo "caught:" . $e->getMessage() . ";"; }
+echo "src:" . count($b) . ";";
+"#,
+    );
+    assert_eq!(out, "ok:5:2;src:2;");
+}
