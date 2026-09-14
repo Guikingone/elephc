@@ -337,4 +337,33 @@ fn test_for_init_clause_accepts_a_closure_containing_a_semicolon() {
     assert_eq!(out, "10|3");
 }
 
+/// Issue #476 review follow-up: `throw` is an EXPRESSION in PHP 8, so it belongs in a clause.
+///
+/// The first version of the clause allow-list listed `throw` among the statements to reject,
+/// on the reasoning that it is a statement in PHP's grammar. That was true before PHP 8.0 and
+/// is not now: `for (throw new LogicException("init"); false; )` and a `throw` in the update
+/// clause both run on 8.5.10, and the output below was measured there.
+#[test]
+fn test_for_clause_throw_is_an_expression() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    for (throw new LogicException("init"); false; ) {
+    }
+} catch (LogicException $e) {
+    echo "init:", $e->getMessage(), "\n";
+}
+
+try {
+    for ($i = 0; $i < 3; throw new RuntimeException("update")) {
+        echo $i;
+    }
+} catch (RuntimeException $e) {
+    echo "|update:", $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "init:init\n0|update:update\n");
+}
+
 // --- Ternary operator ---

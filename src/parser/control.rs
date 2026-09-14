@@ -550,17 +550,35 @@ fn parse_for_clause(
         // declarations alone let the `echo` through.
         //
         // So this is an allow-list of the statement kinds an expression can produce — every
-        // assignment form, `ExprStmt`, the post-increment shape, and the `Synthetic` a list
-        // destructuring expands to. `echo`, `return`, `throw`, `global`, `static`, `const`
-        // and `include` are statements in PHP's grammar, not expressions, and are rejected
+        // assignment form, `ExprStmt`, the post-increment shape, `Throw`, and the
+        // `Synthetic` a list destructuring expands to. `echo`, `return`, `global`, `static`
+        // and `const` are statements in PHP's grammar, not expressions, and are rejected
         // here even though the statement parser accepts them.
+        //
+        // `throw` is on the list because it IS an expression in PHP 8, and PHP accepts it in
+        // a clause: `for (throw new LogicException("x"); false; )` throws. elephc's parser
+        // produces `StmtKind::Throw` for it rather than an `ExprStmt`, so it has to be named
+        // here.
         //
         // Checked BEFORE the trailing-token test below: a declaration takes no trailing `;`
         // and would otherwise leave the synthetic one unconsumed, reporting the generic
         // "trailing tokens" instead of naming what is actually wrong.
+        // `include`/`require` ARE expressions in PHP, and PHP runs them in a clause. elephc
+        // cannot yet: `resolver::engine`'s `StmtKind::For` arm resolves only the BODY, so an
+        // include left in a clause survives into the checker as a transient node every
+        // consumer treats as `unreachable!()` — `for ($v = include "f.php"; …)` reached that
+        // panic once the clause started going through the real statement parser. Reject it
+        // here with a diagnostic that names the limitation instead.
+        if crate::resolver::contains::has_includes(std::slice::from_ref(&stmt)) {
+            return Err(CompileError::new(
+                piece_span,
+                "include/require is not supported in a for clause; move it above the loop",
+            ));
+        }
         if !matches!(
             stmt.kind,
             StmtKind::ExprStmt(_)
+                | StmtKind::Throw(_)
                 | StmtKind::Assign { .. }
                 | StmtKind::TypedAssign { .. }
                 | StmtKind::RefAssign { .. }

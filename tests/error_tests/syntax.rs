@@ -744,6 +744,34 @@ fn test_error_for_clause_rejects_non_expression_statements() {
     );
 }
 
+/// Issue #476 review follow-up: `include` / `require` in a clause is named, not crashed on.
+///
+/// They ARE expressions in PHP and PHP runs them there — both `for (include "f.php"; …)` and
+/// `for ($v = include "f.php"; …)` execute on 8.5.10. elephc cannot yet, because
+/// `resolver::engine`'s `StmtKind::For` arm resolves only the loop BODY, so an include left
+/// in a clause survives into the checker as a transient node every consumer treats as
+/// `unreachable!()`.
+///
+/// The assignment spelling is the one that mattered: once the clause started going through
+/// the real statement parser it PARSED, and the compiler then panicked with
+/// `ExprKind::IncludeValue must be expanded by the resolver`. Before that it was a plain
+/// parse error. This pins the diagnostic that replaced the panic.
+#[test]
+fn test_error_for_clause_rejects_include() {
+    expect_error(
+        "<?php for (include \"f.php\"; false; ) {} echo 1;",
+        "include/require is not supported in a for clause",
+    );
+    expect_error(
+        "<?php for ($v = include \"f.php\"; false; ) {} echo 1;",
+        "include/require is not supported in a for clause",
+    );
+    expect_error(
+        "<?php for ($i = 0; $i < 1; require \"f.php\") {} echo 1;",
+        "include/require is not supported in a for clause",
+    );
+}
+
 /// Issue #476 review follow-up: PHP allows a comma list in the `for` CONDITION as well, but
 /// elephc has no sequence expression to hold one and the condition re-runs every iteration,
 /// so the leading expressions cannot be hoisted into the init clause.

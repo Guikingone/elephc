@@ -14,7 +14,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-mod contains;
+pub(crate) mod contains;
 mod declarations;
 mod discovery;
 mod engine;

@@ -13,7 +13,11 @@ use crate::parser::ast::{
 };
 
 /// Check if any statement or closure expression recursively contains an Include.
-pub(super) fn has_includes(stmts: &[Stmt]) -> bool {
+///
+/// Also read by the `for`-clause parser, which has to REJECT an unexpanded include: the
+/// resolver's `StmtKind::For` arm resolves only the body, so an include left in a clause
+/// reaches the checker as a transient node every consumer treats as `unreachable!()`.
+pub(crate) fn has_includes(stmts: &[Stmt]) -> bool {
     stmts.iter().any(stmt_has_includes)
 }
 

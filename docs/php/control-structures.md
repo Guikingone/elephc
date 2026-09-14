@@ -137,7 +137,20 @@ for ($fmt = function (int $n): string { return "#$n"; }, $i = 0; $i < 3; $i++) {
 }
 ```
 
-Two limits, both matching PHP where noted:
+`throw` counts as an expression here, as it does everywhere in PHP 8, so either clause
+accepts it:
+
+```php
+<?php
+for (throw new LogicException("unreachable"); false; ) {
+}
+
+for ($i = 0; $i < 3; throw new RuntimeException("one pass only")) {
+    echo $i;
+}
+```
+
+Three limits, the first two matching PHP:
 
 - The clauses accept **expressions only**. `for (echo "x"; …)` is a parse error, as it is in
   PHP; so is a named declaration (`function f() {}`), which PHP rejects because it reads
@@ -146,6 +159,9 @@ Two limits, both matching PHP where noted:
   expression there and uses the last one's value, but elephc has no sequence expression to
   hold the list and the condition re-runs each iteration, so it reports a diagnostic naming
   the limitation rather than mis-parsing.
+- `include` / `require` **are** expressions and PHP does run them in a clause, but elephc
+  rejects them there: include resolution rewrites the loop body and not the clauses, so an
+  include left in one would never be expanded. Move it above the loop.
 
 ## foreach
 

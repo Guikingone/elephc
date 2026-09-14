@@ -52,3 +52,13 @@ for (;;) {
     }
 }
 echo $n, "\n";
+
+// `throw` is an expression in PHP 8, so a clause accepts it too. This one ends the loop
+// after a single pass, from the update clause.
+try {
+    for ($i = 0; $i < 4; throw new RuntimeException("one pass only")) {
+        echo "pass ", $i, "\n";
+    }
+} catch (RuntimeException $e) {
+    echo $e->getMessage(), "\n";
+}
