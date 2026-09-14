@@ -39,7 +39,7 @@ fn generate_project_asm(
         .collect();
     let exported_functions = HashMap::new();
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
-    let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
+    let generated_user_asm = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
         gc_stats,
         false, // counters
@@ -54,7 +54,10 @@ fn generate_project_asm(
         elephc::codegen::WebIsolation::Worker,
     )
     .expect("EIR backend codegen failed for project fixture");
-    let runtime_features = ir_module.required_runtime_features;
+    let mut runtime_features = ir_module.required_runtime_features;
+    runtime_features.handler_state |= generated_user_asm.handler_state;
+    runtime_features.object_clone |= generated_user_asm.object_clone;
+    let user_asm = generated_user_asm.asm;
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
     (user_asm, runtime_asm, runtime_features)

@@ -37,28 +37,32 @@ fn eval_scope_exports_are_unique_and_native_fragments_do_not_require_rust() {
     }
 }
 
-/// The dynamic descriptor invoker contains callable arms for clone and handler restoration, so
-/// its standalone runtime must provide their native dependencies even without direct source calls.
+/// Independently discovered clone and handler dependencies emit their native helper families.
 #[test]
-fn descriptor_invoker_emits_transitive_clone_and_handler_dependencies() {
+fn generated_wrapper_dependencies_emit_native_runtime_helpers() {
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = Target::parse(name).unwrap();
         let mut emitter = Emitter::new(target);
         emit_runtime(&mut emitter, RuntimeFeatures {
-            descriptor_invoker: true,
+            handler_state: true,
+            object_clone: true,
             ..RuntimeFeatures::none()
         });
         let asm = emitter.output();
         for symbol in [
-            "__elephc_eval_value_object_clone_shallow",
+            "__rt_object_clone_shallow_boxed",
             "__rt_core_error_handler_pop",
             "__rt_core_exception_handler_pop",
         ] {
             assert!(
-                asm.contains(&target.extern_symbol(symbol)),
-                "{name}: descriptor invoker runtime is missing {symbol}"
+                asm.contains(&format!("{symbol}:")),
+                "{name}: generated-wrapper runtime is missing {symbol}"
             );
         }
+        assert!(
+            !asm.contains("__elephc_eval_value_object_clone_shallow"),
+            "{name}: native wrapper dependencies must not emit eval bridge exports"
+        );
     }
 }
 

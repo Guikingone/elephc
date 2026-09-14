@@ -28,6 +28,7 @@ fn x86_64_mixed_heap_kind_instruction() -> String {
 /// Emits every eval value wrapper required by `libelephc-magician`.
 pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
     emit_eval_value_runtime(emitter);
+    emit_object_clone_shallow_eval_export(emitter);
     scope_release::emit(emitter);
 }
 
@@ -53,6 +54,15 @@ pub(crate) fn emit_object_clone_shallow_runtime(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => emit_aarch64_object_clone_shallow_wrapper(emitter),
         Arch::X86_64 => emit_x86_64_object_clone_shallow_wrapper(emitter),
+    }
+}
+
+/// Exposes the native clone adapter through the C ABI expected by Magician.
+fn emit_object_clone_shallow_eval_export(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_value_object_clone_shallow");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("b __rt_object_clone_shallow_boxed"), // tail-call the native clone adapter through the eval C export
+        Arch::X86_64 => emitter.instruction("jmp __rt_object_clone_shallow_boxed"), // tail-call the native clone adapter through the eval C export
     }
 }
 
@@ -193,8 +203,8 @@ mod tests {
         emitter.output()
     }
 
-    /// The shared boxed shallow-clone adapter is emitted exactly once when native clone or the
-    /// eval bridge can reach it, and is absent from an unrelated runtime.
+    /// The native clone body is emitted exactly once when native clone or the eval bridge can
+    /// reach it, while the C ABI export remains exclusive to the full eval bridge.
     ///
     /// It used to live inside the eval-only class wrappers, so an ordinary `clone()` program
     /// had no adapter to call while an eval-enabled one would now define it twice. Counting the
@@ -211,14 +221,15 @@ mod tests {
             Target::new(Platform::Linux, Arch::AArch64),
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
-            for (features, expected) in [
-                (RuntimeFeatures::none(), 0),
+            for (features, expected_native, expected_eval_export) in [
+                (RuntimeFeatures::none(), 0, 0),
                 (
                     RuntimeFeatures {
                         object_clone: true,
                         ..RuntimeFeatures::none()
                     },
                     1,
+                    0,
                 ),
                 (
                     RuntimeFeatures {
@@ -226,19 +237,25 @@ mod tests {
                         ..RuntimeFeatures::none()
                     },
                     1,
+                    1,
                 ),
             ] {
                 let mut emitter = Emitter::new(target);
                 emit_runtime(&mut emitter, features);
                 let asm = emitter.output();
-                let definition = format!(
+                assert_eq!(
+                    asm.matches("__rt_object_clone_shallow_boxed:\n").count(),
+                    expected_native,
+                    "{target:?}: wrong native clone adapter definition count"
+                );
+                let eval_export = format!(
                     "{}:\n",
                     target.extern_symbol("__elephc_eval_value_object_clone_shallow")
                 );
                 assert_eq!(
-                    asm.matches(&definition).count(),
-                    expected,
-                    "{target:?}: wrong clone adapter definition count"
+                    asm.matches(&eval_export).count(),
+                    expected_eval_export,
+                    "{target:?}: wrong eval clone export definition count"
                 );
             }
         }

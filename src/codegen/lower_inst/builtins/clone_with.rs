@@ -558,16 +558,12 @@ fn emit_mixed_object_type_guard(
     Ok(())
 }
 
-/// Calls the shared boxed shallow-clone adapter through its C argument register.
+/// Calls the shared boxed shallow-clone adapter through its first argument register.
 fn emit_clone_adapter_call(ctx: &mut FunctionContext<'_>) {
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_reg_move(ctx.emitter, arg_reg, &result_reg);
-    let helper = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_value_object_clone_shallow");
-    abi::emit_call_label(ctx.emitter, &helper);
+    abi::emit_call_label(ctx.emitter, "__rt_object_clone_shallow_boxed");
 }
 
 /// Turns the adapter's null sentinel into PHP's catchable uncloneable-object `Error`.

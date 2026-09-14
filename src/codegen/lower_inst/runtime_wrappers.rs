@@ -156,6 +156,7 @@ fn emit_runtime_call_wrapper_inline(
     }
     let mut wrapper_module = ctx.module.clone();
     let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
+    ctx.shared.record_generated_runtime_features(&wrapper);
     let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
     super::super::block_emit::emit_synthetic_function_with_label(

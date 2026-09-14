@@ -17,13 +17,22 @@
 //!   trailing id keeps two functions with similar names from emitting the same label.
 
 use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethodCallableCase};
+use crate::ir::{CoreBuiltinOp, Function, Immediate, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::types::{FunctionSig, PhpType};
+
+/// Optional runtime families discovered while codegen lowers synthetic EIR functions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GeneratedRuntimeFeatures {
+    pub(crate) handler_state: bool,
+    pub(crate) object_clone: bool,
+}
 
 /// Module-wide artifacts emitted once and reused by every function lowering context.
 #[derive(Default)]
 pub(crate) struct SharedCodegenState {
     /// Descriptor argument adapters need the shared boxed-callable normalizer.
     pub(super) callable_argument_normalizer: bool,
+    generated_runtime_features: GeneratedRuntimeFeatures,
     runtime_string_descriptor_cases:
         Vec<(Option<PhpType>, Option<Vec<String>>, bool, Vec<RuntimeCallableCase>)>,
     runtime_static_method_descriptor_cases:
@@ -97,6 +106,50 @@ struct RuntimeCallWrapperCacheEntry {
 }
 
 impl SharedCodegenState {
+    /// Records dependencies introduced by a synthetic wrapper that was not present during the
+    /// module's original EIR feature scan.
+    pub(super) fn record_generated_runtime_features(&mut self, function: &Function) {
+        for inst in &function.instructions {
+            match inst.op {
+                Op::RuntimeCall => {
+                    let target = match inst.immediate {
+                        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
+                        | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                            target,
+                            ..
+                        })) => Some(target),
+                        _ => None,
+                    };
+                    self.generated_runtime_features.object_clone |=
+                        target == Some(RuntimeFnId::CloneWith);
+                }
+                Op::CoreBuiltin => {
+                    let operation = match inst.immediate {
+                        Some(Immediate::I64(value)) => CoreBuiltinOp::from_i64(value),
+                        _ => None,
+                    };
+                    self.generated_runtime_features.handler_state |= matches!(
+                        operation,
+                        Some(
+                            CoreBuiltinOp::RestoreErrorHandler
+                                | CoreBuiltinOp::RestoreExceptionHandler
+                                | CoreBuiltinOp::SetErrorHandler
+                                | CoreBuiltinOp::SetExceptionHandler
+                                | CoreBuiltinOp::GetErrorHandler
+                                | CoreBuiltinOp::GetExceptionHandler
+                        )
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Returns optional runtime families introduced after the module-level EIR scan.
+    pub(crate) fn generated_runtime_features(&self) -> GeneratedRuntimeFeatures {
+        self.generated_runtime_features
+    }
+
     /// Reserves the next module-unique assembly label id.
     ///
     /// Every generated local label ends in `_<id>` taken from this counter. Because the id is a

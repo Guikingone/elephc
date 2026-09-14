@@ -363,7 +363,30 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
         let dispatch = module.functions.iter().find(|f| f.name == "dispatchCallableArgument").unwrap();
         assert_eq!(dispatch.params[0].php_type, crate::types::PhpType::Mixed,
             "{target}: callback validation must run through the runtime descriptor boundary");
-        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let output = crate::codegen::generate_user_asm_from_ir_with_options_and_features(
+            &module,
+            false,
+            false,
+            crate::codegen::Instrumentation::Off,
+            false,
+            false,
+            false,
+            crate::codegen::Emit::Executable,
+            &std::collections::HashMap::new(),
+            true,
+            false,
+            crate::codegen::WebIsolation::Worker,
+        )
+        .unwrap();
+        assert!(
+            output.handler_state,
+            "{target}: generated handler wrappers must reach the runtime"
+        );
+        assert!(
+            output.object_clone,
+            "{target}: generated clone wrappers must reach the runtime"
+        );
+        let asm = output.asm;
         assert_eq!(asm.matches("_eir_callable_argument_normalizer:").count(), 1, "{target}");
         let normalizer = asm.split_once("_eir_callable_argument_normalizer:\n").unwrap().1;
         let descriptor_label = normalizer.lines().find(|line| {

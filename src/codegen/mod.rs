@@ -288,6 +288,49 @@ pub fn generate_user_asm_from_ir_with_options(
     web: bool,
     web_isolation: WebIsolation,
 ) -> Result<String> {
+    generate_user_asm_from_ir_with_options_and_features(
+        module,
+        gc_stats,
+        counters,
+        instrument,
+        probe,
+        heap_debug,
+        requires_elephc_tls,
+        emit,
+        exported_functions,
+        regalloc_linear,
+        web,
+        web_isolation,
+    )
+    .map(|output| output.asm)
+}
+
+/// User assembly together with runtime dependencies introduced by synthetic codegen wrappers.
+pub struct GeneratedUserAsm {
+    /// Complete target assembly for the user object.
+    pub asm: String,
+    /// Whether generated wrappers reference native error or exception handler state.
+    pub handler_state: bool,
+    /// Whether generated wrappers reference the native boxed object clone adapter.
+    pub object_clone: bool,
+}
+
+/// Generates user assembly while preserving dependencies discovered after module EIR lowering.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_user_asm_from_ir_with_options_and_features(
+    module: &Module,
+    gc_stats: bool,
+    counters: bool,
+    instrument: Instrumentation,
+    probe: bool,
+    heap_debug: bool,
+    requires_elephc_tls: bool,
+    emit: Emit,
+    exported_functions: &HashMap<String, ExportedFunction>,
+    regalloc_linear: bool,
+    web: bool,
+    web_isolation: WebIsolation,
+) -> Result<GeneratedUserAsm> {
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_cdylib(module.target),
         // A staticlib joins the executable path: it is linked once into the host
@@ -335,7 +378,7 @@ fn finalize_user_asm(
     exported_functions: &HashMap<String, ExportedFunction>,
     heap_debug: bool,
     mut shared: shared_state::SharedCodegenState,
-) -> Result<String> {
+) -> Result<GeneratedUserAsm> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
@@ -499,12 +542,17 @@ fn finalize_user_asm(
     } else {
         &[]
     };
-    Ok(crate::codegen::visibility::append_hidden_directives_with_extras(
-        &user_asm,
-        &exported,
-        module.target.platform,
-        additional_internal,
-    ))
+    let generated_runtime_features = shared.generated_runtime_features();
+    Ok(GeneratedUserAsm {
+        asm: crate::codegen::visibility::append_hidden_directives_with_extras(
+            &user_asm,
+            &exported,
+            module.target.platform,
+            additional_internal,
+        ),
+        handler_state: generated_runtime_features.handler_state,
+        object_clone: generated_runtime_features.object_clone,
+    })
 }
 
 #[cfg(test)]

@@ -348,7 +348,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
-    let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
+    let generated_user_asm = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
         gc_stats,
         counters,
@@ -362,7 +362,12 @@ fn try_compile_source_to_asm_with_defines_repr(
         false,
         elephc::codegen::WebIsolation::Worker,
     );
-    let runtime_features = ir_module.required_runtime_features;
+    let mut runtime_features = ir_module.required_runtime_features;
+    if let Ok(output) = &generated_user_asm {
+        runtime_features.handler_state |= output.handler_state;
+        runtime_features.object_clone |= output.object_clone;
+    }
+    let user_asm = generated_user_asm.map(|output| output.asm);
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
     let link_requirements = TestLinkRequirements::new(

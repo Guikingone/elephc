@@ -29,7 +29,7 @@ use crate::codegen_support::RuntimeFeatures;
 /// - `__rt_diag_write`: writes already-filtered diagnostics when suppression depth is zero.
 /// - `__rt_diag_warning`: dispatches full warning lines through handlers and reporting masks.
 pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures) {
-    if features.handler_state || features.descriptor_invoker || features.eval_bridge || features.web {
+    if features.handler_state || features.eval_bridge || features.web {
         super::handler_state::emit_handler_state(emitter);
     }
     super::error_handlers::emit_error_handler_invoke(emitter);

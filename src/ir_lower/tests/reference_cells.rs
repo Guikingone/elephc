@@ -444,11 +444,22 @@ createReferenceOwners();
         assert_eq!(function.locals[owner.as_raw() as usize].kind, LocalKind::RefCell);
         assert_eq!(function.value(binding.operands[0]).unwrap().php_type, crate::types::PhpType::Pointer(None));
         assert!(binding.effects.contains(Effects::REFCOUNT_OP | Effects::WRITES_HEAP));
+        assert!(function.instructions.iter().any(|inst| matches!(
+            inst.immediate,
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::CloneWith)
+                    | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                        target: crate::ir::RuntimeFnId::CloneWith,
+                        ..
+                    }
+            ))
+        )), "{name}: clone must retain its typed runtime operation");
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert!(assembly.contains("__rt_incref"), "{name}");
         assert!(assembly.contains("__rt_local_ref_cell_release"), "{name}");
         assert!(assembly.contains("__rt_reference_cell_new"), "{name}: property cells have typed headers");
-        assert!(assembly.contains("__rt_reference_cell_clone"), "{name}: clone preserves reference ownership");
+        assert!(assembly.contains("__rt_object_clone_shallow_boxed"),
+            "{name}: clone must call the native boxed adapter");
     }
 }
