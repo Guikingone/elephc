@@ -1856,6 +1856,95 @@ try {
     );
 }
 
+/// Verifies an INDEXED override array carries the same live-alias refusal as a hash one.
+///
+/// A by-reference `foreach` over an indexed array used to bind the alias straight to the packed
+/// payload slot, which has nowhere to record that the entry joined a PHP reference set, so this
+/// clone silently applied both overrides. The loop now promotes the local to integer-keyed hash
+/// storage with boxed Mixed entries, which is where the persistent marker lives.
+///
+/// One program pins three facts at once: the write through the live alias reaches the SOURCE
+/// (`$overrides[1]` reads `9`), the earlier numeric key is applied before the refusal
+/// (`set(0=1)` is printed), and the referenced entry raises php 8.5's exact message.
+#[test]
+fn test_clone_function_rejects_live_indexed_foreach_reference_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Sink {
+    public int $n = 0;
+    public function __set($k, $v) { echo "set(" . $k . "=" . $v . ");"; }
+}
+$overrides = [1, 2];
+foreach ($overrides as &$value) {}
+$value = 9;
+echo $overrides[1] . ";";
+try {
+    clone(new Sink(), $overrides);
+    echo "no throw";
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "9;set(0=1);Cannot assign by reference when cloning with updated properties"
+    );
+}
+
+/// Verifies dropping the only alias leaves an indexed override array fully by-value again.
+///
+/// Both numeric keys must survive the promotion as the property names php stringifies them to,
+/// which is also what proves the promotion preserved integer keys and insertion order.
+#[test]
+fn test_clone_function_accepts_indexed_foreach_reference_after_last_alias_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$overrides = [1, 2];
+foreach ($overrides as &$value) {}
+unset($value);
+$copy = clone(new stdClass(), $overrides);
+echo $copy->{"0"} . ":" . $copy->{"1"};
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+/// Verifies a copy taken BEFORE the by-reference loop keeps its own values and no reference state.
+///
+/// The loop's copy-on-write split must leave the promotion, the alias write and the entry marker
+/// on the iterated branch only: `$copy` still reads `1,2`, and cloning with it applies both
+/// numeric keys instead of refusing.
+#[test]
+fn test_clone_function_preserves_indexed_reference_cow() {
+    let out = compile_and_run(
+        r#"<?php
+$original = [1, 2];
+$copy = $original;
+foreach ($original as &$value) {}
+$value = 9;
+echo $original[0] . "," . $original[1] . "|" . $copy[0] . "," . $copy[1] . ";";
+try {
+    $c = clone(new stdClass(), $copy);
+    echo "copy:" . $c->{"0"} . $c->{"1"} . ";";
+} catch (Error $e) {
+    echo "copy:" . $e->getMessage() . ";";
+}
+try {
+    clone(new stdClass(), $original);
+    echo "original:no throw";
+} catch (Error $e) {
+    echo "original:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "1,9|1,2;copy:12;\
+original:Cannot assign by reference when cloning with updated properties"
+    );
+}
+
 /// Verifies the internal entry marker is absent from ordinary reads and `var_dump()` output.
 #[test]
 fn test_clone_function_hides_reference_marker_from_reads_and_var_dump() {

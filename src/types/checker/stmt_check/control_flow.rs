@@ -228,22 +228,48 @@ impl Checker {
                 }
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
                 if let PhpType::Array(elem_ty) = &arr_ty {
+                    // A genuinely packed array has int keys; an UNKNOWN-element array (an
+                    // `array`-hinted param/property, elements known only to phpdoc) may be
+                    // associative at runtime, so its keys are Mixed (ward-http's
+                    // `foreach ($headers as $name => $values)` with string keys).
+                    let key_ty = if matches!(elem_ty.as_ref(), PhpType::Mixed) {
+                        PhpType::Mixed
+                    } else {
+                        PhpType::Int
+                    };
+                    // An indexed foreach-by-reference over a SIMPLE local promotes that local to
+                    // integer-keyed hash storage with boxed Mixed entries, because only a hash
+                    // ENTRY carries the persistent per-entry reference marker a live alias needs;
+                    // an indexed payload slot has nowhere to record one, so `clone($o, $arr)`
+                    // could not see that an entry is still referenced
+                    // (`crate::ir_lower::stmt::typed_foreach::promote_by_ref_foreach_source`).
+                    // This mirrors the AssocArray arm below: reflect the promotion in BOTH the
+                    // bound local and a simple source local, so post-loop reads do not
+                    // reinterpret boxed-cell pointers as the old packed payload type.
+                    let promotes_to_hash =
+                        *value_by_ref && matches!(&array.kind, ExprKind::Variable(_));
                     if let Some(k) = key_var {
-                        // A genuinely packed array has int keys; an UNKNOWN-element array (an
-                        // `array`-hinted param/property, elements known only to phpdoc) may be
-                        // associative at runtime, so its keys are Mixed (ward-http's
-                        // `foreach ($headers as $name => $values)` with string keys).
-                        let key_ty = if matches!(elem_ty.as_ref(), PhpType::Mixed) {
-                            PhpType::Mixed
-                        } else {
-                            PhpType::Int
-                        };
-                        env.insert(k.clone(), key_ty);
+                        env.insert(k.clone(), key_ty.clone());
                         self.clear_foreach_callable_metadata(k);
                     }
-                    let value_ty = *elem_ty.clone();
+                    let value_ty = if promotes_to_hash {
+                        PhpType::Mixed
+                    } else {
+                        *elem_ty.clone()
+                    };
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
+                    if promotes_to_hash {
+                        if let ExprKind::Variable(source_name) = &array.kind {
+                            env.insert(
+                                source_name.clone(),
+                                PhpType::AssocArray {
+                                    key: Box::new(key_ty),
+                                    value: Box::new(PhpType::Mixed),
+                                },
+                            );
+                        }
+                    }
                 } else if let PhpType::AssocArray { key, value } = &arr_ty {
                     if let Some(k) = key_var {
                         env.insert(k.clone(), *key.clone());

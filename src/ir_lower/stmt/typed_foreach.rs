@@ -98,6 +98,9 @@ pub(super) fn lower_foreach(
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
+    // Promote a by-reference indexed source BEFORE it is loaded, so the loop iterates the hash
+    // the rest of the program will see in that local.
+    promote_by_ref_foreach_source(ctx, array, value_by_ref);
     let (source, source_is_borrowed_fetch) = lower_foreach_source(ctx, array, value_by_ref);
     // Orthogonal to the borrowed fetch-for-write pin taken after `IterStart` below: that one
     // keeps a by-reference element or property container alive, while this one takes the loop's
@@ -268,6 +271,67 @@ pub(super) fn lower_foreach(
     if let Some(pin) = source_pin {
         crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
     }
+}
+
+/// Promotes a by-reference `foreach` over a simple indexed local to hash storage.
+///
+/// `foreach ($arr as &$v)` makes every visited entry part of a PHP reference set, and elephc
+/// records that membership in the entry's own persistent reference word. Only a hash entry has
+/// one: an indexed array stores bare payload slots, so a by-reference loop over one bound the
+/// alias straight to `payload + cursor * stride` and left nothing behind for a later reader to
+/// find. `clone($object, $withProperties)`'s per-entry guard is exactly such a reader, so a live
+/// alias into an indexed override array was silently accepted instead of raising php 8.5's
+/// "Cannot assign by reference when cloning with updated properties".
+///
+/// Promotion reuses `Op::ArrayToHash` the way `unset($arr[$key])` already does: the indexed
+/// payload becomes an integer-keyed hash (keys `0..n-1`, insertion order, heap children retained
+/// and strings persisted) whose entries are then widened to boxed Mixed cells, which is where the
+/// reference word lives. `Op::ArrayToHash` consumes the loaded owner and returns its replacement,
+/// and `store_mutated_local` releases the local's own reference, so the array is freed exactly
+/// once and the hash owns every child. The local is retyped to match, mirroring the checker
+/// (`crate::types::checker::stmt_check::control_flow`), so post-loop reads use hash storage
+/// instead of reinterpreting boxed-cell pointers as the old packed payload type.
+///
+/// Only a SIMPLE variable source is promoted, which is the same condition the checker applies.
+/// Element and property sources keep the existing fetch-for-write path.
+fn promote_by_ref_foreach_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    value_by_ref: bool,
+) {
+    if !value_by_ref {
+        return;
+    }
+    let ExprKind::Variable(name) = &array.kind else {
+        return;
+    };
+    if !ctx.local_slots.contains_key(name.as_str()) {
+        return;
+    }
+    let PhpType::Array(elem_ty) = ctx.local_type(name).codegen_repr() else {
+        return;
+    };
+    // An `Array(Mixed)` local may ALREADY be a runtime-promoted hash with string keys, so its
+    // key type stays Mixed; a concrete-element indexed array can only ever have integer keys.
+    let key_ty = if matches!(elem_ty.codegen_repr(), PhpType::Mixed) {
+        PhpType::Mixed
+    } else {
+        PhpType::Int
+    };
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(key_ty),
+        value: Box::new(PhpType::Mixed),
+    };
+    let array_value = ctx.load_local(name, Some(array.span));
+    let hash = ctx.emit_value(
+        Op::ArrayToHash,
+        vec![array_value.value],
+        None,
+        assoc_ty.clone(),
+        Op::ArrayToHash.default_effects(),
+        Some(array.span),
+    );
+    ctx.store_mutated_local(name, hash, assoc_ty, Some(array.span));
 }
 
 /// Lowers the `foreach` source expression under the loop's binding mode.
