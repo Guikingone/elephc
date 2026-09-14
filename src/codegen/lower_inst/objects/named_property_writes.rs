@@ -257,3 +257,69 @@ pub(super) fn emit_property_assign_on_null_fatal(ctx: &mut FunctionContext<'_>, 
         }
     }
 }
+
+/// Emits php 8.5's dynamic-property deprecation before a runtime-name hash write CREATES a key.
+///
+/// The class reached this path through the property hash
+/// `crate::types::checker::clone_override_storage` reserved for `clone($object, [...])`, which is
+/// storage only: php still reports `Creation of dynamic property C::$n is deprecated` for a class
+/// that carries neither `#[\AllowDynamicProperties]` nor stdClass's engine exemption. The level is
+/// not passed explicitly; `__rt_diag_warning` derives `E_DEPRECATED` from the `Deprecated: `
+/// prefix, strips it for a user error handler, and gates the default line on `error_reporting`.
+///
+/// Only a CREATION is reported, so the key is probed first: re-cloning an object that already
+/// carries the name overwrites it, and php 8.5.10 stays silent for that second write.
+///
+/// Nothing owned exists yet at this point. The override value is boxed by
+/// `lower_runtime_allow_dynamic_prop_set` afterwards, so an error handler that THROWS out of the
+/// deprecation unwinds with no boxed cell and no half-written hash entry to leak, and the clone
+/// itself is released by the applicator's ordinary throwing path.
+pub(super) fn emit_dynamic_property_creation_deprecation(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    hash_offset: usize,
+    receiver_offset: usize,
+    name_offset: usize,
+) -> Result<()> {
+    let deprecated = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .is_some_and(|info| info.dynamic_property_creation_is_deprecated());
+    if !deprecated {
+        return Ok(());
+    }
+    let target = ctx.emitter.target;
+    let skip_label = ctx.next_label("dyn_prop_create_deprecation_skip");
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, receiver_offset);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        object_reg,
+        hash_offset,
+    );
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), name_offset);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 2),
+        name_offset + 8,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &skip_label);
+    emit_property_warning_fragment(
+        ctx,
+        format!("Deprecated: Creation of dynamic property {}::$", class_name).as_bytes(),
+        false,
+    );
+    let (name_ptr_reg, name_len_reg) = match target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr_reg, name_offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_len_reg, name_offset + 8);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    emit_property_warning_fragment(ctx, b" is deprecated\n", true);
+    ctx.emitter.label(&skip_label);
+    Ok(())
+}

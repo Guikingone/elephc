@@ -181,6 +181,7 @@ pub(super) fn lower_runtime_object_prop_set(
     // through instead DROPPED the write, with no diagnostic anywhere.
     match dynamic_property_hash_offset_for_class(ctx, class_name, "")? {
         Some(hash_offset) => {
+            emit_dynamic_property_creation_deprecation(ctx, class_name, hash_offset, 16, 0)?;
             lower_runtime_allow_dynamic_prop_set(ctx, value, hash_offset, 16, 0, 32)?;
         }
         None => abi::emit_release_temporary_stack(ctx.emitter, 32),

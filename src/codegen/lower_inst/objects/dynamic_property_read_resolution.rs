@@ -77,8 +77,18 @@ pub(super) fn lower_runtime_dynamic_declared_prop_get(
     }
 
     ctx.emitter.label(&miss_label);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    emit_dynamic_property_miss_result(ctx, inst);
+    // A class with per-instance hash storage keeps undeclared names there, so the ladder's miss
+    // arm has to probe it before answering null: `$o->{$name}` must see exactly what the clone
+    // override applicator, or a literal-name write, stored under the same key.
+    match dynamic_property_hash_offset_for_class(ctx, &class_name, "")? {
+        Some(hash_offset) => {
+            lower_runtime_allow_dynamic_prop_get(ctx, inst, hash_offset, 16, 0, 32)?;
+        }
+        None => {
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            emit_dynamic_property_miss_result(ctx, inst);
+        }
+    }
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }

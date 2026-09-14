@@ -40,6 +40,10 @@ pub(super) enum OverrideArm {
     /// Route the write to the class's `__set()` magic setter.
     MagicSet,
     /// Store into the receiver's dynamic-property hash under the runtime name.
+    ///
+    /// Creating a name the class never declared emits php 8.5's dynamic-property deprecation
+    /// unless the class is exempt; the backend decides that from
+    /// `ClassInfo::dynamic_property_creation_is_deprecated()`.
     DynamicAssign,
     /// Raise this catchable `Error` message instead of writing.
     Deny(String),
@@ -236,9 +240,11 @@ pub(super) fn undefined_arm(
     {
         return OverrideArm::DynamicAssign;
     }
-    // php 8.5 DEPRECATES and stores here. AOT objects have no per-instance property hash unless
-    // the class opted in, and this compiler already refuses `$ordinary->undeclared = 1` outright,
-    // so the only alternative to a catchable refusal would be dropping the write silently.
+    // Every class a two-argument `clone()` can reach was given a property hash by
+    // `crate::types::checker::clone_override_storage`, so an ordinary class takes the arm above
+    // and deprecates the creation exactly as php 8.5 does. This arm is left for the classes that
+    // reservation deliberately skips: a checker-injected builtin, a packed class and an enum all
+    // own their physical layout together with the code that reads it.
     OverrideArm::DenyDynamicCreation
 }
 

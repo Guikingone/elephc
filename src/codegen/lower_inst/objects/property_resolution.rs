@@ -113,7 +113,7 @@ pub(super) fn dynamic_property_hash_offset_for_class(
     {
         return Ok(None);
     }
-    if class_info.allow_dynamic_properties {
+    if class_info.dynamic_property_hash_is_name_addressable() {
         return Ok(Some(dynamic_property_hash_offset(
             class_info.properties.len(),
         )));

@@ -266,6 +266,11 @@ pub struct ClassInfo {
     /// EIR reserves a GC-visible property hash for subclasses declared by opaque eval.
     /// This is a storage capability, not PHP's permission to create dynamic properties.
     pub eval_property_storage: bool,
+    /// EIR reserves the same GC-visible property hash for a class a two-argument `clone()`
+    /// can reach with an override key whose name is only known at run time. Like
+    /// `eval_property_storage` this is a storage capability, not PHP's permission: creating
+    /// the property still emits php 8.5's `Creation of dynamic property C::$n is deprecated`.
+    pub clone_override_property_storage: bool,
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
@@ -416,7 +421,28 @@ pub fn constructor_owner<'a>(
 impl ClassInfo {
     /// Returns whether the physical object layout includes a trailing property hash pointer.
     pub fn has_property_hash_storage(&self) -> bool {
-        self.allow_dynamic_properties || self.eval_property_storage
+        self.allow_dynamic_properties
+            || self.eval_property_storage
+            || self.clone_override_property_storage
+    }
+
+    /// Returns whether CREATING a dynamic property on an instance is deprecated rather than free.
+    ///
+    /// The clone-override hash is reserved by the compiler, not requested by the program, so php
+    /// 8.5 still reports `Creation of dynamic property C::$n is deprecated` for every class that
+    /// carries neither `#[\AllowDynamicProperties]` nor stdClass's engine exemption. Eval's own
+    /// reserved storage keeps its established behavior and is deliberately not consulted here.
+    pub fn dynamic_property_creation_is_deprecated(&self) -> bool {
+        self.clone_override_property_storage && !self.allow_dynamic_properties
+    }
+
+    /// Returns whether an UNDECLARED property name addresses this class's hash directly.
+    ///
+    /// Eval's reserved storage is deliberately excluded: it is reached only through
+    /// `__elephc_eval_property_hash_slot`, which gates every access on eval ownership so an
+    /// ordinary native instance of the same class keeps refusing the name.
+    pub fn dynamic_property_hash_is_name_addressable(&self) -> bool {
+        self.allow_dynamic_properties || self.clone_override_property_storage
     }
 
     /// Returns whether a method-map entry is a generated property accessor rather than a PHP method.

@@ -666,25 +666,161 @@ try { clone(new stdClass(), $bad); echo "no throw"; } catch (Error $e) { echo $e
     assert_eq!(out, "zero:seven;Cannot access property starting with \"\\0\"");
 }
 
-/// Verifies a class with dynamic-property storage takes an unknown name, and one without
-/// REPORTS instead of dropping the write.
+/// Verifies an unknown override name stores on an opted-in class silently and on an ORDINARY
+/// class with php 8.5's dynamic-property deprecation.
 ///
-/// php 8.5 deprecates and stores on the plain class. This compiler has no per-instance property
-/// hash unless the class opted in, and already refuses `$plain->undeclared = 1` at compile time,
-/// so the override raises php's `Cannot create dynamic property` `Error` rather than vanishing.
+/// Measured against php 8.5.10: `clone(new Plain(), ["zz" => "x"])` prints
+/// `Deprecated: Creation of dynamic property Plain::$zz is deprecated`, the clone answers `x`,
+/// and the source keeps exactly its declared properties. The clone-only hash is what makes the
+/// stored value visible to `get_object_vars()` and to a runtime-name read.
 #[test]
-fn test_clone_function_stores_dynamic_properties_only_where_storage_exists() {
-    let out = compile_and_run(
+fn test_clone_function_stores_dynamic_properties_on_ordinary_classes_with_a_deprecation() {
+    let out = compile_and_run_capture(
         r#"<?php
 #[AllowDynamicProperties] class D { public int $n = 1; }
 class Plain { public int $n = 1; }
 $ov = ["n" => 2, "zz" => "x"];
 $d = clone(new D(), $ov);
 echo $d->n . ":" . $d->zz . ";";
-try { clone(new Plain(), ["zz" => 1]); echo "no throw"; } catch (Error $e) { echo $e->getMessage(); }
+$src = new Plain();
+$c = clone($src, ["zz" => "x"]);
+$key = "zz";
+echo $c->{$key} . ":" . $c->n . ";";
+echo json_encode(get_object_vars($c)) . ";" . json_encode(get_object_vars($src)) . ";";
+echo var_export(property_exists($src, "zz"), true);
 "#,
     );
-    assert_eq!(out, "2:x;Cannot create dynamic property Plain::$zz");
+    assert_eq!(
+        out.stdout,
+        "2:x;x:1;{\"n\":1,\"zz\":\"x\"};{\"n\":1};false"
+    );
+    assert!(
+        out.stderr
+            .contains("Deprecated: Creation of dynamic property Plain::$zz is deprecated"),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("D::$zz"),
+        "an #[AllowDynamicProperties] class must not deprecate: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a user error handler observes the dynamic-property creation as `E_DEPRECATED`.
+///
+/// php 8.5.10 hands the handler errno `8192` and the message
+/// `Creation of dynamic property Plain::$zz is deprecated`, and still stores the value.
+#[test]
+fn test_clone_function_dynamic_property_deprecation_reaches_a_user_error_handler() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain { public int $n = 1; }
+set_error_handler(function ($no, $msg) {
+    echo "handler(" . $no . "|" . ($no === E_DEPRECATED ? "E_DEPRECATED" : "other") . "|" . $msg . ");";
+    return true;
+});
+$c = clone(new Plain(), ["zz" => "x"]);
+$key = "zz";
+echo $c->{$key};
+"#,
+    );
+    assert_eq!(
+        out,
+        "handler(8192|E_DEPRECATED|Creation of dynamic property Plain::$zz is deprecated);x"
+    );
+}
+
+/// Verifies masking `E_DEPRECATED` silences the report without dropping the stored value.
+///
+/// php 8.5.10 prints nothing under `error_reporting(E_ALL & ~E_DEPRECATED)` and still answers
+/// `x`, because `error_reporting` gates the DEFAULT output only.
+#[test]
+fn test_clone_function_dynamic_property_deprecation_honors_the_reporting_mask() {
+    let out = compile_and_run_capture(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+class Plain { public int $n = 1; }
+$c = clone(new Plain(), ["zz" => "x"]);
+$key = "zz";
+echo $c->{$key};
+"#,
+    );
+    assert_eq!(out.stdout, "x");
+    assert!(
+        !out.stderr.contains("Creation of dynamic property"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies `stdClass` and an INHERITED `#[AllowDynamicProperties]` stay exempt from the
+/// deprecation while still storing the override.
+#[test]
+fn test_clone_function_dynamic_property_exemptions_are_preserved() {
+    let out = compile_and_run_capture(
+        r#"<?php
+#[AllowDynamicProperties] class Base { public int $n = 1; }
+class Child extends Base {}
+$child = clone(new Child(), ["zz" => "x"]);
+$std = clone(new stdClass(), ["a" => 1]);
+echo $child->zz . ":" . $std->a;
+"#,
+    );
+    assert_eq!(out.stdout, "x:1");
+    assert!(
+        !out.stderr.contains("Creation of dynamic property"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies `__set()` still wins over the clone-only hash for an unknown name.
+///
+/// php 8.5.10 answers `set(later=x);` with no deprecation and no stored property, so the magic
+/// setter takes precedence over the reserved storage exactly as it does over php's own.
+#[test]
+fn test_clone_function_magic_set_wins_over_dynamic_property_storage() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class M {
+    public int $n = 1;
+    public function __set($k, $v) { echo "set(" . $k . "=" . $v . ");"; }
+}
+$m = clone(new M(), ["n" => 5, "later" => "x"]);
+echo $m->n . ":" . json_encode(get_object_vars($m));
+"#,
+    );
+    assert_eq!(out.stdout, "set(later=x);5:{\"n\":5}");
+    assert!(
+        !out.stderr.contains("Creation of dynamic property"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies a THROWING deprecation handler leaves the source intact and releases the clone.
+///
+/// php 8.5.10 answers `H;dtor;caught:boom;after;1dtor;`: the partial clone's destructor runs AT the
+/// throw, the source survives with its declared value, and the trailing `dtor;` is the source's own
+/// shutdown release. A leaked clone would drop the first `dtor;`, and a double release would add a
+/// third one.
+#[test]
+fn test_clone_function_dynamic_property_deprecation_handler_throw_releases_the_clone() {
+    let out = compile_and_run(
+        r#"<?php
+class Tracked {
+    public int $n = 1;
+    public function __destruct() { echo "dtor;"; }
+}
+set_error_handler(function ($no, $msg) { echo "H;"; throw new RuntimeException("boom"); });
+$src = new Tracked();
+try { clone($src, ["n" => 2, "zz" => "x"]); } catch (Throwable $e) { echo "caught:" . $e->getMessage() . ";"; }
+restore_error_handler();
+echo "after;" . $src->n;
+"#,
+    );
+    assert_eq!(out, "H;dtor;caught:boom;after;1dtor;");
 }
 
 /// Verifies both arguments are evaluated once in source order before anything is applied, and
@@ -1268,8 +1404,8 @@ var_export([$k => 1, ...$r]); echo "\n";
 /// Verifies a runtime override name that matches no declared slot is never silently dropped.
 ///
 /// `stdClass` stores it as a dynamic property, and a class with `__set` routes it through the
-/// magic setter. The forbidden-storage case is pinned by
-/// `test_clone_function_stores_dynamic_properties_only_where_storage_exists`.
+/// magic setter. The ordinary-class case is pinned by
+/// `test_clone_function_stores_dynamic_properties_on_ordinary_classes_with_a_deprecation`.
 #[test]
 fn test_clone_function_routes_unknown_names_to_dynamic_storage_or_magic_set() {
     let out = compile_and_run(
@@ -1288,4 +1424,104 @@ echo $m->n;
 "#,
     );
     assert_eq!(out, "2:new:1;set(later=x);5");
+}
+
+/// Verifies every supported target emits the clone-only dynamic-property path from shared helpers.
+///
+/// Only two of the five targets can run here, and the creation probe, the deprecation fragments and
+/// the hash store are the layout-sensitive half of this feature: a target whose emitter lost one of
+/// them would store silently, report nothing, or report on every write instead of on creation.
+#[test]
+fn test_every_supported_target_emits_the_clone_dynamic_property_deprecation_and_store() {
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_clone_dynamic_property_targets_{}_{:?}",
+        std::process::id(),
+        std::thread::current().id(),
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("clone_dynamic.php"),
+        r#"<?php
+class TargetClonePlain { public int $n = 1; }
+$name = "zz";
+$clone = clone(new TargetClonePlain(), ["zz" => "x"]);
+echo $clone->{$name};
+"#,
+    )
+    .unwrap();
+
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = emit_clone_dynamic_property_assembly(&dir, target);
+        // Slice the generated applicator out of the module so a match cannot come from an
+        // unrelated function or from the data section at the end of the file. Mach-O comments
+        // start with `;` and ELF comments with `#`, so the marker is matched from `@fn name=`.
+        let applicator = assembly
+            .split_once("@fn name=@clone_apply")
+            .unwrap_or_else(|| panic!("{target}: no clone override applicator emitted:\n{assembly}"))
+            .1;
+        let applicator = applicator
+            .split_once("@fn name=")
+            .map_or(applicator, |(body, _)| body);
+        for expected in [
+            // The creation probe: php reports only when the key is absent.
+            "__rt_hash_get",
+            "__rt_diag_warning_fragment",
+            "__rt_diag_warning",
+            // The store itself, so a silenced report can never pass as a fix.
+            "__rt_hash_set",
+        ] {
+            assert!(
+                applicator.contains(expected),
+                "{target}: applicator is missing {expected}"
+            );
+        }
+        assert!(
+            assembly.contains("Deprecated: Creation of dynamic property TargetClonePlain::$"),
+            "{target}: the deprecation prefix is not interned"
+        );
+        assert!(
+            assembly.contains(" is deprecated"),
+            "{target}: the deprecation suffix is not interned"
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Emits the clone-override fixture's assembly for one target and returns its text.
+///
+/// iOS targets refuse a standalone executable, so they are asked for a static library; the
+/// generated applicator the assertion reads is emitted either way.
+fn emit_clone_dynamic_property_assembly(dir: &std::path::Path, target: &str) -> String {
+    let binary = std::env::var("CARGO_BIN_EXE_elephc").unwrap_or_else(|_| {
+        let mut path = std::env::current_exe().expect("failed to resolve current test binary");
+        path.pop();
+        if path.ends_with("deps") {
+            path.pop();
+        }
+        path.join("elephc").to_string_lossy().into_owned()
+    });
+    let mut command = std::process::Command::new(binary);
+    command.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    command.current_dir(dir);
+    command.args(["--emit-asm", "--target", target]);
+    if target.starts_with("ios") {
+        command.args(["--emit", "staticlib"]);
+    }
+    let output = command
+        .arg("clone_dynamic.php")
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "{target}: emitting assembly failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::read_to_string(dir.join("clone_dynamic.s")).expect("emitted assembly")
 }

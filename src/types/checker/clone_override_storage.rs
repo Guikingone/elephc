@@ -29,6 +29,11 @@
 //! - A reference slot IS widened when its property is undeclared. `property_reference_slots`
 //!   records that the slot physically holds a shared cell; `properties[slot].1` records that
 //!   cell's PAYLOAD, and an undeclared property's payload is `mixed` with or without an alias.
+//! - The same destination set also reserves the per-instance property HASH an override key whose
+//!   name matches no declared slot needs. It is a storage capability only: creating the property
+//!   still emits php 8.5's `Creation of dynamic property C::$n is deprecated`, and the checker
+//!   never consults `has_property_hash_storage()`, so `$ordinary->undeclared = 1` keeps its
+//!   compile-time refusal.
 
 use std::collections::BTreeSet;
 
@@ -145,8 +150,40 @@ pub(super) fn widen_clone_override_property_storage(checker: &mut Checker) {
     }
     let sel = destination_classes(checker, &destinations);
     for class_name in sel {
+        reserve_property_hash_storage(checker, &class_name);
         widen_class(checker, &class_name);
     }
+}
+
+/// Reserves the per-instance property hash one class needs for an UNKNOWN override key.
+///
+/// php 8.5 stores `clone($object, ["zz" => "x"])` on an ordinary class and deprecates the
+/// creation; without a hash there is nowhere to put it, and the applicator could only refuse the
+/// write. Reserving it here rather than on every object keeps the cost to the destination classes
+/// this program's own `clone()` sites can actually reach: one trailing pointer per instance, and
+/// the clone/free/GC traversal `#[\AllowDynamicProperties]` instances already pay.
+///
+/// The flag is a STORAGE capability, never PHP's permission. `allow_dynamic_properties` stays
+/// exactly as the attribute left it, so `ClassInfo::dynamic_property_creation_is_deprecated()`
+/// still separates the exempt classes from the deprecated ones, and `__set()` keeps its
+/// precedence in `crate::ir_lower::clone_overrides::arms`.
+fn reserve_property_hash_storage(checker: &mut Checker, class_name: &str) {
+    // Same exclusions as `widen_class`: a checker-injected builtin, a packed class and an enum
+    // all own their physical layout together with the code that reads it.
+    if !checker.declared_classes.contains(class_name)
+        || checker.packed_classes.contains_key(class_name)
+        || checker.enums.contains_key(class_name)
+        || super::builtin_stdclass::is_stdclass(class_name)
+    {
+        return;
+    }
+    let Some(info) = checker.classes.get_mut(class_name) else {
+        return;
+    };
+    if info.has_property_hash_storage() {
+        return;
+    }
+    info.clone_override_property_storage = true;
 }
 
 /// Expands the recorded destinations into the exact set of classes to widen.

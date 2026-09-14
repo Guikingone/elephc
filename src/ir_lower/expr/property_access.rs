@@ -271,7 +271,9 @@ pub(super) fn property_get_result_type(
                 magic_ty
             };
         }
-        if class_info.allow_dynamic_properties {
+        // The clone-override hash answers an undeclared name exactly like the attribute's does,
+        // so both reserve the same boxed `mixed` result rather than a declared slot type.
+        if class_info.dynamic_property_hash_is_name_addressable() {
             return if nullable {
                 nullable_result_type(PhpType::Mixed)
             } else {
@@ -716,6 +718,17 @@ pub(super) fn dynamic_property_get_result_type(
     let Some(class_info) = ctx.classes.get(normalized) else {
         return fallback_expr_type(expr);
     };
+    // A class with a per-instance property hash can answer a name no declaration mentions, so the
+    // declared-slot union below would describe the wrong storage: the hash holds boxed `mixed`.
+    // Reading the union type instead re-interpreted a boxed cell as the single declared slot type,
+    // which printed the null sentinel as an int for `clone($plain, ["zz" => "x"])`.
+    if class_info.dynamic_property_hash_is_name_addressable() {
+        return if nullable {
+            nullable_result_type(PhpType::Mixed)
+        } else {
+            PhpType::Mixed
+        };
+    }
     let members = class_info
         .properties
         .iter()

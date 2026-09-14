@@ -536,3 +536,59 @@ pub(super) fn lower_allow_dynamic_prop_get(
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
+
+/// Reads a RUNTIME-name undeclared property from the receiver's dynamic-property hash.
+///
+/// The static-name sibling interns the key in the data pool; a name known only at run time takes
+/// its pointer/length pair from the caller's temporary stack frame, the same frame the declared
+/// slot ladder staged the receiver and the name in. The block is released here.
+///
+/// Without this the ladder's MISS arm answered PHP `null` for every undeclared runtime name, so
+/// `$o->{$name}` could not see what `$o->{"literal"}` had just stored in the very same hash.
+///
+/// The result is left in the instruction's result representation for the caller's SHARED
+/// `store_if_result`, exactly like the declared-slot arms it sits next to.
+pub(super) fn lower_runtime_allow_dynamic_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    hash_offset: usize,
+    receiver_offset: usize,
+    name_offset: usize,
+    frame_bytes: usize,
+) -> Result<()> {
+    let target = ctx.emitter.target;
+    let miss_label = ctx.next_label("runtime_dynamic_prop_hash_miss");
+    let done_label = ctx.next_label("runtime_dynamic_prop_hash_done");
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, receiver_offset);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        object_reg,
+        hash_offset,
+    );
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), name_offset);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 2),
+        name_offset + 8,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    // Released before the found test so the branch reads freshly computed flags on every target.
+    abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &miss_label);
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
+        }
+    }
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&miss_label);
+    emit_boxed_null(ctx);
+    ctx.emitter.label(&done_label);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
+}
