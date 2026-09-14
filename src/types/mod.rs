@@ -72,6 +72,10 @@ pub use result::check_with_target;
 pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
 pub use schema::{
+    class_declares_private_property, class_inherits_from, resolve_property_name,
+    scope_shares_class_hierarchy, PropertyNameResolution,
+};
+pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
     PackedFieldInfo, PropertyHookContract,

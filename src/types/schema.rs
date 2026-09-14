@@ -418,6 +418,181 @@ pub fn constructor_owner<'a>(
     None
 }
 
+/// What php does with ONE property NAME on one class, seen from one scope.
+///
+/// A by-name property dispatch has FOUR possible answers, not two, and this compiler's
+/// `ClassInfo` cannot distinguish them on its own: `properties` is the PHYSICAL slot table, so it
+/// still carries a strict ancestor's private slot under its plain name, and `property_offsets`,
+/// `property_visibilities` and `property_declaring_classes` all still answer for that name.
+/// Every by-name dispatch has to ask `resolve_property_name` before it matches a runtime name
+/// against a slot. All four outcomes were measured against php 8.5.10.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropertyNameResolution {
+    /// The name addresses the slot `visible_property_index` resolves on this class.
+    Visible,
+    /// The name addresses the private slot `scope` declares and this class INHERITS.
+    ///
+    /// The index is the scope class's own layout index, which is also the receiver's because the
+    /// physical layout of a subclass starts with its parent's slots in order. This is the same
+    /// fact `crate::ir_lower::clone_overrides::scoped_setters` relies on, and it is what keeps
+    /// `Base::readP()` on a `Child` that redeclares `private $p` reading BASE's slot.
+    ScopePrivate {
+        /// Class that declares the private property, an ancestor of the receiver's class.
+        scope: String,
+        /// That class's own physical slot index for the property.
+        index: usize,
+    },
+    /// The name is not in this class's by-name table from this scope, so it is a DYNAMIC property.
+    ///
+    /// php 7.4 removed shadow properties: a strict ancestor's private property lives under a
+    /// mangled key and the child's by-name table does not contain it at all. Outside the
+    /// declaring class a read reports `Undefined property`, `isset()` answers false, `unset()` is
+    /// a no-op, and a write CREATES a distinct dynamic property with the usual deprecation.
+    Dynamic,
+    /// The name is in the table, but this scope may not touch it: php raises a catchable `Error`.
+    ///
+    /// `Cannot access private property D::$n` for a private property declared by the receiver's
+    /// OWN class, `Cannot access protected property P::$p` for a protected one reached from an
+    /// unrelated scope. Both verbatim from php 8.5.10, with no scope suffix.
+    Inaccessible(Visibility),
+}
+
+/// Resolves one property NAME against a receiver class and an invocation scope, `None` for global.
+///
+/// php's own order, measured against php 8.5.10 across the declaring scope, a child scope, an
+/// unrelated scope and global scope:
+///
+/// 1. A scope that DECLARES a private property of this name, and that the receiver is an instance
+///    of, selects its own slot. This is what makes a parent-private property reachable on a child
+///    object and what keeps two same-named private slots apart.
+/// 2. A name with no visible declaration is dynamic.
+/// 3. Public is always visible.
+/// 4. Protected needs php's ancestor-or-descendant test against the DECLARING class.
+/// 5. Private declared by a STRICT ancestor is invisible, so it is dynamic; private declared by
+///    the receiver's own class is an access error, because step 1 already took the one scope that
+///    may reach it.
+pub fn resolve_property_name(
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+    property: &str,
+    scope: Option<&str>,
+) -> PropertyNameResolution {
+    if let Some(resolution) =
+        resolve_scope_private_property_name(classes, class_name, property, scope)
+    {
+        return resolution;
+    }
+    let Some(info) = classes.get(class_name) else {
+        return PropertyNameResolution::Dynamic;
+    };
+    if info.visible_property_index(property).is_none() {
+        return PropertyNameResolution::Dynamic;
+    }
+    let visibility = info
+        .property_visibilities
+        .get(property)
+        .cloned()
+        .unwrap_or(Visibility::Public);
+    let declaring = info
+        .property_declaring_classes
+        .get(property)
+        .map(String::as_str)
+        .unwrap_or(class_name);
+    match visibility {
+        Visibility::Public => PropertyNameResolution::Visible,
+        Visibility::Protected => {
+            if scope_shares_class_hierarchy(classes, scope, declaring) {
+                PropertyNameResolution::Visible
+            } else {
+                PropertyNameResolution::Inaccessible(Visibility::Protected)
+            }
+        }
+        // Step 1 already answered for the declaring scope, so reaching here means this scope is
+        // not it. A STRICT ancestor's slot is invisible rather than refused.
+        Visibility::Private if declaring != class_name => PropertyNameResolution::Dynamic,
+        Visibility::Private => PropertyNameResolution::Inaccessible(Visibility::Private),
+    }
+}
+
+/// Returns the scope-selected private slot for a name, when the scope owns one the receiver has.
+fn resolve_scope_private_property_name(
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+    property: &str,
+    scope: Option<&str>,
+) -> Option<PropertyNameResolution> {
+    let scope_name = scope?;
+    let scope_info = classes.get(scope_name)?;
+    if !class_declares_private_property(scope_info, scope_name, property) {
+        return None;
+    }
+    if scope_name == class_name {
+        return Some(PropertyNameResolution::Visible);
+    }
+    if !class_inherits_from(classes, class_name, scope_name) {
+        return None;
+    }
+    // The receiver's own by-name table resolves this name to its own shadowing slot, so the arm
+    // has to carry the SCOPE's layout index instead of taking the receiver's answer.
+    let index = scope_info.visible_property_index(property)?;
+    Some(PropertyNameResolution::ScopePrivate {
+        scope: scope_name.to_string(),
+        index,
+    })
+}
+
+/// Returns whether `class_info` itself declares `property` as private.
+pub fn class_declares_private_property(
+    class_info: &ClassInfo,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    class_info.visible_property_index(property).is_some()
+        && class_info.property_visibilities.get(property) == Some(&Visibility::Private)
+        && class_info
+            .property_declaring_classes
+            .get(property)
+            .map(String::as_str)
+            .unwrap_or(class_name)
+            == class_name
+}
+
+/// Returns whether `child` reaches `ancestor` through the declared parent chain.
+pub fn class_inherits_from(
+    classes: &HashMap<String, ClassInfo>,
+    child: &str,
+    ancestor: &str,
+) -> bool {
+    let mut current = classes.get(child).and_then(|info| info.parent.as_deref());
+    let mut guard = 0usize;
+    while let Some(name) = current {
+        if name == ancestor {
+            return true;
+        }
+        guard += 1;
+        if guard > classes.len() + 1 {
+            return false;
+        }
+        current = classes.get(name).and_then(|info| info.parent.as_deref());
+    }
+    false
+}
+
+/// Returns php-src's `zend_check_protected` verdict: the scope is the class, an ancestor OR a
+/// descendant of it.
+pub fn scope_shares_class_hierarchy(
+    classes: &HashMap<String, ClassInfo>,
+    scope: Option<&str>,
+    declaring: &str,
+) -> bool {
+    let Some(scope) = scope else {
+        return false;
+    };
+    scope == declaring
+        || class_inherits_from(classes, scope, declaring)
+        || class_inherits_from(classes, declaring, scope)
+}
+
 impl ClassInfo {
     /// Returns whether the physical object layout includes a trailing property hash pointer.
     pub fn has_property_hash_storage(&self) -> bool {

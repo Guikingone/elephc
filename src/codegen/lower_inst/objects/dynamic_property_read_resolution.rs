@@ -128,6 +128,11 @@ pub(super) fn ensure_runtime_dynamic_property_name(
 }
 
 /// Resolves all declared property slots that a runtime dynamic property read may match.
+///
+/// A name the LEXICAL scope resolves to a DYNAMIC property is left out, so the ladder falls
+/// through to the miss arm and the name is answered from the per-instance hash instead. That is
+/// what php does with a strict ancestor's private property: outside the class that declared it,
+/// the name is a dynamic property and the private slot keeps its own value.
 pub(super) fn declared_dynamic_property_slots(
     ctx: &FunctionContext<'_>,
     class_name: &str,
@@ -145,10 +150,13 @@ pub(super) fn declared_dynamic_property_slots(
             .map(|(property, _)| property.clone())
             .collect::<Vec<_>>()
     };
-    property_names
-        .iter()
-        .map(|property| resolve_property_slot_for_class(ctx, normalized, property, inst))
-        .collect()
+    let mut slots = Vec::with_capacity(property_names.len());
+    for property in &property_names {
+        if let Some(slot) = resolve_property_read_slot(ctx, normalized, property, inst)? {
+            slots.push(slot);
+        }
+    }
+    Ok(slots)
 }
 
 /// Collects declared-property candidates readable from a boxed Mixed receiver.
@@ -164,7 +172,7 @@ pub(super) fn declared_mixed_property_get_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
-            let Ok(slot) = resolve_property_slot_for_class(ctx, class_name, property, inst) else {
+            let Ok(Some(slot)) = resolve_property_read_slot(ctx, class_name, property, inst) else {
                 continue;
             };
             candidates.push(MixedPropertyCandidate {

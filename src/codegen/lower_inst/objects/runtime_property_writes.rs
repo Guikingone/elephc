@@ -147,10 +147,10 @@ pub(super) fn lower_runtime_object_prop_set(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
-    let slots = declared_dynamic_property_set_slots(ctx, class_name, value, inst)?;
-    let match_labels = slots
+    let arms = declared_dynamic_property_set_slots(ctx, class_name, value, inst)?;
+    let match_labels = arms
         .iter()
-        .map(|slot| ctx.next_label(&format!("dyn_prop_set_{}", label_fragment(&slot.property))))
+        .map(|arm| ctx.next_label(&format!("dyn_prop_set_{}", label_fragment(arm.property()))))
         .collect::<Vec<_>>();
     let miss_label = ctx.next_label("dyn_prop_set_miss");
     let done_label = ctx.next_label("dyn_prop_set_done");
@@ -162,18 +162,29 @@ pub(super) fn lower_runtime_object_prop_set(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (slot, label) in slots.iter().zip(match_labels.iter()) {
-        emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
+    for (arm, label) in arms.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, arm.property(), label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
-    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+    for (arm, label) in arms.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-        emit_property_store(ctx, value, slot, base_reg)?;
-        abi::emit_release_temporary_stack(ctx.emitter, 32);
-        abi::emit_jump(ctx.emitter, &done_label);
+        match arm {
+            PropertyNameArm::Slot(slot) => {
+                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
+                emit_property_store(ctx, value, slot, base_reg)?;
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                abi::emit_jump(ctx.emitter, &done_label);
+            }
+            // php refuses the write outright, so nothing is stored and the name never reaches the
+            // hash. The temporary block is released BEFORE the raise, which is what keeps the
+            // unwinder's stack pointer consistent with every other arm.
+            PropertyNameArm::Refuse { message, .. } => {
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                super::super::exceptions::emit_error(ctx, message);
+            }
+        }
     }
 
     ctx.emitter.label(&miss_label);
@@ -217,8 +228,8 @@ pub(super) fn lower_mixed_named_prop_set(
         .map(|candidate| {
             ctx.next_label(&format!(
                 "mixed_named_prop_set_{}_{}",
-                candidate.class_id,
-                label_fragment(&candidate.slot.property)
+                candidate.candidate.class_id,
+                label_fragment(&candidate.candidate.slot.property)
             ))
         })
         .collect::<Vec<_>>();
@@ -229,17 +240,25 @@ pub(super) fn lower_mixed_named_prop_set(
     push_mixed_unboxed_object_payload(ctx);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_stacked_object_class_matches(ctx, candidate.class_id, 0, label);
+        emit_branch_if_stacked_object_class_matches(ctx, candidate.candidate.class_id, 0, label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 0);
-        emit_property_store(ctx, value, &candidate.slot, base_reg)?;
-        abi::emit_release_temporary_stack(ctx.emitter, 16);
-        abi::emit_jump(ctx.emitter, &done_label);
+        match &candidate.refusal {
+            Some(message) => {
+                abi::emit_release_temporary_stack(ctx.emitter, 16);
+                super::super::exceptions::emit_error(ctx, message);
+            }
+            None => {
+                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 0);
+                emit_property_store(ctx, value, &candidate.candidate.slot, base_reg)?;
+                abi::emit_release_temporary_stack(ctx.emitter, 16);
+                abi::emit_jump(ctx.emitter, &done_label);
+            }
+        }
     }
 
     ctx.emitter.label(&miss_label);
@@ -249,16 +268,26 @@ pub(super) fn lower_mixed_named_prop_set(
     Ok(())
 }
 
+/// One class-id arm of a Mixed-receiver property WRITE dispatch.
+pub(super) struct MixedPropertyWriteCandidate {
+    /// Class id and slot the arm matches on. The slot is also what a store arm writes.
+    candidate: MixedPropertyCandidate,
+    /// php's catchable access-error message when this scope may not write the slot at all.
+    refusal: Option<String>,
+}
+
 /// Collects the declared slots named `property` that can accept this value, by class id.
 ///
 /// stdClass is excluded because its properties are dynamic, and the miss path already
-/// routes it to the dynamic-property helper.
+/// routes it to the dynamic-property helper. A class whose by-name table does not contain the
+/// name from THIS scope is excluded too: php answers it from the dynamic-property hash, which is
+/// the receiver-shaped miss path, never this class's private slot.
 fn declared_mixed_named_property_set_candidates(
     ctx: &FunctionContext<'_>,
     value: ValueId,
     property: &str,
     inst: &Instruction,
-) -> Result<Vec<MixedPropertyCandidate>> {
+) -> Result<Vec<MixedPropertyWriteCandidate>> {
     let value_ty = ctx.value_php_type(value)?;
     let mut candidates = Vec::new();
     for (class_name, class_info) in &ctx.module.class_infos {
@@ -272,19 +301,56 @@ fn declared_mixed_named_property_set_candidates(
         {
             continue;
         }
-        let Ok(slot) = resolve_property_slot_for_class(ctx, class_name, property, inst) else {
+        let Some(candidate) =
+            mixed_property_write_candidate(ctx, class_name, property, value, &value_ty, inst)?
+        else {
             continue;
         };
-        if ensure_property_value_supported(ctx, &slot, value, &value_ty, inst).is_err() {
-            continue;
-        }
-        candidates.push(MixedPropertyCandidate {
-            class_id: class_info.class_id,
-            slot,
-        });
+        candidates.push(candidate);
     }
-    candidates.sort_by_key(|candidate| candidate.class_id);
+    candidates.sort_by_key(|candidate| candidate.candidate.class_id);
     Ok(candidates)
+}
+
+/// Builds one Mixed-receiver write arm for a class, or `None` when php answers it dynamically.
+///
+/// A refusal arm still carries the slot: it is what the ladder compares the runtime class id and
+/// the property name against. The store simply never runs, so the value type is not checked for
+/// it either, which keeps a refused write from being silently dropped for an unrelated reason.
+fn mixed_property_write_candidate(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    value: ValueId,
+    value_ty: &PhpType,
+    inst: &Instruction,
+) -> Result<Option<MixedPropertyWriteCandidate>> {
+    let Some(class_info) = ctx.module.class_infos.get(class_name) else {
+        return Ok(None);
+    };
+    let class_id = class_info.class_id;
+    let arm = match resolve_property_write_arm(ctx, class_name, property, inst) {
+        Ok(Some(arm)) => arm,
+        Ok(None) | Err(_) => return Ok(None),
+    };
+    let (slot, refusal) = match arm {
+        PropertyNameArm::Slot(slot) => {
+            if ensure_property_value_supported(ctx, &slot, value, value_ty, inst).is_err() {
+                return Ok(None);
+            }
+            (slot, None)
+        }
+        PropertyNameArm::Refuse { message, .. } => {
+            let Ok(slot) = resolve_property_slot_for_class(ctx, class_name, property, inst) else {
+                return Ok(None);
+            };
+            (slot, Some(message))
+        }
+    };
+    Ok(Some(MixedPropertyWriteCandidate {
+        candidate: MixedPropertyCandidate { class_id, slot },
+        refusal,
+    }))
 }
 
 /// Branches to `matched_label` when a stacked object payload has the given class id.
@@ -330,7 +396,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
         .map(|candidate| {
             ctx.next_label(&format!(
                 "mixed_dyn_prop_set_{}",
-                label_fragment(&candidate.slot.property)
+                label_fragment(&candidate.candidate.slot.property)
             ))
         })
         .collect::<Vec<_>>();
@@ -344,18 +410,26 @@ pub(super) fn lower_runtime_mixed_prop_set(
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, candidate, label);
+        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, &candidate.candidate, label);
     }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-        emit_property_store(ctx, value, &candidate.slot, base_reg)?;
-        abi::emit_release_temporary_stack(ctx.emitter, 32);
-        abi::emit_jump(ctx.emitter, &done_label);
+        match &candidate.refusal {
+            Some(message) => {
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                super::super::exceptions::emit_error(ctx, message);
+            }
+            None => {
+                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
+                emit_property_store(ctx, value, &candidate.candidate.slot, base_reg)?;
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                abi::emit_jump(ctx.emitter, &done_label);
+            }
+        }
     }
 
     ctx.emitter.label(&stdclass_label);
@@ -370,13 +444,20 @@ pub(super) fn lower_runtime_mixed_prop_set(
     Ok(())
 }
 
-/// Resolves declared slots on a known object class that can accept this value.
+/// Resolves the write arms a runtime-name write on a known object class can take.
+///
+/// A name the LEXICAL scope resolves to a DYNAMIC property is left out, so the ladder falls
+/// through to the miss arm, which deprecates the creation and stores the value in the
+/// per-instance hash. That is php's answer for a strict ancestor's private property:
+/// `clone($child, ["n" => 8])` and `$child->{$name} = 8` from the child or from global scope
+/// create a distinct dynamic property and leave the ancestor's private slot exactly as it was.
+/// A name php refuses becomes a `Refuse` arm instead of a store.
 pub(super) fn declared_dynamic_property_set_slots(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     value: ValueId,
     inst: &Instruction,
-) -> Result<Vec<PropertySlot>> {
+) -> Result<Vec<PropertyNameArm>> {
     let value_ty = ctx.value_php_type(value)?;
     let normalized = class_name.trim_start_matches('\\');
     let property_names = {
@@ -390,13 +471,17 @@ pub(super) fn declared_dynamic_property_set_slots(
             .map(|(property, _)| property.clone())
             .collect::<Vec<_>>()
     };
-    let mut slots = Vec::new();
+    let mut arms = Vec::new();
     for property in property_names {
-        let slot = resolve_property_slot_for_class(ctx, normalized, &property, inst)?;
-        ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
-        slots.push(slot);
+        let Some(arm) = resolve_property_write_arm(ctx, normalized, &property, inst)? else {
+            continue;
+        };
+        if let PropertyNameArm::Slot(slot) = &arm {
+            ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
+        }
+        arms.push(arm);
     }
-    Ok(slots)
+    Ok(arms)
 }
 
 /// Collects Mixed receiver declared-property candidates that can accept this value.
@@ -404,7 +489,7 @@ pub(super) fn declared_mixed_property_set_candidates(
     ctx: &FunctionContext<'_>,
     value: ValueId,
     inst: &Instruction,
-) -> Result<Vec<MixedPropertyCandidate>> {
+) -> Result<Vec<MixedPropertyWriteCandidate>> {
     let value_ty = ctx.value_php_type(value)?;
     let mut candidates = Vec::new();
     let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
@@ -414,22 +499,24 @@ pub(super) fn declared_mixed_property_set_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
-            let Ok(slot) = resolve_property_slot_for_class(ctx, class_name, property, inst) else {
+            let Some(candidate) =
+                mixed_property_write_candidate(ctx, class_name, property, value, &value_ty, inst)?
+            else {
                 continue;
             };
-            if ensure_property_value_supported(ctx, &slot, value, &value_ty, inst).is_err() {
-                continue;
-            }
-            candidates.push(MixedPropertyCandidate {
-                class_id: class_info.class_id,
-                slot,
-            });
+            candidates.push(candidate);
         }
     }
     candidates.sort_by(|left, right| {
-        left.class_id
-            .cmp(&right.class_id)
-            .then_with(|| left.slot.property.cmp(&right.slot.property))
+        left.candidate
+            .class_id
+            .cmp(&right.candidate.class_id)
+            .then_with(|| {
+                left.candidate
+                    .slot
+                    .property
+                    .cmp(&right.candidate.slot.property)
+            })
     });
     Ok(candidates)
 }

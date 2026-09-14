@@ -6,8 +6,13 @@
 //!
 //! Key details:
 //! - Case-insensitive class lookup and packed/runtime storage overrides remain authoritative.
+//! - A by-name dispatch asks `crate::types::resolve_property_name` first: the physical slot table
+//!   still carries a strict ancestor's private slot under its plain name, which php resolves to a
+//!   DYNAMIC property everywhere except inside the class that declared it.
 
 use super::*;
+
+use crate::types::PropertyNameResolution;
 
 /// Allocates an object-owned ref cell before a physical initializer writes its default.
 pub(super) fn initialize_owned_property_reference(
@@ -91,6 +96,163 @@ pub(super) fn dynamic_property_hash_offset_for_object(
     dynamic_property_hash_offset_for_class(ctx, &class_name, property)
 }
 
+/// Resolves what php does with one property NAME on `class_name` from the body's LEXICAL scope.
+///
+/// `Function::lexical_class` is the php scope the frame executes in: the declaring class for a
+/// method, the declaring class for a closure written inside one, the planned invocation scope for
+/// a `clone()` override applicator (`crate::ir_lower::clone_overrides`), and `None` for global
+/// scope. It is the same source `clone_hook_is_visible` uses for `__clone` visibility.
+///
+/// Every by-name ladder over `ClassInfo::properties` has to consult this before it matches a
+/// runtime name against a slot: the physical layout still carries a strict ancestor's private
+/// slot under its plain name, and php resolves that name to a DYNAMIC property everywhere except
+/// inside the class that declared it. See `crate::types::resolve_property_name`.
+pub(super) fn resolve_property_name_in_current_scope(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) -> PropertyNameResolution {
+    crate::types::resolve_property_name(
+        &ctx.module.class_infos,
+        class_name,
+        property,
+        ctx.function.lexical_class.as_deref(),
+    )
+}
+
+/// One arm of a runtime-name by-name dispatch ladder.
+pub(super) enum PropertyNameArm {
+    /// The name addresses this slot.
+    Slot(PropertySlot),
+    /// php refuses the access from this scope: raise the catchable `Error` carrying this message.
+    Refuse {
+        /// Property name the runtime string must equal for this arm to run.
+        property: String,
+        /// php 8.5's verbatim wording, e.g. `Cannot access private property D::$n`.
+        message: String,
+    },
+}
+
+impl PropertyNameArm {
+    /// Returns the property name this arm answers for.
+    pub(super) fn property(&self) -> &str {
+        match self {
+            Self::Slot(slot) => &slot.property,
+            Self::Refuse { property, .. } => property,
+        }
+    }
+}
+
+/// Resolves the ladder arm one property name takes on a WRITE, or `None` when it is dynamic.
+///
+/// `Visible` keeps the receiver's own by-name answer. `ScopePrivate` addresses the ANCESTOR's
+/// slot instead, because the receiver's by-name table resolves a redeclared private property to
+/// the child's shadowing slot and writing that one would hit a different property. `Dynamic`
+/// drops the arm so the name falls into the caller's hash miss path, which creates the dynamic
+/// property with php's deprecation. `Inaccessible` becomes a refusal: php raises a catchable
+/// `Error` and never touches the storage.
+pub(super) fn resolve_property_write_arm(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    inst: &Instruction,
+) -> Result<Option<PropertyNameArm>> {
+    let normalized = class_name.trim_start_matches('\\');
+    match resolve_property_name_in_current_scope(ctx, normalized, property) {
+        PropertyNameResolution::Visible => {
+            resolve_property_slot_for_class(ctx, normalized, property, inst)
+                .map(|slot| Some(PropertyNameArm::Slot(slot)))
+        }
+        PropertyNameResolution::ScopePrivate { scope, index } => {
+            resolve_scope_private_property_slot(ctx, &scope, index, property, inst)
+                .map(|slot| Some(PropertyNameArm::Slot(slot)))
+        }
+        PropertyNameResolution::Dynamic => Ok(None),
+        PropertyNameResolution::Inaccessible(visibility) => Ok(Some(PropertyNameArm::Refuse {
+            property: property.to_string(),
+            message: property_access_error_message(&visibility, normalized, property),
+        })),
+    }
+}
+
+/// Resolves the ladder slot one property name takes on a READ, or `None` when it is dynamic.
+///
+/// `Inaccessible` deliberately keeps today's slot arm. php raises `Cannot access private property`
+/// for a value read but answers `false` for `isset()`, and there is no `DynamicPropIsset` opcode:
+/// `isset($o->{$k})` lowers to `DynamicPropGet` plus a null test, so refusing here would make
+/// `isset()` throw. The read-side refusal lands with the isset discriminator, not here.
+pub(super) fn resolve_property_read_slot(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    inst: &Instruction,
+) -> Result<Option<PropertySlot>> {
+    let normalized = class_name.trim_start_matches('\\');
+    match resolve_property_name_in_current_scope(ctx, normalized, property) {
+        PropertyNameResolution::ScopePrivate { scope, index } => {
+            resolve_scope_private_property_slot(ctx, &scope, index, property, inst).map(Some)
+        }
+        PropertyNameResolution::Dynamic => Ok(None),
+        PropertyNameResolution::Visible | PropertyNameResolution::Inaccessible(_) => {
+            resolve_property_slot_for_class(ctx, normalized, property, inst).map(Some)
+        }
+    }
+}
+
+/// Formats php 8.5's verbatim member-access refusal for one property.
+///
+/// Measured against php 8.5.10: `Cannot access private property D::$n` and
+/// `Cannot access protected property Prot::$p`, with no scope suffix on either.
+fn property_access_error_message(
+    visibility: &Visibility,
+    class_name: &str,
+    property: &str,
+) -> String {
+    let label = match visibility {
+        Visibility::Public => "public",
+        Visibility::Protected => "protected",
+        Visibility::Private => "private",
+    };
+    format!(
+        "Cannot access {} property {}::${}",
+        label, class_name, property
+    )
+}
+
+/// Builds the slot metadata for a private property the INVOCATION SCOPE declares.
+///
+/// The offset is computed from the scope class's own layout index, which is also the receiver's:
+/// `ClassBuildState::inherit_properties` pushes a parent's slots first and in order, so a
+/// subclass layout starts with an exact copy of its parent's prefix.
+fn resolve_scope_private_property_slot(
+    ctx: &FunctionContext<'_>,
+    scope_class: &str,
+    index: usize,
+    property: &str,
+    inst: &Instruction,
+) -> Result<PropertySlot> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(scope_class)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", scope_class)))?;
+    let (slot_property, php_type) = class_info.properties.get(index).ok_or_else(|| {
+        CodegenIrError::invalid_module("scope-private property index is outside the class layout")
+    })?;
+    let php_type = runtime_property_type_override(ctx, scope_class, slot_property)
+        .unwrap_or_else(|| php_type.clone());
+    ensure_property_type_supported(&php_type, inst)?;
+    Ok(PropertySlot {
+        class_name: scope_class.to_string(),
+        property: property.to_string(),
+        php_type,
+        offset: 8 + index * 16,
+        is_declared: class_info.property_slot_is_declared(index, slot_property),
+        is_packed: false,
+        is_reference: class_info.property_slot_is_reference(index, slot_property),
+    })
+}
+
 /// Returns the dynamic-property hash slot offset for a known class and property name.
 pub(super) fn dynamic_property_hash_offset_for_class(
     ctx: &FunctionContext<'_>,
@@ -106,10 +268,14 @@ pub(super) fn dynamic_property_hash_offset_for_class(
         .class_infos
         .get(normalized)
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", normalized)))?;
+    // A slot this SCOPE does not resolve the name to is not a collision: php keeps a strict
+    // ancestor's private property under a mangled key, so the plain name belongs to the hash here.
     if class_info
         .properties
         .iter()
         .any(|(name, _)| name == property)
+        && resolve_property_name_in_current_scope(ctx, normalized, property)
+            != PropertyNameResolution::Dynamic
     {
         return Ok(None);
     }

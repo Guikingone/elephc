@@ -1592,6 +1592,52 @@ try { clone($c, ["p" => 99]); echo "no throw"; } catch (Error $e) { echo $e->get
     assert_eq!(out, "10:2;1:20;Cannot access private property Child::$p");
 }
 
+/// Verifies an override key that collides with a STRICT ancestor's private property creates a
+/// dynamic property instead of writing that private slot, from every scope but the declaring one.
+///
+/// php 7.4 removed shadow properties, so `P`'s `private int $n` is simply not in `C`'s by-name
+/// table: measured against php 8.5.10, the same fixture prints `7;1/8;1/9;1` and deprecates the
+/// creation of `C::$n` twice. The declaring scope still selects the private slot (7), while the
+/// child scope and global scope leave it at 1 and store 8 and 9 in the per-instance hash, which
+/// is exactly what the runtime-name reads answer. The source object keeps its own 1 throughout.
+///
+/// The applicator PLANNED this correctly all along, `crate::ir_lower::clone_overrides::arms`
+/// answers `DynamicAssign` here, but the backend's runtime-name ladder was built from the
+/// physical slot table with no scope input and matched the name against the ancestor's slot.
+#[test]
+fn test_clone_function_creates_a_dynamic_property_for_an_ancestor_private_name() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class P {
+    private int $n = 1;
+    public function readN(): int { return $this->n; }
+    public function cloneParent(): P { return clone($this, ["n" => 7]); }
+}
+class C extends P {
+    public function cloneChild(): C { return clone($this, ["n" => 8]); }
+}
+$c = new C();
+$key = "n";
+$byParent = $c->cloneParent();
+echo $byParent->readN() . ";";
+$byChild = $c->cloneChild();
+echo $byChild->readN() . "/" . $byChild->{$key} . ";";
+$byGlobal = clone($c, ["n" => 9]);
+echo $byGlobal->readN() . "/" . $byGlobal->{$key} . ";";
+echo $c->readN();
+"#,
+    );
+    assert_eq!(out.stdout, "7;1/8;1/9;1");
+    assert_eq!(
+        out.stderr
+            .matches("Creation of dynamic property C::$n is deprecated")
+            .count(),
+        2,
+        "the child-scope and global-scope clones each create the dynamic property once: {}",
+        out.stderr
+    );
+}
+
 /// Verifies user functions whose names look exactly like the generated clone helpers cannot
 /// shadow them.
 ///

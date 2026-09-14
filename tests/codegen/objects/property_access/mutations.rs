@@ -822,3 +822,129 @@ echo $b->k . "|" . $b->s . "|" . $c->k . "|" . $d->k;
     );
     assert_eq!(out, "4|z|7|9");
 }
+
+/// Verifies an ordinary runtime-name property access whose name collides with a STRICT ancestor's
+/// private property addresses a DYNAMIC property, while the declaring scope keeps its own slot.
+///
+/// php 7.4 removed shadow properties, so `P`'s `private int $n` is not in `C`'s by-name table:
+/// measured against php 8.5.10, this fixture prints `false;1/5/1;true;1/6;3` and deprecates the
+/// creation of `C::$zz` and `C::$n` exactly once each. Both values exist side by side afterwards,
+/// the outside runtime-name read answers 5 from the hash while `P::readN()` and the PARENT-scope
+/// runtime-name read `$this->{$key}` both still answer 1 from the private slot.
+///
+/// The backend's runtime-name ladder used to be built from the physical slot table with no scope
+/// input, so `isset()` reported the ancestor's slot, the read returned its value and the write
+/// overwrote it. The `#[AllowDynamicProperties]` child and the stdClass receiver are the controls
+/// for the two storage shapes that were already name-addressable.
+///
+/// The parent-scope probe ECHOES instead of returning on purpose. An inherited method with an
+/// undeclared return type whose inferred type is `mixed` is double-boxed at a SUBCLASS call site,
+/// which prints a raw pointer; that defect is unrelated to property identity (an assoc-array
+/// element read reproduces it), and a declared return type here would hide it rather than leave
+/// it visible for its own fix.
+#[test]
+fn test_runtime_name_write_colliding_with_an_ancestor_private_creates_a_dynamic_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class P {
+    private int $n = 1;
+    public function readN(): int { return $this->n; }
+    public function showDyn(string $key): void { echo $this->{$key}; }
+}
+class C extends P {}
+#[AllowDynamicProperties]
+class Open extends P {}
+$c = new C();
+$key = "n";
+clone($c, ["zz" => 0]);
+echo var_export(isset($c->{$key}), true) . ";";
+$c->{$key} = 5;
+echo $c->readN() . "/" . $c->{$key} . "/";
+$c->showDyn("n");
+echo ";" . var_export(isset($c->{$key}), true) . ";";
+$open = new Open();
+$open->{$key} = 6;
+echo $open->readN() . "/" . $open->{$key} . ";";
+$plain = new stdClass();
+$plain->{$key} = 3;
+echo $plain->{$key};
+"#,
+    );
+    assert_eq!(out.stdout, "false;1/5/1;true;1/6;3");
+    assert_eq!(
+        out.stderr
+            .matches("Creation of dynamic property C::$n is deprecated")
+            .count(),
+        1,
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("Open::$n") && !out.stderr.contains("stdClass::$n"),
+        "an opted-in class and stdClass must not deprecate: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a runtime-name write php REFUSES raises the catchable `Error` instead of storing.
+///
+/// A strict ancestor's private name is invisible and becomes a dynamic property, but a private
+/// property declared by the receiver's OWN class, and a protected one reached from an unrelated
+/// scope, are different answers: php raises `Error` and leaves the storage alone. The runtime-name
+/// ladder used to carry no visibility check at all, so both wrote the physical slot, which is a
+/// private-storage escape that a literal name is refused at compile time for.
+///
+/// Both messages are php 8.5.10's verbatim wording, with no scope suffix, and both readers below
+/// prove the slot still holds its default.
+#[test]
+fn test_runtime_name_write_to_an_inaccessible_property_raises_the_php_error() {
+    let out = compile_and_run(
+        r#"<?php
+class D { private int $n = 1; public function readN(): int { return $this->n; } }
+class Prot { protected int $p = 1; public function readP(): int { return $this->p; } }
+class Outsider { public function poke(Prot $o, string $key): void { $o->{$key} = 9; } }
+$d = new D();
+$key = "n";
+try { $d->{$key} = 5; echo "no throw;"; } catch (Error $e) { echo $e->getMessage() . ";"; }
+echo $d->readN() . ";";
+$p = new Prot();
+try { (new Outsider())->poke($p, "p"); echo "no throw;"; } catch (Error $e) { echo $e->getMessage() . ";"; }
+echo $p->readP();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot access private property D::$n;1;Cannot access protected property Prot::$p;1"
+    );
+}
+
+/// Verifies a runtime-name write selects the private slot the INVOCATION SCOPE owns, not the
+/// receiver's shadowing one.
+///
+/// `Base` and `Child` both declare `private int $p`, so the name addresses two different pieces of
+/// storage. The receiver's own by-name table resolves `p` to the CHILD's slot, so a ladder built
+/// from it wrote the wrong property whenever the scope was `Base`. php selects the scope's slot:
+/// measured against php 8.5.10, this prints `10:2;10:20`.
+#[test]
+fn test_runtime_name_write_selects_the_scope_private_slot_of_a_shadowed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    private int $p = 1;
+    public function readP(): int { return $this->p; }
+    public function pokeChild(Child $o, string $key): void { $o->{$key} = 10; }
+}
+class Child extends Base {
+    private int $p = 2;
+    public function readC(): int { return $this->p; }
+    public function pokeSelf(Child $o, string $key): void { $o->{$key} = 20; }
+}
+$c = new Child();
+(new Base())->pokeChild($c, "p");
+echo $c->readP() . ":" . $c->readC() . ";";
+(new Child())->pokeSelf($c, "p");
+echo $c->readP() . ":" . $c->readC();
+"#,
+    );
+    assert_eq!(out, "10:2;10:20");
+}

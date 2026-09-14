@@ -171,14 +171,7 @@ pub(super) fn declares_private(
     class_name: &str,
     property: &str,
 ) -> bool {
-    class_info.visible_property_index(property).is_some()
-        && class_info.property_visibilities.get(property) == Some(&Visibility::Private)
-        && class_info
-            .property_declaring_classes
-            .get(property)
-            .map(String::as_str)
-            .unwrap_or(class_name)
-            == class_name
+    crate::types::class_declares_private_property(class_info, class_name, property)
 }
 
 /// Applies PHP 8.4 asymmetric write visibility and readonly reinitialization scope rules.
@@ -290,19 +283,7 @@ pub(super) fn is_subclass_of(
     child: &str,
     ancestor: &str,
 ) -> bool {
-    let mut current = classes.get(child).and_then(|info| info.parent.as_deref());
-    let mut guard = 0usize;
-    while let Some(name) = current {
-        if name == ancestor {
-            return true;
-        }
-        guard += 1;
-        if guard > classes.len() + 1 {
-            return false;
-        }
-        current = classes.get(name).and_then(|info| info.parent.as_deref());
-    }
-    false
+    crate::types::class_inherits_from(classes, child, ancestor)
 }
 
 /// Returns php-src's `zend_check_protected` verdict: the scope is an ancestor OR a descendant.
@@ -311,10 +292,5 @@ pub(super) fn shares_hierarchy(
     scope: Option<&str>,
     declaring: &str,
 ) -> bool {
-    let Some(scope) = scope else {
-        return false;
-    };
-    scope == declaring
-        || is_subclass_of(classes, scope, declaring)
-        || is_subclass_of(classes, declaring, scope)
+    crate::types::scope_shares_class_hierarchy(classes, scope, declaring)
 }

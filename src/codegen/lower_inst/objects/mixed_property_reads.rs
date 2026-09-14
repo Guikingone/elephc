@@ -156,7 +156,11 @@ pub(super) fn declared_mixed_property_candidates(
         {
             continue;
         }
-        let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
+        // A strict ancestor's private slot is not addressable by this name from anywhere but the
+        // class that declared it, so this receiver class is not a candidate for the read.
+        let Some(slot) = resolve_property_read_slot(ctx, class_name, property, inst)? else {
+            continue;
+        };
         candidates.push(MixedPropertyCandidate {
             class_id: class_info.class_id,
             slot,
