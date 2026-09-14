@@ -30,6 +30,8 @@ use crate::{
     web_prelude,
 };
 
+mod artifact_io;
+pub(crate) use artifact_io::write_artifact;
 mod backend;
 mod eir_output;
 mod frontend;
@@ -88,6 +90,21 @@ pub(crate) fn compile(config: CliConfig) {
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
     let output_paths = output_paths(filename, target, emit);
+    // BEFORE ANY WORK RUNS. Every generated path is derived from the source filename, so a
+    // tree someone else controls chooses them; refusing a symlink destination up front is
+    // the only way to cover the ones an external assembler or linker writes, which this
+    // process never opens itself (issue #888).
+    let artifact_plan = artifact_io::ArtifactPlan::for_run(
+        check_only,
+        emit_ir,
+        emit_asm,
+        emit_source_map,
+        with_crates.contains("probe"),
+    );
+    if let Err(error) = artifact_io::reject_unsafe_destinations(&output_paths, &artifact_plan) {
+        eprintln!("error: {error}");
+        process::exit(1);
+    }
     let mut timings = CompileTimings::new(emit_timings);
 
     let parsed = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);

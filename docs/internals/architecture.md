@@ -191,6 +191,56 @@ dynamic fragments enable the optional `elephc-magician` interpreter staticlib
 at final linking. This is a lowering/linking decision, not a separate timed
 compiler phase. See [Eval Runtime Architecture](eval-runtime.md).
 
+### Generated-artifact write policy
+
+**Source:** `src/pipeline/artifact_io.rs`
+
+Every output path is derived from the **source filename** (`pipeline/output.rs`'s
+`output_paths`), so a checked-out tree someone else controls — an untrusted pull
+request, a shared build directory — chooses them. A symlink named `main.s`,
+`main.map`, `libmain.h` or `main.key` next to `main.php` used to make the
+compiler truncate and overwrite that symlink's target with the compiling user's
+permissions. One module now owns the policy for all of them.
+
+**Preflight, before any work runs.** `reject_unsafe_destinations` inspects each
+destination with `symlink_metadata` — which does not follow the final component,
+unlike `metadata`, whose answer would describe the *target* — and refuses a
+symbolic link or an existing non-regular file (a directory, a FIFO, a device
+node). An existing **regular** file is accepted: recompiling over yesterday's
+`main.s` is the normal case. Only `ErrorKind::NotFound` counts as absence; any
+other inspection failure is refused rather than assumed benign, because a path
+whose kind could not be read is exactly the one that cannot be vouched for.
+
+The check is **scoped to the run about to happen**. `ArtifactPlan::for_run`
+derives the destination set from the flags that decide where `compile()` returns:
+`--check` and `--emit-ir` return before the backend stage and produce none of
+these files, `--emit-asm` stops after the assembly, and the probe-key sidecar is
+a destination only under `--with-monitoring`. Validating a path the command will
+never write would turn an unrelated symlink at that name into a refusal of a
+valid command.
+
+**Staged replacement, for what this process writes.** `write_artifact` creates a
+private file in the destination's own directory with `O_CREAT | O_EXCL`, writes
+and syncs it, then renames it over the destination. `rename(2)` **replaces** a
+symlink rather than following it, so for the assembly, the source map, the
+generated header and the probe key the window between the preflight and the write
+is closed rather than merely narrowed. `write_private_artifact` is the same path
+with `mode(0o600)` applied at creation — used for the probe key, whose bytes are
+the monitoring HMAC credential and must never exist at their well-known `.key`
+name under a permissive umask, not even for the instant before a `chmod`.
+
+**What the preflight does *not* close.** The object file and the final binary are
+written by an external assembler and linker, which this process never opens
+itself — refusing before the tool runs is the only place to cover them, and it
+covers the threat above completely, because a symlink that arrives in a checkout
+is present before the compile starts. It does not cover an attacker running
+*concurrently* with write access to the build directory, who can plant one in the
+interval between the check and the invocation. Staging those two would close it,
+at the cost of reworking the debug-info path: the linker's debug map records the
+object path **as handed to it** (`keep_obj_for_debug` in `pipeline/backend.rs`
+deliberately keeps the object at that path for debuggers to follow), and
+`dsymutil` names its bundle after the binary it is given.
+
 ## Target Model
 
 The compiler now distinguishes the operating-system side of a target from the instruction set:
@@ -213,6 +263,8 @@ src/
 ├── main.rs                    CLI binary entry point
 ├── cli.rs                     Command-line option parsing
 ├── pipeline.rs                Frontend/backend compilation pipeline
+│   └── artifact_io.rs         Generated-artifact write policy: preflight destination
+│                              validation and O_EXCL-staged atomic replacement
 ├── exports.rs                 #[Export] collection and C-ABI signature validation for --emit cdylib
 ├── link_plan.rs               Ordered typed archives, libraries, paths, frameworks, and Linux link mode
 ├── link_planning.rs           Compile/runtime/user/managed inputs to one final ordered link plan
