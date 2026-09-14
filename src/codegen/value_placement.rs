@@ -13,7 +13,12 @@ use std::collections::HashMap;
 
 use crate::ir::{Function, IrType, Op, ValueDef, ValueId};
 
-const ITERATOR_STATE_BYTES: usize = 72;
+/// Bytes reserved for one stack-resident iterator state block.
+///
+/// Twelve 8-byte words: source, cursor, key low/high, value low/high, value tag, value address,
+/// snapshot length, the table snapshot that detects a relocated associative source, and the
+/// successor key that lets a by-reference walk resume after that relocation.
+const ITERATOR_STATE_BYTES: usize = 96;
 
 /// Stack-slot table for the Phase 04 spill-everything backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +167,7 @@ mod tests {
                 Some(Immediate::IterStart {
                     by_ref: false,
                     owner: None,
+                    origin: None,
                 }),
                 IrType::Heap(IrHeapKind::Iterable),
                 PhpType::Iterable,
@@ -172,7 +178,9 @@ mod tests {
         let placement = allocate(&function);
 
         assert_eq!(placement.slot(array), Some(8));
-        assert_eq!(placement.slot(iterator), Some(80));
-        assert_eq!(placement.total_slot_bytes, 80);
+        assert_eq!(placement.slot(iterator), Some(104));
+        // 8 bytes for the array plus the 96-byte iterator block, rounded up to 16-byte
+        // frame alignment.
+        assert_eq!(placement.total_slot_bytes, 112);
     }
 }

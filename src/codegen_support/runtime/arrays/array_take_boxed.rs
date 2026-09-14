@@ -101,6 +101,7 @@ fn emit_take(emitter: &mut Emitter) {
             abi::store_at_offset(emitter, "x2", 40);
             emitter.instruction("ldr x0, [x10, #40]");                          // per-entry tags describe heterogeneous payloads
             emitter.instruction("ldp x1, x2, [x10, #24]");                      // borrow the selected value payload words
+            super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_take_deref_done", "x0", "x1", "x2");
             emitter.instruction("cmp x0, #7");                                  // an existing Mixed value needs a retain rather than nested boxing
             emitter.instruction("b.ne __rt_array_take_box_value");              // concrete payloads need a new owned cell
             emitter.instruction("mov x0, x1");                                  // pass the existing Mixed pointer to incref
@@ -123,6 +124,7 @@ fn emit_take(emitter: &mut Emitter) {
             emitter.instruction("mov rax, QWORD PTR [r11 + 40]");               // per-entry tags describe heterogeneous payloads
             emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");               // borrow the selected value's low word
             emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");               // borrow its paired high word when present
+            super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_take_deref_done", "rax", "rdi", "rsi");
             emitter.instruction("cmp rax, 7");                                  // an existing Mixed value needs a retain rather than nested boxing
             emitter.instruction("jne __rt_array_take_box_value");               // concrete payloads need a new owned cell
             emitter.instruction("mov rax, rdi");                                // pass the existing Mixed pointer to incref

@@ -183,8 +183,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x15, #40]");                                  // load this entry's runtime value_tag
     emitter.instruction("cmp x0, #4");                                          // does this entry hold a heap-backed child?
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_hash_next");         // scalar/string entries contribute no graph edges
+    emitter.instruction("cmp x0, #11");                                         // is this entry a member of a PHP reference set?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_hash_child");        // managed reference cells are ordinary graph edges
     emitter.instruction("cmp x0, #7");                                          // do the per-entry heap-backed tags stay within range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_count_hash_next");         // unknown per-entry tags are ignored
+    emitter.label("__rt_gc_collect_cycles_count_hash_child");
     emitter.instruction("ldr x0, [x15, #24]");                                  // load the nested child pointer from the hash value
     emitter.instruction("str x12, [sp, #32]");                                  // preserve the parent hash pointer across the helper call
     emitter.instruction("str x13, [sp, #40]");                                  // preserve the hash capacity across the helper call

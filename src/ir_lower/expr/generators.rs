@@ -68,6 +68,7 @@ pub(super) fn lower_yield_from_array(
         Some(Immediate::IterStart {
             by_ref: false,
             owner: None,
+            origin: None,
         }),
         PhpType::Iterable,
         Op::IterStart.default_effects(),

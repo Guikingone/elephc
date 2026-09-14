@@ -254,7 +254,7 @@ fn emit_add_numeric_surplus_count(
         abi::int_arg_reg_name(emitter.target, 1),
         CURSOR_OFF,
     );
-    abi::emit_call_label(emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
     emit_branch_if_reg_is_minus_one(emitter, cursor_reg, &done_label);
     abi::emit_store_to_address(emitter, cursor_reg, stack_reg, CURSOR_OFF);
     emit_branch_if_reg_is_minus_one(emitter, key_len_reg, &numeric_label);

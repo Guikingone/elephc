@@ -206,6 +206,7 @@ fn read_aarch64_entry(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, "x10", KEY_HI);
     emitter.instruction("ldr x0, [x11, #40]");                                  // per-entry value tags govern heterogeneous hashes
     emitter.instruction("ldp x1, x2, [x11, #24]");                              // borrow both value words
+    super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_map_boxed_deref_done", "x0", "x1", "x2");
 }
 
 /// Reads an x86_64 source entry into rdx/rdi/rsi before the input boxer moves its tag to rax.
@@ -248,6 +249,7 @@ fn read_x86_64_entry(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [r11 + 40]");                       // heterogeneous entries carry their own value tag
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low payload word
     emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // borrow the high payload word
+    super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_map_boxed_deref_done", "rdx", "rdi", "rsi");
 }
 
 /// Acquires an existing Mixed input cell or boxes a raw entry without consuming the source owner.

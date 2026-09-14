@@ -647,9 +647,13 @@ fn remap_immediate_local(imm: &mut Immediate, local_map: &HashMap<LocalSlotId, L
                 *second = nl;
             }
         }
-        Immediate::IterStart { owner: Some(ls), .. } => {
-            if let Some(&nl) = local_map.get(ls) {
-                *ls = nl;
+        Immediate::IterStart { owner, origin, .. } => {
+            // Both slots are independent: a transplanted `IterStart` can name a
+            // `getIterator()` owner, a by-reference origin local, either, or neither.
+            for slot in [owner.as_mut(), origin.as_mut()].into_iter().flatten() {
+                if let Some(&nl) = local_map.get(&*slot) {
+                    *slot = nl;
+                }
             }
         }
         _ => {}
@@ -1182,6 +1186,7 @@ mod tests {
         let mut immediate = Immediate::IterStart {
             by_ref: true,
             owner: Some(LocalSlotId::from_raw(3)),
+            origin: None,
         };
         let mut local_map = HashMap::new();
         local_map.insert(LocalSlotId::from_raw(3), LocalSlotId::from_raw(11));
@@ -1191,6 +1196,71 @@ mod tests {
             Immediate::IterStart {
                 by_ref: true,
                 owner: Some(LocalSlotId::from_raw(11)),
+                origin: None,
+            }
+        );
+    }
+
+    /// Transplanting a callee remaps the by-reference origin slot onto the host slot.
+    #[test]
+    fn remaps_iter_start_origin_slot() {
+        let mut immediate = Immediate::IterStart {
+            by_ref: true,
+            owner: None,
+            origin: Some(LocalSlotId::from_raw(5)),
+        };
+        let mut local_map = HashMap::new();
+        local_map.insert(LocalSlotId::from_raw(5), LocalSlotId::from_raw(21));
+        remap_immediate_local(&mut immediate, &local_map);
+        assert_eq!(
+            immediate,
+            Immediate::IterStart {
+                by_ref: true,
+                owner: None,
+                origin: Some(LocalSlotId::from_raw(21)),
+            }
+        );
+    }
+
+    /// Owner and origin are remapped independently when both are present.
+    #[test]
+    fn remaps_iter_start_owner_and_origin_independently() {
+        let mut immediate = Immediate::IterStart {
+            by_ref: true,
+            owner: Some(LocalSlotId::from_raw(3)),
+            origin: Some(LocalSlotId::from_raw(5)),
+        };
+        let mut local_map = HashMap::new();
+        local_map.insert(LocalSlotId::from_raw(3), LocalSlotId::from_raw(11));
+        local_map.insert(LocalSlotId::from_raw(5), LocalSlotId::from_raw(21));
+        remap_immediate_local(&mut immediate, &local_map);
+        assert_eq!(
+            immediate,
+            Immediate::IterStart {
+                by_ref: true,
+                owner: Some(LocalSlotId::from_raw(11)),
+                origin: Some(LocalSlotId::from_raw(21)),
+            }
+        );
+    }
+
+    /// A slot missing from the map is left alone even when its sibling is remapped.
+    #[test]
+    fn leaves_unmapped_iter_start_slots_untouched() {
+        let mut immediate = Immediate::IterStart {
+            by_ref: true,
+            owner: Some(LocalSlotId::from_raw(3)),
+            origin: Some(LocalSlotId::from_raw(5)),
+        };
+        let mut local_map = HashMap::new();
+        local_map.insert(LocalSlotId::from_raw(5), LocalSlotId::from_raw(21));
+        remap_immediate_local(&mut immediate, &local_map);
+        assert_eq!(
+            immediate,
+            Immediate::IterStart {
+                by_ref: true,
+                owner: Some(LocalSlotId::from_raw(3)),
+                origin: Some(LocalSlotId::from_raw(21)),
             }
         );
     }
@@ -1201,6 +1271,7 @@ mod tests {
         let mut immediate = Immediate::IterStart {
             by_ref: false,
             owner: None,
+            origin: None,
         };
         let mut local_map = HashMap::new();
         local_map.insert(LocalSlotId::from_raw(0), LocalSlotId::from_raw(4));
@@ -1210,6 +1281,7 @@ mod tests {
             Immediate::IterStart {
                 by_ref: false,
                 owner: None,
+                origin: None,
             }
         );
     }

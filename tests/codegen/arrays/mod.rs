@@ -22,6 +22,7 @@ mod callbacks;
 mod boxed_filter;
 mod boxed_predicates;
 mod foreach_key_write;
+mod foreach_by_ref_growth;
 mod foreach_value_append;
 mod list_and_keys;
 mod list_unpack;

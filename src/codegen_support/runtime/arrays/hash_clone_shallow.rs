@@ -7,11 +7,12 @@
 //!
 //! Key details:
 //! - Clone helpers duplicate container headers and child references without deep-copying unless the runtime contract requires it.
+//! - A source entry carrying runtime value tag 11 is copied by retaining its managed reference
+//!   cell, so the copy and the original observe the same PHP reference set.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-use super::HASH_ENTRY_REFERENCE_FLAG;
 
 /// hash_clone_shallow: duplicate a hash table for copy-on-write semantics.
 /// Keys are re-persisted, string values are re-persisted, refcounted values are
@@ -96,6 +97,8 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // nested refcounted values need retains
     emitter.instruction("cmp x5, #10");                                         // is this entry's value a callable descriptor?
     emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // runtime descriptors need retains; static descriptors are ignored by incref
+    emitter.instruction("cmp x5, #11");                                         // is this entry a member of a PHP reference set?
+    emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // the copy shares the same managed cell, which is PHP copy semantics
     emitter.instruction("ldr x3, [sp, #24]");                                   // x3 = scalar/float value_lo copied as-is
     emitter.instruction("ldr x4, [sp, #32]");                                   // x4 = scalar/float value_hi copied as-is
     emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = scalar/float/null value_tag copied as-is
@@ -118,18 +121,7 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_incref");                                      // retain the shared child pointer for the cloned hash
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload the retained child pointer after the helper call
     emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = refcounted value_tag copied as-is
-    emitter.instruction("cmp x5, #7");                                          // only boxed Mixed entries can carry PHP reference state
-    emitter.instruction("b.ne __rt_hash_clone_shallow_value_ref_clear_hi");     // other refcounted entries keep an empty high payload word
-    emitter.instruction("ldr x4, [sp, #32]");                                   // load the source entry's persistent reference state
-    crate::codegen_support::abi::emit_load_int_immediate(
-        emitter,
-        "x9",
-        HASH_ENTRY_REFERENCE_FLAG,
-    );
-    emitter.instruction("and x4, x4, x9");                                      // preserve the reference-set bit without duplicating local alias counts
-    emitter.instruction("b __rt_hash_clone_shallow_insert");                    // insert the shared boxed cell with persistent reference identity
-    emitter.label("__rt_hash_clone_shallow_value_ref_clear_hi");
-    emitter.instruction("mov x4, xzr");                                         // non-Mixed refcounted hash values store only value_lo
+    emitter.instruction("mov x4, xzr");                                         // refcounted hash values, reference cells included, store only value_lo
 
     // -- insert the fully owned cloned entry into the destination table --
     emitter.label("__rt_hash_clone_shallow_insert");
@@ -213,6 +205,8 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // retain nested refcounted child pointers for the cloned associative-array owner
     emitter.instruction("cmp r10, 10");                                         // is the current source entry value a callable descriptor that needs a retain?
     emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // retain runtime descriptors while static descriptor pointers remain unchanged
+    emitter.instruction("cmp r10, 11");                                         // is the current source entry a member of a PHP reference set?
+    emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // the copy shares the same managed cell, which is PHP copy semantics
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the scalar or float low payload word that can be forwarded into the destination hash unchanged
     emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the scalar or float high payload word that can be forwarded into the destination hash unchanged
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the scalar or float runtime value_tag that can be forwarded into the destination hash unchanged
@@ -234,18 +228,7 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_incref");                                    // retain the shared child pointer for the cloned associative-array owner
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the retained child pointer into the hash-set value_lo register
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the refcounted runtime value_tag into the hash-set value_tag register
-    emitter.instruction("cmp r9, 7");                                           // only boxed Mixed entries can carry PHP reference state
-    emitter.instruction("jne __rt_hash_clone_shallow_value_ref_clear_hi_x");    // other refcounted entries keep an empty high payload word
-    emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // load the source entry's persistent reference state
-    crate::codegen_support::abi::emit_load_int_immediate(
-        emitter,
-        "r10",
-        HASH_ENTRY_REFERENCE_FLAG,
-    );
-    emitter.instruction("and r8, r10");                                         // preserve the reference-set bit without duplicating local alias counts
-    emitter.instruction("jmp __rt_hash_clone_shallow_insert");                  // insert the shared boxed cell with persistent reference identity
-    emitter.label("__rt_hash_clone_shallow_value_ref_clear_hi_x");
-    emitter.instruction("xor r8d, r8d");                                        // non-Mixed refcounted hash values store only value_lo
+    emitter.instruction("xor r8d, r8d");                                        // refcounted hash values, reference cells included, store only value_lo
 
     emitter.label("__rt_hash_clone_shallow_insert");
     emitter.instruction("mov rdi, r13");                                        // pass the destination associative-array pointer to the hash insert helper in the first SysV argument register

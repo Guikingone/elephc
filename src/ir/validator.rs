@@ -837,14 +837,45 @@ fn validate_opcode_rules(
     }
 }
 
-/// Requires a single source operand and a live owner slot when `IterStart` names one.
+/// Requires a single source operand plus live owner and origin slots when `IterStart` names them.
+///
+/// The origin slot is only meaningful for a by-reference start: it is the local that republishes
+/// the container after growth or a copy-on-write split, so `IterNext` can reload the live table.
+/// Rejecting it on a by-value start keeps the metadata from silently describing an iterator that
+/// never reloads.
 fn validate_iter_start(
     function: &Function,
     inst_id: InstId,
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     check_count(inst_id, inst, 1, "1")?;
-    let Some(Immediate::IterStart { owner: Some(slot), .. }) = inst.immediate.as_ref() else {
+    let Some(Immediate::IterStart {
+        by_ref,
+        owner,
+        origin,
+    }) = inst.immediate.as_ref()
+    else {
+        return Ok(());
+    };
+    if let Some(slot) = origin {
+        if !*by_ref {
+            return Err(ValidationError::MissingImmediate {
+                inst: inst_id,
+                expected: "iter_start origin slot only on a by-reference start",
+            });
+        }
+        if !function
+            .locals
+            .get(slot.as_raw() as usize)
+            .is_some_and(|local| local.id == *slot)
+        {
+            return Err(ValidationError::MissingImmediate {
+                inst: inst_id,
+                expected: "valid iter_start origin local slot",
+            });
+        }
+    }
+    let Some(slot) = owner else {
         return Ok(());
     };
     if function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
@@ -1671,5 +1702,116 @@ fn ownership_compatible(ir_type: IrType, php_type: &PhpType, ownership: Ownershi
         !matches!(ownership, Ownership::NonHeap)
     } else {
         matches!(ownership, Ownership::NonHeap)
+    }
+}
+
+#[cfg(test)]
+mod iter_start_metadata_tests {
+    use super::*;
+    use crate::ir::LocalSlotId;
+
+    /// Builds a one-operand `iter_start` carrying the supplied metadata.
+    fn iter_start(
+        by_ref: bool,
+        owner: Option<LocalSlotId>,
+        origin: Option<LocalSlotId>,
+    ) -> Instruction {
+        Instruction::new(
+            Op::IterStart,
+            vec![ValueId::from_raw(0)],
+            Some(Immediate::IterStart {
+                by_ref,
+                owner,
+                origin,
+            }),
+            Some(ValueId::from_raw(1)),
+            IrType::Heap(IrHeapKind::Iterable),
+            PhpType::Iterable,
+            Ownership::MaybeOwned,
+            Op::IterStart.default_effects(),
+            None,
+        )
+    }
+
+    /// A function with one ordinary array local that an origin can legitimately name.
+    fn function_with_array_local() -> (Function, LocalSlotId) {
+        let mut function = Function::new("test".to_owned(), IrType::Void, PhpType::Void);
+        let slot = function.add_local(
+            Some("a".to_owned()),
+            IrType::Heap(IrHeapKind::Hash),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            LocalKind::PhpLocal,
+        );
+        (function, slot)
+    }
+
+    /// A by-reference start may name any live local as the container it reloads from.
+    #[test]
+    fn by_reference_origin_naming_a_live_local_is_accepted() {
+        let (function, slot) = function_with_array_local();
+        let inst = iter_start(true, None, Some(slot));
+        assert_eq!(
+            validate_iter_start(&function, InstId::from_raw(0), &inst),
+            Ok(())
+        );
+    }
+
+    /// A by-value start never reloads, so carrying an origin would describe behavior that
+    /// the backend does not emit. Rejecting it keeps the metadata honest.
+    #[test]
+    fn by_value_start_rejects_an_origin_slot() {
+        let (function, slot) = function_with_array_local();
+        let inst = iter_start(false, None, Some(slot));
+        assert!(matches!(
+            validate_iter_start(&function, InstId::from_raw(0), &inst),
+            Err(ValidationError::MissingImmediate { .. })
+        ));
+    }
+
+    /// An origin slot outside the function's local table cannot be reloaded from.
+    #[test]
+    fn origin_slot_outside_the_local_table_is_rejected() {
+        let (function, _) = function_with_array_local();
+        let inst = iter_start(true, None, Some(LocalSlotId::from_raw(99)));
+        assert!(matches!(
+            validate_iter_start(&function, InstId::from_raw(0), &inst),
+            Err(ValidationError::MissingImmediate { .. })
+        ));
+    }
+
+    /// Starts without an origin keep validating exactly as before, by reference or not.
+    #[test]
+    fn absent_origin_leaves_existing_validation_unchanged() {
+        let (function, _) = function_with_array_local();
+        for by_ref in [false, true] {
+            let inst = iter_start(by_ref, None, None);
+            assert_eq!(
+                validate_iter_start(&function, InstId::from_raw(0), &inst),
+                Ok(())
+            );
+        }
+    }
+
+    /// The owner rule still applies, and it applies independently of the origin.
+    #[test]
+    fn owner_slot_is_still_validated_beside_an_origin() {
+        let (mut function, slot) = function_with_array_local();
+        let owner = function.add_local(
+            None,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::OwnedTemp,
+        );
+        let accepted = iter_start(true, Some(owner), Some(slot));
+        assert_eq!(
+            validate_iter_start(&function, InstId::from_raw(0), &accepted),
+            Ok(())
+        );
+        // The array local is not an OwnedTemp Mixed slot, so it cannot be a getIterator owner.
+        let rejected = iter_start(true, Some(slot), Some(slot));
+        assert!(matches!(
+            validate_iter_start(&function, InstId::from_raw(0), &rejected),
+            Err(ValidationError::MissingImmediate { .. })
+        ));
     }
 }

@@ -483,7 +483,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_serialize_hash_close");                      // close the container when done
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload the iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // next entry -> x0..x5
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // next entry -> x0..x5
     emitter.instruction("str x0, [sp, #16]");                                   // save the advanced cursor
     emitter.instruction("str x1, [sp, #32]");                                   // save the key pointer / integer key
     emitter.instruction("str x2, [sp, #40]");                                   // save the key length (-1 for int keys)
@@ -1323,7 +1323,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_serialize_hash_close");                       // close the container when done
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // next entry -> rax,rdi,rdx,rcx,r8,r9
+    emitter.instruction("call __rt_hash_iter_next_value");                      // next entry -> rax,rdi,rdx,rcx,r8,r9
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the advanced cursor
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the key pointer / integer key
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the key length (-1 for int keys)

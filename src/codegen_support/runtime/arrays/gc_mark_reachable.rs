@@ -168,8 +168,11 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [x11, #40]");                                 // load this entry's runtime value_tag
     emitter.instruction("cmp x12, #4");                                         // does this entry hold a heap-backed child?
     emitter.instruction("b.lo __rt_gc_mark_reachable_hash_next");               // scalar/string entries contribute no graph edges
+    emitter.instruction("cmp x12, #11");                                        // is this entry a member of a PHP reference set?
+    emitter.instruction("b.eq __rt_gc_mark_reachable_hash_child");              // managed reference cells are ordinary graph edges
     emitter.instruction("cmp x12, #7");                                         // do the entry tags stay within the heap-backed range?
     emitter.instruction("b.hi __rt_gc_mark_reachable_hash_next");               // unknown tags are ignored by the cycle collector
+    emitter.label("__rt_gc_mark_reachable_hash_child");
     emitter.instruction("ldr x0, [x11, #24]");                                  // load the refcounted child pointer from the value payload
     emitter.instruction("str x9, [sp, #24]");                                   // preserve the slot index across recursion
     emitter.instruction("bl __rt_gc_mark_reachable");                           // recursively mark the nested child reachable
@@ -402,8 +405,11 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rdx + 40]");                        // load the runtime value_tag stored for this hash entry
     emitter.instruction("cmp r8, 4");                                           // does this hash entry hold a heap-backed child?
     emitter.instruction("jb __rt_gc_mark_reachable_hash_next");                 // scalar and string hash entries contribute no refcounted graph edges
+    emitter.instruction("cmp r8, 11");                                          // is this entry a member of a PHP reference set?
+    emitter.instruction("je __rt_gc_mark_reachable_hash_child");                // managed reference cells are ordinary graph edges
     emitter.instruction("cmp r8, 7");                                           // is the value_tag within the supported heap-backed range?
     emitter.instruction("ja __rt_gc_mark_reachable_hash_next");                 // unknown runtime tags are ignored by the collector
+    emitter.label("__rt_gc_mark_reachable_hash_child");
     emitter.instruction("mov rax, QWORD PTR [rdx + 24]");                       // load the refcounted child pointer stored in the hash value payload
     emitter.instruction("call __rt_gc_mark_reachable");                         // recursively mark the nested hash child reachable
     emitter.label("__rt_gc_mark_reachable_hash_next");

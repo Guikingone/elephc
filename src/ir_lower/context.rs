@@ -1216,19 +1216,39 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         Some(slot)
     }
 
-    /// Emits `iter_start` after publishing its optional `getIterator()` owner.
+    /// Emits `iter_start` for a source that never republishes a relocated container.
     pub(crate) fn emit_iter_start(
         &mut self,
         source: LoweredValue,
         by_ref: bool,
         span: Span,
     ) -> (LoweredValue, Option<LocalSlotId>) {
+        self.emit_iter_start_with_origin(source, by_ref, None, span)
+    }
+
+    /// Emits `iter_start` after publishing its optional `getIterator()` owner.
+    ///
+    /// `origin` names the local slot a by-reference simple-variable source was promoted into.
+    /// Recording it lets `IterNext` reload the live container after the loop body grew it or
+    /// split it through copy-on-write, instead of walking the table the start captured.
+    pub(crate) fn emit_iter_start_with_origin(
+        &mut self,
+        source: LoweredValue,
+        by_ref: bool,
+        origin: Option<LocalSlotId>,
+        span: Span,
+    ) -> (LoweredValue, Option<LocalSlotId>) {
         let source_ty = self.builder.value_php_type(source.value);
         let owner = self.publish_iter_start_owner(&source_ty, span);
+        let origin = if by_ref { origin } else { None };
         let iterator = self.emit_value(
             Op::IterStart,
             vec![source.value],
-            Some(Immediate::IterStart { by_ref, owner }),
+            Some(Immediate::IterStart {
+                by_ref,
+                owner,
+                origin,
+            }),
             PhpType::Iterable,
             Op::IterStart.default_effects(),
             Some(span),

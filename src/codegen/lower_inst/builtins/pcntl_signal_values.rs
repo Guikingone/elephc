@@ -178,7 +178,7 @@ fn normalize_assoc_signal_array(
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", NORMALIZE_SOURCE_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", NORMALIZE_CURSOR_OFFSET);
-            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
             ctx.emitter.instruction("cmp x0, #-1");                             // detect the insertion-order end sentinel
             ctx.emitter.instruction(&format!("b.eq {done}"));                   // finish after the last associative value
             abi::emit_store_to_sp(ctx.emitter, "x0", NORMALIZE_CURSOR_OFFSET);
@@ -186,7 +186,7 @@ fn normalize_assoc_signal_array(
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", NORMALIZE_SOURCE_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", NORMALIZE_CURSOR_OFFSET);
-            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
             ctx.emitter.instruction("cmp rax, -1");                             // detect the insertion-order end sentinel
             ctx.emitter.instruction(&format!("je {done}"));                     // finish after the last associative value
             abi::emit_store_to_sp(ctx.emitter, "rax", NORMALIZE_CURSOR_OFFSET);

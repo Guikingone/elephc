@@ -177,7 +177,7 @@ fn emit_visitor(emitter: &mut Emitter) {
         abi::int_arg_reg_name(emitter.target, 1),
         VISIT_CURSOR,
     );
-    abi::emit_call_label(emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
     ins(emitter, "cmn x0, #1", "cmp rax, -1");
     ins(
         emitter,

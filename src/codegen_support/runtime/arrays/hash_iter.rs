@@ -33,9 +33,15 @@ use crate::codegen_support::platform::Arch;
 /// - `x6`: value address (for by-reference foreach binding)
 ///
 /// Delegates to `emit_hash_iter_linux_x86_64` on x86_64.
+///
+/// Also emits the dereferencing sibling `__rt_hash_iter_next_value`, the borrowed value view
+/// `__rt_hash_entry_deref`, the reference promotion `__rt_hash_entry_make_reference` and the
+/// post-relocation cursor rebuild `__rt_hash_iter_resync`, so the raw and value walks of the same
+/// cursor protocol stay emitted together for every target.
 pub fn emit_hash_iter(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_iter_linux_x86_64(emitter);
+        super::hash_entry_reference::emit_hash_entry_reference(emitter);
         return;
     }
 
@@ -101,6 +107,8 @@ pub fn emit_hash_iter(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #-1");                                         // return -1 to signal end of iteration
     emitter.instruction("mov x5, #8");                                          // value_tag = null when iteration is done
     emitter.instruction("ret");                                                 // return to caller
+
+    super::hash_entry_reference::emit_hash_entry_reference(emitter);
 }
 
 /// Emits `__rt_hash_iter_next` for the x86_64 Linux ABI.

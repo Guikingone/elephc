@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Array, hash, heap, GC, and Mixed helpers must preserve runtime layout, refcounts, and COW rules before mutating shared storage.
+//! - A hash entry that belongs to a PHP reference set carries runtime value tag 11 and a managed
+//!   reference cell in `value_lo`; `hash_entry_reference` owns that representation.
 
 mod array_chunk;
 mod array_chunk_refcounted;
@@ -135,6 +137,7 @@ mod hash_key_hash;
 mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
+mod hash_entry_reference;
 mod hash_flip;
 mod hash_insert_owned;
 mod hash_map;
@@ -159,11 +162,6 @@ mod in_array_mixed_int;
 mod min_max_container;
 mod natsort;
 
-/// Persistent bit marking a boxed Mixed hash entry as part of a PHP reference set.
-pub(crate) const HASH_ENTRY_REFERENCE_FLAG: i64 = 1_i64 << 62;
-
-/// Low bits carrying the number of live local aliases that point directly at this entry.
-pub(crate) const HASH_ENTRY_REFERENCE_COUNT_MASK: i64 = HASH_ENTRY_REFERENCE_FLAG - 1;
 pub(super) mod deep_cleanup;
 mod object_free_deep;
 mod range;

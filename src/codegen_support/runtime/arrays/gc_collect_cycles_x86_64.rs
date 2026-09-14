@@ -198,8 +198,11 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r8 + 40]");                        // load the runtime value_tag stored for this hash entry
     emitter.instruction("cmp rax, 4");                                          // does this hash entry hold a heap-backed child?
     emitter.instruction("jb __rt_gc_collect_cycles_count_hash_next");           // scalar and string entries contribute no incoming edge to the candidate
+    emitter.instruction("cmp rax, 11");                                         // is this entry a member of a PHP reference set?
+    emitter.instruction("je __rt_gc_collect_cycles_count_hash_child");          // managed reference cells are ordinary graph edges
     emitter.instruction("cmp rax, 7");                                          // is the runtime value_tag within the supported heap-backed range?
     emitter.instruction("ja __rt_gc_collect_cycles_count_hash_next");           // unknown runtime tags are ignored by the collector
+    emitter.label("__rt_gc_collect_cycles_count_hash_child");
     emitter.instruction("cmp QWORD PTR [r8 + 24], rsi");                        // does this hash value payload point at the current candidate node?
     emitter.instruction("jne __rt_gc_collect_cycles_count_hash_next");          // no — this entry does not contribute an incoming edge to the candidate
     emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // count one incoming heap edge from this hash entry into the current candidate

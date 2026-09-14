@@ -100,7 +100,7 @@ pub(super) fn lower_foreach(
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
     // Promote a by-reference indexed source BEFORE it is loaded, so the loop iterates the hash
     // the rest of the program will see in that local.
-    promote_by_ref_foreach_source(ctx, array, value_by_ref);
+    let by_ref_origin = promote_by_ref_foreach_source(ctx, array, value_by_ref);
     let (source, source_is_borrowed_fetch) = lower_foreach_source(ctx, array, value_by_ref);
     // Orthogonal to the borrowed fetch-for-write pin taken after `IterStart` below: that one
     // keeps a by-reference element or property container alive, while this one takes the loop's
@@ -136,7 +136,8 @@ pub(super) fn lower_foreach(
             }
         }
     }
-    let (iterator, iterator_owner) = ctx.emit_iter_start(source, value_by_ref, array.span);
+    let (iterator, iterator_owner) =
+        ctx.emit_iter_start_with_origin(source, value_by_ref, by_ref_origin, array.span);
     // Take the loop's own lifetime reference on a borrowed fetch-for-write source after
     // `IterStart`.
     // The order is the whole point: `IterStart` splits a by-reference source through
@@ -333,22 +334,24 @@ pub(super) fn lower_foreach(
 ///
 /// Only a SIMPLE variable source is promoted, which is the same condition the checker applies.
 /// Element and property sources keep the existing fetch-for-write path.
+///
+/// Returns the promoted local slot so `IterStart` can record it as the iterator origin. Growth
+/// and copy-on-write inside the loop body republish the replacement table into that slot, and
+/// `IterNext` reloads it from there instead of walking the table captured at loop entry.
 fn promote_by_ref_foreach_source(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     value_by_ref: bool,
-) {
+) -> Option<LocalSlotId> {
     if !value_by_ref {
-        return;
+        return None;
     }
     let ExprKind::Variable(name) = &array.kind else {
-        return;
+        return None;
     };
-    if !ctx.local_slots.contains_key(name.as_str()) {
-        return;
-    }
+    let slot = *ctx.local_slots.get(name.as_str())?;
     let PhpType::Array(_) = ctx.local_type(name).codegen_repr() else {
-        return;
+        return None;
     };
     let storage_ty = PhpType::Array(Box::new(PhpType::Mixed));
     let array_value = ctx.load_local(name, Some(array.span));
@@ -361,6 +364,7 @@ fn promote_by_ref_foreach_source(
         Some(array.span),
     );
     ctx.store_mutated_local(name, hash, storage_ty, Some(array.span));
+    Some(slot)
 }
 
 /// Lowers the `foreach` source expression under the loop's binding mode.

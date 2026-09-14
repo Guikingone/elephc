@@ -43,6 +43,7 @@ mod boxed_array_aggregates;
 mod boxed_array_multisort;
 mod builtin_datetime_methods;
 mod instanceof_operand_owners;
+mod iter_start_origin;
 mod iterator_aggregate_owners;
 mod boxed_array_predicates;
 mod boxed_array_set_comparators;

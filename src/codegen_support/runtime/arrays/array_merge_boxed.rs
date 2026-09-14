@@ -89,6 +89,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x9, x10, [sp, #64]");                              // retain the source key words while the value is boxed
     emitter.instruction("ldr x0, [x11, #40]");                                  // the per-entry tag is authoritative for heterogeneous hashes
     emitter.instruction("ldp x1, x2, [x11, #24]");                              // borrow both payload words
+    super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_merge_boxed_deref_done", "x0", "x1", "x2");
 
     // -- preserve value ownership and PHP merge key rules --
     emitter.label("__rt_array_merge_boxed_value");
@@ -215,6 +216,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r11 + 40]");                       // each hash entry supplies its actual runtime tag
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low value word
     emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // borrow the high value word
+    super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_merge_boxed_deref_done", "rax", "rdi", "rsi");
 
     // -- acquire a value owner and apply PHP merge key rules --
     emitter.label("__rt_array_merge_boxed_value");

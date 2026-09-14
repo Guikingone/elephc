@@ -19,7 +19,6 @@ use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_curren
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::codegen_support::runtime::HASH_ENTRY_REFERENCE_FLAG;
 use crate::ir::{
     BlockId, DataId, Function, Immediate, InstId, LocalKind, LocalSlotId, Module, Op, Ownership,
     RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
@@ -530,7 +529,7 @@ impl<'a> FunctionContext<'a> {
         self.current_inst_promoted_ref_cells.insert(slot);
     }
 
-    /// Drops this local's counted hash-entry alias, leaving its state word clear.
+    /// Drops this local's counted alias on a hash entry's managed reference cell.
     pub(super) fn release_hash_entry_ref_binding(&mut self, slot: LocalSlotId) {
         let Some(state_offset) = self.ref_cell_state_offset(slot) else {
             return;
@@ -539,30 +538,38 @@ impl<'a> FunctionContext<'a> {
         match self.emitter.target.arch {
             Arch::AArch64 => {
                 abi::load_at_offset(self.emitter, "x9", state_offset);
-                self.emitter.instruction("cmp x9, #1");                         // distinguish a hash marker address from raw and ordinary ref-cell states
-                self.emitter.instruction(&format!("b.ls {done}"));              // zero and the ordinary-ref sentinel own no hash alias count
-                self.emitter.instruction("ldr x10, [x9]");                      // load the persistent reference marker and local-alias count
-                self.emitter.instruction("sub x10, x10, #1");                   // retire this local alias while preserving the reference-set bit
-                self.emitter.instruction("str x10, [x9]");                      // publish the decremented alias count to the hash entry
+                self.emitter.instruction("cmp x9, #1");                         // distinguish a managed cell address from raw and ordinary ref-cell states
+                self.emitter.instruction(&format!("b.ls {done}"));              // zero and the ordinary-ref sentinel own no counted cell alias
+                abi::emit_store_zero_to_local_slot(self.emitter, state_offset);
+                abi::emit_reg_move(self.emitter, "x0", "x9");
+                abi::emit_call_label(self.emitter, "__rt_decref_any");
                 self.emitter.label(&done);
                 abi::emit_store_zero_to_local_slot(self.emitter, state_offset);
             }
             Arch::X86_64 => {
                 abi::load_at_offset(self.emitter, "r10", state_offset);
-                self.emitter.instruction("cmp r10, 1");                         // distinguish a hash marker address from raw and ordinary ref-cell states
-                self.emitter.instruction(&format!("jbe {done}"));               // zero and the ordinary-ref sentinel own no hash alias count
-                self.emitter.instruction("sub QWORD PTR [r10], 1");             // retire this local alias while preserving the reference-set bit
+                self.emitter.instruction("cmp r10, 1");                         // distinguish a managed cell address from raw and ordinary ref-cell states
+                self.emitter.instruction(&format!("jbe {done}"));               // zero and the ordinary-ref sentinel own no counted cell alias
+                abi::emit_store_zero_to_local_slot(self.emitter, state_offset);
+                abi::emit_reg_move(self.emitter, "rax", "r10");
+                abi::emit_call_label(self.emitter, "__rt_decref_any");
                 self.emitter.label(&done);
                 abi::emit_store_zero_to_local_slot(self.emitter, state_offset);
             }
         }
     }
 
-    /// Installs an associative-array entry marker as this local's explicit ref provenance.
+    /// Installs a hash entry's managed reference cell as this local's explicit ref provenance.
+    ///
+    /// The cell address is stored into the slot's runtime state word and retained, so the alias
+    /// keeps the cell alive independently of the table it came from. The matching release runs in
+    /// [`Self::release_hash_entry_ref_binding`]. The state-word encoding is unchanged: `0` is raw,
+    /// `1` is an ordinary borrowed reference, and anything greater is an explicit provenance
+    /// address, which is now always a managed reference cell rather than an interior table word.
     pub(super) fn bind_hash_entry_ref_state(
         &mut self,
         slot: LocalSlotId,
-        marker_address_reg: &str,
+        cell_address_reg: &str,
     ) -> Result<()> {
         let state_offset = self.ref_cell_state_offset(slot).ok_or_else(|| {
             CodegenIrError::invalid_module(format!(
@@ -570,31 +577,23 @@ impl<'a> FunctionContext<'a> {
                 slot.as_raw()
             ))
         })?;
-        match self.emitter.target.arch {
-            Arch::AArch64 => {
-                abi::emit_load_int_immediate(self.emitter, "x11", HASH_ENTRY_REFERENCE_FLAG);
-                self.emitter.instruction(&format!("ldr x12, [{marker_address_reg}]")); // load the persistent marker and current alias count
-                self.emitter.instruction("orr x12, x12, x11");                  // preserve that this boxed cell belongs to a PHP reference set
-                self.emitter.instruction("add x12, x12, #1");                   // count the local now borrowing this entry value slot
-                self.emitter.instruction(&format!("str x12, [{marker_address_reg}]")); // publish the reference marker and updated alias count
-            }
-            Arch::X86_64 => {
-                abi::emit_load_int_immediate(self.emitter, "r11", HASH_ENTRY_REFERENCE_FLAG);
-                self.emitter.instruction(&format!("or QWORD PTR [{marker_address_reg}], r11")); // preserve that this boxed cell belongs to a PHP reference set
-                self.emitter.instruction(&format!("add QWORD PTR [{marker_address_reg}], 1")); // count the local now borrowing this entry value slot
-            }
-        }
         abi::store_at_offset_scratch(
             self.emitter,
-            marker_address_reg,
+            cell_address_reg,
             state_offset,
             abi::tertiary_scratch_reg(self.emitter),
         );
+        abi::emit_reg_move(
+            self.emitter,
+            abi::int_result_reg(self.emitter),
+            cell_address_reg,
+        );
+        abi::emit_call_label(self.emitter, "__rt_incref");
         self.record_promoted_ref_cell(slot);
         Ok(())
     }
 
-    /// Copies explicit hash-entry provenance when one local aliases another by reference.
+    /// Copies explicit reference-cell provenance when one local aliases another by reference.
     pub(super) fn alias_ref_cell_state(
         &mut self,
         target: LocalSlotId,
@@ -618,13 +617,12 @@ impl<'a> FunctionContext<'a> {
             Arch::AArch64 => {
                 if let Some(source_offset) = source_offset {
                     abi::load_at_offset(self.emitter, "x9", source_offset);
-                    self.emitter.instruction("cmp x9, #1");                     // does the source carry a hash-entry marker address?
+                    self.emitter.instruction("cmp x9, #1");                     // does the source carry a managed reference cell address?
                     self.emitter.instruction(&format!("b.ls {ordinary}"));      // raw and ordinary reference sources propagate the sentinel only
-                    self.emitter.instruction("ldr x10, [x9]");                  // load the source entry's reference marker and alias count
-                    self.emitter.instruction("add x10, x10, #1");               // count the new local alias of the same hash entry
-                    self.emitter.instruction("str x10, [x9]");                  // publish the incremented alias count
                     abi::store_at_offset_scratch(self.emitter, "x9", target_offset, "x11");
-                    self.emitter.instruction(&format!("b {done}"));             // keep the marker address as explicit target provenance
+                    abi::emit_reg_move(self.emitter, "x0", "x9");
+                    abi::emit_call_label(self.emitter, "__rt_incref");
+                    self.emitter.instruction(&format!("b {done}"));             // keep the cell address as explicit target provenance
                 }
                 self.emitter.label(&ordinary);
                 abi::emit_load_int_immediate(self.emitter, "x9", 1);
@@ -633,11 +631,12 @@ impl<'a> FunctionContext<'a> {
             Arch::X86_64 => {
                 if let Some(source_offset) = source_offset {
                     abi::load_at_offset(self.emitter, "r10", source_offset);
-                    self.emitter.instruction("cmp r10, 1");                     // does the source carry a hash-entry marker address?
+                    self.emitter.instruction("cmp r10, 1");                     // does the source carry a managed reference cell address?
                     self.emitter.instruction(&format!("jbe {ordinary}"));       // raw and ordinary reference sources propagate the sentinel only
-                    self.emitter.instruction("add QWORD PTR [r10], 1");         // count the new local alias of the same hash entry
                     abi::store_at_offset_scratch(self.emitter, "r10", target_offset, "r11");
-                    self.emitter.instruction(&format!("jmp {done}"));           // keep the marker address as explicit target provenance
+                    abi::emit_reg_move(self.emitter, "rax", "r10");
+                    abi::emit_call_label(self.emitter, "__rt_incref");
+                    self.emitter.instruction(&format!("jmp {done}"));           // keep the cell address as explicit target provenance
                 }
                 self.emitter.label(&ordinary);
                 abi::emit_load_int_immediate(self.emitter, "r10", 1);

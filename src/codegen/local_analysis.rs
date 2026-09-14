@@ -784,6 +784,7 @@ mod tests {
                     Some(Immediate::IterStart {
                         by_ref: false,
                         owner: Some(owner),
+                        origin: None,
                     }),
                     IrType::Heap(crate::ir::IrHeapKind::Iterable),
                     PhpType::Iterable,

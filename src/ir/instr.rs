@@ -176,17 +176,26 @@ pub enum Immediate {
     /// raising, warning variant, so an emitter that forgets the immediate cannot silently turn a
     /// value read into a silent probe.
     PropertyFetchMode(PropertyFetchMode),
-    /// Metadata for `Op::IterStart`: by-reference binding and optional Mixed owner.
+    /// Metadata for `Op::IterStart`: by-reference binding, optional Mixed owner, optional origin.
     ///
     /// `owner` is the OwnedTemp Mixed slot that holds a successful
     /// `IteratorAggregate::getIterator()` result for the iterator lifetime. The
     /// iterator source word then borrows that payload. `None` means this start
     /// cannot produce such a result (arrays, direct `Iterator`, generators).
+    ///
+    /// `origin` is the local slot the by-reference source was promoted into, and it is only
+    /// set for a simple-variable by-reference foreach. Growth and copy-on-write inside the loop
+    /// body republish the replacement table into that slot, so `IterNext` reloads the live table
+    /// from the origin instead of trusting the pointer captured at `IterStart`. `None` means the
+    /// iterator must keep using its own captured source word, which is the case for by-value
+    /// loops and for element/property sources.
     IterStart {
         /// Whether the foreach binds each value by reference.
         by_ref: bool,
         /// Optional Mixed slot owning a `getIterator()` result.
         owner: Option<LocalSlotId>,
+        /// Optional local slot that republishes a relocated by-reference source container.
+        origin: Option<LocalSlotId>,
     },
 }
 

@@ -33,9 +33,6 @@ use crate::codegen::abi;
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
 use crate::codegen::Result;
-use crate::codegen_support::runtime::{
-    HASH_ENTRY_REFERENCE_COUNT_MASK, HASH_ENTRY_REFERENCE_FLAG,
-};
 use crate::ir::{CloneOverrideApplicator, Instruction, ValueId};
 use crate::types::PhpType;
 
@@ -116,12 +113,15 @@ pub(crate) fn lower_reference_override_guard(
     ctx.emitter.comment("__elephc_clone_override_reference_guard()");
     let overrides = expect_operand(inst, 0)?;
     let name = expect_operand(inst, 1)?;
-    let value = expect_operand(inst, 2)?;
+    // The third argument is the override value. The cell-owner predicate no longer needs it:
+    // a by-value read retains the boxed value inside the reference cell, not the cell itself,
+    // so there is nothing for it to discount from the owner count.
+    expect_operand(inst, 2)?;
     let done = ctx.next_label("clone_reference_override_done");
     let probe_done = ctx.next_label("clone_reference_override_probe_done");
     let reject = ctx.next_label("clone_reference_override_reject");
     emit_override_hash_pointer(ctx, overrides, &done)?;
-    emit_entry_reference_probe(ctx, name, value, &probe_done, &reject)?;
+    emit_entry_reference_probe(ctx, name, &probe_done, &reject)?;
     ctx.emitter.label(&probe_done);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_jump(ctx.emitter, &done);
@@ -201,22 +201,24 @@ fn emit_override_hash_pointer(
 /// Rejects the single override entry named by `name` when it still carries PHP reference state.
 ///
 /// Runs with the override array's hash pointer in the integer result register. The matching
-/// entry's payload is reloaded from the entry ADDRESS `__rt_hash_get` returns, so the tag,
-/// reference-state and boxed-cell registers land exactly where an insertion-order walk would
-/// have left them and the refusal predicate itself is unchanged.
+/// entry's payload is reloaded from the entry ADDRESS `__rt_hash_get` returns, because the
+/// lookup's own payload registers are already dereferenced through the reference cell.
+///
+/// A hash entry belongs to a PHP reference set exactly when its runtime value tag is 11 and its
+/// `value_lo` is the managed reference cell that set shares. The refusal predicate is therefore
+/// "tag 11 and the cell has more than one owner": the entry itself owns one count, and any live
+/// local alias or second entry in the same set owns another. The applicator's own by-value read
+/// of the element retains the boxed Mixed value inside the cell rather than the cell, so unlike
+/// the previous marker-word scheme there is nothing to discount here.
 fn emit_entry_reference_probe(
     ctx: &mut FunctionContext<'_>,
     name: ValueId,
-    value: ValueId,
     probe_done: &str,
     reject: &str,
 ) -> Result<()> {
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     let result = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_store_to_sp(ctx.emitter, &result, 0);
-    ctx.load_value_to_result(value)?;
-    abi::emit_store_to_sp(ctx.emitter, &result, 8);
-    let owned = ctx.next_label("clone_reference_override_owned");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_string_value_to_regs(name, "x1", "x2")?;
@@ -225,29 +227,13 @@ fn emit_entry_reference_probe(
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
             ctx.emitter.instruction(&format!("cbz x4, {probe_done}"));          // a key with no entry of its own carries no reference metadata
             ctx.emitter.instruction("mov x6, x4");                              // hold the matching entry address across the payload loads
-            ctx.emitter.instruction("ldr x3, [x6, #24]");                       // x3 = the entry's value_lo, its shared boxed Mixed cell
-            ctx.emitter.instruction("ldr x4, [x6, #32]");                       // x4 = the entry's persistent reference state
+            ctx.emitter.instruction("ldr x3, [x6, #24]");                       // x3 = the entry's value_lo, its managed reference cell when tagged 11
             ctx.emitter.instruction("ldr x5, [x6, #40]");                       // x5 = the entry's value tag
-            ctx.emitter.instruction("cmp x5, #7");                              // reference metadata is valid only beside a boxed Mixed cell
-            ctx.emitter.instruction(&format!("b.ne {probe_done}"));             // concrete entry values cannot represent PHP references here
-            abi::emit_load_int_immediate(ctx.emitter, "x9", HASH_ENTRY_REFERENCE_FLAG);
-            ctx.emitter.instruction("tst x4, x9");                              // is this entry part of a persistent PHP reference set?
-            ctx.emitter.instruction(&format!("b.eq {probe_done}"));             // unmarked Mixed values are ordinary by-value overrides
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                "x10",
-                HASH_ENTRY_REFERENCE_COUNT_MASK,
-            );
-            ctx.emitter.instruction("and x10, x4, x10");                        // isolate the live direct-local alias count
-            ctx.emitter.instruction(&format!("cbnz x10, {reject}"));            // a live alias makes the override assignment by reference
-            ctx.emitter.instruction("ldr w10, [x3, #-12]");                     // load the shared boxed Mixed cell's owner count
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x11", 8);
-            ctx.emitter.instruction("cmp x11, x3");                             // does the applicator's own loop value borrow this very cell?
-            ctx.emitter.instruction(&format!("b.ne {owned}"));                  // an unrelated value local leaves the owner count as it stands
-            ctx.emitter.instruction("sub w10, w10, #1");                        // discount the applicator's own by-value element borrow
-            ctx.emitter.label(&owned);
-            ctx.emitter.instruction("cmp w10, #1");                             // do multiple hash entries still share this reference cell?
-            ctx.emitter.instruction(&format!("b.hi {reject}"));                 // shared entry ownership preserves PHP reference identity
+            ctx.emitter.instruction("cmp x5, #11");                             // is this entry a member of a PHP reference set?
+            ctx.emitter.instruction(&format!("b.ne {probe_done}"));             // ordinary entry values are by-value overrides
+            ctx.emitter.instruction("ldr w10, [x3, #-12]");                     // load the shared reference cell's owner count
+            ctx.emitter.instruction("cmp w10, #1");                             // does anything besides this entry still own the cell?
+            ctx.emitter.instruction(&format!("b.hi {reject}"));                 // shared cell ownership preserves PHP reference identity
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(name, "rax", "rdx")?;
@@ -258,30 +244,13 @@ fn emit_entry_reference_probe(
             ctx.emitter.instruction("test r8, r8");                             // a key with no entry of its own carries no reference metadata
             ctx.emitter.instruction(&format!("jz {probe_done}"));               // absent keys reach the ordinary dynamic-property arms
             ctx.emitter.instruction("mov r10, r8");                             // hold the matching entry address across the payload loads
-            ctx.emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");           // rcx = the entry's value_lo, its shared boxed Mixed cell
-            ctx.emitter.instruction("mov r8, QWORD PTR [r10 + 32]");            // r8 = the entry's persistent reference state
+            ctx.emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");           // rcx = the entry's value_lo, its managed reference cell when tagged 11
             ctx.emitter.instruction("mov r9, QWORD PTR [r10 + 40]");            // r9 = the entry's value tag
-            ctx.emitter.instruction("cmp r9, 7");                               // reference metadata is valid only beside a boxed Mixed cell
-            ctx.emitter.instruction(&format!("jne {probe_done}"));              // concrete entry values cannot represent PHP references here
-            abi::emit_load_int_immediate(ctx.emitter, "r11", HASH_ENTRY_REFERENCE_FLAG);
-            ctx.emitter.instruction("test r8, r11");                            // is this entry part of a persistent PHP reference set?
-            ctx.emitter.instruction(&format!("jz {probe_done}"));               // unmarked Mixed values are ordinary by-value overrides
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                "r11",
-                HASH_ENTRY_REFERENCE_COUNT_MASK,
-            );
-            ctx.emitter.instruction("mov r10, r8");                             // copy the reference state before masking its flag
-            ctx.emitter.instruction("and r10, r11");                            // isolate the live direct-local alias count
-            ctx.emitter.instruction(&format!("jnz {reject}"));                  // a live alias makes the override assignment by reference
-            ctx.emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");          // load the shared boxed Mixed cell's owner count
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 8);
-            ctx.emitter.instruction("cmp r11, rcx");                            // does the applicator's own loop value borrow this very cell?
-            ctx.emitter.instruction(&format!("jne {owned}"));                   // an unrelated value local leaves the owner count as it stands
-            ctx.emitter.instruction("sub r10d, 1");                             // discount the applicator's own by-value element borrow
-            ctx.emitter.label(&owned);
-            ctx.emitter.instruction("cmp r10d, 1");                             // do multiple hash entries still share this reference cell?
-            ctx.emitter.instruction(&format!("ja {reject}"));                   // shared entry ownership preserves PHP reference identity
+            ctx.emitter.instruction("cmp r9, 11");                              // is this entry a member of a PHP reference set?
+            ctx.emitter.instruction(&format!("jne {probe_done}"));              // ordinary entry values are by-value overrides
+            ctx.emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");          // load the shared reference cell's owner count
+            ctx.emitter.instruction("cmp r10d, 1");                             // does anything besides this entry still own the cell?
+            ctx.emitter.instruction(&format!("ja {reject}"));                   // shared cell ownership preserves PHP reference identity
         }
     }
     Ok(())

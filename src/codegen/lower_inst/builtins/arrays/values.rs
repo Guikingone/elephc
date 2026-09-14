@@ -6,7 +6,8 @@
 //! - `crate::codegen::lower_inst::builtins::arrays::lower_array_values()`.
 //!
 //! Key details:
-//! - Associative arrays are copied in insertion order using `__rt_hash_iter_next`.
+//! - Associative arrays are copied in insertion order using `__rt_hash_iter_next_value`, so a
+//!   reference entry contributes the value it references rather than its reference cell.
 //! - Refcounted payloads are retained before storing them in the result array.
 //! - Boxed PHP arrays inspect their payload shape and preserve the source during normalization.
 
@@ -196,7 +197,7 @@ fn lower_assoc_array_values_aarch64(ctx: &mut FunctionContext<'_>, value_ty: &Ph
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("ldr x0, [sp, #32]");                               // load the associative-array hash-table pointer for the next iteration step
     ctx.emitter.instruction("ldr x1, [sp]");                                    // load the current associative-array iterator cursor
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
     ctx.emitter.instruction("cmn x0, #1");                                      // has associative-array iteration reached the done sentinel?
     ctx.emitter.instruction(&format!("b.eq {}", end_label));                    // stop once every associative-array value has been collected
     ctx.emitter.instruction("str x0, [sp]");                                    // save the updated associative-array iterator cursor for the next loop step
@@ -227,7 +228,7 @@ fn lower_assoc_array_values_x86_64(ctx: &mut FunctionContext<'_>, value_ty: &Php
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                   // load the associative-array hash-table pointer for the next iteration step
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                        // load the current associative-array iterator cursor
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
     ctx.emitter.instruction("cmp rax, -1");                                     // has associative-array iteration reached the done sentinel?
     ctx.emitter.instruction(&format!("je {}", end_label));                      // stop once every associative-array value has been collected
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the updated associative-array iterator cursor for the next loop step

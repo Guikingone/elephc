@@ -30,6 +30,8 @@ use crate::codegen_support::platform::Arch;
 ///   key pointer at +8, key_hi at +16, value_tag at +40, value pointer at +24)
 /// - Integer keys are inline payloads (key_hi == -1) and carry no heap ownership
 /// - Heap-backed values (tags 1/4/5/6/7) are released through `__rt_decref_any`
+/// - Tag 11 entries own a managed reference cell (heap kind 7) and release the same way,
+///   so the cell outlives the table whenever an escaped alias still holds a count
 /// - `_gc_release_suppressed` is set to 1 before the scan and restored after freeing the struct
 /// - Child exceptions are accumulated until every key, value, and the container have been released
 pub fn emit_hash_free_deep(emitter: &mut Emitter) {
@@ -121,6 +123,8 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // mixed cells release through the uniform dispatch helper
     emitter.instruction("cmp x14, #10");                                        // is this a callable descriptor value?
     emitter.instruction("b.eq __rt_hash_free_deep_value_callable");             // callable descriptors release through the descriptor helper
+    emitter.instruction("cmp x14, #11");                                        // is this entry a member of a PHP reference set?
+    emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // managed reference cells release through the uniform dispatch helper
     emitter.instruction("b __rt_hash_free_deep_next");                          // plain scalars need no cleanup
 
     emitter.label("__rt_hash_free_deep_value_any");
@@ -233,6 +237,8 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_free_deep_value_mixed");                  // release boxed mixed payloads through mixed decref
     emitter.instruction("cmp r8, 10");                                          // detect callable descriptor payloads stored in associative-array entries
     emitter.instruction("je __rt_hash_free_deep_value_callable");               // release callable descriptors through the descriptor helper
+    emitter.instruction("cmp r8, 11");                                          // detect entries that are members of a PHP reference set
+    emitter.instruction("je __rt_hash_free_deep_value_reference");              // release managed reference cells through the uniform dispatch helper
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // plain scalar payloads do not require any additional cleanup
 
     emitter.label("__rt_hash_free_deep_value_string");
@@ -269,6 +275,11 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the boxed mixed pointer stored in the current hash-entry payload
     super::deep_cleanup::invoke(emitter, "__rt_decref_mixed", "rax");
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the boxed mixed payload
+
+    emitter.label("__rt_hash_free_deep_value_reference");
+    emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the managed reference cell stored in the current hash-entry payload
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
+    emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the reference cell
 
     emitter.label("__rt_hash_free_deep_value_callable");
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the callable descriptor pointer stored in the current hash-entry payload

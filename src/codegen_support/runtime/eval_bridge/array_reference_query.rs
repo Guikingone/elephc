@@ -11,20 +11,20 @@
 //!   in generated code carries its reference state in the hash entry instead, and this query is
 //!   how Magician reads it. Without it a by-reference override entry would be applied silently.
 //! - The predicate is the one the generated clone-override applicator already uses
-//!   (`codegen/lower_inst/builtins/clone_with/overrides.rs`): value tag 7, the persistent
-//!   `HASH_ENTRY_REFERENCE_FLAG`, and then either a non-zero direct-local alias count or a
-//!   shared boxed cell whose owner count exceeds the caller's own single borrow.
+//!   (`codegen/lower_inst/builtins/clone_with/overrides.rs`): runtime value tag 11 identifies a
+//!   reference entry, and its `value_lo` managed reference cell answers "shared" when more than
+//!   one owner holds it. The entry itself owns one count; a live local alias or a second entry in
+//!   the same reference set owns another.
+//! - The caller's borrowed entry value retains the boxed Mixed value INSIDE the cell, not the
+//!   cell, so there is nothing to discount from the owner count.
 //! - Every input is BORROWED. The query allocates nothing, retains nothing, releases nothing,
 //!   writes no output slot, and cannot throw, so it needs no status/output split.
 //! - Both supported architectures define the same symbol with the same argument order.
 
 use super::*;
-use crate::codegen_support::runtime::{
-    HASH_ENTRY_REFERENCE_COUNT_MASK, HASH_ENTRY_REFERENCE_FLAG,
-};
 
-/// Runtime tag of a boxed Mixed payload, the only shape that can carry entry reference state.
-const MIXED_VALUE_TAG: i64 = 7;
+/// Runtime tag marking a hash entry whose `value_lo` is a managed reference cell.
+const REFERENCE_CELL_VALUE_TAG: i64 = 11;
 
 /// Runtime tag of an associative array payload inside a boxed Mixed cell.
 const ASSOC_ARRAY_TAG: i64 = 5;
@@ -64,25 +64,13 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_get");                                    // x4 = matching entry address, zero on a miss
     emitter.instruction("cbz x4, __elephc_eval_array_entry_ref_no");            // a key with no entry of its own carries no reference metadata
     emitter.instruction("mov x6, x4");                                          // hold the entry address across the payload loads
-    emitter.instruction("ldr x3, [x6, #24]");                                   // x3 = value_lo, the entry's shared boxed Mixed cell
-    emitter.instruction("ldr x4, [x6, #32]");                                   // x4 = the entry's persistent reference state
+    emitter.instruction("ldr x3, [x6, #24]");                                   // x3 = value_lo, the entry's managed reference cell when tagged 11
     emitter.instruction("ldr x5, [x6, #40]");                                   // x5 = the entry's value tag
-    emitter.instruction(&format!("cmp x5, #{MIXED_VALUE_TAG}"));                // reference metadata is valid only beside a boxed Mixed cell
-    emitter.instruction("b.ne __elephc_eval_array_entry_ref_no");               // concrete entry values cannot represent PHP references here
-    abi::emit_load_int_immediate(emitter, "x9", HASH_ENTRY_REFERENCE_FLAG);
-    emitter.instruction("tst x4, x9");                                          // is this entry part of a persistent PHP reference set?
-    emitter.instruction("b.eq __elephc_eval_array_entry_ref_no");               // unmarked Mixed values are ordinary by-value overrides
-    abi::emit_load_int_immediate(emitter, "x10", HASH_ENTRY_REFERENCE_COUNT_MASK);
-    emitter.instruction("and x10, x4, x10");                                    // isolate the live direct-local alias count
-    emitter.instruction("cbnz x10, __elephc_eval_array_entry_ref_yes");         // a live alias makes the override assignment by reference
-    emitter.instruction("ldr w10, [x3, #-12]");                                 // load the shared boxed Mixed cell's owner count
-    emitter.instruction("ldr x11, [sp, #0]");                                   // x11 = the caller's own borrowed entry value
-    emitter.instruction("cmp x11, x3");                                         // does the caller's value borrow this very cell?
-    emitter.instruction("b.ne __elephc_eval_array_entry_ref_owned");            // an unrelated value leaves the owner count as it stands
-    emitter.instruction("sub w10, w10, #1");                                    // discount the caller's own by-value element borrow
-    emitter.label("__elephc_eval_array_entry_ref_owned");
-    emitter.instruction("cmp w10, #1");                                         // do multiple hash entries still share this reference cell?
-    emitter.instruction("b.hi __elephc_eval_array_entry_ref_yes");              // shared entry ownership preserves PHP reference identity
+    emitter.instruction(&format!("cmp x5, #{REFERENCE_CELL_VALUE_TAG}"));       // is this entry a member of a PHP reference set?
+    emitter.instruction("b.ne __elephc_eval_array_entry_ref_no");               // ordinary entry values are by-value overrides
+    emitter.instruction("ldr w10, [x3, #-12]");                                 // load the shared reference cell's owner count
+    emitter.instruction("cmp w10, #1");                                         // does anything besides this entry still own the cell?
+    emitter.instruction("b.hi __elephc_eval_array_entry_ref_yes");              // shared cell ownership preserves PHP reference identity
     emitter.label("__elephc_eval_array_entry_ref_no");
     emitter.instruction("mov x0, xzr");                                         // report an ordinary by-value override entry
     emitter.instruction("b __elephc_eval_array_entry_ref_ret");                 // fall into the shared epilogue
@@ -119,26 +107,13 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r8, r8");                                         // a key with no entry of its own carries no reference metadata
     emitter.instruction("jz __elephc_eval_array_entry_ref_no_x86");             // absent keys are ordinary by-value overrides
     emitter.instruction("mov r10, r8");                                         // hold the entry address across the payload loads
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // rcx = value_lo, the entry's shared boxed Mixed cell
-    emitter.instruction("mov r8, QWORD PTR [r10 + 32]");                        // r8 = the entry's persistent reference state
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // rcx = value_lo, the entry's managed reference cell when tagged 11
     emitter.instruction("mov r9, QWORD PTR [r10 + 40]");                        // r9 = the entry's value tag
-    emitter.instruction(&format!("cmp r9, {MIXED_VALUE_TAG}"));                 // reference metadata is valid only beside a boxed Mixed cell
-    emitter.instruction("jne __elephc_eval_array_entry_ref_no_x86");            // concrete entry values cannot represent PHP references here
-    abi::emit_load_int_immediate(emitter, "r11", HASH_ENTRY_REFERENCE_FLAG);
-    emitter.instruction("test r8, r11");                                        // is this entry part of a persistent PHP reference set?
-    emitter.instruction("jz __elephc_eval_array_entry_ref_no_x86");             // unmarked Mixed values are ordinary by-value overrides
-    abi::emit_load_int_immediate(emitter, "r11", HASH_ENTRY_REFERENCE_COUNT_MASK);
-    emitter.instruction("mov r10, r8");                                         // copy the reference state before masking its flag
-    emitter.instruction("and r10, r11");                                        // isolate the live direct-local alias count
-    emitter.instruction("jnz __elephc_eval_array_entry_ref_yes_x86");           // a live alias makes the override assignment by reference
-    emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");                      // load the shared boxed Mixed cell's owner count
-    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // r11 = the caller's own borrowed entry value
-    emitter.instruction("cmp r11, rcx");                                        // does the caller's value borrow this very cell?
-    emitter.instruction("jne __elephc_eval_array_entry_ref_owned_x86");         // an unrelated value leaves the owner count as it stands
-    emitter.instruction("sub r10d, 1");                                         // discount the caller's own by-value element borrow
-    emitter.label("__elephc_eval_array_entry_ref_owned_x86");
-    emitter.instruction("cmp r10d, 1");                                         // do multiple hash entries still share this reference cell?
-    emitter.instruction("ja __elephc_eval_array_entry_ref_yes_x86");            // shared entry ownership preserves PHP reference identity
+    emitter.instruction(&format!("cmp r9, {REFERENCE_CELL_VALUE_TAG}"));        // is this entry a member of a PHP reference set?
+    emitter.instruction("jne __elephc_eval_array_entry_ref_no_x86");            // ordinary entry values are by-value overrides
+    emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");                      // load the shared reference cell's owner count
+    emitter.instruction("cmp r10d, 1");                                         // does anything besides this entry still own the cell?
+    emitter.instruction("ja __elephc_eval_array_entry_ref_yes_x86");            // shared cell ownership preserves PHP reference identity
     emitter.label("__elephc_eval_array_entry_ref_no_x86");
     emitter.instruction("xor eax, eax");                                        // report an ordinary by-value override entry
     emitter.instruction("jmp __elephc_eval_array_entry_ref_ret_x86");           // fall into the shared epilogue
@@ -168,18 +143,16 @@ mod tests {
             assert!(output.contains("__rt_mixed_unbox"), "{name}");
             assert!(output.contains("__rt_hash_normalize_key"), "{name}");
             assert!(output.contains("__rt_hash_get"), "{name}");
-            // Both halves of the refusal predicate have to survive on both architectures.
-            let (alias_count_branch, shared_owner_branch) = match target.arch {
+            // Both halves of the refusal predicate have to survive on both architectures:
+            // the tag-11 reference-entry test and the shared-cell owner-count test.
+            let (reference_tag_branch, shared_owner_branch) = match target.arch {
                 Arch::AArch64 => (
-                    "cbnz x10, __elephc_eval_array_entry_ref_yes",
+                    "cmp x5, #11",
                     "b.hi __elephc_eval_array_entry_ref_yes",
                 ),
-                Arch::X86_64 => (
-                    "jnz __elephc_eval_array_entry_ref_yes_x86",
-                    "ja __elephc_eval_array_entry_ref_yes_x86",
-                ),
+                Arch::X86_64 => ("cmp r9, 11", "ja __elephc_eval_array_entry_ref_yes_x86"),
             };
-            assert!(output.contains(alias_count_branch), "{name}");
+            assert!(output.contains(reference_tag_branch), "{name}");
             assert!(output.contains(shared_owner_branch), "{name}");
             // A pure read must not allocate, retain, release, or throw.
             for forbidden in [

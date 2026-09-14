@@ -1659,11 +1659,11 @@ struct NamedScanProbeSlots {
 ///
 /// The cursor the fetch STARTS from is saved first, because that value is what bounds a later
 /// prefix rescan: re-walking from `0` and stopping once the rescan's own cursor reaches it visits
-/// exactly the entries before this one. `__rt_hash_iter_next` is a pure read, so the second walk
+/// exactly the entries before this one. `__rt_hash_iter_next_value` is a pure read, so the second walk
 /// over an unmodified container reproduces the first walk's cursor sequence exactly.
 ///
 /// Leaves through `done_label` at the `-1` end sentinel and through `numeric_label` when the
-/// entry carries an integer key, which `__rt_hash_iter_next` marks with a `-1` key length and
+/// entry carries an integer key, which `__rt_hash_iter_next_value` marks with a `-1` key length and
 /// reports through the key-pointer register.
 fn emit_named_scan_fetch_entry(
     hash_base_reg: &str,
@@ -1678,7 +1678,7 @@ fn emit_named_scan_fetch_entry(
             emitter.instruction(&format!("mov x0, {}", hash_base_reg));         // pass the argument hash to the entry walk
             abi::emit_load_temporary_stack_slot(emitter, "x1", slots.cursor_off);
             abi::emit_store_to_address(emitter, "x1", stack_reg, slots.entry_cursor_off);
-            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
             emitter.instruction("cmn x0, #1");                                  // did the iterator return the -1 end sentinel?
             emit_named_scan_branch(emitter, true, done_label);
             abi::emit_store_to_address(emitter, "x0", stack_reg, slots.cursor_off);
@@ -1691,7 +1691,7 @@ fn emit_named_scan_fetch_entry(
             emitter.instruction(&format!("mov rdi, {}", hash_base_reg));        // pass the argument hash to the entry walk
             abi::emit_load_temporary_stack_slot(emitter, "rsi", slots.cursor_off);
             abi::emit_store_to_address(emitter, "rsi", stack_reg, slots.entry_cursor_off);
-            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
             emitter.instruction("cmp rax, -1");                                 // did the iterator return the -1 end sentinel?
             emit_named_scan_branch(emitter, true, done_label);
             abi::emit_store_to_address(emitter, "rax", stack_reg, slots.cursor_off);
@@ -1788,7 +1788,7 @@ fn emit_named_scan_prefix_positional_probe(
             emitter.instruction("cmp x1, x9");                                  // has the rescan reached the entry being classified?
             emit_named_scan_branch(emitter, true, skip_label);
             emitter.instruction(&format!("mov x0, {}", hash_base_reg));         // pass the argument hash to the prefix walk
-            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
             emitter.instruction("cmn x0, #1");                                  // did the prefix walk end before that entry?
             emit_named_scan_branch(emitter, true, skip_label);
             abi::emit_store_to_address(emitter, "x0", stack_reg, slots.scan_cursor_off);
@@ -1804,7 +1804,7 @@ fn emit_named_scan_prefix_positional_probe(
             emitter.instruction("cmp rsi, r10");                                // has the rescan reached the entry being classified?
             emit_named_scan_branch(emitter, true, skip_label);
             emitter.instruction(&format!("mov rdi, {}", hash_base_reg));        // pass the argument hash to the prefix walk
-            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
             emitter.instruction("cmp rax, -1");                                 // did the prefix walk end before that entry?
             emit_named_scan_branch(emitter, true, skip_label);
             abi::emit_store_to_address(emitter, "rax", stack_reg, slots.scan_cursor_off);
@@ -2789,7 +2789,7 @@ fn emit_loaded_assoc_variadic_entries(
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(emitter, "x0", SOURCE_HASH_OFF);
             abi::emit_load_temporary_stack_slot(emitter, "x1", CURSOR_OFF);
-            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
             emitter.instruction("cmn x0, #1");                                  // did the iterator return the -1 end sentinel?
             emitter.instruction(&format!("b.eq {}", done_label));               // stop once the source hash is exhausted
             abi::emit_store_to_address(emitter, "x0", "sp", CURSOR_OFF);
@@ -2805,7 +2805,7 @@ fn emit_loaded_assoc_variadic_entries(
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(emitter, "rdi", SOURCE_HASH_OFF);
             abi::emit_load_temporary_stack_slot(emitter, "rsi", CURSOR_OFF);
-            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
             emitter.instruction("cmp rax, -1");                                 // did the iterator return the -1 end sentinel?
             emitter.instruction(&format!("je {}", done_label));                 // stop once the source hash is exhausted
             abi::emit_store_to_address(emitter, "rax", "rsp", CURSOR_OFF);

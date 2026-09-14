@@ -83,6 +83,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x9, x10, [sp, #48]");                              // keep both key words while boxing the value
     emitter.instruction("ldr x0, [x11, #40]");                                  // each hash entry is authoritative for its value tag
     emitter.instruction("ldp x1, x2, [x11, #24]");                              // preserve both source payload words
+    super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_reverse_boxed_deref_done", "x0", "x1", "x2");
 
     // -- acquire one value owner and transfer it into a new hash entry --
     emitter.label("__rt_array_reverse_boxed_value");
@@ -191,6 +192,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r11 + 40]");                       // each entry supplies its actual runtime value tag
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low payload word
     emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // preserve the high payload word
+    super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_reverse_boxed_deref_done", "rax", "rdi", "rsi");
 
     // -- acquire one value owner and transfer it into a new hash entry --
     emitter.label("__rt_array_reverse_boxed_value");

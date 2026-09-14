@@ -548,6 +548,7 @@ fn function_with_iter_owner_local(
                 Some(Immediate::IterStart {
                     by_ref: false,
                     owner: Some(owner),
+                    origin: None,
                 }),
                 IrType::Heap(IrHeapKind::Iterable),
                 PhpType::Iterable,
@@ -636,6 +637,7 @@ fn validator_rejects_an_unknown_iter_start_owner_slot() {
                 Some(Immediate::IterStart {
                     by_ref: false,
                     owner: Some(LocalSlotId::from_raw(99)),
+                    origin: None,
                 }),
                 IrType::Heap(IrHeapKind::Iterable),
                 PhpType::Iterable,
