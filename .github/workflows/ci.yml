@@ -1450,6 +1450,32 @@ jobs:
         # use the symbol fail to link.
         run: python3 crates/elephc-image/tools/check_extern_exports.py
 
+  security-audit:
+    name: RustSec advisory audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        # The exact toolchain `.github/docker/ci.Dockerfile` pins (RUST_VERSION), not
+        # floating `stable`: an unchanged commit must not start failing because a new
+        # compiler shipped.
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Install cargo-audit
+        # Pinned for the same reason, and `--locked` so its own dependency tree is the
+        # reviewed one. Bump both deliberately, in their own PR.
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Audit Cargo.lock against the RustSec database
+        # Fails on any advisory that is not listed in `.cargo/audit.toml`, so a NEW
+        # vulnerability entering the dependency graph breaks the build instead of being
+        # noticed in a periodic manual sweep. Every ignored advisory carries its
+        # justification and its removal condition next to it in that file; unmaintained,
+        # unsound and yanked notices stay warnings rather than failures, because they have
+        # no fixed version to move to and would otherwise make the gate unactionable.
+        run: cargo audit
+
   builtins-docs-sync:
     name: Builtins docs in sync
     runs-on: ubuntu-latest
@@ -1809,6 +1835,7 @@ jobs:
       - builtins-docs-sync
       - managed-native-smoke
       - curl-feature-contract
+      - security-audit
     if: always()
     steps:
       - name: Verify test jobs
@@ -1840,6 +1867,7 @@ jobs:
           test "${{ needs.builtins-docs-sync.result }}" = "success"
           test "${{ needs.managed-native-smoke.result }}" = "success"
           test "${{ needs.curl-feature-contract.result }}" = "success"
+          test "${{ needs.security-audit.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite

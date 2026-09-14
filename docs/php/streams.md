@@ -156,6 +156,19 @@ path cannot locate a sidecar and therefore reject OpenSSL-signed input.
 `getSignature()` returns `['hash' => <uppercase hex>,
 'hash_type' => 'MD5'|'SHA-1'|'SHA-256'|'SHA-512'|'OpenSSL']`.
 
+> **Security note on OpenSSL signing.** The RSA implementation behind
+> `setSignatureAlgorithm(Phar::OPENSSL, …)` carries a known timing side-channel on
+> private-key operations ([RUSTSEC-2023-0071], the Marvin attack), and no fixed release of
+> that crate exists. Recovering a key through it requires an attacker who can submit many
+> chosen inputs to the signing operation **and** measure how long each one takes. Signing a
+> phar is an authoring-time operation on a key the program supplies itself, so elephc
+> exposes no such oracle on its own — but a program that turns phar signing into a remote,
+> attacker-triggerable service would. Sign during a build, not in response to a request.
+> Verification (`getSignature()`, opening a signed archive) uses only the **public** key and
+> is unaffected.
+
+[RUSTSEC-2023-0071]: https://rustsec.org/advisories/RUSTSEC-2023-0071
+
 Metadata persistence covers the same scalar+array subset as
 [`serialize()`/`unserialize()`](system-and-io.md#serialization); object metadata is not
 serialized.
