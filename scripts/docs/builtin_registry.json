@@ -47586,7 +47586,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_heap"
+          "reads_heap",
+          "may_throw"
         ]
       },
       "lowering": {
@@ -48506,7 +48507,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_heap"
+          "reads_heap",
+          "may_throw"
         ]
       },
       "lowering": {
