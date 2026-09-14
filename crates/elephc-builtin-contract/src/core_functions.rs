@@ -12,6 +12,7 @@
 pub const CORE_FUNCTION_NAMES: &[&str] = &[
     "class_alias",
     "class_exists",
+    "clone",
     "debug_backtrace",
     "debug_print_backtrace",
     "define",
