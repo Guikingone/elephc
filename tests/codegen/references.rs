@@ -18,6 +18,28 @@
 
 use crate::support::*;
 
+/// A fresh by-reference foreach value must be canonical null when the source is empty.
+/// Capturing it by reference immediately afterwards exercises the raw-to-ref-cell path,
+/// which previously promoted an uninitialized frame word when the loop ran zero times.
+#[test]
+fn test_empty_foreach_initializes_fresh_by_ref_value_before_capture() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [1];
+array_pop($items);
+foreach ($items as &$value) {
+}
+$read = function () use (&$value): mixed {
+    return $value;
+};
+echo is_null($read()) ? "null" : "not-null";
+$value = "updated";
+echo "|", $read();
+"#,
+    );
+    assert_eq!(out, "null|updated");
+}
+
 /// `$x = &$obj->prop` aliases a scalar property: writing the local updates the property
 /// and writing the property updates the local (write-through in both directions).
 #[test]
