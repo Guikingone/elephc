@@ -408,8 +408,13 @@ fn test_error_unexpected_token_in_stmt() {
 /// Verifies the error diagnostic for missing function name.
 #[test]
 fn test_error_missing_function_name() {
-    // A `function` keyword without a following name produces "Expected function name".
-    expect_error("<?php function () { }", "Expected function name");
+    // `function () { }` is NOT a nameless declaration -- it is a closure EXPRESSION, and PHP
+    // parses it as one, then complains about the missing statement terminator
+    // ("unexpected end of file" on 8.5.10). elephc now says the same thing.
+    expect_error("<?php function () { }", "Expected ';'");
+    // A genuinely malformed declaration -- a name that is not an identifier -- still reports
+    // the missing name, which is the case this test was reaching for.
+    expect_error("<?php function 123() { }", "Expected function name");
 }
 
 /// Verifies the error diagnostic for missing function paren.
@@ -722,9 +727,33 @@ fn test_declaring_the_object_cast_helper_without_a_cast_is_accepted() {
 /// start of a CLOSURE there, so a named declaration cannot appear. It was rejected here
 /// before the delegation too, and has to stay rejected.
 #[test]
-fn test_error_for_clause_rejects_a_declaration() {
+fn test_error_for_clause_rejects_non_expression_statements() {
+    // A named declaration. php-src reads `function` in an expression position as the start of
+    // a CLOSURE, so the name is what makes this invalid there:
+    // `syntax error, unexpected identifier "f", expecting "("` on 8.5.10.
     expect_error(
         "<?php for (function f() {}; false; ) {} echo 1;",
-        "A declaration is not allowed in a for clause",
+        "Only expressions are allowed in a for clause",
+    );
+    // `echo` is a statement, not an expression, and PHP rejects it in a clause too:
+    // `syntax error, unexpected token "echo", expecting ";"`. A deny-list of declarations
+    // alone let this through.
+    expect_error(
+        "<?php for (echo \"x\"; false; ) {} echo 1;",
+        "Only expressions are allowed in a for clause",
+    );
+}
+
+/// Issue #476 review follow-up: PHP allows a comma list in the `for` CONDITION as well, but
+/// elephc has no sequence expression to hold one and the condition re-runs every iteration,
+/// so the leading expressions cannot be hoisted into the init clause.
+///
+/// The diagnostic says so rather than letting the comma fall through to a bare `Expected ';'`
+/// that names neither the construct nor the limitation.
+#[test]
+fn test_error_for_condition_comma_list_is_named() {
+    expect_error(
+        "<?php for ($i = 0; $i++, $i < 3; $i++) {}",
+        "not supported in a for CONDITION",
     );
 }

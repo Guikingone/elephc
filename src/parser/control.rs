@@ -366,6 +366,20 @@ pub fn parse_for(
     } else {
         None
     };
+    // PHP allows a comma list in the CONDITION too, evaluating every expression and taking
+    // the last one's value as the loop test. elephc's AST has no sequence expression, and
+    // the condition re-runs every iteration so the leading expressions cannot be hoisted
+    // into the init clause — supporting it needs a new expression node rather than a
+    // re-spelling. Say that, instead of letting the comma fall through to a bare
+    // "Expected ';'" that names neither the construct nor the limitation.
+    if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Comma)) {
+        return Err(CompileError::new(
+            tokens[*pos].1.span,
+            "A comma-separated list is not supported in a for CONDITION (the init and \
+             update clauses do support one); rewrite the leading expressions into the loop \
+             body or the update clause",
+        ));
+    }
     expect_semicolon(tokens, pos)?;
 
     let update = parse_for_clause(tokens, pos, &Token::RParen, "Expected ')' after for clauses", span)?;
@@ -530,26 +544,41 @@ fn parse_for_clause(
 
         let mut piece_pos = 0usize;
         let stmt = parse_stmt(&buffer, &mut piece_pos)?;
-        // Delegating to the statement parser buys every assignment form for free, but it
-        // would also accept a DECLARATION, which PHP's clause grammar (an expression list)
-        // does not: `for (function f() {}; …)` is a parse error there and used to be one
-        // here too. Keep it one.
+        // Delegating to the statement parser buys every assignment form for free, but PHP's
+        // clause grammar is an EXPRESSION list: `for (echo "x"; …)` and
+        // `for (function f() {}; …)` are both parse errors there, and a deny-list of
+        // declarations alone let the `echo` through.
         //
-        // Checked BEFORE the trailing-token test below, because a declaration does not take
-        // a trailing `;` and so leaves the synthetic one unconsumed — which would otherwise
-        // report the generic "trailing tokens" instead of naming what is actually wrong.
-        if matches!(
+        // So this is an allow-list of the statement kinds an expression can produce — every
+        // assignment form, `ExprStmt`, the post-increment shape, and the `Synthetic` a list
+        // destructuring expands to. `echo`, `return`, `throw`, `global`, `static`, `const`
+        // and `include` are statements in PHP's grammar, not expressions, and are rejected
+        // here even though the statement parser accepts them.
+        //
+        // Checked BEFORE the trailing-token test below: a declaration takes no trailing `;`
+        // and would otherwise leave the synthetic one unconsumed, reporting the generic
+        // "trailing tokens" instead of naming what is actually wrong.
+        if !matches!(
             stmt.kind,
-            StmtKind::ClassDecl { .. }
-                | StmtKind::InterfaceDecl { .. }
-                | StmtKind::TraitDecl { .. }
-                | StmtKind::EnumDecl { .. }
-                | StmtKind::FunctionDecl { .. }
-                | StmtKind::PackedClassDecl { .. }
+            StmtKind::ExprStmt(_)
+                | StmtKind::Assign { .. }
+                | StmtKind::TypedAssign { .. }
+                | StmtKind::RefAssign { .. }
+                | StmtKind::ArrayAssign { .. }
+                | StmtKind::NestedArrayAssign { .. }
+                | StmtKind::ArrayPush { .. }
+                | StmtKind::PropertyAssign { .. }
+                | StmtKind::PropertyArrayAssign { .. }
+                | StmtKind::PropertyArrayPush { .. }
+                | StmtKind::StaticPropertyAssign { .. }
+                | StmtKind::StaticPropertyArrayAssign { .. }
+                | StmtKind::StaticPropertyArrayPush { .. }
+                | StmtKind::ListUnpack { .. }
+                | StmtKind::Synthetic(_)
         ) {
             return Err(CompileError::new(
                 piece_span,
-                "A declaration is not allowed in a for clause",
+                "Only expressions are allowed in a for clause",
             ));
         }
         if piece_pos < buffer.len() {
