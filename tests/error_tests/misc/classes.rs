@@ -1159,3 +1159,86 @@ fn test_error_incompatible_trait_constant_composition() {
         "class UsesBoth has incompatible duplicate trait constant 'VALUE'",
     );
 }
+
+/// Verifies a write to a private property the RECEIVER'S OWN class declares is still refused.
+///
+/// php raises `Cannot access private property Base::$p` here, and step 1 of php's resolution
+/// already took the one scope that may reach the slot. Making a strict ancestor's private name
+/// writable as a dynamic property must not make this one writable too.
+#[test]
+fn test_error_write_to_own_class_private_property_from_global_scope() {
+    expect_error(
+        "<?php class Base { private $p = 1; } $b = new Base(); $b->p = 2;",
+        "Cannot access private property: Base::p",
+    );
+}
+
+/// Verifies a write to a protected property from an unrelated scope is still refused.
+#[test]
+fn test_error_write_to_protected_property_from_an_unrelated_scope() {
+    expect_error(
+        "<?php class Base { protected $q = 1; } $b = new Base(); $b->q = 2;",
+        "Cannot access protected property: Base::q",
+    );
+}
+
+/// Verifies `unset()` on a private property the receiver's own class declares is still refused.
+///
+/// php raises the same access `Error` for `unset()` as for a write. The scope-dynamic arm added
+/// for a strict ancestor's private name must not swallow this one, which is a different
+/// resolution entirely.
+#[test]
+fn test_error_unset_own_class_private_property_from_global_scope() {
+    expect_error(
+        "<?php class Base { private $p = 1; } $b = new Base(); unset($b->p);",
+        "Cannot access private property: Base::p",
+    );
+}
+
+/// Verifies binding a reference to a private property from an unrelated scope is refused.
+///
+/// A reference hands the caller the ADDRESS of the storage, which is the widest exposure a
+/// property access has, so the refusal has to hold there too.
+#[test]
+fn test_error_reference_binding_to_a_private_property_from_global_scope() {
+    expect_error(
+        "<?php class Base { private $p = 1; } $b = new Base(); $r = &$b->p;",
+        "Cannot access private property: Base::p",
+    );
+}
+
+/// Verifies an ARRAY-ELEMENT write through a scope-dynamic name is refused with a precise
+/// diagnostic, and without resolving the ancestor's slot.
+///
+/// `$obj->p[] = v` reads the property's container, mutates it and publishes it back, which needs
+/// storage the element write can address for the whole operation. For a name php resolves to a
+/// dynamic property that container is not a slot at all, and resolving one anyway would select a
+/// strict ancestor's private storage and then refine ITS inferred type from a write that never
+/// reaches it.
+#[test]
+fn test_error_array_element_write_to_a_scope_dynamic_property() {
+    expect_error(
+        "<?php class Base { private $p = []; } class Child extends Base { \
+         public function go() { $this->p[] = 1; } } (new Child())->go();",
+        "Cannot write an array element through Child::p from this scope",
+    );
+}
+
+/// Verifies a `readonly` class refuses to CREATE the dynamic property a strict ancestor's private
+/// name resolves to, instead of storing one.
+///
+/// A `readonly` class carries php's no-dynamic-properties flag, so php answers this write with
+/// `Cannot create dynamic property ROChild::$p`, not with a creation. The scope-dynamic arm
+/// answers before the whole visibility and readonly ladder runs, so without its own check the arm
+/// would have created storage php forbids, and the reservation would have charged every instance
+/// a hash that no legal write can ever fill.
+#[test]
+fn test_error_dynamic_property_creation_on_a_readonly_class() {
+    expect_error(
+        "<?php readonly class ROBase { private string $p; \
+         public function __construct() { $this->p = 'base'; } } \
+         readonly class ROChild extends ROBase {} \
+         $c = new ROChild(); $c->p = 'x';",
+        "Cannot create dynamic property ROChild::$p",
+    );
+}

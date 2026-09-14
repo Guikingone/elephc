@@ -135,7 +135,7 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
 
 /// Returns true when `unset($object->property)` can be checked without reading the property.
 fn unset_object_property_probe_is_valid(
-    checker: &Checker,
+    checker: &mut Checker,
     object_ty: &PhpType,
     property: &str,
     arg: &Expr,
@@ -158,12 +158,25 @@ fn unset_object_property_probe_is_valid(
 
 /// Checks one known receiver class for PHP `unset($object->property)` magic/no-op legality.
 fn unset_property_probe_is_valid_on_class(
-    checker: &Checker,
+    checker: &mut Checker,
     class_name: &str,
     property: &str,
     arg: &Expr,
 ) -> Result<bool, CompileError> {
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        return Ok(true);
+    }
+    // php 7.4 removed shadow properties, so `unset($child->p)` on a strict ancestor's private
+    // name is not an access error: it removes the DISTINCT dynamic property of that name, or
+    // does nothing when none was created, and the ancestor's slot is untouched either way. The
+    // visibility ladder below still answers for that slot under its plain name, so this arm has
+    // to come first. Recording the site is what reserves the hash the removal addresses.
+    if crate::types::checker::scope_dynamic_storage::mutation_targets_scope_dynamic_name(
+        checker, class_name, property,
+    ) {
+        crate::types::checker::scope_dynamic_storage::record_scope_dynamic_mutation(
+            checker, class_name, property, "__unset",
+        );
         return Ok(true);
     }
     let Some(class_info) = checker.classes.get(class_name) else {

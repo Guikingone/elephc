@@ -256,6 +256,24 @@ pub(super) fn lower_dynamic_property_assign(
     let object = lower_expr(ctx, object);
     let property = lower_expr(ctx, property);
     let value = lower_expr(ctx, value);
+    // Same rule as the direct-name store: a receiver whose CLASS is only known at run time can
+    // land this value on a TYPED slot, and only the weak-mode guard can tell php's coercion from
+    // php's refusal. Boxing is what lets the runtime-class dispatch keep every class instead of
+    // dropping the one it could not model statically.
+    let value = crate::ir_lower::stmt::box_value_for_runtime_shaped_receiver(
+        ctx, object, value, span,
+    );
+    // The store CAN THROW now: a name this scope may not write raises php's catchable access
+    // `Error`, and a runtime class whose typed slot refuses the value raises a `TypeError`.
+    // Leaving all three owned temporaries as plain SSA across it meant a caught refusal skipped
+    // every release. Pinning parks them for the window the throwing instruction occupies, so the
+    // unwind path retires them through the record and the normal path unpins and retires them
+    // exactly once, which is the contract call lowering already applies.
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(
+        ctx,
+        &[object.value, property.value, value.value],
+        span,
+    );
     ctx.emit_void(
         Op::DynamicPropSet,
         vec![object.value, property.value, value.value],
@@ -263,6 +281,7 @@ pub(super) fn lower_dynamic_property_assign(
         Op::DynamicPropSet.default_effects(),
         Some(span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
         ctx, &PhpType::Mixed, value, span,
     );

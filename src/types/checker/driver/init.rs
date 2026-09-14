@@ -106,6 +106,7 @@ impl Checker {
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
             clone_override_destinations: Default::default(),
+            scope_dynamic_mutation_targets: Default::default(),
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
             php_array_reference_outputs: HashMap::new(),

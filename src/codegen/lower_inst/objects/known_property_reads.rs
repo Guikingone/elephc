@@ -17,6 +17,18 @@ const REFERENCE_RETURN_PAYLOAD_MISMATCH_MESSAGE: &str =
     "Cannot return a reference to a property whose stored representation differs from the \
      declared by-reference result type";
 
+/// Wording of the catchable `Error` a `Mixed`-receiver reference load raises when the receiver is
+/// not an object of a class that stores the property in a shared cell.
+///
+/// The path used to publish a literal zero as the cell pointer instead. A zero cell is a LIVE
+/// alias as far as everything downstream is concerned: the next read or write through the alias
+/// dereferences it, and an arm that merely omitted an unreachable class fell here too, so the
+/// unsafe answer was reachable from more than the non-object case. Raising leaves the caller with
+/// no cell at all, which is the only answer that cannot be dereferenced.
+const REFERENCE_WITHOUT_CELL_MESSAGE: &str =
+    "Cannot take a reference to a property the receiver's runtime class does not store in a \
+     shared reference cell";
+
 /// Lowers a declared object property read for statically known object receivers.
 pub(in crate::codegen::lower_inst) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
@@ -88,29 +100,28 @@ pub(super) fn lower_prop_get_nonnull(
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
     }
-    // The physical layout still carries a strict ancestor's PRIVATE slot under this plain name,
-    // so the slot lookup below would read storage php makes invisible here. php answers this name
-    // from the per-instance hash instead, or from `__get` on a class that declares one, and the
-    // name only reaches lowering at all because the checker resolves it the same way.
-    if let Some(class_name) = scope_dynamic_property_class_for_object(ctx, object, property)? {
-        let mode = property_fetch_mode(inst);
-        match resolve_property_read_arm(ctx, &class_name, property, mode, inst)? {
-            Some(PropertyNameArm::MagicDeferred { .. }) => {
-                emit_dynamic_property_miss_result(ctx, inst);
-                return store_if_result(ctx, inst);
-            }
-            _ => {
-                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-                ctx.load_value_to_reg(object, base_reg)?;
-                emit_scope_dynamic_property_read(
-                    ctx, inst, &class_name, property, base_reg, mode,
-                )?;
-                return store_if_result(ctx, inst);
-            }
-        }
-    }
-    if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, property)? {
-        return lower_allow_dynamic_prop_get(ctx, inst, object, property, offset);
+    // php does not answer this name from a declared slot on the receiver's STATIC class: it is a
+    // strict ancestor's private slot, which php 7.4 made invisible here, or an undeclared name the
+    // class keeps in its per-instance hash. Either way the runtime class decides what happens, and
+    // it can decide something of a different KIND: a subclass that redeclares the name public
+    // answers from its own slot, one that declares `__get` answers the accessor, and each class
+    // lays its hash out at its own offset and reports its own name.
+    let mode = property_fetch_mode(inst);
+    if let Some(plan) = dynamic_property_runtime_plan_for_object(
+        ctx,
+        object,
+        property,
+        PropertyAccessKind::DirectRead(mode),
+        inst,
+    )? {
+        return emit_object_property_runtime_dispatch(
+            ctx,
+            object,
+            &plan,
+            "prop_get_dynamic",
+            DispatchStackCleanup::NONE,
+            |ctx, arm| emit_dynamic_plan_read(ctx, inst, object, property, arm, mode),
+        );
     }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -121,6 +132,47 @@ pub(super) fn lower_prop_get_nonnull(
     emit_property_load(ctx, &slot, base_reg)?;
     materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
     store_if_result(ctx, inst)
+}
+
+/// Resolves the reference-cell slot a statically typed receiver exposes, or emits php's refusal.
+///
+/// Both ref-cell loads used to call `resolve_property_slot`, which answers from the class's
+/// by-name table and therefore from the PHYSICAL layout. That table still carries a strict
+/// ancestor's private slot under its plain name, and it answers for a private or protected slot
+/// this scope may not touch at all, so both were routes that handed a caller the ADDRESS of
+/// storage php forbids it. `resolve_property_reference_arm` is the scope-aware authority.
+///
+/// `Ok(None)` means the refusal was emitted and the instruction is complete: the `Error` is
+/// raised before any cell pointer exists, so there is nothing to publish as the result and
+/// nothing on the temporary stack to release.
+fn typed_receiver_reference_slot(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<Option<PropertySlot>> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return resolve_property_slot(ctx, object, property, inst).map(Some);
+    };
+    match resolve_property_reference_arm(ctx, &class_name, property, inst)? {
+        Some(PropertyNameArm::Slot(slot)) => Ok(Some(slot)),
+        Some(PropertyNameArm::Refuse { message, .. }) => {
+            super::super::exceptions::emit_error(ctx, &message);
+            Ok(None)
+        }
+        // php binds the reference to a DISTINCT dynamic property here, never to the ancestor's
+        // slot. Binding into the per-instance hash is not a capability this backend has yet, for
+        // any class, so the honest answer is the same `unsupported` diagnostic `stdClass` already
+        // produces rather than a slot this scope may not see.
+        Some(PropertyNameArm::ScopeDynamic)
+        | Some(PropertyNameArm::MagicDeferred)
+        | None => Err(CodegenIrError::unsupported(format!(
+            "{} for dynamic or missing property {}::${}",
+            inst.op.name(),
+            class_name.trim_start_matches('\\'),
+            property
+        ))),
+    }
 }
 
 /// Lowers `LoadPropRefCell`: loads the raw ref-cell pointer stored in a reference
@@ -136,7 +188,9 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell(
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return lower_mixed_load_prop_ref_cell(ctx, inst, object, &property);
     }
-    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    let Some(slot) = typed_receiver_reference_slot(ctx, object, &property, inst)? else {
+        return Ok(());
+    };
     if !slot.is_reference {
         return Err(CodegenIrError::unsupported(format!(
             "load_prop_ref_cell on non-reference property {}::${}",
@@ -173,7 +227,9 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell_checked(
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return lower_mixed_load_prop_ref_cell_checked(ctx, inst, object, &property, &expected);
     }
-    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    let Some(slot) = typed_receiver_reference_slot(ctx, object, &property, inst)? else {
+        return Ok(());
+    };
     if !slot.is_reference {
         return Err(CodegenIrError::unsupported(format!(
             "load_prop_ref_cell_checked on non-reference property {}::${}",
@@ -227,7 +283,7 @@ fn lower_mixed_load_prop_ref_cell_checked(
         .map(|candidate| {
             ctx.next_label(&format!(
                 "mixed_propref_checked_{}",
-                label_fragment(&candidate.slot.class_name)
+                label_fragment(&candidate.candidate.slot.class_name)
             ))
         })
         .collect::<Vec<_>>();
@@ -236,9 +292,10 @@ fn lower_mixed_load_prop_ref_cell_checked(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_mixed_object_payload_or_null(ctx, &null_label);
     // stdClass and classes without this reference property have no matching cell.
+    let dispatch = mixed_reference_dispatch_candidates(&candidates);
     emit_mixed_property_class_dispatch(
         ctx,
-        &candidates,
+        &dispatch,
         &match_labels,
         &null_label,
         &null_label,
@@ -248,8 +305,16 @@ fn lower_mixed_load_prop_ref_cell_checked(
     let mut any_mismatch = false;
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        if candidate.slot.php_type.reference_payload_compatible(expected) {
-            abi::emit_load_from_address(ctx.emitter, int_reg, int_reg, candidate.slot.offset); // load the reference-cell pointer from the matched class's property slot
+        // php refuses the access from this scope, so no cell is published at all. The arm exists
+        // precisely so this runtime class cannot fall into the shared no-cell path.
+        if let Some(message) = &candidate.refusal {
+            let message = message.clone();
+            super::super::exceptions::emit_error(ctx, &message);
+            continue;
+        }
+        let slot = &candidate.candidate.slot;
+        if slot.php_type.reference_payload_compatible(expected) {
+            abi::emit_load_from_address(ctx.emitter, int_reg, int_reg, slot.offset); // load the reference-cell pointer from the matched class's property slot
         } else {
             any_mismatch = true;
             abi::emit_jump(ctx.emitter, &mismatch_label);
@@ -265,10 +330,19 @@ fn lower_mixed_load_prop_ref_cell_checked(
     }
 
     ctx.emitter.label(&null_label);
-    abi::emit_load_int_immediate(ctx.emitter, int_reg, 0); // no reference cell for a non-object / unknown receiver
+    // NEVER a zero cell pointer: see `REFERENCE_WITHOUT_CELL_MESSAGE`.
+    super::super::exceptions::emit_error(ctx, REFERENCE_WITHOUT_CELL_MESSAGE);
 
     ctx.emitter.label(&done_label);
     store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// Projects the reference arms onto the class-id dispatch shape the shared ladder expects.
+fn mixed_reference_dispatch_candidates(candidates: &[MixedReferenceCandidate]) -> Vec<u64> {
+    candidates
+        .iter()
+        .map(|candidate| candidate.candidate.class_id)
+        .collect()
 }
 
 /// Stores the materialized reference-cell pointer (in the integer result register) into the
@@ -307,7 +381,10 @@ pub(super) fn lower_mixed_load_prop_ref_cell(
     let match_labels = candidates
         .iter()
         .map(|candidate| {
-            ctx.next_label(&format!("mixed_propref_{}", label_fragment(&candidate.slot.class_name)))
+            ctx.next_label(&format!(
+                "mixed_propref_{}",
+                label_fragment(&candidate.candidate.slot.class_name)
+            ))
         })
         .collect::<Vec<_>>();
 
@@ -315,9 +392,10 @@ pub(super) fn lower_mixed_load_prop_ref_cell(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_mixed_object_payload_or_null(ctx, &null_label);
     // stdClass and classes without this reference property have no matching cell.
+    let dispatch = mixed_reference_dispatch_candidates(&candidates);
     emit_mixed_property_class_dispatch(
         ctx,
-        &candidates,
+        &dispatch,
         &match_labels,
         &null_label,
         &null_label,
@@ -326,12 +404,19 @@ pub(super) fn lower_mixed_load_prop_ref_cell(
     let int_reg = abi::int_result_reg(ctx.emitter);
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        abi::emit_load_from_address(ctx.emitter, int_reg, int_reg, candidate.slot.offset); // load the reference-cell pointer from the matched class's property slot
+        // php refuses the access from this scope, so no cell is published at all.
+        if let Some(message) = &candidate.refusal {
+            let message = message.clone();
+            super::super::exceptions::emit_error(ctx, &message);
+            continue;
+        }
+        abi::emit_load_from_address(ctx.emitter, int_reg, int_reg, candidate.candidate.slot.offset); // load the reference-cell pointer from the matched class's property slot
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
     ctx.emitter.label(&null_label);
-    abi::emit_load_int_immediate(ctx.emitter, int_reg, 0); // no reference cell for a non-object / unknown receiver
+    // NEVER a zero cell pointer: see `REFERENCE_WITHOUT_CELL_MESSAGE`.
+    super::super::exceptions::emit_error(ctx, REFERENCE_WITHOUT_CELL_MESSAGE);
 
     ctx.emitter.label(&done_label);
     store_ref_cell_pointer_result(ctx, inst)
@@ -409,10 +494,17 @@ pub(super) fn magic_get_receiver_class(
     let Some(class_info) = ctx.module.class_infos.get(normalized) else {
         return Ok(None);
     };
+    // A slot this SCOPE does not resolve the name to is not a declaration for this decision.
+    // php 7.4 removed shadow properties, so a strict ancestor's private name is not in this
+    // class's by-name table at all and php answers it from `__get`, measured on php 8.5.10 from
+    // the child scope and from global scope alike. This is the read half of the pair
+    // `magic_set_receiver_has_method` decides for a write: routing the write to `__set` while the
+    // read kept answering null would report a value php never stores.
     if class_info
         .properties
         .iter()
         .any(|(name, _)| name == property)
+        && !property_name_is_scope_dynamic(ctx, normalized, property)
     {
         return Ok(None);
     }
@@ -499,57 +591,6 @@ pub(super) fn emit_stdclass_get_call(
     Ok(())
 }
 
-/// Lowers a static-name read from an undeclared property on an allow-dynamic class.
-///
-/// OWNERSHIP: the miss path boxes a FRESH null cell, so the caller owns and releases the
-/// result. `__rt_hash_get` only BORROWS the stored cell, so the hit path has to retain it
-/// to match — exactly what `__rt_stdclass_get` does for the same storage. Without the
-/// retain each read handed the caller a reference it did not own, and the caller's release
-/// eventually freed a live hash entry, after which further reads of that property answered
-/// `NULL` (a use-after-free of the removed cell).
-pub(super) fn lower_allow_dynamic_prop_get(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    object: ValueId,
-    property: &str,
-    hash_offset: usize,
-) -> Result<()> {
-    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let (label, key_len) = ctx.data.add_string(property.as_bytes());
-    let miss_label = ctx.next_label("dynamic_prop_miss");
-    let done_label = ctx.next_label("dynamic_prop_done");
-    ctx.load_value_to_reg(object, object_reg)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("ldr x0, [{}, #{}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
-            abi::emit_symbol_address(ctx.emitter, "x1", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-            ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // missing dynamic properties read as PHP null
-            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
-            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null fallback after a successful dynamic-property hit
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [{} + {}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-            ctx.emitter.instruction("test rax, rax");                           // check whether the dynamic-property key was present
-            ctx.emitter.instruction(&format!("je {}", miss_label));             // missing dynamic properties read as PHP null
-            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
-            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null fallback after a successful dynamic-property hit
-        }
-    }
-    ctx.emitter.label(&miss_label);
-    emit_boxed_null(ctx);
-    ctx.emitter.label(&done_label);
-    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
-    store_if_result(ctx, inst)
-}
-
 /// Reads a name php resolves to a DYNAMIC property on a statically known class.
 ///
 /// php 7.4 removed shadow properties: a strict ancestor's private slot lives under a mangled key,
@@ -569,14 +610,38 @@ pub(super) fn emit_scope_dynamic_property_read(
     object_reg: &str,
     mode: PropertyFetchMode,
 ) -> Result<()> {
-    let Some(hash_offset) = dynamic_property_hash_offset_for_class(ctx, class_name, property)?
-    else {
-        if mode.is_read() {
-            emit_undefined_property_warning(ctx, class_name, property);
+    let warn_on_miss = mode.is_read() && property_name_is_scope_dynamic(ctx, class_name, property);
+    match dynamic_property_hash_offset_for_class(ctx, class_name, property)? {
+        Some(hash_offset) => emit_scope_dynamic_property_hash_probe(
+            ctx, class_name, property, object_reg, hash_offset, warn_on_miss,
+        )?,
+        None => {
+            if warn_on_miss {
+                emit_undefined_property_warning(ctx, class_name, property);
+            }
+            emit_boxed_null(ctx);
         }
-        emit_boxed_null(ctx);
-        return cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr());
-    };
+    }
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
+}
+
+/// The probe half of the read above, leaving the answer as a BOXED Mixed pointer.
+///
+/// A ladder whose arms converge on one shared `cast_loaded_mixed_pointer_to_result` needs the
+/// boxed pointer, not the already-cast result: casting inside the arm and again at the
+/// convergence point would read the cast value as a cell pointer.
+///
+/// `class_name` and `hash_offset` both come from the caller because both have to describe the
+/// RUNTIME class. A ladder arm supplies its own; a caller that has already proven the runtime
+/// class is the static one supplies that one.
+pub(super) fn emit_scope_dynamic_property_hash_probe(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    object_reg: &str,
+    hash_offset: usize,
+    warn_on_miss: bool,
+) -> Result<()> {
     let target = ctx.emitter.target;
     let (label, key_len) = ctx.data.add_string(property.as_bytes());
     let miss_label = ctx.next_label("scope_dynamic_prop_miss");
@@ -603,12 +668,85 @@ pub(super) fn emit_scope_dynamic_property_read(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
-    if mode.is_read() {
+    if warn_on_miss {
         emit_undefined_property_warning(ctx, class_name, property);
     }
     emit_boxed_null(ctx);
     ctx.emitter.label(&done_label);
-    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
+    Ok(())
+}
+
+/// Emits one runtime-class arm of a read whose name php answers dynamically on the static class.
+///
+/// Every arm publishes the instruction's own result representation and stores it, so the arms
+/// converge AFTER the store and nothing has to agree on an intermediate register shape. The
+/// `Refuse` arm never reaches here: the dispatcher raises it.
+pub(super) fn emit_dynamic_plan_read(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+    arm: &PropertyRuntimeArm,
+    mode: PropertyFetchMode,
+) -> Result<()> {
+    match &arm.action {
+        // This runtime class DECLARES the name, so php reads its slot and nothing is dynamic
+        // about the access at all. Reaching a slot here is the polymorphic case, not an escape:
+        // the arm only runs when the receiver's runtime class id matched this class.
+        PropertyRuntimeAction::Slot(slot) => {
+            let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+            ctx.load_value_to_reg(object, base_reg)?;
+            if slot.is_declared {
+                emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
+            }
+            emit_property_load(ctx, slot, base_reg)?;
+            materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+            store_if_result(ctx, inst)
+        }
+        PropertyRuntimeAction::DynamicHash {
+            hash_offset,
+            warns_on_miss,
+        } => {
+            let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+            ctx.load_value_to_reg(object, base_reg)?;
+            emit_scope_dynamic_property_hash_probe(
+                ctx,
+                &arm.class_name,
+                property,
+                base_reg,
+                *hash_offset,
+                mode.is_read() && *warns_on_miss,
+            )?;
+            cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+            store_if_result(ctx, inst)
+        }
+        // No hash on this runtime class, so the entry can never exist: php warns on a value read
+        // and answers null, and stays silent for a probe.
+        PropertyRuntimeAction::DynamicMissing { warns_on_miss } => {
+            if mode.is_read() && *warns_on_miss {
+                emit_undefined_property_warning(ctx, &arm.class_name, property);
+            }
+            emit_boxed_null(ctx);
+            cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+            store_if_result(ctx, inst)
+        }
+        // php calls `__get` on this runtime class and the name is a constant here, so the arm
+        // makes the real call. `lower_magic_get_prop` is the same lowering a receiver whose STATIC
+        // class declares the accessor already takes, so the two agree by construction.
+        PropertyRuntimeAction::MagicGet => {
+            lower_magic_get_prop(ctx, inst, object, &arm.class_name, property)
+        }
+        // A silent probe would consult `__isset`, which has no codegen call site in this phase. It
+        // answers php null rather than a slot so that the deferral can only lose a value, never
+        // expose storage.
+        PropertyRuntimeAction::MagicDeferred => {
+            emit_dynamic_property_miss_result(ctx, inst);
+            store_if_result(ctx, inst)
+        }
+        PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
+            "property dispatch handed a refusal arm to its action emitter",
+        )),
+    }
 }
 
 /// Reads a RUNTIME-name undeclared property from the receiver's dynamic-property hash.

@@ -783,6 +783,16 @@ pub enum Op {
     /// An initializer may instead supply PropertyRef to mark a freshly zeroed physical slot.
     /// That form adds ALLOC_HEAP to the default effects for owned reference cells.
     PropUnset,
+    /// Removes `unset($object->{$name})` for a property NAME only known at run time.
+    ///
+    /// Operands: object, name string. There is no immediate: the name is a value, which is the
+    /// whole difference from `PropUnset`. The backend compares the runtime name against the
+    /// receiver's declared names and then takes php's answer for the matched name on the
+    /// receiver's RUNTIME class: a visible declared slot is cleared, a name the scope may not
+    /// reach raises the catchable `Error`, and a name php resolves dynamically is removed from
+    /// that class's per-instance property hash. A name that matches nothing is removed from the
+    /// hash too, or is php's no-op when the class reserves none.
+    DynamicPropUnset,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
@@ -1071,8 +1081,17 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             ArrayLen | HashLen => E::READS_HEAP,
-            ArrayKeyExists | OffsetExists | PropInitialized | LoadPropRefCell => {
-                E::READS_HEAP
+            ArrayKeyExists | OffsetExists | PropInitialized => E::READS_HEAP,
+            // `LoadPropRefCell` now carries exactly its checked sibling's contract. Phase B2 made
+            // the plain form raise php's catchable access `Error` for a name this scope may not
+            // reach, and made the `Mixed` form raise instead of publishing a zero pointer as a
+            // live cell, so the unguarded read it used to advertise is no longer what it does.
+            // A throw unwinds through frame cleanup that can run PHP destructors, and modelling
+            // it as a plain heap read would let the optimizer hoist, sink or drop the load across
+            // the very cleanup the throw depends on.
+            LoadPropRefCell => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+                    | E::MAY_THROW | E::MAY_FATAL
             }
             // The payload guard allocates and throws a catchable `Error` for an incompatible
             // runtime class, and that throw unwinds through frame cleanup that can run PHP
@@ -1099,13 +1118,27 @@ impl Op {
             BindRefCellPtr | AdoptRefCellPtr => E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             // Replacing a pending return can retire a payload with an arbitrary destructor.
             AcquireRefCell => E::all(),
-            HashUnset | PropUnset | OffsetUnset => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP
-                | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
+            // `DynamicPropUnset` carries exactly `PropUnset`'s contract: the same storage is
+            // removed, the same destructors can run, the same access `Error` can be raised, and
+            // the hash removal can reallocate the table.
+            HashUnset | PropUnset | DynamicPropUnset | OffsetUnset => E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
-            | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
+            | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            PropSet => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP | E::WRITES_HEAP
-                | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
+            // `PropSet` and `DynamicPropSet` now carry the SAME conservative contract, because
+            // phase B2 gave them the same set of observable consequences. Either can create a
+            // dynamic property in the receiver's per-instance hash, which READS the table,
+            // ALLOCATES on a rehash and REFCOUNTS the boxed value; either can report php 8.5's
+            // `Creation of dynamic property C::$p is deprecated` on the diagnostic stream, which
+            // is `MAY_WARN` plus the global read and write the stream itself is; and either can
+            // raise php's catchable access `Error` for a name this scope may not write, or a
+            // `TypeError` for a value a declared slot refuses, which is `MAY_THROW`. Advertising
+            // `DynamicPropSet` as a bare heap write let the optimizer reorder or drop a store
+            // that now diagnoses and can unwind.
+            PropSet | DynamicPropSet => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_FATAL
+                | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
             // checks its load factor and may grow/rehash the table before it even knows whether
@@ -1443,6 +1476,7 @@ impl Op {
             AcquireRefCell => "acquire_ref_cell",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropSet => "dynamic_prop_set",
+            DynamicPropUnset => "dynamic_prop_unset",
             NullsafePropGet => "nullsafe_prop_get",
             NullsafeMethodCall => "nullsafe_method_call",
             MethodLookup => "method_lookup",

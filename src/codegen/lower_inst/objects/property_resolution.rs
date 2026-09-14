@@ -83,17 +83,653 @@ pub(super) fn resolve_property_slot(
     resolve_property_slot_for_class(ctx, &class_name, property, inst)
 }
 
-/// Returns the dynamic-property hash slot offset for an undeclared allow-dynamic property.
-pub(super) fn dynamic_property_hash_offset_for_object(
+/// What php does with ONE property name on ONE RUNTIME class, seen from the current scope.
+///
+/// A receiver's STATIC class only bounds its runtime class, and under that bound php's answer can
+/// change KIND, not merely address. Measured on php 8.5.10:
+/// `class A { private $p; } class P extends A {} class Q extends P { public $p; }` reached through
+/// `function f(P $x)` answers from a DYNAMIC property on a `P` and from `Q`'s own public SLOT on a
+/// `Q`. A subclass can also widen a `protected` its parent refuses, declare an accessor its parent
+/// does not, and lay its per-instance hash out at a different offset because it declares more
+/// properties. So the dispatch has to pick the whole action per runtime class.
+pub(super) enum PropertyRuntimeAction {
+    /// The name addresses this physical slot on this runtime class.
+    Slot(PropertySlot),
+    /// php answers from THIS class's per-instance hash, at THIS class's offset, and names THIS
+    /// class in the creation notice or the `Undefined property` warning.
+    DynamicHash {
+        /// This class's own `8 + slots * 16` hash offset.
+        hash_offset: usize,
+        /// Whether a value read that finds no entry reports `Undefined property`.
+        ///
+        /// Phase B1 established that a strict ancestor's private name DOES report it, because php
+        /// does. An ordinary undeclared name on an `#[\AllowDynamicProperties]` class keeps the
+        /// answer this backend already gave it, which is silence: changing that is general
+        /// undefined-property warning work and is deliberately not part of this phase.
+        warns_on_miss: bool,
+    },
+    /// php answers dynamically but this class reserves no hash, so the entry can never exist.
+    ///
+    /// A value read warns `Undefined property` and answers null, a probe answers null in silence,
+    /// an `unset()` is a no-op. A WRITE must never reach this: `scope_dynamic_storage` reserves
+    /// the hash for exactly the classes a reachable mutation can address, so a write arm carrying
+    /// it is a compiler invariant failure rather than a program error, and the write sites say so
+    /// instead of silently dropping the value.
+    DynamicMissing {
+        /// Whether a value read reports `Undefined property`. Same rule as `DynamicHash`.
+        warns_on_miss: bool,
+    },
+    /// php refuses the access from this scope: raise this catchable `Error` and touch nothing.
+    Refuse {
+        /// php 8.5's verbatim wording, e.g. `Cannot access private property D::$n`.
+        message: String,
+    },
+    /// php answers `__get` on THIS runtime class, and the name is a compile-time constant, so the
+    /// dispatch makes the real call through `lower_magic_get_prop`.
+    ///
+    /// Only a value read builds this. A silent probe would consult `__isset`, which has no codegen
+    /// call site yet and keeps `MagicDeferred`; a write and an `unset()` are peeled off earlier by
+    /// `crate::ir_lower`, which calls `__set` and `__unset` through the ordinary method lowering.
+    MagicGet,
+    /// php answers an accessor this dispatch does not call.
+    ///
+    /// For a DIRECT name that never happens here: `crate::ir_lower::stmt::instance_property_writes`
+    /// and its read and unset siblings peel such a runtime class off with an `instanceof` guard
+    /// and call the real `__get`, `__set` or `__unset` through the ordinary method-call lowering,
+    /// so this arm is unreachable by construction and answers php null only so that a future
+    /// divergence between the two predicates can never become a storage escape.
+    /// For a RUNTIME name it is phase B1's `MagicDeferred`, still deferred, still never a slot.
+    MagicDeferred,
+}
+
+/// One runtime-class arm of a property dispatch.
+pub(super) struct PropertyRuntimeArm {
+    /// Runtime class id this arm matches, or `None` for the static class's fallthrough arm.
+    pub(super) class_id: Option<u64>,
+    /// That class's name, which is the one php reports in a notice or a warning.
+    pub(super) class_name: String,
+    /// What php does on that class.
+    pub(super) action: PropertyRuntimeAction,
+}
+
+/// Where one property access really lands, per runtime class.
+pub(super) enum PropertyRuntimePlan {
+    /// The receiver's runtime class is PROVABLY its static class: one action, no comparison.
+    Fixed(PropertyRuntimeArm),
+    /// Arms in class-id order with the receiver's own static class LAST as the fallthrough.
+    ByClassId(Vec<PropertyRuntimeArm>),
+}
+
+/// Which operation is asking, and whether the property NAME is a compile-time constant.
+///
+/// The direct/runtime split is what decides the accessor arm. php consults `__get`, `__set`,
+/// `__isset` or `__unset` for a name it does not resolve to a visible slot, and a DIRECT name is
+/// answered upstream in `crate::ir_lower` by a real call; a RUNTIME name cannot reach the
+/// accessor in this phase and keeps php's null answer without ever reading storage.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum PropertyAccessKind {
+    /// `$o->name`, with php's fetch mode.
+    DirectRead(PropertyFetchMode),
+    /// `$o->{$k}` after the name matched, with php's fetch mode.
+    RuntimeRead(PropertyFetchMode),
+    /// `$o->name = v`.
+    DirectWrite,
+    /// `$o->{$k} = v` after the name matched.
+    RuntimeWrite,
+    /// `unset($o->name)`.
+    DirectUnset,
+    /// `unset($o->{$k})` after the name matched.
+    RuntimeUnset,
+    /// `$x = &$o->name`, a by-reference argument, or a by-reference return.
+    Reference,
+    /// The MISS arm of a runtime-name ladder, where the name matched no declared name at all.
+    ///
+    /// Only the runtime class's per-instance hash can answer such a name, and no accessor
+    /// decision belongs here: the ladder's own arms already made that decision for every name the
+    /// class declares, and a name it does not declare is one this phase cannot hand to an
+    /// accessor anyway. So this kind asks only WHERE the hash is, per runtime class.
+    RuntimeHashMiss,
+}
+
+impl PropertyAccessKind {
+    /// Returns the accessor php consults before reporting anything, when there is one.
+    fn magic_method(self) -> Option<&'static str> {
+        match self {
+            Self::DirectRead(mode) | Self::RuntimeRead(mode) => {
+                Some(if mode.is_read() { "__get" } else { "__isset" })
+            }
+            Self::DirectWrite | Self::RuntimeWrite => Some("__set"),
+            Self::DirectUnset | Self::RuntimeUnset => Some("__unset"),
+            // php does not route a reference binding through an accessor: an accessor returns a
+            // value, not storage, so there is nothing for the alias to point at. A ladder miss
+            // arm deliberately makes no accessor decision either.
+            Self::Reference | Self::RuntimeHashMiss => None,
+        }
+    }
+
+    /// Returns whether this operation can CREATE a dynamic property, which php forbids on a
+    /// `readonly` class. The name is known for both write forms, so the refusal can name it.
+    fn creates_dynamic_property(self) -> bool {
+        matches!(self, Self::DirectWrite | Self::RuntimeWrite)
+    }
+}
+
+impl PropertyRuntimePlan {
+    /// Returns the single arm when the runtime class is provably the static one.
+    pub(super) fn fixed_arm(&self) -> Option<&PropertyRuntimeArm> {
+        match self {
+            Self::Fixed(arm) => Some(arm),
+            Self::ByClassId(_) => None,
+        }
+    }
+
+    /// Returns every arm, for callers that have to validate what the plan can do before it runs.
+    pub(super) fn arms(&self) -> &[PropertyRuntimeArm] {
+        match self {
+            Self::Fixed(arm) => std::slice::from_ref(arm),
+            Self::ByClassId(arms) => arms,
+        }
+    }
+}
+
+
+/// Resolves what one property access does on a named receiver class, per runtime class.
+///
+/// `Fixed` is claimed only under a proof, never as an optimization. The proof has two parts and
+/// both must hold:
+///
+/// 1. No class in `ctx.module.class_infos` inherits from the receiver's static class. That map is
+///    the AOT model's complete set of declared classes, and it is the same map
+///    `crate::codegen::eval_property_helpers::dynamic_properties` dispatches its hash-slot helper
+///    over, so agreeing with it keeps the two answers consistent.
+/// 2. The static class does not carry `eval_property_storage`. That flag is exactly the marker
+///    `crate::ir_lower::program::metadata::reserve_eval_subclass_property_storage` sets on every
+///    non-final user class when an opaque `eval` is reachable, which is to say the marker for
+///    "opaque eval may declare a subclass of this class that the module never enumerated". Under
+///    it the runtime class is NOT proven, so the plan stays a ladder whose fallthrough addresses
+///    the static class's own layout, which is precisely the layout the eval bridge allocates for
+///    such a subclass.
+pub(super) fn resolve_property_runtime_plan(
     ctx: &FunctionContext<'_>,
-    object: crate::ir::ValueId,
+    class_name: &str,
     property: &str,
-) -> Result<Option<usize>> {
-    let object_ty = ctx.value_php_type(object)?;
-    let PhpType::Object(class_name) = object_ty else {
+    kind: PropertyAccessKind,
+    inst: &Instruction,
+) -> Result<PropertyRuntimePlan> {
+    let normalized = class_name.trim_start_matches('\\');
+    let static_arm = PropertyRuntimeArm {
+        class_id: None,
+        class_name: normalized.to_string(),
+        action: resolve_property_runtime_action(ctx, normalized, property, kind, inst)?,
+    };
+    if is_builtin_stdclass(normalized) {
+        return Ok(PropertyRuntimePlan::Fixed(static_arm));
+    }
+    let eval_may_subclass = ctx
+        .module
+        .class_infos
+        .get(normalized)
+        .is_some_and(|class_info| class_info.eval_property_storage);
+    let mut arms = Vec::new();
+    for (candidate, candidate_info) in &ctx.module.class_infos {
+        if candidate.as_str() == normalized
+            || !crate::types::class_inherits_from(&ctx.module.class_infos, candidate, normalized)
+        {
+            continue;
+        }
+        arms.push(PropertyRuntimeArm {
+            class_id: Some(candidate_info.class_id),
+            class_name: candidate.clone(),
+            action: resolve_property_runtime_action(ctx, candidate, property, kind, inst)?,
+        });
+    }
+    if arms.is_empty() && !eval_may_subclass {
+        return Ok(PropertyRuntimePlan::Fixed(static_arm));
+    }
+    arms.sort_by_key(|arm| arm.class_id);
+    arms.push(static_arm);
+    Ok(PropertyRuntimePlan::ByClassId(arms))
+}
+
+/// Resolves php's answer for one name on ONE class, which is the per-arm decision.
+///
+/// The three existing per-class arm resolvers stay the single authority for php's answer; this
+/// only turns their answer into the action the ladder emits, and adds the hash offset, which is
+/// the one part that is per class rather than per name.
+pub(super) fn resolve_property_runtime_action(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    kind: PropertyAccessKind,
+    inst: &Instruction,
+) -> Result<PropertyRuntimeAction> {
+    let resolution = resolve_property_name_in_current_scope(ctx, class_name, property);
+    // php consults the accessor BEFORE it reports anything, for every name it does not resolve to
+    // a visible slot. The scope-selected private slot of `ScopePrivate` IS visible to this scope,
+    // so it keeps the slot exactly as php does.
+    if !matches!(
+        resolution,
+        PropertyNameResolution::Visible | PropertyNameResolution::ScopePrivate { .. }
+    ) {
+        if let Some(magic) = kind.magic_method() {
+            if class_declares_method(ctx, class_name, magic) {
+                return Ok(
+                    if matches!(kind, PropertyAccessKind::DirectRead(mode) if mode.is_read()) {
+                        PropertyRuntimeAction::MagicGet
+                    } else {
+                        PropertyRuntimeAction::MagicDeferred
+                    },
+                );
+            }
+        }
+    }
+    match resolution {
+        PropertyNameResolution::Visible => {
+            resolve_property_slot_for_class(ctx, class_name, property, inst)
+                .map(PropertyRuntimeAction::Slot)
+        }
+        PropertyNameResolution::ScopePrivate { scope, index } => {
+            resolve_scope_private_property_slot(ctx, &scope, index, property, inst)
+                .map(PropertyRuntimeAction::Slot)
+        }
+        PropertyNameResolution::Dynamic => {
+            // A reference binding into the per-instance hash is the capability the dedicated
+            // dynamic-reference phase adds. Until then the honest answer is "no storage here",
+            // which every reference site turns into a refusal to compile rather than a pointer.
+            if kind == PropertyAccessKind::Reference {
+                return Ok(PropertyRuntimeAction::DynamicMissing {
+                    warns_on_miss: false,
+                });
+            }
+            // A `readonly` class carries php's no-dynamic-properties flag, so CREATING the name
+            // is an `Error`, never a store. Answering here keeps the write arms' invariant intact:
+            // a write may never see `DynamicMissing`, and a readonly class deliberately reserves
+            // no hash. A read or an `unset()` needs no arm of its own, because nothing can ever
+            // have been created, which is exactly what `DynamicMissing` already means.
+            if kind.creates_dynamic_property() && class_is_readonly(ctx, class_name) {
+                return Ok(PropertyRuntimeAction::Refuse {
+                    message: format!(
+                        "Cannot create dynamic property {}::${}",
+                        class_name.trim_start_matches('\\'),
+                        property
+                    ),
+                });
+            }
+            let warns_on_miss = property_name_is_scope_dynamic(ctx, class_name, property);
+            Ok(
+                match dynamic_property_hash_offset_for_class(ctx, class_name, property)? {
+                    Some(hash_offset) => PropertyRuntimeAction::DynamicHash {
+                        hash_offset,
+                        warns_on_miss,
+                    },
+                    None => PropertyRuntimeAction::DynamicMissing { warns_on_miss },
+                },
+            )
+        }
+        PropertyNameResolution::Inaccessible(visibility) => {
+            // A SILENT probe is php's one answer that reports nothing at all: `isset()`, `empty()`
+            // and `??` answer false or null without raising. Every other access raises.
+            if matches!(
+                kind,
+                PropertyAccessKind::DirectRead(mode) | PropertyAccessKind::RuntimeRead(mode)
+                    if !mode.is_read()
+            ) {
+                return Ok(PropertyRuntimeAction::DynamicMissing {
+                    warns_on_miss: false,
+                });
+            }
+            Ok(PropertyRuntimeAction::Refuse {
+                message: property_access_error_message(&visibility, class_name, property),
+            })
+        }
+    }
+}
+
+/// Returns whether the class is declared `readonly`, which php makes no-dynamic-properties.
+fn class_is_readonly(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    ctx.module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|class_info| class_info.is_readonly_class)
+}
+
+/// Returns whether the class, or an ancestor, declares one magic accessor.
+///
+/// `ClassInfo::methods` is already flattened over the ancestry, so an inherited accessor counts,
+/// exactly as `magic_get_receiver_class` reads it.
+pub(super) fn class_declares_method(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method: &str,
+) -> bool {
+    ctx.module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|class_info| class_info.methods.contains_key(&php_symbol_key(method)))
+}
+
+/// How much temporary stack the calling site has reserved above the dispatch.
+///
+/// A `Refuse` arm raises before it can return, so the block has to be released BEFORE the raise
+/// or the unwinder sees a stack pointer no other arm left behind. Sites pass their own number
+/// rather than the emitter assuming one, because the ladders reserve different frames: a
+/// direct-name site has none, a runtime-name site has its receiver and key staged in 32 bytes.
+#[derive(Clone, Copy)]
+pub(super) struct DispatchStackCleanup(pub(super) usize);
+
+impl DispatchStackCleanup {
+    /// The site holds no temporary block over the dispatch.
+    pub(super) const NONE: Self = Self(0);
+
+    /// Releases the site's block, if it reserved one.
+    fn release(self, ctx: &mut FunctionContext<'_>) {
+        if self.0 > 0 {
+            abi::emit_release_temporary_stack(ctx.emitter, self.0);
+        }
+    }
+}
+
+/// Emits one property access, once per runtime class the receiver can hold.
+///
+/// The emitter owns the two arms whose behaviour does not depend on the operation: `Refuse`
+/// releases the site's stack block and raises, and `MagicDeferred` is handed back to the site
+/// because only the site knows how to spell php's null in its own result representation.
+///
+/// `emit_action` sees `Slot`, `DynamicHash`, `DynamicMissing` and `MagicDeferred`, and must leave
+/// the machine in the same state on every arm, because the arms converge. A `Refuse` arm never
+/// converges: it raises.
+pub(super) fn emit_property_runtime_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    plan: &PropertyRuntimePlan,
+    label_prefix: &str,
+    cleanup: DispatchStackCleanup,
+    mut emit_class_id_probe: impl FnMut(&mut FunctionContext<'_>, u64, &str),
+    mut emit_action: impl FnMut(&mut FunctionContext<'_>, &PropertyRuntimeArm) -> Result<()>,
+) -> Result<()> {
+    if let Some(arm) = plan.fixed_arm() {
+        return emit_plan_arm(ctx, arm, cleanup, &mut emit_action);
+    }
+    let PropertyRuntimePlan::ByClassId(arms) = plan else {
+        return Err(CodegenIrError::invalid_module("property plan without arms"));
+    };
+    let Some((fallthrough, dispatched)) = arms.split_last() else {
+        return Err(CodegenIrError::invalid_module("property plan without arms"));
+    };
+    let labels = dispatched
+        .iter()
+        .map(|arm| {
+            ctx.next_label(&format!(
+                "{}_{}",
+                label_prefix,
+                label_fragment(&arm.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+    let done_label = ctx.next_label(&format!("{}_done", label_prefix));
+    for (arm, label) in dispatched.iter().zip(labels.iter()) {
+        if let Some(class_id) = arm.class_id {
+            emit_class_id_probe(ctx, class_id, label);
+        }
+    }
+    // No probe matched, so the receiver is the static class itself or a subclass the module never
+    // enumerated, which the `Fixed` proof above is exactly about.
+    emit_plan_arm(ctx, fallthrough, cleanup, &mut emit_action)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    for (arm, label) in dispatched.iter().zip(labels.iter()) {
+        ctx.emitter.label(label);
+        emit_plan_arm(ctx, arm, cleanup, &mut emit_action)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits one arm, handling the operation-independent refusal itself.
+fn emit_plan_arm(
+    ctx: &mut FunctionContext<'_>,
+    arm: &PropertyRuntimeArm,
+    cleanup: DispatchStackCleanup,
+    emit_action: &mut impl FnMut(&mut FunctionContext<'_>, &PropertyRuntimeArm) -> Result<()>,
+) -> Result<()> {
+    if let PropertyRuntimeAction::Refuse { message } = &arm.action {
+        let message = message.clone();
+        cleanup.release(ctx);
+        super::super::exceptions::emit_error(ctx, &message);
+        return Ok(());
+    }
+    emit_action(ctx, arm)
+}
+
+/// Emits one property access for a receiver still held as an SSA value.
+///
+/// The receiver is materialized ONCE, before any arm, because every probe is emitted ahead of
+/// every action body: an action is free to clobber the probe register afterwards.
+pub(super) fn emit_object_property_runtime_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    plan: &PropertyRuntimePlan,
+    label_prefix: &str,
+    cleanup: DispatchStackCleanup,
+    emit_action: impl FnMut(&mut FunctionContext<'_>, &PropertyRuntimeArm) -> Result<()>,
+) -> Result<()> {
+    if plan.fixed_arm().is_some() {
+        return emit_property_runtime_dispatch(
+            ctx,
+            plan,
+            label_prefix,
+            cleanup,
+            |_, _, _| {},
+            emit_action,
+        );
+    }
+    let probe_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, probe_reg)?;
+    emit_property_runtime_dispatch(
+        ctx,
+        plan,
+        label_prefix,
+        cleanup,
+        |ctx, class_id, label| {
+            emit_branch_if_object_reg_class_matches(ctx, probe_reg, class_id, label)
+        },
+        emit_action,
+    )
+}
+
+/// Reports a write arm that reached `DynamicMissing`, which the reservation must prevent.
+///
+/// `crate::types::checker::scope_dynamic_storage` reserves the per-instance hash for exactly the
+/// classes a reachable mutation can address, and expands that over subclasses, so a write whose
+/// runtime class resolves the name dynamically always has somewhere to put the value. Reaching
+/// here means the reservation and the backend disagree, and php stores a value in that program,
+/// so the honest answer is to fail the build rather than to drop the write in silence.
+pub(super) fn dynamic_write_without_storage(class_name: &str, property: &str) -> CodegenIrError {
+    CodegenIrError::invalid_module(format!(
+        "write to dynamic property {}::${} reached a class with no per-instance property hash; \
+         scope-dynamic storage reservation and backend dispatch disagree",
+        class_name, property
+    ))
+}
+
+/// Compares a receiver held in `object_reg` against one candidate class id.
+///
+/// The runtime class id is the object's header word, the same one
+/// `emit_branch_if_stacked_object_class_matches` reads for the Mixed ladders.
+///
+/// The receiver SURVIVES the probe, because a ladder emits every probe before any arm body and
+/// each probe reads the receiver again. Both scratch registers therefore have to be distinct from
+/// `object_reg`, which callers take from `abi::symbol_scratch_reg`: `x9` on AArch64 and `r11` on
+/// x86_64. Spelling the candidate register `r11` literally aliased the receiver on x86_64, so the
+/// first non-matching probe overwrote it with a class id and the NEXT probe dereferenced that
+/// immediate as a pointer. `abi::tertiary_scratch_reg` is `x11` and `rcx`, which keeps AArch64
+/// byte-identical and removes the alias on x86_64.
+pub(super) fn emit_branch_if_object_reg_class_matches(
+    ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
+    class_id: u64,
+    matched_label: &str,
+) {
+    let header_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    debug_assert!(
+        header_reg != object_reg && candidate_reg != object_reg,
+        "class-id probe must not clobber the receiver it reads on every arm"
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("ldr {}, [{}]", header_reg, object_reg)); // load the receiver's runtime class id from its object header
+            abi::emit_load_int_immediate(ctx.emitter, candidate_reg, class_id as i64);
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", header_reg, candidate_reg)); // compare it with this candidate class
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // take that class's own runtime action
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov {}, QWORD PTR [{}]", header_reg, object_reg)); // load the receiver's runtime class id from its object header
+            abi::emit_load_int_immediate(ctx.emitter, candidate_reg, class_id as i64);
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", header_reg, candidate_reg)); // compare it with this candidate class
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // take that class's own runtime action
+        }
+    }
+}
+
+/// Returns every property NAME a RUNTIME name can match on a receiver of this static class.
+///
+/// A by-name ladder used to enumerate the static class's layout alone, which is only an upper
+/// bound on the receiver: a module-declared subclass can INTRODUCE a property its parent never
+/// had, and php answers `$base->{$k}` from that subclass's own slot when the instance really is
+/// one. A name missing from the ladder fell into the hash miss arm instead, so the access went to
+/// the per-instance hash while php went to a declared slot, and the two disagreed about both the
+/// value and the storage.
+///
+/// The static class's own layout order comes FIRST and is preserved exactly, so a program whose
+/// receiver class has no declared subclass emits the same ladder it emitted before. Names only a
+/// subclass declares follow, ordered by class id and then by that class's layout, which is
+/// deterministic regardless of how `class_infos` iterates.
+pub(super) fn runtime_name_candidate_properties(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Result<Vec<String>> {
+    let normalized = class_name.trim_start_matches('\\');
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(normalized)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", normalized)))?;
+    let mut names = class_info
+        .properties
+        .iter()
+        .map(|(property, _)| property.clone())
+        .collect::<Vec<_>>();
+    let mut subclasses = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(candidate, _)| {
+            candidate.as_str() != normalized
+                && crate::types::class_inherits_from(
+                    &ctx.module.class_infos,
+                    candidate.as_str(),
+                    normalized,
+                )
+        })
+        .collect::<Vec<_>>();
+    subclasses.sort_by_key(|(_, candidate_info)| candidate_info.class_id);
+    for (_, candidate_info) in subclasses {
+        for (property, _) in &candidate_info.properties {
+            if !names.iter().any(|name| name == property) {
+                names.push(property.clone());
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Returns the per-runtime-class plan for a name php does NOT answer from a declared slot on the
+/// receiver's static class, or `None` when this access is an ordinary declared-slot one.
+///
+/// The entry condition is deliberately the one the hash routes already used: the name is a strict
+/// ancestor's private slot in this scope, or the static class answers it from its per-instance
+/// hash. Everything else keeps the declared-slot path it had before, so this phase does not
+/// change what an ordinary property access emits.
+///
+/// What the plan adds inside that condition is php's answer per RUNTIME class, which can differ
+/// in kind and not only in address: `#[\AllowDynamicProperties] class A {} class B extends A {
+/// public $p; }` answers `$a->p` from the hash on an `A` and from `B`'s own slot on a `B`, and the
+/// same is true of a subclass that redeclares a strict ancestor's private name as public.
+pub(super) fn dynamic_property_runtime_plan_for_object(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    kind: PropertyAccessKind,
+    inst: &Instruction,
+) -> Result<Option<PropertyRuntimePlan>> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)? else {
         return Ok(None);
     };
-    dynamic_property_hash_offset_for_class(ctx, &class_name, property)
+    dynamic_property_runtime_plan_for_class(ctx, &class_name, property, kind, inst)
+}
+
+/// The named-class form of [`dynamic_property_runtime_plan_for_object`].
+pub(super) fn dynamic_property_runtime_plan_for_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    kind: PropertyAccessKind,
+    inst: &Instruction,
+) -> Result<Option<PropertyRuntimePlan>> {
+    let normalized = class_name.trim_start_matches('\\');
+    let answers_dynamically = property_name_is_scope_dynamic(ctx, normalized, property)
+        || dynamic_property_hash_offset_for_class(ctx, normalized, property)?.is_some()
+        || subtree_answers_from_its_own_hash(ctx, normalized, property)?;
+    if !answers_dynamically {
+        return Ok(None);
+    }
+    resolve_property_runtime_plan(ctx, normalized, property, kind, inst).map(Some)
+}
+
+/// Returns whether a module-declared SUBCLASS answers this name from its OWN per-instance hash
+/// while the static class does not resolve it to a slot this scope can see.
+///
+/// Asking only the static class made the plan ineligible for the case where the base has no hash
+/// at all: `class P {} #[\AllowDynamicProperties] class Q extends P {}` with `f(P $x, $k) { $x->{$k} = 1; }`
+/// found no storage on `P`, so the access fell through to a path that DROPPED the write, while php
+/// stores it on the `Q` the receiver really is. The static class is only an upper bound on the
+/// runtime class, and hash storage is a per-class property, so the eligibility question has to be
+/// asked of the whole subtree.
+///
+/// The guard on the front is what keeps the blast radius where phase B2 put it: a name the static
+/// class resolves to a VISIBLE slot keeps its ordinary declared-slot lowering untouched. php
+/// forbids weakening visibility in a subclass, so such a name stays reachable on every subclass
+/// and keeps the inherited slot index.
+fn subtree_answers_from_its_own_hash(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) -> Result<bool> {
+    if matches!(
+        resolve_property_name_in_current_scope(ctx, class_name, property),
+        PropertyNameResolution::Visible | PropertyNameResolution::ScopePrivate { .. }
+    ) {
+        return Ok(false);
+    }
+    for (candidate, _) in &ctx.module.class_infos {
+        if candidate.as_str() == class_name
+            || !crate::types::class_inherits_from(
+                &ctx.module.class_infos,
+                candidate.as_str(),
+                class_name,
+            )
+        {
+            continue;
+        }
+        if dynamic_property_hash_offset_for_class(ctx, candidate, property)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Resolves what php does with one property NAME on `class_name` from the body's LEXICAL scope.
@@ -120,14 +756,18 @@ pub(super) fn resolve_property_name_in_current_scope(
     )
 }
 
-/// One arm of a runtime-name by-name dispatch ladder.
+/// php's answer for ONE property name on ONE class, as the `Mixed` candidate builders read it.
+///
+/// The arm no longer carries the property NAME. Every caller already knows which name it asked
+/// about, and the by-name ladders that once selected an arm by comparing that field are gone:
+/// they resolve a per-runtime-class plan per candidate name instead. Keeping a second copy of the
+/// name here only made it possible for the two to disagree. `Refuse` still carries php's verbatim
+/// message, which names the class and the property, so no diagnostic loses anything.
 pub(super) enum PropertyNameArm {
     /// The name addresses this slot.
     Slot(PropertySlot),
     /// php refuses the access from this scope: raise the catchable `Error` carrying this message.
     Refuse {
-        /// Property name the runtime string must equal for this arm to run.
-        property: String,
         /// php 8.5's verbatim wording, e.g. `Cannot access private property D::$n`.
         message: String,
     },
@@ -136,10 +776,7 @@ pub(super) enum PropertyNameArm {
     /// Only a READ builds this arm. A strict ancestor's private slot still occupies the physical
     /// layout under this plain name, so the arm exists to keep the name away from that slot and
     /// send it to the per-instance hash, or to php `null` when the class reserves no hash.
-    ScopeDynamic {
-        /// Property name the runtime string must equal for this arm to run.
-        property: String,
-    },
+    ScopeDynamic,
     /// php would answer this name from `__get` or `__isset`, which is not dispatchable yet.
     ///
     /// The class declares the accessor php consults BEFORE it reports anything, so neither the
@@ -149,22 +786,7 @@ pub(super) enum PropertyNameArm {
     /// may not see, and handing it back would be a storage escape dressed up as a value.
     ///
     /// The php-correct value arrives with the dedicated runtime-name magic dispatch phase.
-    MagicDeferred {
-        /// Property name the runtime string must equal for this arm to run.
-        property: String,
-    },
-}
-
-impl PropertyNameArm {
-    /// Returns the property name this arm answers for.
-    pub(super) fn property(&self) -> &str {
-        match self {
-            Self::Slot(slot) => &slot.property,
-            Self::Refuse { property, .. }
-            | Self::ScopeDynamic { property }
-            | Self::MagicDeferred { property } => property,
-        }
-    }
+    MagicDeferred,
 }
 
 /// Returns php's fetch mode for one property-read instruction, defaulting to a value read.
@@ -178,37 +800,6 @@ pub(super) fn property_fetch_mode(inst: &Instruction) -> PropertyFetchMode {
     }
 }
 
-/// Resolves the ladder arm one property name takes on a WRITE, or `None` when it is dynamic.
-///
-/// `Visible` keeps the receiver's own by-name answer. `ScopePrivate` addresses the ANCESTOR's
-/// slot instead, because the receiver's by-name table resolves a redeclared private property to
-/// the child's shadowing slot and writing that one would hit a different property. `Dynamic`
-/// drops the arm so the name falls into the caller's hash miss path, which creates the dynamic
-/// property with php's deprecation. `Inaccessible` becomes a refusal: php raises a catchable
-/// `Error` and never touches the storage.
-pub(super) fn resolve_property_write_arm(
-    ctx: &FunctionContext<'_>,
-    class_name: &str,
-    property: &str,
-    inst: &Instruction,
-) -> Result<Option<PropertyNameArm>> {
-    let normalized = class_name.trim_start_matches('\\');
-    match resolve_property_name_in_current_scope(ctx, normalized, property) {
-        PropertyNameResolution::Visible => {
-            resolve_property_slot_for_class(ctx, normalized, property, inst)
-                .map(|slot| Some(PropertyNameArm::Slot(slot)))
-        }
-        PropertyNameResolution::ScopePrivate { scope, index } => {
-            resolve_scope_private_property_slot(ctx, &scope, index, property, inst)
-                .map(|slot| Some(PropertyNameArm::Slot(slot)))
-        }
-        PropertyNameResolution::Dynamic => Ok(None),
-        PropertyNameResolution::Inaccessible(visibility) => Ok(Some(PropertyNameArm::Refuse {
-            property: property.to_string(),
-            message: property_access_error_message(&visibility, normalized, property),
-        })),
-    }
-}
 
 /// Resolves the ladder arm one property name takes on a READ, or `None` when it drops out.
 ///
@@ -235,9 +826,7 @@ pub(super) fn resolve_property_read_arm(
     if class_declares_property_magic(ctx, normalized, mode)
         && !matches!(resolution, PropertyNameResolution::Visible)
     {
-        return Ok(Some(PropertyNameArm::MagicDeferred {
-            property: property.to_string(),
-        }));
+        return Ok(Some(PropertyNameArm::MagicDeferred));
     }
     match resolution {
         PropertyNameResolution::Visible => {
@@ -248,12 +837,9 @@ pub(super) fn resolve_property_read_arm(
             resolve_scope_private_property_slot(ctx, &scope, index, property, inst)
                 .map(|slot| Some(PropertyNameArm::Slot(slot)))
         }
-        PropertyNameResolution::Dynamic => Ok(Some(PropertyNameArm::ScopeDynamic {
-            property: property.to_string(),
-        })),
+        PropertyNameResolution::Dynamic => Ok(Some(PropertyNameArm::ScopeDynamic)),
         PropertyNameResolution::Inaccessible(visibility) => Ok(mode.is_read().then(|| {
             PropertyNameArm::Refuse {
-                property: property.to_string(),
                 message: property_access_error_message(&visibility, normalized, property),
             }
         })),
@@ -276,27 +862,43 @@ fn class_declares_property_magic(
         .is_some_and(|class_info| class_info.methods.contains_key(&php_symbol_key(magic)))
 }
 
-/// Resolves the slot a property name addresses for a REFERENCE binding, ignoring accessibility.
+/// Resolves the ladder arm a property name takes for a REFERENCE binding on ONE class.
 ///
-/// `$x = &$mixed->p` and a by-reference return are writes as much as reads, and php's refusal for
-/// them is phase B2's subject. This keeps the pre-B1 answer verbatim so the reference paths do not
-/// change behaviour in a phase that owns reads: `Dynamic` has no slot, everything else takes the
-/// scope-selected one.
-pub(super) fn resolve_property_reference_slot(
+/// `$x = &$o->p`, a by-reference argument and a by-reference return all hand the CALLER the
+/// address of the storage, which is the widest exposure a property access has: whatever the cell
+/// aliases can be read and written for as long as the alias lives. So the accessibility question
+/// is asked here in full, not deferred to whoever dereferences the pointer.
+///
+/// `Visible` and `ScopePrivate` take the scope-selected slot, exactly as before. `Inaccessible`
+/// becomes a refusal carrying php's verbatim message instead of handing back the slot, which is
+/// what pre-B1 did and what phase B1 deliberately left standing for this phase. `Dynamic` has no
+/// slot at all: php creates a distinct dynamic property and binds the reference to THAT, so the
+/// one answer that must never be given is the strict ancestor's physical slot.
+///
+/// Binding a reference INTO the per-instance hash is a capability this compiler does not have
+/// yet, for any class: `$r = &$o->d` on a plain `stdClass` is already an `unsupported` backend
+/// diagnostic. `None` therefore surfaces as that same diagnostic, which is a refusal to compile
+/// rather than a silent read of storage this scope may not see.
+pub(super) fn resolve_property_reference_arm(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     property: &str,
     inst: &Instruction,
-) -> Result<Option<PropertySlot>> {
+) -> Result<Option<PropertyNameArm>> {
     let normalized = class_name.trim_start_matches('\\');
     match resolve_property_name_in_current_scope(ctx, normalized, property) {
+        PropertyNameResolution::Visible => {
+            resolve_property_slot_for_class(ctx, normalized, property, inst)
+                .map(|slot| Some(PropertyNameArm::Slot(slot)))
+        }
         PropertyNameResolution::ScopePrivate { scope, index } => {
-            resolve_scope_private_property_slot(ctx, &scope, index, property, inst).map(Some)
+            resolve_scope_private_property_slot(ctx, &scope, index, property, inst)
+                .map(|slot| Some(PropertyNameArm::Slot(slot)))
         }
         PropertyNameResolution::Dynamic => Ok(None),
-        PropertyNameResolution::Visible | PropertyNameResolution::Inaccessible(_) => {
-            resolve_property_slot_for_class(ctx, normalized, property, inst).map(Some)
-        }
+        PropertyNameResolution::Inaccessible(visibility) => Ok(Some(PropertyNameArm::Refuse {
+            message: property_access_error_message(&visibility, normalized, property),
+        })),
     }
 }
 
@@ -366,18 +968,12 @@ pub(super) fn property_name_is_scope_dynamic(
     class_name: &str,
     property: &str,
 ) -> bool {
-    let normalized = class_name.trim_start_matches('\\');
-    ctx.module
-        .class_infos
-        .get(normalized)
-        .is_some_and(|class_info| {
-            class_info
-                .properties
-                .iter()
-                .any(|(name, _)| name == property)
-        })
-        && resolve_property_name_in_current_scope(ctx, normalized, property)
-            == PropertyNameResolution::Dynamic
+    crate::types::property_name_shadows_ancestor_private_slot(
+        &ctx.module.class_infos,
+        class_name,
+        property,
+        ctx.function.lexical_class.as_deref(),
+    )
 }
 
 /// Returns the receiver's class when `property` is a scope-dynamic name on it.

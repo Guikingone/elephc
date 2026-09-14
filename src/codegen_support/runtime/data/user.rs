@@ -3547,6 +3547,7 @@ mod tests {
             allow_dynamic_properties: false,
             eval_property_storage: false,
             clone_override_property_storage: false,
+            scope_dynamic_property_storage: false,
             constants: HashMap::new(),
     constant_deprecations: HashMap::new(),
     constant_types: HashMap::new(),

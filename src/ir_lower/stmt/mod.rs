@@ -81,6 +81,12 @@ use return_coercions::*;
 use static_property_helpers::*;
 
 pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr};
+// Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel
+// for `__unset` that the write path needs for `__set`.
+pub(crate) use instance_property_writes::{
+    borrow_receiver_as_runtime_class, box_value_for_runtime_shaped_receiver,
+    emit_receiver_instanceof, magic_accessor_subclasses,
+};
 pub(super) use typed_foreach::coerce_typed_assign_value;
 pub(super) use instance_property_writes::contextualize_property_array_value;
 pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;

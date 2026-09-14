@@ -168,21 +168,23 @@ pub(super) fn lower_const_dynamic_prop_get(
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
     }
     let mode = property_fetch_mode(inst);
-    if let Some(class_name) = scope_dynamic_property_class_for_object(ctx, object, property)? {
-        if matches!(
-            resolve_property_read_arm(ctx, &class_name, property, mode, inst)?,
-            Some(PropertyNameArm::MagicDeferred { .. })
-        ) {
-            emit_dynamic_property_miss_result(ctx, inst);
-            return store_if_result(ctx, inst);
-        }
-        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-        ctx.load_value_to_reg(object, base_reg)?;
-        emit_scope_dynamic_property_read(ctx, inst, &class_name, property, base_reg, mode)?;
-        return store_if_result(ctx, inst);
-    }
-    if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, property)? {
-        return lower_allow_dynamic_prop_get(ctx, inst, object, property, offset);
+    // Same runtime-class rule as the `PropGet` sibling: a name php does not answer from a declared
+    // slot on the STATIC class is decided per runtime class, kind and all.
+    if let Some(plan) = dynamic_property_runtime_plan_for_object(
+        ctx,
+        object,
+        property,
+        PropertyAccessKind::DirectRead(mode),
+        inst,
+    )? {
+        return emit_object_property_runtime_dispatch(
+            ctx,
+            object,
+            &plan,
+            "const_dyn_prop_get",
+            DispatchStackCleanup::NONE,
+            |ctx, arm| emit_dynamic_plan_read(ctx, inst, object, property, arm, mode),
+        );
     }
     // A literal name reaches an inaccessible slot only where the checker tolerates the access.
     // php raises for a value read and answers a probe `null`; neither may read the slot, and on a
@@ -197,7 +199,7 @@ pub(super) fn lower_const_dynamic_prop_get(
             // `MagicDeferred` is php's accessor answer this compiler cannot dispatch yet, and
             // `None` is a probe of a refused name. Both answer php `null` without reading the
             // slot, which holds storage this scope may not see.
-            Some(PropertyNameArm::MagicDeferred { .. }) | None => {
+            Some(PropertyNameArm::MagicDeferred) | None => {
                 emit_dynamic_property_miss_result(ctx, inst);
                 return store_if_result(ctx, inst);
             }
@@ -239,6 +241,21 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
             ))
         })
         .collect::<Vec<_>>();
+    // A runtime name a class does not DECLARE can still live in that class's own per-instance
+    // hash. Without an arm for it the name reached a miss path that understands `stdClass` alone,
+    // so an `#[\AllowDynamicProperties]` user class answered `null` for a key it really held.
+    // The arms are per CLASS, because the name is only known at run time; the declared (class,
+    // name) probes above run first, so a name the class declares keeps its declared answer.
+    let hash_arms = mixed_class_hash_arms(ctx, "", &[])?;
+    let hash_labels = hash_arms
+        .iter()
+        .map(|arm| {
+            ctx.next_label(&format!(
+                "mixed_dyn_prop_get_hash_{}",
+                label_fragment(&arm.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -249,10 +266,26 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, &candidate.candidate, label);
+        emit_branch_if_mixed_dynamic_property_candidate_matches(
+            ctx,
+            candidate.candidate.class_id,
+            &candidate.candidate.slot.property,
+            label,
+        );
+    }
+    for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
+        emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
+        ctx.emitter.label(label);
+        // The arm matched this runtime class, so the offset is its own. The helper takes the
+        // runtime key from the stacked block and releases that block itself.
+        lower_runtime_allow_dynamic_prop_get(ctx, inst, arm.hash_offset, 16, 0, 32)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);

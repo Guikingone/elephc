@@ -271,6 +271,16 @@ pub struct ClassInfo {
     /// `eval_property_storage` this is a storage capability, not PHP's permission: creating
     /// the property still emits php 8.5's `Creation of dynamic property C::$n is deprecated`.
     pub clone_override_property_storage: bool,
+    /// EIR reserves the same GC-visible property hash for a class a reachable MUTATION can
+    /// address under a strict ancestor's private name.
+    ///
+    /// php 7.4 removed shadow properties: `$child->p = 1` outside the class that declared
+    /// `private $p` creates a DISTINCT dynamic property and leaves the ancestor's slot alone.
+    /// Without a hash the write has nowhere to go and the backend's by-name ladder falls back
+    /// onto the ancestor's physical slot, which is the storage escape phase B2 exists to close.
+    /// Like the two flags above this is a storage capability, not php's permission: creating the
+    /// property still emits php 8.5's `Creation of dynamic property C::$n is deprecated`.
+    pub scope_dynamic_property_storage: bool,
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
@@ -514,6 +524,36 @@ pub fn resolve_property_name(
     }
 }
 
+/// Returns whether the layout of `class_name` carries `property` but php resolves it to a
+/// DYNAMIC property from `scope`.
+///
+/// This is the strict-ancestor-private shape and nothing else. `resolve_property_name` alone is
+/// too wide for it: that function answers `Dynamic` for EVERY name a class does not declare, so
+/// an ordinary undeclared name on an `#[\AllowDynamicProperties]` class would pass too. The
+/// physical-slot test is what narrows it, because only a strict ancestor's private slot is both
+/// present in the layout and invisible by name.
+///
+/// It is the single authority for three decisions that must agree: which mutation sites reserve
+/// per-instance hash storage (`crate::types::checker::scope_dynamic_storage`), which names the
+/// backend must keep away from the physical slot
+/// (`crate::codegen::lower_inst::objects::property_name_is_scope_dynamic`), and which names the
+/// checker must not validate against the ancestor's declared type.
+pub fn property_name_shadows_ancestor_private_slot(
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+    property: &str,
+    scope: Option<&str>,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    classes.get(normalized).is_some_and(|class_info| {
+        class_info
+            .properties
+            .iter()
+            .any(|(name, _)| name == property)
+    }) && resolve_property_name(classes, normalized, property, scope)
+        == PropertyNameResolution::Dynamic
+}
+
 /// Returns the scope-selected private slot for a name, when the scope owns one the receiver has.
 fn resolve_scope_private_property_name(
     classes: &HashMap<String, ClassInfo>,
@@ -599,6 +639,7 @@ impl ClassInfo {
         self.allow_dynamic_properties
             || self.eval_property_storage
             || self.clone_override_property_storage
+            || self.scope_dynamic_property_storage
     }
 
     /// Returns whether CREATING a dynamic property on an instance is deprecated rather than free.
@@ -608,7 +649,8 @@ impl ClassInfo {
     /// carries neither `#[\AllowDynamicProperties]` nor stdClass's engine exemption. Eval's own
     /// reserved storage keeps its established behavior and is deliberately not consulted here.
     pub fn dynamic_property_creation_is_deprecated(&self) -> bool {
-        self.clone_override_property_storage && !self.allow_dynamic_properties
+        (self.clone_override_property_storage || self.scope_dynamic_property_storage)
+            && !self.allow_dynamic_properties
     }
 
     /// Returns whether an UNDECLARED property name addresses this class's hash directly.
@@ -617,7 +659,9 @@ impl ClassInfo {
     /// `__elephc_eval_property_hash_slot`, which gates every access on eval ownership so an
     /// ordinary native instance of the same class keeps refusing the name.
     pub fn dynamic_property_hash_is_name_addressable(&self) -> bool {
-        self.allow_dynamic_properties || self.clone_override_property_storage
+        self.allow_dynamic_properties
+            || self.clone_override_property_storage
+            || self.scope_dynamic_property_storage
     }
 
     /// Returns whether a method-map entry is a generated property accessor rather than a PHP method.

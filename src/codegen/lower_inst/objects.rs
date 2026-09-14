@@ -242,7 +242,7 @@ pub(super) use property_resolution::{
     raw_value_php_type,
 };
 pub(super) use runtime_property_writes::{
-    lower_dynamic_prop_set, lower_prop_set, lower_prop_unset,
+    lower_dynamic_prop_set, lower_dynamic_prop_unset_runtime, lower_prop_set, lower_prop_unset,
 };
 pub(super) use clone_and_spl::lower_object_clone_shallow;
 

@@ -358,7 +358,54 @@ mod instruction_effect_tests {
     fn unset_effects_preserve_cow_and_destructor_boundaries() {
         let required = Effects::READS_HEAP | Effects::WRITES_HEAP | Effects::ALLOC_HEAP
             | Effects::REFCOUNT_OP | Effects::MAY_THROW | Effects::MAY_FATAL;
-        for op in [Op::HashUnset, Op::PropUnset, Op::OffsetUnset] {
+        for op in [
+            Op::HashUnset,
+            Op::PropUnset,
+            Op::DynamicPropUnset,
+            Op::OffsetUnset,
+        ] {
+            assert!(op.default_effects().contains(required), "{op:?}");
+        }
+    }
+
+    /// A property STORE can create a dynamic property, which diagnoses and can unwind.
+    ///
+    /// Both forms carry the same contract because phase B2 gave them the same consequences: the
+    /// per-instance hash is read and can be reallocated, the boxed value is refcounted, php 8.5's
+    /// `Creation of dynamic property C::$p is deprecated` goes to the diagnostic stream, and a
+    /// name this scope may not write, or a value a declared slot refuses, raises a catchable
+    /// `Error`. Advertising less let the optimizer reorder or drop such a store.
+    #[test]
+    fn property_store_effects_cover_dynamic_creation_diagnostics_and_unwind() {
+        let required = Effects::READS_GLOBAL
+            | Effects::WRITES_GLOBAL
+            | Effects::READS_HEAP
+            | Effects::WRITES_HEAP
+            | Effects::ALLOC_HEAP
+            | Effects::MAY_THROW
+            | Effects::MAY_WARN
+            | Effects::MAY_FATAL
+            | Effects::REFCOUNT_OP;
+        for op in [Op::PropSet, Op::DynamicPropSet] {
+            assert!(op.default_effects().contains(required), "{op:?}");
+        }
+    }
+
+    /// A reference-cell load can now refuse, so it carries the checked variant's contract.
+    ///
+    /// The plain form used to advertise a bare `READS_HEAP`. Phase B2 made it raise php's
+    /// catchable access `Error` for a name this scope may not reach, and made the `Mixed` form
+    /// raise instead of publishing a zero pointer as a live cell. That throw unwinds through
+    /// frame cleanup which can run PHP destructors, so the two forms must not differ.
+    #[test]
+    fn reference_cell_loads_share_the_unwinding_contract() {
+        let required = Effects::READS_HEAP
+            | Effects::WRITES_HEAP
+            | Effects::ALLOC_HEAP
+            | Effects::REFCOUNT_OP
+            | Effects::MAY_THROW
+            | Effects::MAY_FATAL;
+        for op in [Op::LoadPropRefCell, Op::LoadPropRefCellChecked] {
             assert!(op.default_effects().contains(required), "{op:?}");
         }
     }
@@ -729,6 +776,10 @@ fn validate_opcode_rules(
         }
         PropSet => check_count(inst_id, inst, 2, "2"),
         PropUnset => check_count(inst_id, inst, 1, "1"),
+        // The receiver plus the runtime name. `PropUnset` names its property in an immediate, so
+        // it takes one operand; this op takes the name as a VALUE, which is the whole difference
+        // between the two, and the count is what pins it.
+        DynamicPropUnset => check_count(inst_id, inst, 2, "2"),
         CallablePtr
         | NormalizeCallable
         | PdoAdapterAddr

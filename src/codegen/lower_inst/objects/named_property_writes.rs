@@ -67,6 +67,138 @@ pub(super) fn lower_mixed_prop_set(
     Ok(())
 }
 
+/// Lowers a static-name write php does not answer from a declared slot on the STATIC class.
+///
+/// The runtime class decides the whole action, not merely the hash offset: a subclass that
+/// redeclares the name as a public property stores into ITS OWN slot, a subclass that declares
+/// `__set` is peeled off upstream by `crate::ir_lower`, one that refuses the name raises, and each
+/// class lays its hash out at its own offset and reports its own name in php's notice.
+pub(super) fn lower_planned_dynamic_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+    plan: &PropertyRuntimePlan,
+    inst: &Instruction,
+) -> Result<()> {
+    emit_object_property_runtime_dispatch(
+        ctx,
+        object,
+        plan,
+        "prop_set_dynamic",
+        DispatchStackCleanup::NONE,
+        |ctx, arm| emit_dynamic_plan_write(ctx, object, value, property, arm, inst),
+    )
+}
+
+/// Emits one runtime-class arm of such a write.
+fn emit_dynamic_plan_write(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+    arm: &PropertyRuntimeArm,
+    inst: &Instruction,
+) -> Result<()> {
+    match &arm.action {
+        // This runtime class DECLARES the name, so php stores into its slot. The arm only runs
+        // when the receiver's runtime class id matched, so the slot is this class's own.
+        PropertyRuntimeAction::Slot(slot) => {
+            let value_ty = ctx.value_php_type(value)?;
+            ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
+            let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+            ctx.load_value_to_reg(object, base_reg)?;
+            emit_property_store(ctx, value, slot, base_reg)
+        }
+        PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
+            // The NAME comes from the arm, not from the receiver's static type: php reports the
+            // class the instance really is, so a `Mid`-typed write on a `Leaf` says `Leaf::$p`.
+            emit_named_dynamic_property_creation_deprecation(
+                ctx,
+                &arm.class_name,
+                property,
+                object,
+                *hash_offset,
+            )?;
+            lower_allow_dynamic_prop_set(ctx, object, value, property, *hash_offset)
+        }
+        // php STORES a value here, so there is no correct way to emit nothing.
+        // `crate::types::checker::scope_dynamic_storage` reserves the hash for exactly the classes
+        // a reachable mutation can address and expands that over subclasses, which makes this arm
+        // unreachable; reaching it means the reservation and this dispatch disagree, and the build
+        // has to fail rather than drop the write in silence.
+        PropertyRuntimeAction::DynamicMissing { .. } => {
+            Err(dynamic_write_without_storage(&arm.class_name, property))
+        }
+        // A DIRECT name never reaches this arm: `crate::ir_lower::stmt::instance_property_writes`
+        // peels a runtime class declaring `__set` off with an `instanceof` guard and calls the
+        // accessor there. Storing nothing here is what php does once the accessor answered.
+        // `MagicGet` is a read-only answer and cannot be built for a write.
+        PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet => Ok(()),
+        PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
+            "property dispatch handed a refusal arm to its action emitter",
+        )),
+    }
+}
+
+/// Emits php 8.5's `Creation of dynamic property C::$p is deprecated` for a STATIC name.
+///
+/// The runtime-name sibling below has to splice the key in from the temporary stack. A literal
+/// name makes the whole line a single constant, so the only runtime work is the existence probe
+/// php itself performs: the notice is reported when the key is ABSENT, and assigning to a
+/// dynamic property that already exists is an ordinary write php says nothing about.
+///
+/// `ClassInfo::dynamic_property_creation_is_deprecated()` is the single authority for whether
+/// php reports anything at all, so an `#[\AllowDynamicProperties]` class stays silent and a class
+/// whose hash the compiler reserved on its own behalf still reports, exactly as php does for an
+/// ordinary class.
+fn emit_named_dynamic_property_creation_deprecation(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    object: ValueId,
+    hash_offset: usize,
+) -> Result<()> {
+    let deprecated = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .is_some_and(|info| info.dynamic_property_creation_is_deprecated());
+    if !deprecated {
+        return Ok(());
+    }
+    let target = ctx.emitter.target;
+    let skip_label = ctx.next_label("named_dyn_prop_create_deprecation_skip");
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let (key_label, key_len) = ctx.data.add_string(property.as_bytes());
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        object_reg,
+        hash_offset,
+    );                                                                          // pass the receiver's dynamic-property hash to the existence probe
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &key_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 2),
+        key_len as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &skip_label);           // an existing key is a plain write, which php does not report
+    emit_property_warning_fragment(
+        ctx,
+        format!(
+            "Deprecated: Creation of dynamic property {}::${} is deprecated\n",
+            class_name, property
+        )
+        .as_bytes(),
+        true,
+    );
+    ctx.emitter.label(&skip_label);
+    Ok(())
+}
+
 /// Lowers a static-name write to an undeclared property on an allow-dynamic class.
 pub(super) fn lower_allow_dynamic_prop_set(
     ctx: &mut FunctionContext<'_>,
@@ -183,6 +315,104 @@ pub(super) fn lower_runtime_allow_dynamic_prop_set(
         hash_offset,
     );
     abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
+    Ok(())
+}
+
+/// Lowers a STATIC-name dynamic-property write whose receiver is staged on the temporary stack.
+///
+/// The sibling above takes the key from the stack because its name is only known at run time;
+/// this one takes the receiver from the stack because the name is a constant but the RECEIVER is
+/// a Mixed-ladder arm's unboxed payload. It does not release the frame: the Mixed write ladder
+/// releases one block for every arm at the arm's own end, so that all arms converge with the
+/// same stack pointer.
+pub(super) fn lower_stacked_named_dynamic_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    property: &str,
+    hash_offset: usize,
+    receiver_offset: usize,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let boxed_reg = abi::secondary_scratch_reg(ctx.emitter).to_string();
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
+    let target = ctx.emitter.target;
+    let (key_label, key_len) = ctx.data.add_string(property.as_bytes());
+    materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+    abi::emit_reg_move(ctx.emitter, &boxed_reg, abi::int_result_reg(ctx.emitter));
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        &object_reg,
+        hash_offset,
+    );
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &key_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(target, 3), &boxed_reg);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 4), 0);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 5),
+        runtime_value_tag(&PhpType::Mixed) as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    // The helper can reallocate, so the receiver is reloaded and the fresh table stored back.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &object_reg,
+        hash_offset,
+    );
+    Ok(())
+}
+
+/// Emits php's dynamic-creation notice for a STATIC name on a stacked receiver.
+///
+/// Same probe-then-report shape as the two siblings: the notice belongs to CREATION, so an
+/// existing key is a plain write php says nothing about, and
+/// `dynamic_property_creation_is_deprecated()` stays the single authority for whether php
+/// reports anything on this class at all.
+pub(super) fn emit_stacked_named_dynamic_property_creation_deprecation(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    hash_offset: usize,
+    receiver_offset: usize,
+) -> Result<()> {
+    let deprecated = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .is_some_and(|info| info.dynamic_property_creation_is_deprecated());
+    if !deprecated {
+        return Ok(());
+    }
+    let target = ctx.emitter.target;
+    let skip_label = ctx.next_label("stacked_dyn_prop_create_deprecation_skip");
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
+    let (key_label, key_len) = ctx.data.add_string(property.as_bytes());
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        &object_reg,
+        hash_offset,
+    );
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &key_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &skip_label);           // an existing key is a plain write, which php does not report
+    emit_property_warning_fragment(
+        ctx,
+        format!(
+            "Deprecated: Creation of dynamic property {}::${} is deprecated\n",
+            class_name, property
+        )
+        .as_bytes(),
+        true,
+    );
+    ctx.emitter.label(&skip_label);
     Ok(())
 }
 

@@ -72,7 +72,8 @@ pub use result::check_with_target;
 pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
 pub use schema::{
-    class_declares_private_property, class_inherits_from, resolve_property_name,
+    class_declares_private_property, class_inherits_from,
+    property_name_shadows_ancestor_private_slot, resolve_property_name,
     scope_shares_class_hierarchy, PropertyNameResolution,
 };
 pub use schema::{

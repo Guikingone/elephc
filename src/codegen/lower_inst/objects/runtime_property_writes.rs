@@ -35,8 +35,14 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, &property);
     }
-    if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
-        return lower_allow_dynamic_prop_set(ctx, object, value, &property, offset);
+    if let Some(plan) = dynamic_property_runtime_plan_for_object(
+        ctx,
+        object,
+        &property,
+        PropertyAccessKind::DirectWrite,
+        inst,
+    )? {
+        return lower_planned_dynamic_prop_set(ctx, object, value, &property, &plan, inst);
     }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
@@ -48,7 +54,6 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
     }
     emit_property_store(ctx, value, &slot, base_reg)
 }
-
 /// Lowers a dynamic property write (`$object->{$name} = $value`).
 pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_set(
     ctx: &mut FunctionContext<'_>,
@@ -95,8 +100,14 @@ pub(super) fn lower_const_dynamic_prop_set(
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, property);
     }
-    if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, property)? {
-        return lower_allow_dynamic_prop_set(ctx, object, value, property, offset);
+    if let Some(plan) = dynamic_property_runtime_plan_for_object(
+        ctx,
+        object,
+        property,
+        PropertyAccessKind::DirectWrite,
+        inst,
+    )? {
+        return lower_planned_dynamic_prop_set(ctx, object, value, property, &plan, inst);
     }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
@@ -147,10 +158,14 @@ pub(super) fn lower_runtime_object_prop_set(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
-    let arms = declared_dynamic_property_set_slots(ctx, class_name, value, inst)?;
-    let match_labels = arms
+    // EVERY candidate name gets an arm, and every arm dispatches by RUNTIME class. Emitting the
+    // static class's answer directly wrote the wrong storage under polymorphism in both
+    // directions: a subclass can redeclare a strict ancestor's private name as its own property,
+    // and it can WIDEN a `protected` the static class refuses into a `public` slot.
+    let property_names = runtime_name_candidate_properties(ctx, class_name)?;
+    let match_labels = property_names
         .iter()
-        .map(|arm| ctx.next_label(&format!("dyn_prop_set_{}", label_fragment(arm.property()))))
+        .map(|property| ctx.next_label(&format!("dyn_prop_set_{}", label_fragment(property))))
         .collect::<Vec<_>>();
     let miss_label = ctx.next_label("dyn_prop_set_miss");
     let done_label = ctx.next_label("dyn_prop_set_done");
@@ -162,46 +177,62 @@ pub(super) fn lower_runtime_object_prop_set(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (arm, label) in arms.iter().zip(match_labels.iter()) {
-        emit_branch_if_dynamic_name_matches(ctx, arm.property(), label);
+    for (property, label) in property_names.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, property, label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
-    for (arm, label) in arms.iter().zip(match_labels.iter()) {
+    for (property, label) in property_names.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        match arm {
-            PropertyNameArm::Slot(slot) => {
-                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-                abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-                emit_property_store(ctx, value, slot, base_reg)?;
-                abi::emit_release_temporary_stack(ctx.emitter, 32);
-                abi::emit_jump(ctx.emitter, &done_label);
-            }
-            // php refuses the write outright, so nothing is stored and the name never reaches the
-            // hash. The temporary block is released BEFORE the raise, which is what keeps the
-            // unwinder's stack pointer consistent with every other arm.
-            PropertyNameArm::Refuse { message, .. } => {
-                abi::emit_release_temporary_stack(ctx.emitter, 32);
-                super::super::exceptions::emit_error(ctx, message);
-            }
-            // A WRITE never builds either of these: `resolve_property_write_arm` drops a dynamic
-            // name so the miss arm below creates the dynamic property with php's deprecation, and
-            // it has no accessor-deferred answer. Falling through to that arm keeps the name on
-            // php's answer if the resolution ever changes.
-            PropertyNameArm::ScopeDynamic { .. } | PropertyNameArm::MagicDeferred { .. } => {
-                abi::emit_jump(ctx.emitter, &miss_label)
-            }
-        }
+        emit_runtime_name_stacked_write_arm(
+            ctx,
+            class_name,
+            property,
+            value,
+            &miss_label,
+            &done_label,
+            inst,
+        )?;
     }
 
     ctx.emitter.label(&miss_label);
     // A class with per-instance hash storage takes the undeclared name there. Falling straight
-    // through instead DROPPED the write, with no diagnostic anywhere.
-    match dynamic_property_hash_offset_for_class(ctx, class_name, "")? {
-        Some(hash_offset) => {
-            emit_dynamic_property_creation_deprecation(ctx, class_name, hash_offset, 16, 0)?;
-            lower_runtime_allow_dynamic_prop_set(ctx, value, hash_offset, 16, 0, 32)?;
-        }
+    // through instead DROPPED the write, with no diagnostic anywhere. The receiver is still
+    // stacked at offset 16 here, so the offset ladder probes it where it lies.
+    match dynamic_property_runtime_plan_for_class(
+        ctx,
+        class_name,
+        "",
+        PropertyAccessKind::RuntimeHashMiss,
+        inst,
+    )? {
+        // The receiver is still stacked at offset 16 here, so the ladder probes it there and each
+        // arm releases the site's 32-byte block itself. The arm's class name is the one php
+        // reports in its creation notice, not the receiver's static type.
+        Some(plan) => emit_property_runtime_dispatch(
+            ctx,
+            &plan,
+            "dyn_prop_set_hash",
+            DispatchStackCleanup(32),
+            |ctx, class_id, label| {
+                emit_branch_if_stacked_object_class_matches(ctx, class_id, 16, label)
+            },
+            |ctx, arm| match &arm.action {
+                PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
+                    emit_dynamic_property_creation_deprecation(
+                        ctx,
+                        &arm.class_name,
+                        *hash_offset,
+                        16,
+                        0,
+                    )?;
+                    lower_runtime_allow_dynamic_prop_set(ctx, value, *hash_offset, 16, 0, 32)
+                }
+                // A class in this subtree with no hash cannot hold the name at all. php would
+                // store, so the build fails rather than dropping the write in silence.
+                _ => Err(dynamic_write_without_storage(&arm.class_name, "{runtime name}")),
+            },
+        )?,
         None => abi::emit_release_temporary_stack(ctx.emitter, 32),
     }
     ctx.emitter.label(&done_label);
@@ -235,8 +266,8 @@ pub(super) fn lower_mixed_named_prop_set(
         .map(|candidate| {
             ctx.next_label(&format!(
                 "mixed_named_prop_set_{}_{}",
-                candidate.candidate.class_id,
-                label_fragment(&candidate.candidate.slot.property)
+                candidate.class_id,
+                label_fragment(property)
             ))
         })
         .collect::<Vec<_>>();
@@ -247,21 +278,39 @@ pub(super) fn lower_mixed_named_prop_set(
     push_mixed_unboxed_object_payload(ctx);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_stacked_object_class_matches(ctx, candidate.candidate.class_id, 0, label);
+        emit_branch_if_stacked_object_class_matches(ctx, candidate.class_id, 0, label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        match &candidate.refusal {
-            Some(message) => {
+        match &candidate.action {
+            MixedPropertyWriteAction::Refuse(message) => {
                 abi::emit_release_temporary_stack(ctx.emitter, 16);
                 super::super::exceptions::emit_error(ctx, message);
             }
-            None => {
+            MixedPropertyWriteAction::Slot(slot) => {
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 0);
-                emit_property_store(ctx, value, &candidate.candidate.slot, base_reg)?;
+                emit_property_store(ctx, value, slot, base_reg)?;
+                abi::emit_release_temporary_stack(ctx.emitter, 16);
+                abi::emit_jump(ctx.emitter, &done_label);
+            }
+            // php resolves the name to a DYNAMIC property on this runtime class, so the arm
+            // stores into that class's own per-instance hash. The offset is the arm's class's
+            // own, which is why no offset ladder is needed here: the class id IS the dispatch.
+            MixedPropertyWriteAction::DynamicHash {
+                class_name,
+                hash_offset,
+            } => {
+                emit_stacked_named_dynamic_property_creation_deprecation(
+                    ctx,
+                    class_name,
+                    property,
+                    *hash_offset,
+                    0,
+                )?;
+                lower_stacked_named_dynamic_prop_set(ctx, value, property, *hash_offset, 0)?;
                 abi::emit_release_temporary_stack(ctx.emitter, 16);
                 abi::emit_jump(ctx.emitter, &done_label);
             }
@@ -277,10 +326,110 @@ pub(super) fn lower_mixed_named_prop_set(
 
 /// One class-id arm of a Mixed-receiver property WRITE dispatch.
 pub(super) struct MixedPropertyWriteCandidate {
-    /// Class id and slot the arm matches on. The slot is also what a store arm writes.
-    candidate: MixedPropertyCandidate,
-    /// php's catchable access-error message when this scope may not write the slot at all.
-    refusal: Option<String>,
+    /// Runtime class id the arm matches on.
+    class_id: u64,
+    /// Property name the arm answers for. The runtime-name ladder compares it too.
+    property: String,
+    /// What the arm does once the runtime class matched.
+    action: MixedPropertyWriteAction,
+}
+
+/// What one class-id arm of a Mixed-receiver property WRITE does.
+enum MixedPropertyWriteAction {
+    /// Store into this class's declared slot.
+    Slot(PropertySlot),
+    /// php refuses the write from this scope: raise the catchable `Error` and store nothing.
+    Refuse(String),
+    /// php resolves the name to a DYNAMIC property here, so the arm stores into this class's
+    /// per-instance hash instead of into any slot.
+    ///
+    /// Without this arm the write fell through to the receiver-shaped miss path, whose helper
+    /// understands stdClass alone, and a `$mixed->p = v` on a strict ancestor's private name
+    /// stored NOTHING with no diagnostic anywhere.
+    DynamicHash {
+        /// Class whose hash this arm writes, for php's dynamic-creation notice.
+        class_name: String,
+        /// That class's own `8 + slots * 16` hash offset.
+        hash_offset: usize,
+    },
+}
+
+/// Emits the matched-name arm of a runtime-name write, dispatched by RUNTIME class.
+///
+/// The site's 32-byte block stays live across the dispatch, so the probes read the receiver where
+/// it already lies and each action releases the block exactly once. That is what lets the
+/// `DynamicMissing` action hand the name back to the ladder's own miss arm, which still needs the
+/// receiver and the runtime key on the stack.
+fn emit_runtime_name_stacked_write_arm(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    value: ValueId,
+    miss_label: &str,
+    done_label: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    let plan = resolve_property_runtime_plan(
+        ctx,
+        class_name,
+        property,
+        PropertyAccessKind::RuntimeWrite,
+        inst,
+    )?;
+    emit_property_runtime_dispatch(
+        ctx,
+        &plan,
+        &format!("dyn_prop_set_{}", label_fragment(property)),
+        DispatchStackCleanup(32),
+        |ctx, class_id, label| emit_branch_if_stacked_object_class_matches(ctx, class_id, 16, label),
+        |ctx, arm| match &arm.action {
+            // This runtime class declares the name, so php stores into its own slot.
+            PropertyRuntimeAction::Slot(slot) => {
+                let value_ty = ctx.value_php_type(value)?;
+                ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
+                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
+                emit_property_store(ctx, value, slot, base_reg)?;
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                abi::emit_jump(ctx.emitter, done_label);
+                Ok(())
+            }
+            // The name is a compile-time constant in this arm even though the ladder matched it
+            // at run time, so the static-key helpers apply and php's notice names THIS class.
+            PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
+                emit_stacked_named_dynamic_property_creation_deprecation(
+                    ctx,
+                    &arm.class_name,
+                    property,
+                    *hash_offset,
+                    16,
+                )?;
+                lower_stacked_named_dynamic_prop_set(ctx, value, property, *hash_offset, 16)?;
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                abi::emit_jump(ctx.emitter, done_label);
+                Ok(())
+            }
+            // No hash on this runtime class, so the name has nowhere to go HERE. That is the
+            // answer the ladder's receiver-shaped miss arm already gives, and it is where this
+            // name went before the arm existed, so it is handed back rather than failing the
+            // build: the storage reservation deliberately covers only the strict-ancestor-private
+            // shape this phase owns, not every undeclared name in the program.
+            PropertyRuntimeAction::DynamicMissing { .. } => {
+                abi::emit_jump(ctx.emitter, miss_label);
+                Ok(())
+            }
+            // php answers an accessor on this class, which a runtime name cannot reach yet. The
+            // arm must not store into any slot, so it stores nothing at all.
+            PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet => {
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                abi::emit_jump(ctx.emitter, done_label);
+                Ok(())
+            }
+            PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
+                "property dispatch handed a refusal arm to its action emitter",
+            )),
+        },
+    )
 }
 
 /// Collects the declared slots named `property` that can accept this value, by class id.
@@ -301,25 +450,38 @@ fn declared_mixed_named_property_set_candidates(
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             continue;
         }
-        if !class_info
+        // A class that does not DECLARE the name can still keep it in its own per-instance hash.
+        // Requiring a declared slot excluded every `#[\AllowDynamicProperties]` user class, and
+        // the write then fell through to the miss path, whose helper understands `stdClass`
+        // alone, so the store was dropped where php puts it in that class's hash.
+        let declares = class_info
             .properties
             .iter()
-            .any(|(declared, _)| declared == property)
+            .any(|(declared, _)| declared == property);
+        if !declares && dynamic_property_hash_offset_for_class(ctx, class_name, property)?.is_none()
         {
             continue;
         }
         let Some(candidate) =
-            mixed_property_write_candidate(ctx, class_name, property, value, &value_ty, inst)?
+            mixed_property_write_candidate(
+                ctx,
+                class_name,
+                property,
+                value,
+                &value_ty,
+                PropertyAccessKind::DirectWrite,
+                inst,
+            )?
         else {
             continue;
         };
         candidates.push(candidate);
     }
-    candidates.sort_by_key(|candidate| candidate.candidate.class_id);
+    candidates.sort_by_key(|candidate| candidate.class_id);
     Ok(candidates)
 }
 
-/// Builds one Mixed-receiver write arm for a class, or `None` when php answers it dynamically.
+/// Builds one Mixed-receiver write arm for a class, or `None` when the miss path must answer.
 ///
 /// A refusal arm still carries the slot: it is what the ladder compares the runtime class id and
 /// the property name against. The store simply never runs, so the value type is not checked for
@@ -330,43 +492,60 @@ fn mixed_property_write_candidate(
     property: &str,
     value: ValueId,
     value_ty: &PhpType,
+    kind: PropertyAccessKind,
     inst: &Instruction,
 ) -> Result<Option<MixedPropertyWriteCandidate>> {
     let Some(class_info) = ctx.module.class_infos.get(class_name) else {
         return Ok(None);
     };
     let class_id = class_info.class_id;
-    let arm = match resolve_property_write_arm(ctx, class_name, property, inst) {
-        Ok(Some(arm)) => arm,
-        Ok(None) | Err(_) => return Ok(None),
-    };
-    let (slot, refusal) = match arm {
-        PropertyNameArm::Slot(slot) => {
-            if ensure_property_value_supported(ctx, &slot, value, value_ty, inst).is_err() {
-                return Ok(None);
+    // This arm IS a runtime class, so one per-class answer is exactly what it needs and the
+    // ladder never has to dispatch a second time. Sharing the resolver with the typed-receiver
+    // plan is what keeps the two from drifting.
+    //
+    // A resolver failure is PROPAGATED, never swallowed into "no arm". Swallowing it omitted a
+    // known runtime class from the ladder and the miss path then dropped the write, which is the
+    // one outcome php never has. Failing the build is the fail-closed answer this backend already
+    // gives elsewhere for a store it cannot model.
+    let action = resolve_property_runtime_action(ctx, class_name, property, kind, inst)?;
+    let action = match action {
+        PropertyRuntimeAction::Slot(slot) => {
+            // FAIL CLOSED, never omit. `crate::ir_lower` boxes the value for a receiver whose
+            // class is only known at run time, so this check sees a `Mixed` value and accepts it
+            // for every slot the weak-mode guard can model; the guard then produces php's own two
+            // answers from the RUNTIME tag, coercing `'5'` into an `int` slot and raising the
+            // `TypeError` for `'nope'`. What is left here is a slot shape the backend genuinely
+            // cannot model, and the honest answer for that is to fail the build rather than to
+            // drop a whole runtime class out of the dispatch and lose the assignment with it.
+            ensure_property_value_supported(ctx, &slot, value, value_ty, inst)?;
+            MixedPropertyWriteAction::Slot(slot)
+        }
+        PropertyRuntimeAction::Refuse { message } => MixedPropertyWriteAction::Refuse(message),
+        PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
+            MixedPropertyWriteAction::DynamicHash {
+                class_name: class_name.to_string(),
+                hash_offset,
             }
-            (slot, None)
         }
-        PropertyNameArm::Refuse { message, .. } => {
-            let Ok(slot) = resolve_property_slot_for_class(ctx, class_name, property, inst) else {
-                return Ok(None);
-            };
-            (slot, Some(message))
-        }
-        // A write never builds either arm, and a class that cannot answer the name by slot is not
-        // a candidate for the class-id dispatch: the receiver-shaped miss path handles it.
-        PropertyNameArm::ScopeDynamic { .. } | PropertyNameArm::MagicDeferred { .. } => {
-            return Ok(None)
-        }
+        // This class has no hash, so it cannot hold the name at all, and php's answer for a
+        // receiver of this class is whatever the ladder's shared miss path already gives it.
+        // A write that php WOULD store never lands here: the storage reservation covers exactly
+        // the classes a reachable mutation can address.
+        PropertyRuntimeAction::DynamicMissing { .. } => return Ok(None),
+        // php answers an accessor on this class. The write is peeled off upstream for a direct
+        // name and deferred for a runtime one; either way this arm must not store into a slot,
+        // so the class simply does not contribute one.
+        PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::MagicDeferred => return Ok(None),
     };
     Ok(Some(MixedPropertyWriteCandidate {
-        candidate: MixedPropertyCandidate { class_id, slot },
-        refusal,
+        class_id,
+        property: property.to_string(),
+        action,
     }))
 }
 
 /// Branches to `matched_label` when a stacked object payload has the given class id.
-fn emit_branch_if_stacked_object_class_matches(
+pub(super) fn emit_branch_if_stacked_object_class_matches(
     ctx: &mut FunctionContext<'_>,
     class_id: u64,
     object_stack_offset: usize,
@@ -381,10 +560,18 @@ fn emit_branch_if_stacked_object_class_matches(
             ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // take the candidate's declared-slot store
         }
         Arch::X86_64 => {
+            // NOT `r12`. That register is callee-saved on this ABI and is the one
+            // `abi::nested_call_frame_pointer_reg` reserves, and an ordinary property op does not
+            // enable its frame preservation, so materializing a class id into it silently
+            // corrupted whatever the frame had parked there. `tertiary_scratch_reg` is `rcx`
+            // here, caller-saved, and it aliases neither the stacked receiver in `r11` nor the
+            // class-id word in `r10`.
+            let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", object_stack_offset);
             ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the stacked receiver's runtime class id
-            abi::emit_load_int_immediate(ctx.emitter, "r12", class_id as i64);
-            ctx.emitter.instruction("cmp r10, r12");                            // compare it with this candidate class
+            abi::emit_load_int_immediate(ctx.emitter, candidate_reg, class_id as i64);
+            ctx.emitter
+                .instruction(&format!("cmp r10, {}", candidate_reg));           // compare it with this candidate class
             ctx.emitter.instruction(&format!("je {}", matched_label));          // take the candidate's declared-slot store
         }
     }
@@ -408,7 +595,20 @@ pub(super) fn lower_runtime_mixed_prop_set(
         .map(|candidate| {
             ctx.next_label(&format!(
                 "mixed_dyn_prop_set_{}",
-                label_fragment(&candidate.candidate.slot.property)
+                label_fragment(&candidate.property)
+            ))
+        })
+        .collect::<Vec<_>>();
+    // A runtime name a class does not DECLARE still belongs in that class's own per-instance
+    // hash. The declared (class, name) probes above run first, so a name the class declares keeps
+    // its declared answer, and only the rest reach this per-CLASS arm.
+    let hash_arms = mixed_class_hash_arms(ctx, "", &[])?;
+    let hash_labels = hash_arms
+        .iter()
+        .map(|arm| {
+            ctx.next_label(&format!(
+                "mixed_dyn_prop_set_hash_{}",
+                label_fragment(&arm.class_name)
             ))
         })
         .collect::<Vec<_>>();
@@ -422,22 +622,65 @@ pub(super) fn lower_runtime_mixed_prop_set(
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, &candidate.candidate, label);
+        emit_branch_if_mixed_dynamic_property_candidate_matches(
+            ctx,
+            candidate.class_id,
+            &candidate.property,
+            label,
+        );
+    }
+    for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
+        emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
 
+    for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
+        ctx.emitter.label(label);
+        // The arm matched this runtime class, so the offset and the class php names in its
+        // creation notice are both its own. The store helper takes the runtime key from the
+        // stacked block and releases that block itself.
+        emit_dynamic_property_creation_deprecation(ctx, &arm.class_name, arm.hash_offset, 16, 0)?;
+        lower_runtime_allow_dynamic_prop_set(ctx, value, arm.hash_offset, 16, 0, 32)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        match &candidate.refusal {
-            Some(message) => {
+        match &candidate.action {
+            MixedPropertyWriteAction::Refuse(message) => {
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 super::super::exceptions::emit_error(ctx, message);
             }
-            None => {
+            MixedPropertyWriteAction::Slot(slot) => {
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-                emit_property_store(ctx, value, &candidate.candidate.slot, base_reg)?;
+                emit_property_store(ctx, value, slot, base_reg)?;
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                abi::emit_jump(ctx.emitter, &done_label);
+            }
+            // php resolves the name to a DYNAMIC property on this runtime class. The arm matched
+            // on the class id AND the name, so both the offset and the class php names are this
+            // class's own and no second dispatch is needed. Falling through to the miss arm
+            // instead dropped the write: that helper understands stdClass alone.
+            MixedPropertyWriteAction::DynamicHash {
+                class_name,
+                hash_offset,
+            } => {
+                emit_stacked_named_dynamic_property_creation_deprecation(
+                    ctx,
+                    class_name,
+                    &candidate.property,
+                    *hash_offset,
+                    16,
+                )?;
+                lower_stacked_named_dynamic_prop_set(
+                    ctx,
+                    value,
+                    &candidate.property,
+                    *hash_offset,
+                    16,
+                )?;
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 abi::emit_jump(ctx.emitter, &done_label);
             }
@@ -456,45 +699,6 @@ pub(super) fn lower_runtime_mixed_prop_set(
     Ok(())
 }
 
-/// Resolves the write arms a runtime-name write on a known object class can take.
-///
-/// A name the LEXICAL scope resolves to a DYNAMIC property is left out, so the ladder falls
-/// through to the miss arm, which deprecates the creation and stores the value in the
-/// per-instance hash. That is php's answer for a strict ancestor's private property:
-/// `clone($child, ["n" => 8])` and `$child->{$name} = 8` from the child or from global scope
-/// create a distinct dynamic property and leave the ancestor's private slot exactly as it was.
-/// A name php refuses becomes a `Refuse` arm instead of a store.
-pub(super) fn declared_dynamic_property_set_slots(
-    ctx: &FunctionContext<'_>,
-    class_name: &str,
-    value: ValueId,
-    inst: &Instruction,
-) -> Result<Vec<PropertyNameArm>> {
-    let value_ty = ctx.value_php_type(value)?;
-    let normalized = class_name.trim_start_matches('\\');
-    let property_names = {
-        let class_info =
-            ctx.module.class_infos.get(normalized).ok_or_else(|| {
-                CodegenIrError::unsupported(format!("unknown class {}", normalized))
-            })?;
-        class_info
-            .properties
-            .iter()
-            .map(|(property, _)| property.clone())
-            .collect::<Vec<_>>()
-    };
-    let mut arms = Vec::new();
-    for property in property_names {
-        let Some(arm) = resolve_property_write_arm(ctx, normalized, &property, inst)? else {
-            continue;
-        };
-        if let PropertyNameArm::Slot(slot) = &arm {
-            ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
-        }
-        arms.push(arm);
-    }
-    Ok(arms)
-}
 
 /// Collects Mixed receiver declared-property candidates that can accept this value.
 pub(super) fn declared_mixed_property_set_candidates(
@@ -511,8 +715,15 @@ pub(super) fn declared_mixed_property_set_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
-            let Some(candidate) =
-                mixed_property_write_candidate(ctx, class_name, property, value, &value_ty, inst)?
+            let Some(candidate) = mixed_property_write_candidate(
+                ctx,
+                class_name,
+                property,
+                value,
+                &value_ty,
+                PropertyAccessKind::RuntimeWrite,
+                inst,
+            )?
             else {
                 continue;
             };
@@ -520,15 +731,9 @@ pub(super) fn declared_mixed_property_set_candidates(
         }
     }
     candidates.sort_by(|left, right| {
-        left.candidate
-            .class_id
-            .cmp(&right.candidate.class_id)
-            .then_with(|| {
-                left.candidate
-                    .slot
-                    .property
-                    .cmp(&right.candidate.slot.property)
-            })
+        left.class_id
+            .cmp(&right.class_id)
+            .then_with(|| left.property.cmp(&right.property))
     });
     Ok(candidates)
 }
@@ -561,7 +766,8 @@ pub(super) fn push_mixed_unboxed_object_payload(ctx: &mut FunctionContext<'_>) {
 /// Branches when both the stacked object class id and runtime property name match.
 pub(super) fn emit_branch_if_mixed_dynamic_property_candidate_matches(
     ctx: &mut FunctionContext<'_>,
-    candidate: &MixedPropertyCandidate,
+    class_id: u64,
+    property: &str,
     matched_label: &str,
 ) {
     let next_label = ctx.next_label("mixed_dyn_prop_set_next");
@@ -569,19 +775,22 @@ pub(super) fn emit_branch_if_mixed_dynamic_property_candidate_matches(
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);
             ctx.emitter.instruction("ldr x10, [x9]");                           // load the candidate receiver class id
-            abi::emit_load_int_immediate(ctx.emitter, "x11", candidate.class_id as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
             ctx.emitter.instruction("cmp x10, x11");                            // compare receiver class id before checking the property name
             ctx.emitter.instruction(&format!("b.ne {}", next_label));           // skip name comparison for unrelated classes
         }
         Arch::X86_64 => {
+            // Caller-saved `rcx`, never callee-saved `r12`. See the sibling probe above.
+            let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 16);
             ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the candidate receiver class id
-            abi::emit_load_int_immediate(ctx.emitter, "r12", candidate.class_id as i64);
-            ctx.emitter.instruction("cmp r10, r12");                            // compare receiver class id before checking the property name
+            abi::emit_load_int_immediate(ctx.emitter, candidate_reg, class_id as i64);
+            ctx.emitter
+                .instruction(&format!("cmp r10, {}", candidate_reg));           // compare receiver class id before checking the property name
             ctx.emitter.instruction(&format!("jne {}", next_label));            // skip name comparison for unrelated classes
         }
     }
-    emit_branch_if_dynamic_name_matches(ctx, &candidate.slot.property, matched_label);
+    emit_branch_if_dynamic_name_matches(ctx, property, matched_label);
     ctx.emitter.label(&next_label);
 }
 
@@ -603,10 +812,13 @@ pub(super) fn emit_branch_if_stacked_object_is_stdclass(
             ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // route stdClass writes through the dynamic-property helper
         }
         Arch::X86_64 => {
+            // Caller-saved `rcx`, never callee-saved `r12`. See the sibling probes above.
+            let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", object_stack_offset);
             ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the stacked object's class id
-            abi::emit_load_int_immediate(ctx.emitter, "r12", stdclass_id as i64);
-            ctx.emitter.instruction("cmp r10, r12");                            // check whether the runtime receiver is stdClass
+            abi::emit_load_int_immediate(ctx.emitter, candidate_reg, stdclass_id as i64);
+            ctx.emitter
+                .instruction(&format!("cmp r10, {}", candidate_reg));           // check whether the runtime receiver is stdClass
             ctx.emitter.instruction(&format!("je {}", matched_label));          // route stdClass writes through the dynamic-property helper
         }
     }
@@ -703,10 +915,44 @@ pub(in crate::codegen::lower_inst) fn lower_prop_unset(ctx: &mut FunctionContext
         return Ok(());
     }
     let property = property_name_immediate(ctx, inst)?.to_string();
-    if let Some(hash_offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
-        return lower_dynamic_prop_unset(ctx, object, &property, hash_offset);
+    lower_named_prop_unset(ctx, object, &property, inst)
+}
+
+/// Removes ONE named property from a receiver, shared by the direct-name `unset()` and by the
+/// runtime-name form whose name folded to a literal.
+///
+/// Routing the folded runtime name here rather than duplicating the ladder is what keeps
+/// `unset($o->p)` and `unset($o->{"p"})` from ever disagreeing.
+pub(super) fn lower_named_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    if let Some(plan) = dynamic_property_runtime_plan_for_object(
+        ctx,
+        object,
+        property,
+        PropertyAccessKind::DirectUnset,
+        inst,
+    )? {
+        return emit_object_property_runtime_dispatch(
+            ctx,
+            object,
+            &plan,
+            "prop_unset_dynamic",
+            DispatchStackCleanup::NONE,
+            |ctx, arm| emit_dynamic_plan_unset(ctx, object, property, arm),
+        );
     }
-    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    // A name php resolves to a DYNAMIC property has no physical slot to clear, and the slot the
+    // by-name table finds for it belongs to a strict ancestor's private storage. php's answer
+    // when no dynamic entry was ever created is a plain no-op, so that is what this emits rather
+    // than marking the ancestor's slot uninitialized.
+    if scope_dynamic_property_class_for_object(ctx, object, property)?.is_some() {
+        return Ok(());
+    }
+    let slot = resolve_property_slot(ctx, object, property, inst)?;
     if let Some(reason) = unset_unsupported_slot_reason(&slot) {
         return Err(CodegenIrError::unsupported(format!(
             "unset() of {} {}::${}",
@@ -718,4 +964,438 @@ pub(in crate::codegen::lower_inst) fn lower_prop_unset(ctx: &mut FunctionContext
     release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
     emit_property_uninitialized_marker(ctx, &slot, base_reg);
     Ok(())
+}
+
+/// Emits one runtime-class arm of an `unset()` whose name php answers dynamically on the static
+/// class.
+///
+/// php's three answers are all represented: a class that DECLARES the name clears its own slot, a
+/// class that keeps it in its per-instance hash removes the key, and a class with no hash has
+/// nothing to remove, which is php's no-op for a dynamic property that was never created. The
+/// ancestor's private slot is never touched on any of them, because no arm addresses it.
+pub(super) fn emit_dynamic_plan_unset(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    arm: &PropertyRuntimeArm,
+) -> Result<()> {
+    match &arm.action {
+        PropertyRuntimeAction::Slot(slot) => {
+            if let Some(reason) = unset_unsupported_slot_reason(slot) {
+                return Err(CodegenIrError::unsupported(format!(
+                    "unset() of {} {}::${}",
+                    reason, slot.class_name, slot.property
+                )));
+            }
+            let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+            ctx.load_value_to_reg(object, base_reg)?;
+            release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
+            emit_property_uninitialized_marker(ctx, slot, base_reg);
+            Ok(())
+        }
+        PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
+            lower_dynamic_prop_unset(ctx, object, property, *hash_offset)
+        }
+        // php's `unset()` of a dynamic property that was never created is a no-op, and a class
+        // with no hash can never have created one.
+        PropertyRuntimeAction::DynamicMissing { .. } => Ok(()),
+        // A DIRECT name never reaches this arm: `crate::ir_lower::expr::unset` peels a runtime
+        // class declaring `__unset` off and calls the accessor there. `MagicGet` is a read-only
+        // answer and cannot be built for an unset, but it removes nothing either way.
+        PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet => Ok(()),
+        PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
+            "property dispatch handed a refusal arm to its action emitter",
+        )),
+    }
+}
+
+/// Lowers `unset($object->{$name})` for a property NAME only known at run time.
+///
+/// A folded literal name is exactly the direct-name removal, so it takes that lowering verbatim
+/// and the two can never disagree. Everything else compares the runtime name against the
+/// receiver's declared names and then asks php's answer for the matched name on the receiver's
+/// RUNTIME class, which is the only authority that knows whether the name is a slot, a hash entry
+/// or a refusal on the instance actually in hand.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_unset_runtime(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property_value = expect_operand(inst, 1)?;
+    if let Some(property) = const_string_operand(ctx, property_value)? {
+        let property = property.to_string();
+        return lower_named_prop_unset(ctx, object, &property, inst);
+    }
+    match ctx.value_php_type(object)?.codegen_repr() {
+        PhpType::Object(class_name) => {
+            lower_runtime_object_prop_unset(ctx, object, property_value, &class_name, inst)
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            lower_runtime_mixed_prop_unset(ctx, object, property_value, inst)
+        }
+        object_ty => Err(CodegenIrError::unsupported(format!(
+            "{} for receiver PHP type {:?}",
+            inst.op.name(),
+            object_ty
+        ))),
+    }
+}
+
+/// Lowers a runtime-name removal on a receiver whose class is statically known.
+///
+/// The frame is the one `lower_runtime_object_prop_set` already uses: the receiver at offset 16,
+/// the name pointer at 0 and its length at 8, in a 32-byte block every arm releases exactly once.
+fn lower_runtime_object_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
+    // Every name the runtime subtree can declare, not just the static class's layout: a subclass
+    // that INTRODUCES a property owns a real slot for it, and php clears that slot rather than
+    // removing a hash entry that never existed.
+    let property_names = runtime_name_candidate_properties(ctx, class_name)?;
+    let match_labels = property_names
+        .iter()
+        .map(|property| ctx.next_label(&format!("dyn_prop_unset_{}", label_fragment(property))))
+        .collect::<Vec<_>>();
+    let miss_label = ctx.next_label("dyn_prop_unset_miss");
+    let done_label = ctx.next_label("dyn_prop_unset_done");
+
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    for (property, label) in property_names.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, property, label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (property, label) in property_names.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        emit_runtime_name_unset_arm(ctx, object, class_name, property, inst)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&miss_label);
+    // A name the class does not declare can only live in its per-instance hash, and a class that
+    // reserves none never created it, which is php's no-op.
+    emit_runtime_name_hash_unset(ctx, class_name, inst)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits one matched-name arm of a runtime-name removal on a known receiver class.
+///
+/// The name matched, but the receiver's runtime class is still only bounded by the static one, so
+/// the whole ACTION is selected by class id: a subclass that declares the name clears its own
+/// slot, one that refuses it raises, and one that keeps it in its hash removes the key there. The
+/// 32-byte block is released before any of that, so every arm converges with one stack pointer.
+fn emit_runtime_name_unset_arm(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    let plan = resolve_property_runtime_plan(
+        ctx,
+        class_name,
+        property,
+        PropertyAccessKind::RuntimeUnset,
+        inst,
+    )?;
+    emit_object_property_runtime_dispatch(
+        ctx,
+        object,
+        &plan,
+        &format!("dyn_prop_unset_{}", label_fragment(property)),
+        DispatchStackCleanup::NONE,
+        |ctx, arm| emit_dynamic_plan_unset(ctx, object, property, arm),
+    )
+}
+
+/// Removes a runtime name from the receiver's per-instance hash, at the RUNTIME class's offset.
+///
+/// The receiver and the name are still staged in the caller's 32-byte block, which every arm of
+/// the dispatch releases exactly once.
+fn emit_runtime_name_hash_unset(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    match dynamic_property_runtime_plan_for_class(
+        ctx,
+        class_name,
+        "",
+        PropertyAccessKind::RuntimeHashMiss,
+        inst,
+    )? {
+        Some(plan) => emit_property_runtime_dispatch(
+            ctx,
+            &plan,
+            "dyn_prop_unset_hash",
+            DispatchStackCleanup(32),
+            |ctx, class_id, label| {
+                emit_branch_if_stacked_object_class_matches(ctx, class_id, 16, label)
+            },
+            |ctx, arm| match &arm.action {
+                PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
+                    lower_runtime_stacked_prop_unset(ctx, *hash_offset, 16, 0, 32)
+                }
+                // No hash on this runtime class, so nothing was ever created under that name and
+                // php's `unset()` is a no-op.
+                _ => {
+                    abi::emit_release_temporary_stack(ctx.emitter, 32);
+                    Ok(())
+                }
+            },
+        ),
+        None => {
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            Ok(())
+        }
+    }
+}
+
+/// Removes a RUNTIME-name key from a stacked receiver's dynamic-property hash.
+///
+/// The static-name sibling interns the key in the data pool; a name known only at run time takes
+/// its pointer/length pair from the caller's temporary block. The table is made unique and
+/// published back before the removal, exactly as the static-name form does, so an alias of the
+/// old table keeps the entry this instance just dropped. The block is released here.
+fn lower_runtime_stacked_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    hash_offset: usize,
+    receiver_offset: usize,
+    name_offset: usize,
+    frame_bytes: usize,
+) -> Result<()> {
+    let target = ctx.emitter.target;
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        &object_reg,
+        hash_offset,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+    // The split can move the table, so the fresh one is published before anything removes a key.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &object_reg,
+        hash_offset,
+    );
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        abi::int_result_reg(ctx.emitter),
+    );
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), name_offset);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 2),
+        name_offset + 8,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+    abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
+    Ok(())
+}
+
+/// Lowers a runtime-name removal whose receiver is only known to be a boxed Mixed.
+///
+/// The ladder is the one the Mixed write already uses: unbox, keep non-objects out, then dispatch
+/// on the runtime class id. Each arm is a concrete class, so it resolves its own plan with its own
+/// offsets and its own refusals.
+fn lower_runtime_mixed_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
+    let candidates = declared_mixed_property_unset_candidates(ctx, inst)?;
+    let done_label = ctx.next_label("mixed_dyn_prop_unset_done");
+    let miss_label = ctx.next_label("mixed_dyn_prop_unset_miss");
+    let stdclass_label = ctx.next_label("mixed_dyn_prop_unset_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_dyn_prop_unset_{}_{}",
+                candidate.class_id,
+                label_fragment(candidate.property.as_deref().unwrap_or("hash"))
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_mixed_unboxed_not_object(ctx, &done_label);
+    push_mixed_unboxed_object_payload(ctx);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    // Every DECLARED name is probed before any class-only arm, so a name a class declares takes
+    // its own slot answer and only the names it does not declare reach that class's hash.
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        if let Some(property) = &candidate.property {
+            emit_branch_if_mixed_dynamic_property_candidate_matches(
+                ctx,
+                candidate.class_id,
+                property,
+                label,
+            );
+        }
+    }
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        if candidate.property.is_none() {
+            emit_branch_if_stacked_object_class_matches(ctx, candidate.class_id, 16, label);
+        }
+    }
+    emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        emit_mixed_runtime_name_unset_arm(ctx, candidate, &done_label)?;
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    // stdClass keeps every property in the hash the header points at, which is the layout of a
+    // class with no declared slots at all.
+    lower_runtime_stacked_prop_unset(ctx, dynamic_property_hash_offset(0), 16, 0, 32)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    // A runtime class this module never enumerated cannot have a hash this ladder can address,
+    // and php's `unset()` of a property that was never created removes nothing.
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits one arm of the boxed `Mixed` runtime-name removal.
+///
+/// Every arm releases the ladder's 32-byte block exactly once and converges on `done_label`,
+/// except a refusal, which raises and never converges.
+fn emit_mixed_runtime_name_unset_arm(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &MixedPropertyUnsetCandidate,
+    done_label: &str,
+) -> Result<()> {
+    match &candidate.action {
+        // The arm matched this runtime class, so the slot is that class's own declared storage
+        // and this scope resolves the name to it. No ancestor's private slot is reachable here:
+        // such a name resolves to `DynamicHash` or `DynamicMissing` instead.
+        PropertyRuntimeAction::Slot(slot) => {
+            if let Some(reason) = unset_unsupported_slot_reason(slot) {
+                return Err(CodegenIrError::unsupported(format!(
+                    "unset() of {} {}::${}",
+                    reason, slot.class_name, slot.property
+                )));
+            }
+            let base_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
+            abi::emit_load_temporary_stack_slot(ctx.emitter, &base_reg, 16);
+            release_previous_property_value(ctx, &base_reg, &slot.php_type, slot.offset, None);
+            emit_property_uninitialized_marker(ctx, slot, &base_reg);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            abi::emit_jump(ctx.emitter, done_label);
+        }
+        // php refuses the access from this scope, so nothing is removed and nothing is read.
+        PropertyRuntimeAction::Refuse { message } => {
+            let message = message.clone();
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            super::super::exceptions::emit_error(ctx, &message);
+        }
+        // The removal is the one `lower_runtime_stacked_prop_unset` performs, at THIS class's own
+        // hash offset, which is exact because the arm already matched this class id.
+        PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
+            lower_runtime_stacked_prop_unset(ctx, *hash_offset, 16, 0, 32)?;
+            abi::emit_jump(ctx.emitter, done_label);
+        }
+        // Nothing can ever have been created under the name on this class, and php's `unset()` of
+        // a property that does not exist is a no-op. A runtime name cannot reach `__unset` in
+        // this phase either, and php's accessor removes nothing from storage in any case.
+        PropertyRuntimeAction::DynamicMissing { .. }
+        | PropertyRuntimeAction::MagicDeferred
+        | PropertyRuntimeAction::MagicGet => {
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            abi::emit_jump(ctx.emitter, done_label);
+        }
+    }
+    Ok(())
+}
+
+/// One arm of a boxed `Mixed` receiver's runtime-name `unset()`.
+struct MixedPropertyUnsetCandidate {
+    /// Runtime class id the arm matches on.
+    class_id: u64,
+    /// The declared name the arm answers for, or `None` for the arm that answers every name the
+    /// class does NOT declare from that class's per-instance hash.
+    property: Option<String>,
+    /// php's answer for that name on that class.
+    action: PropertyRuntimeAction,
+}
+
+/// Collects the removal arms a boxed `Mixed` receiver can take, by runtime class and name.
+///
+/// Each arm IS a runtime class, so one per-class answer is exact and no second dispatch is
+/// needed, which is the same property the Mixed WRITE ladder relies on. `stdClass` is left out
+/// because the ladder probes it separately, with the layout of a class that declares no slots.
+fn declared_mixed_property_unset_candidates(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<Vec<MixedPropertyUnsetCandidate>> {
+    let mut candidates = Vec::new();
+    for (class_name, class_info) in &ctx.module.class_infos {
+        if is_builtin_stdclass(class_name) {
+            continue;
+        }
+        for (property, _) in &class_info.properties {
+            let Ok(action) = resolve_property_runtime_action(
+                ctx,
+                class_name,
+                property,
+                PropertyAccessKind::RuntimeUnset,
+                inst,
+            ) else {
+                continue;
+            };
+            candidates.push(MixedPropertyUnsetCandidate {
+                class_id: class_info.class_id,
+                property: Some(property.clone()),
+                action,
+            });
+        }
+        // The empty name stands for "a name this class does not declare", which is exactly what
+        // the class-only arm answers, and it is the same key the known-receiver miss path asks
+        // the offset for.
+        if let Some(hash_offset) = dynamic_property_hash_offset_for_class(ctx, class_name, "")? {
+            candidates.push(MixedPropertyUnsetCandidate {
+                class_id: class_info.class_id,
+                property: None,
+                action: PropertyRuntimeAction::DynamicHash {
+                    hash_offset,
+                    warns_on_miss: false,
+                },
+            });
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.class_id
+            .cmp(&right.class_id)
+            .then_with(|| left.property.cmp(&right.property))
+    });
+    Ok(candidates)
 }

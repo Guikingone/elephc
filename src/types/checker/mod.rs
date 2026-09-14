@@ -23,6 +23,7 @@ mod builtin_user_filter;
 pub(crate) mod builtins;
 mod callables;
 pub(crate) mod clone_override_storage;
+pub(crate) mod scope_dynamic_storage;
 mod driver;
 mod extern_decl;
 mod functions;
@@ -262,6 +263,14 @@ pub(crate) struct Checker {
     /// `mixed`, so a slot an override can reach must carry runtime-shaped storage rather than the
     /// narrow type its default happened to infer.
     pub clone_override_destinations: clone_override_storage::CloneOverrideDestinations,
+    /// Classes a reachable MUTATION in this program addresses under a strict ancestor's private
+    /// property name.
+    ///
+    /// Recorded by the property-write and `unset` checks, and applied to `classes` after checking
+    /// by `scope_dynamic_storage::reserve_scope_dynamic_property_storage`: php creates a DISTINCT
+    /// dynamic property for such a name, so the class needs per-instance hash storage or the
+    /// backend's by-name ladder falls back onto the ancestor's physical slot.
+    pub scope_dynamic_mutation_targets: scope_dynamic_storage::ScopeDynamicMutationTargets,
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
     ///
@@ -812,6 +821,7 @@ pub fn check_types_with_options(
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);
     clone_override_storage::widen_clone_override_property_storage(&mut checker);
+    scope_dynamic_storage::reserve_scope_dynamic_property_storage(&mut checker);
     validate_magic_method_contracts(&checker)?;
 
     let mut warnings = crate::types::warnings::collect_warnings(program);

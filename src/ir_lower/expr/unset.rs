@@ -31,6 +31,9 @@ pub(super) fn lower_unset_locals(
             | ExprKind::NullsafePropertyAccess { object, property } => {
                 lower_unset_property_access(ctx, object, property, arg);
             }
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                lower_unset_dynamic_property_access(ctx, object, property, arg);
+            }
             _ => {}
         }
     }
@@ -49,6 +52,13 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
             unset_property_access_has_direct_lowering(ctx, object, property)
+        }
+        // `unset($o->{$k})` lowers to `Op::DynamicPropUnset`, whose backend ladder compares the
+        // runtime name against the receiver's declared names and then takes php's answer for the
+        // matched name on the receiver's runtime class. The name has to be a string: an integer
+        // or a boxed value is the general runtime-name capability, not this one.
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            unset_dynamic_property_access_has_direct_lowering(ctx, object, property)
         }
         _ => false,
     }
@@ -251,30 +261,185 @@ pub(super) fn lower_unset_property_access(
     property: &str,
     expr: &Expr,
 ) {
-    match property_unset_action(ctx, object, property) {
+    let action = property_unset_action(ctx, object, property);
+    match action {
         Some(UnsetPropertyAction::Magic) => {
             let object = lower_expr(ctx, object);
             lower_magic_property_unset(ctx, object, property, expr);
         }
         Some(UnsetPropertyAction::Noop) => {
-            lower_expr(ctx, object);
+            let object = lower_expr(ctx, object);
+            // A runtime SUBCLASS can declare `__unset` where the static class does not, and php
+            // calls it on such an instance instead of doing nothing. The receiver is lowered once,
+            // before the guard, so php's evaluation order is unchanged either way.
+            lower_guarded_magic_property_unset(ctx, object, property, expr, |_, _| {});
         }
         // Both storage shapes share `Op::PropUnset`: the backend already resolves the
         // receiver's property storage, so it picks the fixed-slot marker or the
         // dynamic-hash removal from the same instruction.
         Some(UnsetPropertyAction::ClearTyped | UnsetPropertyAction::RemoveDynamic) => {
             let object = lower_expr(ctx, object);
-            let data = ctx.intern_string(property);
-            ctx.emit_void(
-                Op::PropUnset,
-                vec![object.value],
-                Some(Immediate::Data(data)),
-                Op::PropUnset.default_effects(),
-                Some(expr.span),
-            );
+            lower_guarded_magic_property_unset(ctx, object, property, expr, |ctx, object| {
+                let data = ctx.intern_string(property);
+                ctx.emit_void(
+                    Op::PropUnset,
+                    vec![object.value],
+                    Some(Immediate::Data(data)),
+                    Op::PropUnset.default_effects(),
+                    Some(expr.span),
+                );
+            });
         }
         Some(UnsetPropertyAction::Fallback) | None => {}
     }
+}
+
+/// Returns true when `unset($object->{$name})` has a direct EIR lowering.
+///
+/// The receiver must be an object whose class the module knows, or a boxed `Mixed`, and the name
+/// expression must be a string. Everything else keeps the shared unsupported diagnostic rather
+/// than a lowering that would have to guess which storage the name addresses.
+pub(super) fn unset_dynamic_property_access_has_direct_lowering(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+) -> bool {
+    // `unset($o->$k)` almost always spells the name as a LOCAL, and `infer_expr_type_syntactic`
+    // has no `Variable` arm at all: it answers from the expression's own shape. Asking it alone
+    // therefore rejected the ordinary form and kept only a literal or a concatenation, so the
+    // whole runtime-name lowering was unreachable from the syntax php programs actually use.
+    if !matches!(unset_operand_type(ctx, property).codegen_repr(), PhpType::Str) {
+        return false;
+    }
+    if isset_object_expr_class(ctx, object).is_some() {
+        return true;
+    }
+    // A boxed receiver and a union both reach the Mixed ladder in the backend, which unboxes,
+    // keeps non-objects out and then dispatches on the runtime class id, so both are lowerable.
+    matches!(
+        unset_operand_type(ctx, object).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    )
+}
+
+/// Returns an unset operand's inferred type, reading a local's checked type when there is one.
+///
+/// Same shape as `unset_array_access_has_object_receiver`: the checker's local type is the
+/// authority when the operand is a plain variable, and the syntactic answer is the fallback.
+fn unset_operand_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
+    match &expr.kind {
+        ExprKind::Variable(name) => ctx
+            .local_types
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
+        _ => infer_expr_type_syntactic(expr),
+    }
+}
+
+/// Lowers `unset($object->{$name})` for a property name only known at run time.
+///
+/// The receiver and the name are evaluated once, in source order, exactly as php does, and the
+/// backend decides the rest: it is the only place that can compare the runtime name against the
+/// receiver's declared names and then ask php's answer for the RUNTIME class.
+pub(super) fn lower_unset_dynamic_property_access(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+    expr: &Expr,
+) {
+    let object = lower_expr(ctx, object);
+    let property = lower_expr(ctx, property);
+    // The removal CAN THROW: a name this scope may not reach raises php's catchable access
+    // `Error`. Retiring the owning temporaries only afterwards meant a caught refusal skipped
+    // both releases and leaked the receiver and the key. Pinning parks them for the window the
+    // throwing instruction occupies, so the unwind path retires them through the record, and the
+    // normal path unpins and retires them exactly once as before. Same contract call lowering
+    // uses for every throwing instruction that holds owned operands.
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(
+        ctx,
+        &[object.value, property.value],
+        expr.span,
+    );
+    ctx.emit_void(
+        Op::DynamicPropUnset,
+        vec![object.value, property.value],
+        None,
+        Op::DynamicPropUnset.default_effects(),
+        Some(expr.span),
+    );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, expr.span);
+    if ctx.value_needs_release_after_use(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
+    }
+    stabilize_unset_receiver(ctx, object, expr.span);
+}
+
+/// Releases an owning receiver temporary once the removal has run.
+fn stabilize_unset_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    span: Span,
+) {
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
+}
+
+/// Wraps an `unset()` lowering in the `instanceof` chain a runtime subclass's `__unset` needs.
+///
+/// The receiver is already lowered, so the guard adds no evaluation and every branch converges on
+/// one merge block. When no subclass adds the accessor the chain is empty and `lower_ordinary`
+/// runs exactly where it ran before, with no extra block at all.
+fn lower_guarded_magic_property_unset(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+    lower_ordinary: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
+) {
+    let magic_classes =
+        crate::ir_lower::stmt::magic_accessor_subclasses(ctx, object.value, property, "__unset");
+    if magic_classes.is_empty() {
+        lower_ordinary(ctx, object);
+        return;
+    }
+    let merge = ctx
+        .builder
+        .create_named_block("unset.property.magic.merge", Vec::new());
+    for class_name in &magic_classes {
+        let magic_block = ctx
+            .builder
+            .create_named_block("unset.property.magic.call", Vec::new());
+        let next_block = ctx
+            .builder
+            .create_named_block("unset.property.magic.next", Vec::new());
+        let matched = crate::ir_lower::stmt::emit_receiver_instanceof(
+            ctx,
+            object.value,
+            class_name,
+            expr.span,
+        );
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: matched,
+            then_target: magic_block,
+            then_args: Vec::new(),
+            else_target: next_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(magic_block);
+        // Resolved against the class the guard proved: the receiver's static type does not
+        // declare `__unset`, which is the whole reason this branch exists.
+        let guarded = crate::ir_lower::stmt::borrow_receiver_as_runtime_class(
+            ctx, object, class_name, expr.span,
+        );
+        lower_magic_property_unset(ctx, guarded, property, expr);
+        branch_to(ctx, merge);
+        ctx.builder.position_at_end(next_block);
+    }
+    lower_ordinary(ctx, object);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
 }
 
 /// Describes how `unset($object->property)` should be lowered for a known receiver class.
@@ -304,6 +469,25 @@ pub(super) fn property_unset_action(
         return Some(UnsetPropertyAction::RemoveDynamic);
     }
     let class_info = ctx.classes.get(class_name.as_str())?;
+    // php 7.4 removed shadow properties: a strict ancestor's `private $p` is not in this class's
+    // by-name table, so `unset($child->p)` removes the DISTINCT dynamic entry of that name and
+    // leaves the ancestor's slot alone. The accessibility ladder below still answers for that
+    // slot under its plain name and would have chosen `__unset` or a no-op, so this arm comes
+    // first. Without reserved hash storage there is no entry to remove and php's answer really
+    // is a no-op, which is what `dynamic_property_unset_action` falls back to.
+    if crate::types::property_name_shadows_ancestor_private_slot(
+        ctx.classes,
+        &class_name,
+        property,
+        ctx.current_class.as_deref(),
+    ) {
+        // php consults `__unset` for such a name exactly as it does for one the class never
+        // declared, measured on php 8.5.10 from the child scope and from global scope alike.
+        if class_method_signature(ctx, &class_name, &php_symbol_key("__unset")).is_some() {
+            return Some(UnsetPropertyAction::Magic);
+        }
+        return Some(UnsetPropertyAction::RemoveDynamic);
+    }
     if class_info.allow_dynamic_properties && class_info.visible_property(property).is_none() {
         return Some(dynamic_property_unset_action(ctx, &class_name));
     }
