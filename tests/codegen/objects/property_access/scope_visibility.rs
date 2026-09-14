@@ -671,7 +671,7 @@ echo $o->readP(), "\n";
 "#,
     );
     assert!(out.success, "fixture must not fault: {}", out.stderr);
-    assert_eq!(out.stdout, "string(10) \"mixed-set\"\nbase-p\n");
+    assert_eq!(out.stdout, "string(9) \"mixed-set\"\nbase-p\n");
     assert_eq!(dynamic_property_notices(&out.stderr, "Plain"), 1, "{}", out.stderr);
 }
 
