@@ -157,9 +157,10 @@ pub(super) fn merge_imported_method_set(
 /// Merges imported trait constants with constants declared directly by a class or trait.
 ///
 /// PHP permits duplicate trait constants only when their complete declarations
-/// are compatible. A differing value, visibility, final flag, type, or
-/// attribute is a composition error; compatible local declarations replace
-/// the imported copy.
+/// are compatible. Values are folded before comparison, so different syntax
+/// producing the same PHP value remains compatible. A differing value,
+/// visibility, final flag, type, or attribute is a composition error;
+/// compatible local declarations replace the imported copy.
 pub(super) fn merge_constants(
     imported: &[ClassConst],
     local: &[ClassConst],
@@ -207,7 +208,7 @@ fn merge_constant_into(
         merged.push(constant);
         return Ok(());
     };
-    if merged[index] != constant {
+    if !constants_compatible(&merged[index], &constant) {
         return Err(CompileError::new(
             span,
             &format!(
@@ -220,6 +221,17 @@ fn merge_constant_into(
         merged[index] = constant;
     }
     Ok(())
+}
+
+/// Compares trait constants after folding their values to PHP-equivalent compile-time forms.
+fn constants_compatible(left: &ClassConst, right: &ClassConst) -> bool {
+    left.name == right.name
+        && left.visibility == right.visibility
+        && left.is_final == right.is_final
+        && left.type_expr == right.type_expr
+        && left.attributes == right.attributes
+        && crate::optimize::fold_constant_expression(left.value.clone())
+            == crate::optimize::fold_constant_expression(right.value.clone())
 }
 
 /// Returns true if `left` and `right` have matching visibility, type_expr,

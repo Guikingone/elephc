@@ -99,6 +99,14 @@ pub fn fold_constants(program: Program) -> Program {
     fold_block(program)
 }
 
+/// Folds one standalone constant expression without adding program-level runtime metadata.
+///
+/// Trait composition uses this to compare declarations by their resolved
+/// compile-time value rather than by raw expression syntax.
+pub(crate) fn fold_constant_expression(expr: Expr) -> Expr {
+    fold_expr(expr)
+}
+
 /// Folds constants whose values or builtin availability depend on the compile target.
 ///
 /// This variant is used before type checking so portable `PHP_OS[_FAMILY]` and

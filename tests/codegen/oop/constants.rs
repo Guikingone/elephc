@@ -716,7 +716,7 @@ class UsesOuter {
     use Outer;
 }
 trait SameLeft {
-    public const SAME = 7;
+    public const SAME = 3 + 4;
 }
 trait SameRight {
     public const SAME = 7;
