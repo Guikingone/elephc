@@ -8,6 +8,8 @@
 //! Key details:
 //! - `define("NAME", value)` updates the per-function lowering context in source
 //!   order so later `ConstRef` expressions can keep precise PHP metadata.
+//! - Literal `defined("NAME")` folds using global constants plus scope-aware
+//!   `Class::CONST` existence from class/interface/enum metadata.
 
 use crate::ir::{Immediate, Op, Ownership};
 use crate::ir_lower::context::{value_ir_type, LoweredValue, LoweringContext};
@@ -35,6 +37,12 @@ pub(super) fn register_static_define_call(
 }
 
 /// Lowers `defined("NAME")` to a compile-time boolean when the name is literal.
+///
+/// Global names use prescanned `define()`/`const` metadata. `Class::CONST`
+/// strings also succeed when the member is visible from the current lexical
+/// class scope, including inherited and implemented-interface constants.
+/// Relative receivers without a valid class or parent scope throw a catchable
+/// PHP `Error`.
 pub(super) fn lower_static_defined_call(
     ctx: &mut LoweringContext<'_, '_>,
     name: &Name,
@@ -44,10 +52,26 @@ pub(super) fn lower_static_defined_call(
     if php_symbol_key(name.as_str().trim_start_matches('\\')) != "defined" || args.len() != 1 {
         return None;
     }
-    let ExprKind::StringLiteral(constant_name) = &args[0].kind else {
-        return None;
-    };
-    let exists = ctx.constant_value(constant_name).is_some();
+    let constant_name = static_defined_name_arg(&args[0])?;
+    if let Some(message) = crate::types::class_like_constant_scope_error(
+        ctx.classes,
+        constant_name,
+        ctx.current_class.as_deref(),
+    ) {
+        return Some(crate::ir_lower::stmt::lower_throw_access_error_expr(
+            ctx,
+            &message,
+            expr.span,
+        ));
+    }
+    if let Some(member_name) = crate::types::defined_late_static_member(constant_name) {
+        return Some(super::scoped_values::lower_late_static_defined(
+            ctx,
+            member_name,
+            expr,
+        ));
+    }
+    let exists = literal_constant_is_defined(ctx, constant_name);
     if !exists && (ctx.has_eval_barrier() || ctx.eval_executed()) {
         // Barrier-free AOT evals can still define constants dynamically; the
         // probe needs the eval context, so make sure its slot exists.
@@ -69,6 +93,30 @@ pub(super) fn lower_static_defined_call(
         PhpType::Bool,
         expr,
     ))
+}
+
+/// Returns the literal name from positional or PHP-named `defined()` syntax.
+fn static_defined_name_arg(arg: &Expr) -> Option<&str> {
+    match &arg.kind {
+        ExprKind::StringLiteral(value) => Some(value.as_str()),
+        ExprKind::NamedArg { name, value } if name == "constant_name" => match &value.kind {
+            ExprKind::StringLiteral(value) => Some(value.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Returns true when a literal `defined()` name exists as a global or class-like constant.
+fn literal_constant_is_defined(ctx: &LoweringContext<'_, '_>, constant_name: &str) -> bool {
+    ctx.constant_value(constant_name).is_some()
+        || crate::types::class_like_constant_is_defined(
+            ctx.classes,
+            ctx.interfaces,
+            ctx.enums,
+            constant_name,
+            ctx.current_class.as_deref(),
+        )
 }
 
 /// Lowers `constant("NAME")` to exactly the EIR a bare `NAME` reference produces.

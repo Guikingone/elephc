@@ -12,11 +12,16 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, ClassProperty, TraitAdaptation, TraitUse, Visibility};
+use crate::parser::ast::{
+    ClassConst, ClassMethod, ClassProperty, TraitAdaptation, TraitUse, Visibility,
+};
 use crate::span::Span;
 
 use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo};
-use super::merge::{merge_imported_method_set, merge_methods, merge_properties, merge_property_into};
+use super::merge::{
+    merge_constants, merge_imported_constant_set, merge_imported_method_set, merge_methods,
+    merge_properties, merge_property_into,
+};
 use super::validation::validate_direct_members;
 
 /// Recursively expands a single trait, applying its trait_uses, then merging
@@ -55,7 +60,7 @@ fn expand_trait(
     )?;
 
     stack.push(trait_name.to_string());
-    let (imported_props, imported_methods) = resolve_trait_uses(
+    let (imported_props, imported_methods, imported_constants) = resolve_trait_uses(
         &trait_info.trait_uses,
         trait_map,
         cache,
@@ -78,7 +83,17 @@ fn expand_trait(
         trait_info.span,
         &format!("trait {}", trait_name),
     )?;
-    let expanded = ExpandedTrait { properties, methods };
+    let constants = merge_constants(
+        &imported_constants,
+        &trait_info.constants,
+        trait_info.span,
+        &format!("trait {}", trait_name),
+    )?;
+    let expanded = ExpandedTrait {
+        properties,
+        methods,
+        constants,
+    };
     cache.insert(trait_name.to_string(), expanded.clone());
     Ok(expanded)
 }
@@ -86,11 +101,11 @@ fn expand_trait(
 /// For each `TraitUse` in `trait_uses`, expands the referenced traits, applies
 /// insteadof/alias adaptations, resolves visibility overrides, selects the
 /// dominant method from each `HashMap` of candidates, and accumulates all
-/// imported properties and methods into `all_properties` and `all_methods`.
+/// imported properties, methods, and constants.
 ///
 /// `owner_label` is a human-readable context string (e.g., `"class Foo"` or
 /// `"trait Bar"`) used only in error messages. `owner_span` is the source span
-/// used for error location. Returns `([ClassProperty], [ClassMethod])` on success.
+/// used for error location. Returns imported properties, methods, and constants.
 pub(super) fn resolve_trait_uses(
     trait_uses: &[TraitUse],
     trait_map: &HashMap<String, TraitDeclInfo>,
@@ -98,12 +113,14 @@ pub(super) fn resolve_trait_uses(
     stack: &mut Vec<String>,
     owner_label: &str,
     owner_span: Span,
-) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>), CompileError> {
+) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>, Vec<ClassConst>), CompileError> {
     let mut all_properties = Vec::new();
     let mut all_methods = Vec::new();
+    let mut all_constants = Vec::new();
 
     for trait_use in trait_uses {
         let mut imported_properties = Vec::new();
+        let mut imported_constants = Vec::new();
         let mut candidates: HashMap<String, Vec<ImportedMethod>> = HashMap::new();
         let mut method_order = Vec::new();
         let listed_trait_names: HashSet<String> = trait_use
@@ -113,13 +130,22 @@ pub(super) fn resolve_trait_uses(
             .collect();
 
         for trait_name in &trait_use.trait_names {
-            let expanded = expand_trait(trait_name.as_str(), trait_map, cache, stack).map_err(|err| {
-                CompileError::new(
-                    trait_use.span,
-                    &format!("{} references unknown or invalid trait '{}': {}", owner_label, trait_name, err.message),
-                )
-            })?;
-            for property in expanded.properties {
+            let expanded =
+                expand_trait(trait_name.as_str(), trait_map, cache, stack).map_err(|err| {
+                    CompileError::new(
+                        trait_use.span,
+                        &format!(
+                            "{} references unknown or invalid trait '{}': {}",
+                            owner_label, trait_name, err.message
+                        ),
+                    )
+                })?;
+            let ExpandedTrait {
+                properties,
+                methods,
+                constants,
+            } = expanded;
+            for property in properties {
                 merge_property_into(
                     &mut imported_properties,
                     property,
@@ -128,7 +154,7 @@ pub(super) fn resolve_trait_uses(
                     false,
                 )?;
             }
-            for method in expanded.methods {
+            for method in methods {
                 let method_key = php_symbol_key(&method.name);
                 if !candidates.contains_key(&method_key) {
                     method_order.push(method_key.clone());
@@ -141,6 +167,12 @@ pub(super) fn resolve_trait_uses(
                         decl: method,
                     });
             }
+            merge_imported_constant_set(
+                &mut imported_constants,
+                constants,
+                trait_use.span,
+                owner_label,
+            )?;
         }
 
         let mut suppressed: HashMap<String, HashSet<String>> = HashMap::new();
@@ -252,9 +284,15 @@ pub(super) fn resolve_trait_uses(
             false,
         )?;
         merge_imported_method_set(&mut all_methods, selected_methods, owner_span, owner_label)?;
+        merge_imported_constant_set(
+            &mut all_constants,
+            imported_constants,
+            owner_span,
+            owner_label,
+        )?;
     }
 
-    Ok((all_properties, all_methods))
+    Ok((all_properties, all_methods, all_constants))
 }
 
 /// Filters `candidates` using `suppressed` trait-of-origin, applies visibility

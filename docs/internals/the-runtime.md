@@ -278,7 +278,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_is_callable_mixed` | Unbox a Mixed value and dispatch string, array, hash, or object callable checks | mixed pointer | `x0` = bool |
 | `__rt_is_callable_heap` | Dispatch callable checks from a raw heap pointer by inspecting its heap-kind tag | heap pointer | `x0` = bool |
 | `__rt_callable_descriptor_release` | Free a heap-backed callable descriptor copy plus the by-value capture slots appended after its static header; static `.data` descriptors are ignored | `x0` = descriptor pointer | — |
-| `__rt_closure_bind` | Bind a `$this`-only closure to a new receiver for `Closure::bind` / `Closure::bindTo` / `Closure::call`: copy the runtime descriptor, overwrite the captured object, and incref it. Closures with any other capture shape abort with a fatal diagnostic | `x0` = source closure descriptor, `x1` = new `$this` object | `x0` = bound descriptor copy |
+| `__rt_closure_bind` | Bind a closure whose first capture is `$this` to a new receiver for `Closure::bind` / `Closure::bindTo` / `Closure::call`: copy the 80-byte `$this`-only descriptor or the 96-byte class-scope descriptor whose second capture is the compiler-owned `__elephc_called_class_id`, overwrite the captured object, and incref it. Any user-capture shape aborts with a fatal diagnostic | `x0` = source closure descriptor, `x1` = new `$this` object | `x0` = bound descriptor copy |
 
 ## Array routines
 
