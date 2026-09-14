@@ -234,7 +234,7 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
 | `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. |
-| `--emit-asm` | — | off | Write generated assembly instead of a binary. |
+| `--emit-asm` | — | off | Write generated assembly and stop before runtime-object preparation, native assembly, or linking; no target assembler is required. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
