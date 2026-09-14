@@ -132,12 +132,15 @@ fn name_matches(property: &str) -> Expr {
 fn arm_statements(class_name: &str, resolved: &ResolvedArm) -> Vec<Stmt> {
     match &resolved.arm {
         OverrideArm::AssignThis => vec![property_assign(&resolved.property)],
-        // A helper that could not be generated means the ancestor no longer declares the name,
-        // so the clone's own visible slot is the only remaining answer.
-        OverrideArm::AssignScoped { .. } => match resolved.scoped_helper.as_deref() {
-            Some(helper) => vec![scoped_setter_call(helper)],
-            None => vec![property_assign(&resolved.property)],
-        },
+        // `super::resolve_scoped_helper` refuses the build when the helper is missing, so this
+        // arm always has one. Writing the clone's own visible slot instead would silently hit a
+        // DIFFERENT property: the child's shadowing private slot, never the ancestor's.
+        OverrideArm::AssignScoped { .. } => vec![scoped_setter_call(
+            resolved
+                .scoped_helper
+                .as_deref()
+                .expect("an AssignScoped arm carries its scoped setter helper"),
+        )],
         OverrideArm::MagicSet => vec![magic_set_call()],
         OverrideArm::DynamicAssign => vec![dynamic_property_assign()],
         OverrideArm::Deny(message) => vec![throw_error(string(message))],

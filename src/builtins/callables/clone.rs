@@ -37,6 +37,13 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
 
     if let Some(properties) = cx.args.get(1) {
+        // A property WITHOUT a declared type is `mixed` in PHP, so an override can hand it any
+        // value. The applicator is synthesized after checking and can therefore not widen the
+        // slot the way an ordinary `$o->p = $value;` does; record the destination here so
+        // `clone_override_storage` can do it once every body has been checked.
+        cx.checker
+            .clone_override_destinations
+            .record(&object_ty);
         let properties_ty = cx.checker.infer_type(properties, cx.env)?;
         if !matches!(
             properties_ty.codegen_repr(),

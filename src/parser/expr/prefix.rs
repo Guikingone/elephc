@@ -521,6 +521,7 @@ fn parse_array_literal_with_terminator(
     let mut elems = Vec::new();
     let mut assoc_elems = Vec::new();
     let mut is_assoc = false;
+    let mut saw_spread = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
     let mut auto_key_initialized = false;
@@ -541,9 +542,13 @@ fn parse_array_literal_with_terminator(
             let spread_span = tokens[*pos].1.span;
             *pos += 1;
             let inner = parse_expr(tokens, pos)?;
-            if !is_assoc {
-                elems.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+            let spread = Expr::new(ExprKind::Spread(Box::new(inner)), spread_span);
+            if is_assoc {
+                assoc_elems.push(crate::parser::ast::assoc_spread_entry(spread));
+            } else {
+                elems.push(spread);
             }
+            saw_spread = true;
             first = false;
             continue;
         }
@@ -564,10 +569,23 @@ fn parse_array_literal_with_terminator(
             );
             assoc_elems.push((expr, value));
         } else if is_assoc {
-            let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
-            assoc_elems.push((key, expr));
-            next_auto_key += 1;
-            auto_key_initialized = true;
+            if saw_spread {
+                // A spread already contributed an unknown number of integer keys, so php's next
+                // free key is only known at run time. Appending through a one-element spread
+                // reuses the runtime append the spread entries already go through instead of
+                // baking in a statically wrong key.
+                let span = expr.span;
+                let one = Expr::new(ExprKind::ArrayLiteral(vec![expr]), span);
+                assoc_elems.push(crate::parser::ast::assoc_spread_entry(Expr::new(
+                    ExprKind::Spread(Box::new(one)),
+                    span,
+                )));
+            } else {
+                let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
+                assoc_elems.push((key, expr));
+                next_auto_key += 1;
+                auto_key_initialized = true;
+            }
         } else {
             elems.push(expr);
             next_auto_key += 1;
@@ -647,8 +665,22 @@ fn promote_indexed_array_items_to_assoc(
     assoc_elems: &mut Vec<(Expr, Expr)>,
 ) {
     let mut auto_key = 0i64;
+    let mut saw_spread = false;
     for elem in std::mem::take(elems) {
         if matches!(elem.kind, ExprKind::Spread(_)) {
+            // Keep the spread. Dropping it here is what made `[...$rest, "k" => 1]` and
+            // `["k" => 1, ...$rest]` lose every spread entry.
+            assoc_elems.push(crate::parser::ast::assoc_spread_entry(elem));
+            saw_spread = true;
+            continue;
+        }
+        if saw_spread {
+            let span = elem.span;
+            let one = Expr::new(ExprKind::ArrayLiteral(vec![elem]), span);
+            assoc_elems.push(crate::parser::ast::assoc_spread_entry(Expr::new(
+                ExprKind::Spread(Box::new(one)),
+                span,
+            )));
             continue;
         }
         let key = Expr::new(ExprKind::IntLiteral(auto_key), elem.span);

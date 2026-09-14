@@ -28,9 +28,13 @@ use crate::types::{CheckResult, FunctionSig, PhpType};
 /// Parameter carrying the override value into a scoped setter helper.
 pub(super) const VALUE_PARAM: &str = "__elephc_clone_scoped_value";
 
-/// Returns the EIR function name of one scoped setter helper.
+/// Returns the reserved EIR function name of one scoped setter helper.
+///
+/// Reserved for the same reason the applicator name is: a user `function _clone_set_4_0()` would
+/// otherwise be called in place of the generated helper and the ancestor's private slot would
+/// never be written. See `crate::names::internal_generated_function_name`.
 pub(super) fn helper_name(class_id: u64, slot: usize) -> String {
-    format!("_clone_set_{}_{}", class_id, slot)
+    crate::names::internal_generated_function_name("clone_set", &[class_id, slot as u64])
 }
 
 /// Lowers the scoped setter helper for one `(declaring class, property)` pair.

@@ -52,9 +52,14 @@ struct CloneOverrideSites {
     static_scopes: BTreeSet<Option<String>>,
 }
 
-/// Returns the EIR function name of one applicator body.
+/// Returns the reserved EIR function name of one applicator body.
+///
+/// The name goes through `crate::names::internal_generated_function_name`, so a PHP program that
+/// declares `function _clone_apply_4_0()` cannot shadow the generated applicator. It used to:
+/// `lower_clone_override_function` skips a name the module already defines, so the user body was
+/// called with `(clone, overrides)` and every override was dropped.
 fn applicator_function_name(class_id: u64, index: usize) -> String {
-    format!("_clone_apply_{}_{}", class_id, index)
+    crate::names::internal_generated_function_name("clone_apply", &[class_id, index as u64])
 }
 
 /// Generates every `clone()` override applicator the lowered module can reach.
@@ -67,9 +72,9 @@ pub(crate) fn lower_clone_override_applicators(
     check_result: &CheckResult,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
-) {
+) -> Result<(), crate::ir_lower::LoweringError> {
     let Some(sites) = collect_sites(module) else {
-        return;
+        return Ok(());
     };
     let mut planned = Vec::new();
     for class_name in candidate_classes(module, &sites) {
@@ -103,28 +108,26 @@ pub(crate) fn lower_clone_override_applicators(
     for (class_name, class_id, groups) in planned {
         for (index, group) in groups.into_iter().enumerate() {
             let function_name = applicator_function_name(class_id, index);
-            let arms = group
-                .arms
-                .into_iter()
-                .map(|(property, arm)| {
-                    let scoped_helper = match &arm {
-                        OverrideArm::AssignScoped { scope, property } => module
-                            .class_infos
-                            .get(scope)
-                            .and_then(|info| {
-                                info.visible_property_index(property)
-                                    .map(|slot| scoped_setters::helper_name(info.class_id, slot))
-                            })
-                            .filter(|name| functions.contains_key(name)),
-                        _ => None,
-                    };
-                    ResolvedArm {
-                        property,
-                        arm,
-                        scoped_helper,
-                    }
-                })
-                .collect::<Vec<_>>();
+            let mut arms = Vec::with_capacity(group.arms.len());
+            for (property, arm) in group.arms {
+                let scoped_helper = match &arm {
+                    OverrideArm::AssignScoped {
+                        scope,
+                        property: scoped_property,
+                    } => Some(resolve_scoped_helper(
+                        module,
+                        &functions,
+                        scope,
+                        scoped_property,
+                    )?),
+                    _ => None,
+                };
+                arms.push(ResolvedArm {
+                    property,
+                    arm,
+                    scoped_helper,
+                });
+            }
             let statements = body::build(&class_name, &arms, &group.unknown);
             crate::ir_lower::function::lower_clone_override_function(
                 &function_name,
@@ -157,6 +160,44 @@ pub(crate) fn lower_clone_override_applicators(
     module
         .clone_override_applicators
         .sort_by(|left, right| left.function_name.cmp(&right.function_name));
+    Ok(())
+}
+
+/// Returns the scoped setter helper one `AssignScoped` arm must call, or refuses the build.
+///
+/// The arm exists precisely because php resolves the name through an ANCESTOR's private slot,
+/// which the clone's own receiver cannot address: `$this->p = $v` inside the applicator writes
+/// the child's shadowing slot instead. Falling back to that write is therefore never a
+/// degradation, it is a different property, so a helper the planner failed to generate is a
+/// compiler defect and stops the build rather than silently writing the wrong slot.
+fn resolve_scoped_helper(
+    module: &Module,
+    functions: &HashMap<String, FunctionSig>,
+    scope: &str,
+    property: &str,
+) -> Result<String, crate::ir_lower::LoweringError> {
+    let helper = module
+        .class_infos
+        .get(scope)
+        .and_then(|info| {
+            info.visible_property_index(property)
+                .map(|slot| scoped_setters::helper_name(info.class_id, slot))
+        })
+        .filter(|name| functions.contains_key(name));
+    helper.ok_or_else(|| {
+        crate::ir_lower::LoweringError::Unsupported(crate::errors::CompileError::new(
+            module
+                .class_infos
+                .get(scope)
+                .map(|info| info.declaration_span)
+                .unwrap_or_else(crate::span::Span::dummy),
+            &format!(
+                "clone() override planning could not generate the scoped setter for the private \
+                 property {}::${} selected by that invocation scope",
+                scope, property
+            ),
+        ))
+    })
 }
 
 /// One applicator body plus the invocation scopes it is exact for.
@@ -292,15 +333,13 @@ fn downgrade_unsupported_slot(
             owner_name, property
         ));
     }
-    let Some((index, (_, php_type))) = owner.visible_property(property) else {
+    // A reference DESTINATION is not a refusal in php: `clone($o, ["p" => 7])` where `$o->p` is a
+    // reference writes THROUGH the shared cell, so every alias of it observes 7, which is why the
+    // slot's own by-reference flag is deliberately not consulted here. Only a reference SOURCE
+    // ELEMENT is refused, and that is decided per element rather than per slot.
+    let Some((_, (_, php_type))) = owner.visible_property(property) else {
         return accepted;
     };
-    if owner.property_slot_is_reference(index, property) {
-        return OverrideArm::Deny(format!(
-            "Cannot modify by-reference property {}::${}",
-            owner_name, property
-        ));
-    }
     if slot_accepts_runtime_value(php_type) {
         return accepted;
     }

@@ -81,7 +81,7 @@ fn root_array_literal_item(
 }
 
 /// Validates and copies a boxed spread without leaving its expression owner live after a throw.
-fn lower_boxed_array_spread_source(
+pub(super) fn lower_boxed_array_spread_source(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     span: Span,

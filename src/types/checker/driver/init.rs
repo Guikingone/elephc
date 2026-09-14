@@ -105,6 +105,7 @@ impl Checker {
             current_loop_storage_scope: "main".to_string(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
+            clone_override_destinations: Default::default(),
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
             php_array_reference_outputs: HashMap::new(),

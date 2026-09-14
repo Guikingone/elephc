@@ -1093,6 +1093,11 @@ pub(crate) fn lower_clone_override_function(
     }
     let mut function = Function::new(function_name.to_string(), IrType::Void, PhpType::Void);
     function.flags.is_synthetic = true;
+    // The body is lowered AS IF it were written inside `scope`, so the EIR function has to carry
+    // that scope too. Leaving `lexical_class` at `None` made a nested `clone($o, [...])` inside an
+    // applicator or a scoped setter resolve its own invocation scope as global scope, both when
+    // `collect_sites` plans the candidate scopes and when the backend picks the applicator arm.
+    function.lexical_class = scope.map(str::to_string);
     for (name, php_type) in params {
         function.params.push(FunctionParam {
             name: name.clone(),

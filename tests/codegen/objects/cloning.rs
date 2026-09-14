@@ -752,3 +752,270 @@ echo "after";
         "gone;caught:Cannot access private property Tracked::$secret;src=1;gone;after"
     );
 }
+
+/// Verifies an UNTYPED property is `mixed` for an override, exactly as it is for an ordinary
+/// assignment: no coercion toward the type its default happened to infer.
+///
+/// The inferred-`int` slot used to silently answer `int(0)` for a string override, and the
+/// defaultless slot used to fail the whole build with an invalid `Void` payload.
+#[test]
+fn test_clone_function_writes_untyped_properties_without_coercion() {
+    let out = compile_and_run(
+        r#"<?php
+class Tag { public int $v = 9; }
+class U {
+    public $fromInt = 0;
+    public $fromString = "x";
+    public $noDefault;
+    public $fromArray = [];
+    public $fromNull = null;
+}
+$ov = [
+    "fromInt" => "hello",
+    "fromString" => 5,
+    "noDefault" => [1, 2],
+    "fromArray" => null,
+    "fromNull" => new Tag(),
+];
+$c = clone(new U(), $ov);
+var_dump($c->fromInt);
+var_dump($c->fromString);
+var_dump($c->noDefault);
+var_dump($c->fromArray);
+var_dump($c->fromNull);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(5) \"hello\"\nint(5)\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\nNULL\nobject(Tag)#1 (1) {\n  [\"v\"]=>\n  int(9)\n}\n"
+    );
+}
+
+/// Verifies a DECLARED array, associative-array and nullable slot materializes a runtime override
+/// value safely, including `null` for every nullable form.
+///
+/// `null` used to reach the slot as an invalid `Void` payload rather than the slot's null
+/// representation, which is why the nullable object slot is exercised in both directions.
+#[test]
+fn test_clone_function_materializes_array_and_nullable_override_values() {
+    let out = compile_and_run(
+        r#"<?php
+class Tag { public int $v = 9; }
+class T {
+    public array $list = [];
+    public array $map = ["k" => 1];
+    public ?int $maybeInt = 7;
+    public ?string $maybeStr = "s";
+    public ?Tag $maybeTag = null;
+}
+$ov = [
+    "list" => [4, 5, 6],
+    "map" => ["a" => 1, "b" => 2],
+    "maybeInt" => null,
+    "maybeStr" => null,
+    "maybeTag" => new Tag(),
+];
+$c = clone(new T(), $ov);
+echo count($c->list) . ":" . $c->list[2] . ";";
+echo count($c->map) . ":" . $c->map["b"] . ";";
+var_dump($c->maybeInt);
+var_dump($c->maybeStr);
+echo $c->maybeTag->v . ";";
+$back = clone($c, ["maybeTag" => null]);
+var_dump($back->maybeTag);
+"#,
+    );
+    assert_eq!(out, "3:6;2:2;NULL\nNULL\n9;NULL\n");
+}
+
+/// Verifies an override whose DESTINATION property is a reference writes THROUGH the shared cell.
+///
+/// php 8.5 permits this: every alias of the property observes the override. This compiler used to
+/// refuse the whole call with `Cannot modify by-reference property`, which is a diagnostic php
+/// never produces for a reference destination.
+#[test]
+fn test_clone_function_writes_through_a_reference_destination_property() {
+    let out = compile_and_run(
+        r#"<?php
+class RefProp { public int $p = 1; }
+$o = new RefProp();
+$alias = &$o->p;
+$ov = ["p" => 9];
+$c = clone($o, $ov);
+echo $alias . "|" . $c->p . "|" . $o->p;
+"#,
+    );
+    assert_eq!(out, "9|9|9");
+}
+
+/// Verifies an override ARRAY ELEMENT that is itself a reference never reaches the applicator.
+///
+/// php 8.5 raises `Cannot assign by reference when cloning with updated properties` at run time.
+/// This compiler has no by-reference element representation at all, so both syntactic ways of
+/// building one are refused before any clone runs. The test pins that refusal so the day element
+/// references become representable, the clone path is revisited rather than silently applying an
+/// aliased value.
+#[test]
+fn test_clone_function_never_receives_a_by_reference_override_element() {
+    let source = r#"<?php
+class R { public int $n = 1; }
+$v = 5;
+$ov = ["n" => &$v];
+clone(new R(), $ov);
+"#;
+    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
+    let error = elephc::parser::parse(&tokens).expect_err("a by-reference element must be refused");
+    assert!(
+        error
+            .message
+            .contains("Reference elements in array literals"),
+        "unexpected diagnostic: {}",
+        error.message
+    );
+}
+
+/// Verifies an inherited SAME-NAME private property resolves to the slot the invocation scope
+/// owns, in both ancestry directions, and stays inaccessible from global scope.
+///
+/// The applicator writes an ancestor's private slot through a scoped setter helper. Falling back
+/// to `$this->p = $v` when that helper is missing would hit the CHILD's shadowing slot instead,
+/// so a missing helper now stops the build rather than writing a different property.
+#[test]
+fn test_clone_function_writes_the_scope_private_slot_of_a_shadowed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    private int $p = 1;
+    public function cloneP(Child $o): Child { return clone($o, ["p" => 10]); }
+    public function readP(): int { return $this->p; }
+}
+class Child extends Base {
+    private int $p = 2;
+    public function cloneC(Child $o): Child { return clone($o, ["p" => 20]); }
+    public function readC(): int { return $this->p; }
+}
+$c = new Child();
+$byBase = $c->cloneP($c);
+echo $byBase->readP() . ":" . $byBase->readC() . ";";
+$byChild = $c->cloneC($c);
+echo $byChild->readP() . ":" . $byChild->readC() . ";";
+try { clone($c, ["p" => 99]); echo "no throw"; } catch (Error $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(out, "10:2;1:20;Cannot access private property Child::$p");
+}
+
+/// Verifies user functions whose names look exactly like the generated clone helpers cannot
+/// shadow them.
+///
+/// The applicator and the scoped setters used to be named `_clone_apply_<id>_<n>` and
+/// `_clone_set_<id>_<n>`, which are legal PHP function names: declaring one made the module skip
+/// the generated body, call the user body with `(clone, overrides)` and drop every override.
+#[test]
+fn test_clone_function_symbols_cannot_be_shadowed_by_user_functions() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $n = 1; }
+function _clone_apply_4_0($a, $b) { echo "user_apply;"; }
+function _clone_set_4_0($a, $b) { echo "user_set;"; }
+function _clone_apply_5_0($a, $b) { echo "user_apply5;"; }
+$ov = ["n" => 5];
+$c = clone(new Box(), $ov);
+echo $c->n;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies the `clone` KEYWORD refuses an enum case exactly like the `clone()` function does.
+///
+/// The two-argument function form answered from the clone's runtime class id, while the keyword
+/// form knew the class statically and handed back a second copy of the singleton.
+#[test]
+fn test_clone_keyword_refuses_to_clone_enum_cases() {
+    let out = compile_and_run(
+        r#"<?php
+enum E: string { case A = 'a'; }
+try { $x = clone E::A; echo "no throw"; } catch (Error $e) { echo get_class($e) . ":" . $e->getMessage(); }
+"#,
+    );
+    assert_eq!(out, "Error:Trying to clone an uncloneable object of class E");
+}
+
+/// Verifies an override array built from an explicit pair PLUS a spread keeps every spread entry,
+/// in either order, with php's later-wins overwrite rule.
+///
+/// The parser used to drop every spread once a literal had turned associative, so
+/// `["n" => 4, ...$rest]` silently reached `clone()` carrying only `n`.
+#[test]
+fn test_clone_function_applies_a_mixed_literal_and_spread_override_array() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $n = 1; public string $s = "a"; public int $m = 2; }
+$rest = ["s" => "z", "m" => 7];
+$b = clone(new Box(), ["n" => 4, ...$rest]);
+echo $b->n . ":" . $b->s . ":" . $b->m . ";";
+$c = clone(new Box(), [...$rest, "s" => "late", "n" => 9]);
+echo $c->n . ":" . $c->s . ":" . $c->m . ";";
+$d = clone(new Box(), ["s" => "first", ...$rest]);
+echo $d->n . ":" . $d->s . ":" . $d->m;
+"#,
+    );
+    assert_eq!(out, "4:z:7;9:late:7;1:z:7");
+}
+
+/// Verifies an associative array literal containing a spread keeps php's key rules exactly.
+///
+/// Explicit integer keys stay put and seed the auto-key cursor, spread integer keys are
+/// renumbered from that cursor, string keys overwrite in source order, and a positional item
+/// after a spread takes the run-time next free key.
+#[test]
+fn test_assoc_array_literal_spread_preserves_php_key_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+$r = ["a" => 1, 7 => "seven", "b" => 2];
+$idx = [10, 20];
+$k = "dyn";
+var_export([5 => 'x', ...$r]); echo "\n";
+var_export([1, 2, ...$r, "z" => 9]); echo "\n";
+var_export(["a" => 100, ...$r, "a" => 999]); echo "\n";
+var_export(["k" => 1, ...$idx, 5, 6]); echo "\n";
+var_export([$k => 1, ...$r]); echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array (\n  5 => 'x',\n  'a' => 1,\n  6 => 'seven',\n  'b' => 2,\n)\n",
+            "array (\n  0 => 1,\n  1 => 2,\n  'a' => 1,\n  2 => 'seven',\n  'b' => 2,\n  'z' => 9,\n)\n",
+            "array (\n  'a' => 999,\n  0 => 'seven',\n  'b' => 2,\n)\n",
+            "array (\n  'k' => 1,\n  0 => 10,\n  1 => 20,\n  2 => 5,\n  3 => 6,\n)\n",
+            "array (\n  'dyn' => 1,\n  'a' => 1,\n  0 => 'seven',\n  'b' => 2,\n)\n",
+        )
+    );
+}
+
+/// Verifies a runtime override name that matches no declared slot is never silently dropped.
+///
+/// `stdClass` stores it as a dynamic property, and a class with `__set` routes it through the
+/// magic setter. The forbidden-storage case is pinned by
+/// `test_clone_function_stores_dynamic_properties_only_where_storage_exists`.
+#[test]
+fn test_clone_function_routes_unknown_names_to_dynamic_storage_or_magic_set() {
+    let out = compile_and_run(
+        r#"<?php
+$o = new stdClass();
+$o->a = 1;
+$ov = ["a" => 2, "fresh" => "new"];
+$c = clone($o, $ov);
+echo $c->a . ":" . $c->fresh . ":" . $o->a . ";";
+class M {
+    public int $n = 1;
+    public function __set($k, $v) { echo "set(" . $k . "=" . $v . ");"; }
+}
+$m = clone(new M(), ["n" => 5, "later" => "x"]);
+echo $m->n;
+"#,
+    );
+    assert_eq!(out, "2:new:1;set(later=x);5");
+}

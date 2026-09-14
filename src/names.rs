@@ -614,6 +614,30 @@ mod mangle_tests {
     }
 }
 
+/// Separator that makes a compiler-generated EIR function name unreachable from PHP source.
+///
+/// A PHP identifier is `[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*`, so `@` can never occur in a
+/// user function name. Building a generated name out of `@`-separated fragments therefore makes
+/// the name collision-free by construction instead of by an allocation loop that would have to
+/// know every name the program can still declare.
+pub const INTERNAL_SYMBOL_SEPARATOR: char = '@';
+
+/// Returns the reserved EIR function name for one compiler-generated helper.
+///
+/// `kind` names the generator (`clone_apply`, `clone_set`, ...) and `parts` are the dense ids
+/// that make the helper unique within that generator. The result is deterministic, so two
+/// compilations of the same program produce the same symbol, and it can never be shadowed by a
+/// PHP `function` declaration: see [`INTERNAL_SYMBOL_SEPARATOR`].
+pub fn internal_generated_function_name(kind: &str, parts: &[u64]) -> String {
+    let mut name = String::from(INTERNAL_SYMBOL_SEPARATOR);
+    name.push_str(kind);
+    for part in parts {
+        name.push(INTERNAL_SYMBOL_SEPARATOR);
+        name.push_str(&part.to_string());
+    }
+    name
+}
+
 /// Returns the global function symbol label for a given PHP function name.
 ///
 /// Format: `_fn_<mangled_fqn>`. Used for user-defined function entry points.

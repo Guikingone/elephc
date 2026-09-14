@@ -143,7 +143,7 @@ pub(crate) fn lower(
         check_result,
         &constants,
         &fiber_return_sigs,
-    );
+    )?;
     super::effect_refinement::refine_module(&mut module);
     reserve_eval_subclass_property_storage(&mut module);
     // A refused shape is reported before validation: the placeholder EIR those sites emit

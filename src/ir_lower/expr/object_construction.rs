@@ -135,6 +135,20 @@ pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr:
         unreachable!("clone expressions must be type-checked as non-null objects before lowering");
     };
     let class_name = class_name.to_string();
+    // php refuses to clone an enum case. The two-argument `clone()` form already answers this
+    // from the clone's runtime class id (`emit_enum_uncloneable_guard`); the keyword form knows
+    // the class statically, so it raises the SAME catchable `Error` here instead of handing back
+    // a second copy of the singleton and letting `E::A === clone E::A` become false.
+    if ctx.enums.contains_key(class_name.trim_start_matches('\\')) {
+        return crate::ir_lower::stmt::lower_throw_access_error_expr(
+            ctx,
+            &format!(
+                "Trying to clone an uncloneable object of class {}",
+                class_name
+            ),
+            expr.span,
+        );
+    }
     let data = ctx.intern_class_name(&class_name);
     let result_ty = PhpType::Object(class_name.clone());
     let cloned = ctx.emit_value(

@@ -22,6 +22,7 @@ mod builtin_types;
 mod builtin_user_filter;
 pub(crate) mod builtins;
 mod callables;
+pub(crate) mod clone_override_storage;
 mod driver;
 mod extern_decl;
 mod functions;
@@ -254,6 +255,13 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// Classes a two-argument `clone()` in this program can hand an override array to.
+    ///
+    /// Recorded by the `clone` builtin's check hook, and applied to `classes` after checking by
+    /// `clone_override_storage::widen_clone_override_property_storage`: a PHP untyped property is
+    /// `mixed`, so a slot an override can reach must carry runtime-shaped storage rather than the
+    /// narrow type its default happened to infer.
+    pub clone_override_destinations: clone_override_storage::CloneOverrideDestinations,
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
     ///
@@ -803,6 +811,7 @@ pub fn check_types_with_options(
 
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);
+    clone_override_storage::widen_clone_override_property_storage(&mut checker);
     validate_magic_method_contracts(&checker)?;
 
     let mut warnings = crate::types::warnings::collect_warnings(program);

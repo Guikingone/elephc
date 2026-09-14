@@ -16,6 +16,7 @@ mod stmt;
 mod types;
 
 pub use expr::{
+    assoc_spread_entry, assoc_spread_source,
     is_compound_assignment_self_read, CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget,
     MagicConstant, StaticReceiver,
 };
