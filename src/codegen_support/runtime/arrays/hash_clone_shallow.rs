@@ -11,6 +11,8 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+use super::HASH_ENTRY_REFERENCE_FLAG;
+
 /// hash_clone_shallow: duplicate a hash table for copy-on-write semantics.
 /// Keys are re-persisted, string values are re-persisted, refcounted values are
 /// retained for the cloned owner, and insertion order is preserved exactly.
@@ -115,8 +117,19 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x3");                                          // move the shared child pointer into the retain helper
     emitter.instruction("bl __rt_incref");                                      // retain the shared child pointer for the cloned hash
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload the retained child pointer after the helper call
-    emitter.instruction("mov x4, xzr");                                         // refcounted hash values store only value_lo
     emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = refcounted value_tag copied as-is
+    emitter.instruction("cmp x5, #7");                                          // only boxed Mixed entries can carry PHP reference state
+    emitter.instruction("b.ne __rt_hash_clone_shallow_value_ref_clear_hi");     // other refcounted entries keep an empty high payload word
+    emitter.instruction("ldr x4, [sp, #32]");                                   // load the source entry's persistent reference state
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        HASH_ENTRY_REFERENCE_FLAG,
+    );
+    emitter.instruction("and x4, x4, x9");                                      // preserve the reference-set bit without duplicating local alias counts
+    emitter.instruction("b __rt_hash_clone_shallow_insert");                    // insert the shared boxed cell with persistent reference identity
+    emitter.label("__rt_hash_clone_shallow_value_ref_clear_hi");
+    emitter.instruction("mov x4, xzr");                                         // non-Mixed refcounted hash values store only value_lo
 
     // -- insert the fully owned cloned entry into the destination table --
     emitter.label("__rt_hash_clone_shallow_insert");
@@ -220,8 +233,19 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the shared refcounted child pointer that the cloned associative array must retain
     emitter.instruction("call __rt_incref");                                    // retain the shared child pointer for the cloned associative-array owner
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the retained child pointer into the hash-set value_lo register
-    emitter.instruction("xor r8d, r8d");                                        // clear value_hi because refcounted associative-array payloads only occupy the low word
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the refcounted runtime value_tag into the hash-set value_tag register
+    emitter.instruction("cmp r9, 7");                                           // only boxed Mixed entries can carry PHP reference state
+    emitter.instruction("jne __rt_hash_clone_shallow_value_ref_clear_hi_x");    // other refcounted entries keep an empty high payload word
+    emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // load the source entry's persistent reference state
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r10",
+        HASH_ENTRY_REFERENCE_FLAG,
+    );
+    emitter.instruction("and r8, r10");                                         // preserve the reference-set bit without duplicating local alias counts
+    emitter.instruction("jmp __rt_hash_clone_shallow_insert");                  // insert the shared boxed cell with persistent reference identity
+    emitter.label("__rt_hash_clone_shallow_value_ref_clear_hi_x");
+    emitter.instruction("xor r8d, r8d");                                        // non-Mixed refcounted hash values store only value_lo
 
     emitter.label("__rt_hash_clone_shallow_insert");
     emitter.instruction("mov rdi, r13");                                        // pass the destination associative-array pointer to the hash insert helper in the first SysV argument register

@@ -158,6 +158,12 @@ mod heap_free;
 mod in_array_mixed_int;
 mod min_max_container;
 mod natsort;
+
+/// Persistent bit marking a boxed Mixed hash entry as part of a PHP reference set.
+pub(crate) const HASH_ENTRY_REFERENCE_FLAG: i64 = 1_i64 << 62;
+
+/// Low bits carrying the number of live local aliases that point directly at this entry.
+pub(crate) const HASH_ENTRY_REFERENCE_COUNT_MASK: i64 = HASH_ENTRY_REFERENCE_FLAG - 1;
 pub(super) mod deep_cleanup;
 mod object_free_deep;
 mod range;

@@ -358,7 +358,10 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
 pub(super) fn foreach_ref_value_type(source_ty: &PhpType) -> PhpType {
     match source_ty.codegen_repr() {
         PhpType::Array(elem) => *elem,
-        PhpType::AssocArray { value, .. } => *value,
+        // Hash foreach references point at boxed Mixed entry slots. Keeping the local Mixed
+        // lets assignment replace the entry cell without interpreting its pointer as a typed
+        // scalar payload, and preserves PHP's ability to change the referenced value's type.
+        PhpType::AssocArray { .. } => PhpType::Mixed,
         _ => PhpType::Mixed,
     }
 }

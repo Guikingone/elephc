@@ -142,7 +142,7 @@ pub(super) fn lower_alias_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &I
         target_offset,
         abi::tertiary_scratch_reg(ctx.emitter),
     );
-    ctx.mark_promoted_ref_cell(target_slot);
+    ctx.alias_ref_cell_state(target_slot, source_slot)?;
     Ok(())
 }
 

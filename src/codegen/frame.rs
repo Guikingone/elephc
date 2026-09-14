@@ -109,9 +109,9 @@ pub(super) fn layout_for_function(
         local_offsets.insert(local.id, offset);
     }
     let mut ref_cell_state_offsets = HashMap::new();
-    let mut dynamic_ref_cell_slots = local_analysis.dynamic_ref_cell_slots().collect::<Vec<_>>();
-    dynamic_ref_cell_slots.sort_by_key(|slot| slot.as_raw());
-    for slot in dynamic_ref_cell_slots {
+    let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
+    ref_cell_slots.sort_by_key(|slot| slot.as_raw());
+    for slot in ref_cell_slots {
         offset += 8;
         ref_cell_state_offsets.insert(slot, offset);
     }
@@ -920,6 +920,7 @@ fn zero_initialize_main_cleanup_locals(ctx: &mut FunctionContext<'_>) {
 
 /// Releases owned main locals that still hold refcounted storage at process exit.
 fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    emit_hash_entry_ref_epilogue_cleanup(ctx);
     emit_ref_cell_owner_epilogue_cleanup(ctx);
     for (name, slot, ty, offset) in main_cleanup_locals(ctx) {
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
@@ -1003,6 +1004,22 @@ fn zero_initialize_ref_cell_state_slots(ctx: &mut FunctionContext<'_>) {
 fn emit_ref_cell_owner_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     let owners = ref_cell_owner_locals(ctx);
     emit_ref_cell_owner_epilogue_cleanup_for(ctx, owners);
+}
+
+/// Releases live foreach-by-reference aliases recorded in local representation words.
+fn emit_hash_entry_ref_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    let mut slots = ctx
+        .function
+        .locals
+        .iter()
+        .filter(|local| ctx.local_slot_ever_stores_ref_cell_pointer(local.id))
+        .map(|local| local.id)
+        .collect::<Vec<_>>();
+    slots.sort_by_key(|slot| slot.as_raw());
+    slots.dedup();
+    for slot in slots {
+        ctx.release_hash_entry_ref_binding(slot);
+    }
 }
 
 /// Releases a precomputed set of hidden ref-cell owner slots.
@@ -1267,10 +1284,16 @@ fn emit_function_local_epilogue_cleanup(
     emit_instr_exit(ctx);
     let cleanup_locals = function_cleanup_locals(ctx, skip_return_slot);
     let ref_cell_owners = ref_cell_owner_locals(ctx);
+    let has_hash_entry_refs = ctx
+        .function
+        .locals
+        .iter()
+        .any(|local| ctx.local_slot_ever_stores_ref_cell_pointer(local.id));
     let eval_scopes = eval_scope_locals(ctx);
     let eval_contexts = eval_context_locals(ctx);
     if cleanup_locals.is_empty()
         && ref_cell_owners.is_empty()
+        && !has_hash_entry_refs
         && eval_scopes.is_empty()
         && eval_contexts.is_empty()
     {
@@ -1285,6 +1308,7 @@ fn emit_function_local_epilogue_cleanup(
     if preserves_return {
         push_return_value(ctx, &return_ty);
     }
+    emit_hash_entry_ref_epilogue_cleanup(ctx);
     emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners);
     for (name, slot, ty, offset) in cleanup_locals {
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));

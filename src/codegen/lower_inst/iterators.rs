@@ -368,6 +368,7 @@ pub(super) fn lower_iter_current_value_ref(
         // Dead code in practice — `IterNext` already reported "no more elements" — but bind
         // the slot to a null cell so nothing downstream dereferences stack garbage.
         IteratorSourceKind::NonIterable { .. } => {
+            ctx.release_hash_entry_ref_binding(slot);
             let local_offset = ctx.local_offset(slot)?;
             let result_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
@@ -379,7 +380,7 @@ pub(super) fn lower_iter_current_value_ref(
             ))
         }
     }
-    ctx.mark_promoted_ref_cell(slot);
+    ctx.record_promoted_ref_cell(slot);
     Ok(())
 }
 
@@ -569,7 +570,7 @@ fn iter_start_owner_slot(inst: &Instruction) -> Option<LocalSlotId> {
     }
 }
 
-/// Splits statically typed array/hash sources before by-reference iteration.
+/// Splits statically typed array sources and boxes hash entries before reference iteration.
 ///
 /// A null/sentinel source — the value a missed read such as `foreach ($a[7] as &$v)`
 /// materializes — has nothing to split: the copy-on-write helpers recognize both the zero
@@ -583,7 +584,9 @@ fn ensure_unique_static_iter_source(
 ) -> Result<()> {
     let helper = match source_kind {
         IteratorSourceKind::Indexed { .. } => "__rt_array_ensure_unique",
-        IteratorSourceKind::Hash => "__rt_hash_ensure_unique",
+        // Hash references use the boxed Mixed entry slot as their stable value cell. The
+        // converter performs COW itself before replacing concrete entry payloads.
+        IteratorSourceKind::Hash => "__rt_hash_to_mixed",
         _ => return Ok(()),
     };
     if ctx.emitter.target.arch == Arch::X86_64 {
@@ -749,6 +752,7 @@ fn bind_indexed_current_value_ref(
     slot: LocalSlotId,
     elem_ty: &PhpType,
 ) -> Result<()> {
+    ctx.mark_promoted_ref_cell(slot);
     let local_offset = ctx.local_offset(slot)?;
     let is_string_slot = matches!(elem_ty.codegen_repr(), PhpType::Str);
     match ctx.emitter.target.arch {
@@ -786,15 +790,20 @@ fn bind_hash_current_value_ref(
     offset: usize,
     slot: LocalSlotId,
 ) -> Result<()> {
+    ctx.release_hash_entry_ref_binding(slot);
     let local_offset = ctx.local_offset(slot)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset(ctx.emitter, "x9", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
             abi::store_at_offset_scratch(ctx.emitter, "x9", local_offset, "x11");
+            ctx.emitter.instruction("add x10, x9, #8");                         // address the entry's persistent reference-state word
+            ctx.bind_hash_entry_ref_state(slot, "x10")?;
         }
         Arch::X86_64 => {
             abi::load_at_offset(ctx.emitter, "r11", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
             abi::store_at_offset(ctx.emitter, "r11", local_offset);
+            ctx.emitter.instruction("lea r10, [r11 + 8]");                      // address the entry's persistent reference-state word
+            ctx.bind_hash_entry_ref_state(slot, "r10")?;
         }
     }
     Ok(())

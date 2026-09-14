@@ -249,9 +249,28 @@ impl Checker {
                         env.insert(k.clone(), *key.clone());
                         self.clear_foreach_callable_metadata(k);
                     }
-                    let value_ty = *value.clone();
+                    // Associative foreach-by-reference converts every entry to boxed Mixed
+                    // storage. Reflect that in both the bound local and a simple source local,
+                    // so post-loop reads do not reinterpret boxed-cell pointers as the old
+                    // concrete payload type.
+                    let value_ty = if *value_by_ref {
+                        PhpType::Mixed
+                    } else {
+                        *value.clone()
+                    };
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
+                    if *value_by_ref {
+                        if let ExprKind::Variable(source_name) = &array.kind {
+                            env.insert(
+                                source_name.clone(),
+                                PhpType::AssocArray {
+                                    key: key.clone(),
+                                    value: Box::new(PhpType::Mixed),
+                                },
+                            );
+                        }
+                    }
                 } else if let PhpType::Object(class_name) = &arr_ty {
                     if !self.object_type_implements_iterable(class_name) {
                         return Err(CompileError::new(

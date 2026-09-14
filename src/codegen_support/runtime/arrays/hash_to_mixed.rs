@@ -49,17 +49,17 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("str x5, [sp, #32]");                                   // save the entry runtime value tag
     emitter.instruction("str x6, [sp, #40]");                                   // save the mutable entry value address
     emitter.instruction("cmp x5, #7");                                          // does this entry already hold a boxed Mixed cell?
-    emitter.instruction("b.eq __rt_hash_to_mixed_entry_ready");                 // already-mixed entries only need metadata normalization
+    emitter.instruction("b.eq __rt_hash_to_mixed_entry_ready");                 // already-mixed entries keep their persistent reference state
     emitter.instruction("mov x0, x5");                                          // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov x1, x3");                                          // pass the entry low payload word to the owned-box helper
     emitter.instruction("mov x2, x4");                                          // pass the entry high payload word to the owned-box helper
     emitter.instruction("bl __rt_hash_to_mixed_box_owned");                     // allocate a Mixed cell that takes over the entry payload
     emitter.instruction("ldr x6, [sp, #40]");                                   // reload the mutable entry value address
     emitter.instruction("str x0, [x6]");                                        // store the boxed Mixed pointer in value_lo
+    emitter.instruction("str xzr, [x6, #8]");                                   // new boxed entries start outside every PHP reference set
 
     emitter.label("__rt_hash_to_mixed_entry_ready");
     emitter.instruction("ldr x6, [sp, #40]");                                   // reload the mutable entry value address
-    emitter.instruction("str xzr, [x6, #8]");                                   // normalize value_hi for boxed Mixed entries
     emitter.instruction("mov x9, #7");                                          // runtime value tag 7 = boxed Mixed
     emitter.instruction("str x9, [x6, #16]");                                   // stamp the entry payload as boxed Mixed
     emitter.instruction("b __rt_hash_to_mixed_loop");                           // continue converting insertion-order entries
@@ -135,17 +135,17 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save the entry runtime value tag
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the mutable entry value address
     emitter.instruction("cmp r9, 7");                                           // does this entry already hold a boxed Mixed cell?
-    emitter.instruction("je __rt_hash_to_mixed_x86_entry_ready");               // already-mixed entries only need metadata normalization
+    emitter.instruction("je __rt_hash_to_mixed_x86_entry_ready");               // already-mixed entries keep their persistent reference state
     emitter.instruction("mov rax, r9");                                         // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov rdi, rcx");                                        // pass the entry low payload word to the owned-box helper
     emitter.instruction("mov rsi, r8");                                         // pass the entry high payload word to the owned-box helper
     emitter.instruction("call __rt_hash_to_mixed_x86_box_owned");               // allocate a Mixed cell that takes over the entry payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the mutable entry value address
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store the boxed Mixed pointer in value_lo
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // new boxed entries start outside every PHP reference set
 
     emitter.label("__rt_hash_to_mixed_x86_entry_ready");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the mutable entry value address
-    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // normalize value_hi for boxed Mixed entries
     emitter.instruction("mov QWORD PTR [r10 + 16], 7");                         // stamp the entry payload as boxed Mixed
     emitter.instruction("jmp __rt_hash_to_mixed_x86_loop");                     // continue converting insertion-order entries
 

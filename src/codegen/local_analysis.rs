@@ -98,9 +98,9 @@ impl LocalSlotAnalysis {
         self.ever_ref_cell_slots.contains(&slot)
     }
 
-    /// Iterates slots whose runtime representation can switch between a raw value and a cell.
-    pub(super) fn dynamic_ref_cell_slots(&self) -> impl Iterator<Item = LocalSlotId> + '_ {
-        self.dynamic_ref_cell_slots.iter().copied()
+    /// Iterates every slot that can hold a ref-cell pointer on at least one path.
+    pub(super) fn ref_cell_slots(&self) -> impl Iterator<Item = LocalSlotId> + '_ {
+        self.ever_ref_cell_slots.iter().copied()
     }
 
     /// Returns whether cleanup must inspect this slot's runtime representation flag.
