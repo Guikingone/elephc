@@ -443,6 +443,12 @@ pub(crate) fn lower_class_name_lookup(
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?;
     match &value_ty {
+        // A statically typed slot can still hold an eval-declared subclass, which owns no
+        // generated class id and would otherwise report its nearest emitted ancestor. Magician
+        // answers from dynamic-owner metadata first and falls back to the same class-name table.
+        PhpType::Object(_) if super::has_eval_context(ctx) => {
+            return super::lower_eval_object_class_name(ctx, inst, value, name);
+        }
         PhpType::Object(_) => {
             ctx.load_value_to_result(value)?;
             emit_dynamic_object_class_name(ctx, name);

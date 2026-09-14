@@ -29888,3 +29888,80 @@ echo ":"; echo $box->kept;
         "set:extra=E:Cannot assign by reference when cloning with updated properties:K"
     );
 }
+
+/// Verifies `get_class()` on a STATICALLY TYPED slot reports the eval-declared subclass.
+///
+/// `identity_parent()` returns the EMITTED parent type, so the operand reaches `get_class()` as a
+/// concrete object slot rather than a Mixed cell. The value it really holds is an eval-declared
+/// subclass, which owns no generated class id, so the generated class-name table can only answer
+/// `ParentBox`. This passes only when the typed operand consults Magician's dynamic-owner
+/// metadata first. The `else` arm exists so a FALSE `instanceof` fails loudly instead of silently
+/// skipping the case this fixture is here to prove.
+#[test]
+fn test_aot_get_class_reports_eval_declared_subclass_through_typed_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentBox {}
+function identity_parent(ParentBox $value): ParentBox { return $value; }
+$box = eval('class EvalChildBox extends ParentBox {} return new EvalChildBox();');
+if ($box instanceof ParentBox) {
+    $typed = identity_parent($box);
+    echo get_class($typed);
+} else {
+    echo "not-an-instance";
+}
+"#,
+    );
+    assert_eq!(out, "EvalChildBox");
+}
+
+/// Verifies `get_parent_class()` on the same typed slot reports the eval subclass's own parent.
+///
+/// Both builtins share one lowering, so the identical defect applies here: reading the generated
+/// class id would treat the value as `ParentBox` itself and report the PARENTLESS empty string.
+/// The eval-declared class really is a child of `ParentBox`, so that is the PHP answer.
+#[test]
+fn test_aot_get_parent_class_reports_eval_declared_subclass_parent_through_typed_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentBox {}
+function identity_parent(ParentBox $value): ParentBox { return $value; }
+$box = eval('class EvalChildBox extends ParentBox {} return new EvalChildBox();');
+if ($box instanceof ParentBox) {
+    $typed = identity_parent($box);
+    echo get_parent_class($typed);
+} else {
+    echo "not-an-instance";
+}
+"#,
+    );
+    assert_eq!(out, "ParentBox");
+}
+
+/// Verifies ordinary typed AOT objects keep their generated class names in an eval program.
+///
+/// The program links eval, so these typed operands take the Magician route too. Magician holds no
+/// dynamic owner for any of them, so every answer has to come from the SAME generated class-name
+/// metadata the pre-bridge lowering read: an emitted class, an emitted subclass, an emitted
+/// parent name, the empty string for a parentless class, `stdClass`, and an enum case.
+#[test]
+fn test_aot_get_class_typed_aot_object_keeps_generated_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+class AotNameBase {}
+class AotNameChild extends AotNameBase {}
+enum AotNameSuit { case Hearts; }
+function identity_aot_base(AotNameBase $value): AotNameBase { return $value; }
+eval('$evalLinked = 1;');
+$base = identity_aot_base(new AotNameBase());
+$child = identity_aot_base(new AotNameChild());
+echo get_class($base), ":";
+echo get_class($child), ":";
+echo get_parent_class($child), ":";
+echo get_parent_class($base), ":";
+echo get_class(new stdClass()), ":";
+echo get_class(AotNameSuit::Hearts);
+"#,
+    );
+    assert_eq!(out, "AotNameBase:AotNameChild:AotNameBase::stdClass:AotNameSuit");
+}
