@@ -460,7 +460,7 @@ return get_extension_funcs("missing");"#,
 
     assert_eq!(
         values.output,
-        "7:7:7:9:8:float:catalog:function:flag:61:1:2:3:files"
+        "7:7:7:9:8:float:catalog:function:flag:62:1:2:3:files"
     );
     assert_eq!(values.get(result), FakeValue::Bool(false));
 }
