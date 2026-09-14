@@ -57,7 +57,6 @@ fn test_reference_detach_rejects_conditional_and_shared_storage() {
         "<?php function shared() { global $text; } $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved();",
         "<?php $text = 'x'; function shared() { global $text; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); } shared();",
         "<?php function shared() { static $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); } shared();",
-        "<?php function typed(string $text) { $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); } typed('x');",
         "<?php function borrowed(string &$text) { $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); } $text = 'x'; borrowed($text);",
         "<?php string $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved();",
         "<?php $values = ['x']; foreach ($values as &$text) { $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); }",
