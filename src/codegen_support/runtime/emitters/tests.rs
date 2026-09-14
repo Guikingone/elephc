@@ -37,6 +37,31 @@ fn eval_scope_exports_are_unique_and_native_fragments_do_not_require_rust() {
     }
 }
 
+/// The dynamic descriptor invoker contains callable arms for clone and handler restoration, so
+/// its standalone runtime must provide their native dependencies even without direct source calls.
+#[test]
+fn descriptor_invoker_emits_transitive_clone_and_handler_dependencies() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit_runtime(&mut emitter, RuntimeFeatures {
+            descriptor_invoker: true,
+            ..RuntimeFeatures::none()
+        });
+        let asm = emitter.output();
+        for symbol in [
+            "__elephc_eval_value_object_clone_shallow",
+            "__rt_core_error_handler_pop",
+            "__rt_core_exception_handler_pop",
+        ] {
+            assert!(
+                asm.contains(&target.extern_symbol(symbol)),
+                "{name}: descriptor invoker runtime is missing {symbol}"
+            );
+        }
+    }
+}
+
 /// Verifies that AArch64 runtime emits fiber routines.
 #[test]
 fn test_aarch64_runtime_emits_fiber_routines() {
