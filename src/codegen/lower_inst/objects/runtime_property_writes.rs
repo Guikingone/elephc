@@ -16,6 +16,14 @@ use super::*;
 pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    if let Some(Immediate::ReflectionPropertyRef { class, property }) = inst.immediate {
+        let slot = resolve_physical_property_slot(ctx, object, class, property, inst)?;
+        let value_ty = ctx.value_php_type(value)?;
+        ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, base_reg)?;
+        return emit_property_store(ctx, value, &slot, base_reg);
+    }
     if let Some(Immediate::PropertyRef { class, property }) = inst.immediate {
         let slot = resolve_initializer_property_slot(ctx, object, class, property, inst)?;
         let value_ty = ctx.value_php_type(value)?;
@@ -517,6 +525,18 @@ fn mixed_property_write_candidate(
             // `TypeError` for `'nope'`. What is left here is a slot shape the backend genuinely
             // cannot model, and the honest answer for that is to fail the build rather than to
             // drop a whole runtime class out of the dispatch and lose the assignment with it.
+            // An untyped slot keeps the historical `Void` storage marker until a concrete
+            // assignment widens it. A Mixed-receiver ladder is conservative and enumerates
+            // classes the receiver may never hold, so rejecting that marker here makes an
+            // unrelated runtime class prevent the whole function from compiling. There is no
+            // safe fixed representation to emit for this candidate yet. Leave it to the miss
+            // route, while typed slots continue to fail closed on unsupported assignments.
+            if !slot.is_declared
+                && matches!(slot.php_type.codegen_repr(), PhpType::Void | PhpType::Never)
+                && matches!(value_ty.codegen_repr(), PhpType::Mixed)
+            {
+                return Ok(None);
+            }
             ensure_property_value_supported(ctx, &slot, value, value_ty, inst)?;
             MixedPropertyWriteAction::Slot(slot)
         }

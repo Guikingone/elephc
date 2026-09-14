@@ -144,6 +144,13 @@ pub enum Immediate {
         class: u32,
         property: u32,
     },
+    /// A physical class-id/property-index pair used by statically resolved ReflectionProperty
+    /// value access. This bypasses PHP caller visibility but still requires a compatible concrete
+    /// receiver in the backend.
+    ReflectionPropertyRef {
+        class: u32,
+        property: u32,
+    },
     FieldRef {
         layout: u32,
         field: u32,
@@ -773,8 +780,9 @@ pub enum Op {
     PropGet,
     PropGetForWrite,
     PropInitialized,
-    /// Stores through a property name, or a physical PropertyRef inside its allocation initializer.
-    /// Physical initialization adds ALLOC_HEAP to the default effects for owned reference cells.
+    /// Stores through a property name, a physical PropertyRef inside its allocation initializer,
+    /// or a trusted ReflectionPropertyRef for reflected value access. Physical initialization
+    /// adds ALLOC_HEAP to the default effects for owned reference cells.
     PropSet,
     /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
     /// refcounted payload the slot owned and stamps the uninitialized-typed-property

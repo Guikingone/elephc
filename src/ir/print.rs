@@ -226,6 +226,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::PropertyRef { class, property } => {
             let _ = write!(out, " property#{}::{}", class, property);
         }
+        Immediate::ReflectionPropertyRef { class, property } => {
+            let _ = write!(out, " reflection-property#{}::{}", class, property);
+        }
         Immediate::FieldRef { layout, field } => {
             let _ = write!(out, " field#{}::{}", layout, field);
         }

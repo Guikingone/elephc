@@ -32,6 +32,17 @@ const REFERENCE_WITHOUT_CELL_MESSAGE: &str =
 /// Lowers a declared object property read for statically known object receivers.
 pub(in crate::codegen::lower_inst) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
+    if let Some(Immediate::ReflectionPropertyRef { class, property }) = inst.immediate {
+        let slot = resolve_physical_property_slot(ctx, object, class, property, inst)?;
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, base_reg)?;
+        if slot.is_declared {
+            emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
+        }
+        emit_property_load(ctx, &slot, base_reg)?;
+        materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+        return store_if_result(ctx, inst);
+    }
     let property = property_name_immediate(ctx, inst)?.to_string();
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
         return lower_object_prop_get_with_null_guard(ctx, inst, object, &property);

@@ -47,12 +47,47 @@ pub(super) fn resolve_initializer_property_slot(
     {
         return Err(CodegenIrError::invalid_module("physical property reference outside its initializer"));
     }
+    resolve_physical_property_slot(ctx, object, class_id, index, inst)
+}
+
+/// Resolves a compiler-trusted physical property slot by class id and layout index.
+///
+/// Reflection uses this path because PHP reflection intentionally bypasses caller visibility.
+/// The receiver must still be a concrete instance of the referenced class or one of its
+/// subclasses. Ordinary source property access continues through the scope-aware name resolver.
+pub(super) fn resolve_physical_property_slot(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    class_id: u32,
+    index: u32,
+    inst: &Instruction,
+) -> Result<PropertySlot> {
+    let PhpType::Object(receiver_class) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Err(CodegenIrError::invalid_module(
+            "physical property access needs a concrete object",
+        ));
+    };
+    let Some((class_name, info)) = ctx
+        .module
+        .class_infos
+        .iter()
+        .find(|(_, info)| info.class_id == u64::from(class_id))
+    else {
+        return Err(CodegenIrError::invalid_module(format!(
+            "physical property access references unknown class id {class_id}",
+        )));
+    };
+    if !class_extends_class(ctx, &receiver_class, class_name) {
+        return Err(CodegenIrError::invalid_module(format!(
+            "physical property access for {class_name} cannot use receiver {receiver_class}",
+        )));
+    }
     let index = index as usize;
     let (property, php_type) = info.properties.get(index)
-        .ok_or_else(|| CodegenIrError::invalid_module("property initializer index is outside the class layout"))?;
+        .ok_or_else(|| CodegenIrError::invalid_module("physical property index is outside the class layout"))?;
     ensure_property_type_supported(php_type, inst)?;
     Ok(PropertySlot {
-        class_name,
+        class_name: class_name.clone(),
         property: property.clone(),
         php_type: php_type.clone(),
         offset: 8 + index * 16,

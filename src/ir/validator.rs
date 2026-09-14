@@ -353,6 +353,38 @@ mod instruction_effect_tests {
         }
     }
 
+    /// Reflected physical access has its own immediate and does not claim initializer allocation.
+    #[test]
+    fn reflected_property_access_has_distinct_canonical_effects() {
+        for op in [Op::PropGet, Op::PropSet] {
+            let immediate = Some(Immediate::ReflectionPropertyRef {
+                class: 1,
+                property: 0,
+            });
+            let mut instruction = Instruction::new(
+                op,
+                Vec::new(),
+                immediate,
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+                op.default_effects(),
+                None,
+            );
+            let id = InstId::from_raw(0);
+            assert_eq!(validate_instruction_immediate(id, &instruction), Ok(()));
+            assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+            instruction.effects |= Effects::ALLOC_HEAP;
+            if op == Op::PropSet {
+                assert!(matches!(
+                    validate_instruction_effects(id, &instruction),
+                    Err(ValidationError::EffectMismatch { .. })
+                ));
+            }
+        }
+    }
+
     /// Unsetting a last-owner element can allocate COW storage and execute a throwing destructor.
     #[test]
     fn unset_effects_preserve_cow_and_destructor_boundaries() {
@@ -440,7 +472,18 @@ fn validate_instruction_immediate(
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),
-        PropSet | PropUnset => require_immediate(inst_id, inst, "property name or physical slot", |imm| {
+        PropGet => require_immediate(inst_id, inst, "property name or reflected physical slot", |imm| {
+            matches!(imm, Imm::Data(_) | Imm::ReflectionPropertyRef { .. })
+        }),
+        PropSet => require_immediate(inst_id, inst, "property name or trusted physical slot", |imm| {
+            matches!(
+                imm,
+                Imm::Data(_)
+                    | Imm::PropertyRef { .. }
+                    | Imm::ReflectionPropertyRef { .. }
+            )
+        }),
+        PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
         LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
