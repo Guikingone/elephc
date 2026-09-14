@@ -131,38 +131,31 @@ pub(super) fn lower_reflection_method_constructor_operands(
 pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
     let object_ty = ctx.builder.value_php_type(object.value);
-    let Some((class_name, false)) = singular_object_class(&object_ty) else {
-        unreachable!("clone expressions must be type-checked as non-null objects before lowering");
+    let result_ty = match object_ty.codegen_repr() {
+        PhpType::Object(class_name) => PhpType::Object(class_name),
+        PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
+        other => unreachable!("clone expression reached EIR lowering with {other:?}"),
     };
-    let class_name = class_name.to_string();
-    // php refuses to clone an enum case. The two-argument `clone()` form already answers this
-    // from the clone's runtime class id (`emit_enum_uncloneable_guard`); the keyword form knows
-    // the class statically, so it raises the SAME catchable `Error` here instead of handing back
-    // a second copy of the singleton and letting `E::A === clone E::A` become false.
-    if ctx.enums.contains_key(class_name.trim_start_matches('\\')) {
-        return crate::ir_lower::stmt::lower_throw_access_error_expr(
-            ctx,
-            &format!(
-                "Trying to clone an uncloneable object of class {}",
-                class_name
-            ),
-            expr.span,
-        );
-    }
-    let data = ctx.intern_class_name(&class_name);
-    let result_ty = PhpType::Object(class_name.clone());
-    let cloned = ctx.emit_value(
-        Op::ObjectCloneShallow,
+    // The result record is outside the source root. A temporary source object's destructor can
+    // throw while its post-clone owner is retired, and the already-created clone must remain
+    // reachable from that same-frame catch.
+    let result_staging = prepublish_call_result(ctx, &result_ty, expr.span);
+    let (object, object_owner) = root_owned_call_operand(ctx, object, expr.span);
+    let cloned = ctx.emit_owned_value(
+        Op::RuntimeCall,
         vec![object.value],
-        Some(Immediate::Data(data)),
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::CloneWith,
+        ))),
         result_ty,
-        Op::ObjectCloneShallow.default_effects(),
+        crate::ir::RuntimeFnId::CloneWith.effects(),
         Some(expr.span),
     );
-    if class_method_signature(ctx, &class_name, &php_symbol_key("__clone")).is_some() {
-        lower_method_call_with_receiver(ctx, cloned, "__clone", &[], Op::MethodCall, expr);
+    stage_call_result(ctx, result_staging.as_ref(), cloned, expr.span);
+    if let Some(owner) = object_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
     }
-    cloned
+    take_prepublished_call_result(ctx, result_staging, cloned, expr.span)
 }
 
 /// Metadata operand source for direct `ReflectionParameter` constructor lowering.

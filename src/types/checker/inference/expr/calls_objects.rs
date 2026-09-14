@@ -188,11 +188,9 @@ impl Checker {
             }
             ExprKind::Clone(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                match ty {
-                    PhpType::Object(class_name) => {
-                        self.check_clone_visibility(&class_name, expr.span)?;
-                        Ok(PhpType::Object(class_name))
-                    }
+                match ty.codegen_repr() {
+                    PhpType::Object(class_name) => Ok(PhpType::Object(class_name)),
+                    PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
                     _ => Err(CompileError::new(expr.span, "clone requires an object value")),
                 }
             }

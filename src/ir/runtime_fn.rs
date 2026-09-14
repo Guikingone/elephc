@@ -860,6 +860,12 @@ impl RuntimeFnId {
     pub fn refine_first_class_callable_sig(self, sig: &mut crate::types::FunctionSig) {
         use crate::types::PhpType;
         match self {
+            RuntimeFnId::CloneWith => {
+                // A first-class invocation can carry a runtime Mixed value that must be checked
+                // before any clone is allocated or hook is invoked. Keep the public builtin
+                // contract typed as array while widening only the callable ABI.
+                set_callable_param_type(sig, 1, PhpType::Mixed);
+            }
             RuntimeFnId::Getenv => {
                 // Preserve null in both direct operands and generated callable wrappers.
                 if let Some((_, name_ty)) = sig.params.get_mut(0) {
@@ -917,7 +923,10 @@ impl RuntimeFnId {
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
             RuntimeFnId::CloneWith => {
                 set_callable_param_type(sig, 0, PhpType::Mixed);
-                set_callable_param_type(sig, 1, PhpType::php_array());
+                // Dynamic callable arguments reach the runtime before their PHP parameter type
+                // is known. Preserve the value as Mixed so `CloneWith` can raise the catchable
+                // second-argument TypeError before allocating a clone or invoking `__clone`.
+                set_callable_param_type(sig, 1, PhpType::Mixed);
                 sig.return_type = PhpType::Mixed;
             }
             // `array_reverse()`'s `$preserve_keys` and `array_slice()`'s `$preserve_keys` pick

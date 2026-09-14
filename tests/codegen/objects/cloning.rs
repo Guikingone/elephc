@@ -212,6 +212,100 @@ clone(): Argument #1 ($object) must be of type object;Box"
     );
 }
 
+/// Verifies a runtime-shaped invalid override is rejected before allocating the clone or running
+/// its hook. Only the source destructor may run when the surrounding function returns.
+#[test]
+fn test_clone_function_validates_mixed_overrides_before_copy_and_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class Probe {
+    public function __clone(): void { echo "hook;"; }
+    public function __destruct() { echo "drop;"; }
+}
+function badOverrides(): mixed { echo "arg;"; return 7; }
+function run(): void {
+    $source = new Probe();
+    try {
+        clone($source, badOverrides());
+        echo "no throw;";
+    } catch (TypeError $e) {
+        echo $e->getMessage() . ";";
+    }
+    echo "alive;";
+}
+run();
+"#,
+    );
+    assert_eq!(
+        out,
+        "arg;clone(): Argument #2 ($withProperties) must be of type array, int given;alive;drop;"
+    );
+}
+
+/// Verifies every callable route validates a Mixed override before `__clone` can run.
+#[test]
+fn test_clone_function_validates_mixed_overrides_across_callable_paths() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableProbe {
+    public function __clone(): void { echo "hook;"; }
+}
+function badCallableOverrides(): mixed { echo "arg;"; return 7; }
+$source = new CallableProbe();
+$fcc = clone(...);
+try { $fcc($source, badCallableOverrides()); } catch (TypeError $e) { echo "type;"; }
+try { call_user_func("clone", $source, badCallableOverrides()); } catch (TypeError $e) { echo "type;"; }
+try { call_user_func_array("clone", [$source, badCallableOverrides()]); } catch (TypeError $e) { echo "type;"; }
+$name = "clone";
+try { $name($source, badCallableOverrides()); } catch (TypeError $e) { echo "type;"; }
+try { $fcc(...[$source, badCallableOverrides()]); } catch (TypeError $e) { echo "type;"; }
+"#,
+    );
+    assert_eq!(out, "arg;type;arg;type;arg;type;arg;type;arg;type;");
+}
+
+/// Verifies unary clone accepts runtime Mixed objects, rejects runtime Mixed scalars, and reports
+/// an inaccessible hook as a catchable runtime `Error` while preserving declaring-class access.
+#[test]
+fn test_clone_keyword_supports_mixed_values_and_runtime_hook_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+class OpenBox {
+    public int $n = 4;
+    public function __clone(): void { echo "open;"; }
+}
+function choose(bool $object): mixed { return $object ? new OpenBox() : 7; }
+$source = choose(true);
+$copy = clone $source;
+echo get_class($copy) . ":" . $copy->n . ";";
+try {
+    $bad = choose(false);
+    clone $bad;
+    echo "no type;";
+} catch (TypeError $e) {
+    echo $e->getMessage() . ";";
+}
+class LockedClone {
+    private function __clone(): void { echo "private;"; }
+    public function copy(): LockedClone { return clone $this; }
+}
+$locked = new LockedClone();
+try {
+    clone $locked;
+    echo "no visibility;";
+} catch (Error $e) {
+    echo $e->getMessage() . ";";
+}
+echo get_class($locked->copy());
+"#,
+    );
+    assert_eq!(
+        out,
+        "open;OpenBox:4;clone(): Argument #1 ($object) must be of type object;\
+Call to private method LockedClone::__clone() from global scope;private;LockedClone"
+    );
+}
+
 /// Verifies a RUNTIME override array is applied to the clone and leaves the source untouched.
 ///
 /// The array is a plain local, not a literal the backend can read at compile time, which is the

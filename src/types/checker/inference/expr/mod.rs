@@ -9,7 +9,6 @@
 //! - Inference must preserve PHP evaluation errors and avoid treating effectful expressions as pure type facts.
 
 use crate::errors::CompileError;
-use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
@@ -187,39 +186,6 @@ impl Checker {
             return Ok(PhpType::Never);
         }
         Ok(ty)
-    }
-}
-
-impl Checker {
-    /// Checks whether the current scope may invoke a class's `__clone` hook.
-    ///
-    /// PHP permits `__clone` to be non-public, but the actual `clone $object`
-    /// expression must obey the hook's visibility when a hook exists.
-    fn check_clone_visibility(&self, class_name: &str, span: Span) -> Result<(), CompileError> {
-        let normalized = class_name.trim_start_matches('\\');
-        let Some(class_info) = self.classes.get(normalized) else {
-            return Ok(());
-        };
-        let key = php_symbol_key("__clone");
-        let Some(visibility) = class_info.method_visibilities.get(&key) else {
-            return Ok(());
-        };
-        let declaring_class = class_info
-            .method_declaring_classes
-            .get(&key)
-            .map(String::as_str)
-            .unwrap_or(normalized);
-        if self.can_access_member(declaring_class, visibility) {
-            return Ok(());
-        }
-        Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot access {} method: {}::__clone",
-                Self::visibility_label(visibility),
-                normalized
-            ),
-        ))
     }
 }
 

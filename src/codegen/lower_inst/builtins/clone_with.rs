@@ -85,6 +85,10 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
         return super::store_if_result(ctx, inst);
     }
 
+    emit_clone_object_type_guard(ctx, object)?;
+    if let Some(properties) = inst.operands.get(1).copied() {
+        emit_clone_properties_type_guard(ctx, properties)?;
+    }
     emit_boxed_shallow_clone(ctx, object)?;
     emit_uncloneable_guard(ctx);
 
@@ -175,7 +179,7 @@ fn emit_boxed_shallow_clone(ctx: &mut FunctionContext<'_>, object: ValueId) -> R
             Ok(())
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            emit_mixed_object_type_guard(ctx, object)?;
+            ctx.load_value_to_result(object)?;
             emit_clone_adapter_call(ctx);
             Ok(())
         }
@@ -183,6 +187,95 @@ fn emit_boxed_shallow_clone(ctx: &mut FunctionContext<'_>, object: ValueId) -> R
             "clone() received non-object EIR operand {other:?}",
         ))),
     }
+}
+
+/// Validates the first argument before the shallow clone is allocated.
+fn emit_clone_object_type_guard(ctx: &mut FunctionContext<'_>, object: ValueId) -> Result<()> {
+    match ctx.value_php_type(object)?.codegen_repr() {
+        PhpType::Object(_) => Ok(()),
+        PhpType::Mixed | PhpType::Union(_) => emit_mixed_object_type_guard(ctx, object),
+        other => Err(CodegenIrError::invalid_module(format!(
+            "clone() received non-object EIR operand {other:?}",
+        ))),
+    }
+}
+
+/// Validates PHP 8.5's override array before allocating the shallow clone or invoking `__clone`.
+fn emit_clone_properties_type_guard(
+    ctx: &mut FunctionContext<'_>,
+    properties: ValueId,
+) -> Result<()> {
+    let properties_ty = ctx.value_php_type(properties)?.codegen_repr();
+    match properties_ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => return Ok(()),
+        PhpType::Mixed | PhpType::Union(_) => {}
+        other => {
+            super::super::exceptions::emit_type_error(
+                ctx,
+                &format!(
+                    "clone(): Argument #2 ($withProperties) must be of type array, {} given",
+                    static_type_name(&other)
+                ),
+            );
+            return Ok(());
+        }
+    }
+
+    let valid = ctx.next_label("clone_properties_array");
+    let int_case = ctx.next_label("clone_properties_int");
+    let string_case = ctx.next_label("clone_properties_string");
+    let float_case = ctx.next_label("clone_properties_float");
+    let bool_case = ctx.next_label("clone_properties_bool");
+    let true_case = ctx.next_label("clone_properties_true");
+    let object_case = ctx.next_label("clone_properties_object");
+    let resource_case = ctx.next_label("clone_properties_resource");
+    let callable_case = ctx.next_label("clone_properties_callable");
+    ctx.load_value_to_result(properties)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    for tag in [4u8, 5] {
+        super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, tag, &valid);
+    }
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 0, &int_case);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 2, &float_case);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 3, &bool_case);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 10, &callable_case);
+    emit_clone_properties_type_error(ctx, "null");
+
+    ctx.emitter.label(&int_case);
+    emit_clone_properties_type_error(ctx, "int");
+    ctx.emitter.label(&string_case);
+    emit_clone_properties_type_error(ctx, "string");
+    ctx.emitter.label(&float_case);
+    emit_clone_properties_type_error(ctx, "float");
+    ctx.emitter.label(&object_case);
+    emit_clone_properties_type_error(ctx, "object");
+    ctx.emitter.label(&resource_case);
+    emit_clone_properties_type_error(ctx, "resource");
+    ctx.emitter.label(&callable_case);
+    emit_clone_properties_type_error(ctx, "Closure");
+
+    ctx.emitter.label(&bool_case);
+    let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &true_case);
+    emit_clone_properties_type_error(ctx, "false");
+    ctx.emitter.label(&true_case);
+    emit_clone_properties_type_error(ctx, "true");
+    ctx.emitter.label(&valid);
+    Ok(())
+}
+
+/// Raises the runtime second-argument TypeError for one concrete Mixed payload tag.
+fn emit_clone_properties_type_error(ctx: &mut FunctionContext<'_>, type_name: &str) {
+    super::super::exceptions::emit_type_error(
+        ctx,
+        &format!(
+            "clone(): Argument #2 ($withProperties) must be of type array, {type_name} given"
+        ),
+    );
 }
 
 /// Names a statically known argument type the way PHP's `TypeError` wording does.

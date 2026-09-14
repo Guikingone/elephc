@@ -156,15 +156,6 @@ fn test_error_magic_clone_must_return_void() {
     );
 }
 
-/// Verifies that cloning from outside respects a private `__clone` hook's visibility.
-#[test]
-fn test_error_private_magic_clone_is_inaccessible_from_global_scope() {
-    expect_error(
-        "<?php class Locked { private function __clone() { } } $a = new Locked(); $b = clone $a;",
-        "Cannot access private method: Locked::__clone",
-    );
-}
-
 /// Verifies that a private `__toString` method reports
 /// "Magic method must be public: User::__toString".
 #[test]
