@@ -427,6 +427,12 @@ impl Checker {
                     {
                         source_ty.clone()
                     }
+                    // A declared `array` is represented as the exact packed-or-associative
+                    // storage union. `codegen_repr()` erases that union to Mixed, but every
+                    // member still casts to stdClass, so retain the precise result type.
+                    CastType::Object if source_ty.is_php_array() => {
+                        PhpType::Object("stdClass".to_string())
+                    }
                     CastType::Object
                         if matches!(
                             source_ty.codegen_repr(),
