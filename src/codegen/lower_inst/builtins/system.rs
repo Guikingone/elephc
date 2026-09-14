@@ -939,12 +939,14 @@ fn emit_putenv_syntax_guard(ctx: &mut FunctionContext<'_>) {
     let valid = ctx.next_label("putenv_valid");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- reject invalid environment assignment syntax before libc --
             ctx.emitter.instruction(&format!("cbz x2, {}", invalid));           // reject an empty assignment before reading its first byte
             ctx.emitter.instruction("ldrb w3, [x1]");                           // inspect the first assignment byte before any libc call
             ctx.emitter.instruction("cmp w3, #61");                             // PHP rejects environment names beginning with '='
             ctx.emitter.instruction(&format!("b.ne {}", valid));                // a nonempty name may proceed to set or unset dispatch
         }
         Arch::X86_64 => {
+            // -- reject invalid environment assignment syntax before libc --
             ctx.emitter.instruction("test rdx, rdx");                           // reject an empty assignment before reading its first byte
             ctx.emitter.instruction(&format!("jz {}", invalid));                // an empty assignment has no valid environment name
             ctx.emitter.instruction("cmp BYTE PTR [rax], 61");                  // PHP rejects environment names beginning with '='
