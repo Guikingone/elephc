@@ -528,6 +528,49 @@ echo $box->s, "|", $box->u, "|", count($box->m), "|", $box->n, "|", is_float($bo
     );
 }
 
+/// Verifies a declared object property releases the Mixed box it was handed ownership of.
+///
+/// A runtime-shaped write to an object slot unboxes the payload and retains the OBJECT on its
+/// own, so the cell EIR expects this consumer to adopt keeps no owner afterwards. Without that
+/// release the slot leaked one boxed cell and one payload reference per accepted write, which
+/// is why the loop repeats the assignment instead of writing once.
+#[test]
+fn test_declared_object_property_releases_adopted_mixed_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Animal {
+    public string $name = "animal";
+}
+class Dog extends Animal {
+    public string $name = "dog";
+}
+class Pen {
+    public Animal $pet;
+}
+
+function pick(mixed $value): mixed { return $value; }
+
+$pen = new Pen();
+for ($i = 0; $i < 40; $i++) {
+    $pen->pet = pick(new Animal());
+    $pen->pet = pick(new Dog());
+}
+echo $pen->pet->name, "|", $i;
+"#,
+    );
+    assert!(
+        out.success,
+        "stdout={:?}\nstderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "dog|40");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got:\n{}",
+        out.stderr
+    );
+}
+
 /// Verifies PHP 8.5's implicit int-conversion diagnostics for a typed property write.
 ///
 /// A lossy float is DEPRECATED and stored truncated, an exact one is silent, and a float PHP

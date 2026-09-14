@@ -121,7 +121,13 @@ fn load_accepted_property_store_value_to_result(
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
-            PhpType::Object(_) => property_values::emit_mixed_object_for_property_store(ctx),
+            // An object slot stores the unboxed object POINTER, retained on its own, so the
+            // adopted cell keeps no owner here either. Without this release a declared object
+            // property leaked one boxed cell and its payload owner per runtime-shaped write.
+            PhpType::Object(_) => {
+                property_values::emit_mixed_object_for_property_store(ctx);
+                release_adopted_mixed_source(ctx, value, &PhpType::Object(String::new()))?;
+            }
             // An `iterable` slot stores the raw container/object pointer, not the cell wrapping
             // it, so the payload is promoted out of the box and retained on its own. The box's
             // own reference then has no owner left here, which is what the release ends.
