@@ -362,6 +362,7 @@ fn slot_accepts_runtime_value(php_type: &PhpType) -> bool {
             | PhpType::Never
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
+            | PhpType::Iterable
             | PhpType::Mixed
             | PhpType::TaggedScalar
             | PhpType::Union(_)

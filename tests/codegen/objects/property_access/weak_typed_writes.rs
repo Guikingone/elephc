@@ -694,29 +694,75 @@ Beta"
     );
 }
 
+/// Verifies a declared `iterable` property accepts exactly what PHP's `array|Traversable` accepts,
+/// through a plain assignment rather than through `clone()`.
+///
+/// `iterable` had no declared-property slot contract at all: even the fully static `$box->it = [1]`
+/// failed EIR lowering, so neither a static nor a runtime-shaped write could reach the slot. Both
+/// halves are checked here because the acceptance lives in the SHARED instance-property
+/// compatibility and store path, not in one caller. Expected output follows PHP 8.5 semantics; no
+/// reference `php` command was run to produce it.
+#[test]
+fn test_declared_iterable_property_accepts_arrays_and_traversable_writes() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $current = 0;
+    public function rewind(): void { $this->current = 0; }
+    public function valid(): bool { return $this->current < 2; }
+    public function current(): int { return $this->current; }
+    public function key(): int { return $this->current; }
+    public function next(): void { $this->current = $this->current + 1; }
+}
+class Plain { public int $v = 1; }
+class Box { public iterable $it; }
+function pick(mixed $value): mixed { return $value; }
+function dump(iterable $items): void {
+    foreach ($items as $k => $v) {
+        echo $k;
+        echo '=';
+        echo $v;
+        echo ';';
+    }
+    echo '|';
+}
+$box = new Box();
+$box->it = [10, 20];
+dump($box->it);
+$box->it = ["a" => 1];
+dump($box->it);
+$box->it = new Range();
+dump($box->it);
+$box->it = pick([30, 40]);
+dump($box->it);
+$box->it = pick(["b" => 2]);
+dump($box->it);
+$box->it = pick(new Range());
+dump($box->it);
+try { $box->it = pick(5); } catch (TypeError $e) { echo $e->getMessage() . ";"; }
+try { $box->it = pick("x"); } catch (TypeError $e) { echo $e->getMessage() . ";"; }
+try { $box->it = pick(new Plain()); } catch (TypeError $e) { echo $e->getMessage() . ";"; }
+dump($box->it);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=10;1=20;|a=1;|0=0;1=1;|0=30;1=40;|b=2;|0=0;1=1;|\
+Cannot assign int to property Box::$it of type Traversable|array;\
+Cannot assign string to property Box::$it of type Traversable|array;\
+Cannot assign Plain to property Box::$it of type Traversable|array;\
+0=0;1=1;|"
+    );
+}
+
 /// Pins the declared property types this backend does NOT support a runtime-shaped write for.
 ///
 /// This is the recorded decision behind the guard's `None` answer for them, and the reason it is
-/// a refusal rather than a silently dropped write: `iterable` has no declared-property slot
-/// contract at all in this backend (even a fully static write fails the same way), and `ptr<T>`
-/// is an elephc systems extension whose slot holds a raw address. Turning either into a runtime
-/// coercion would hide the compile-time error the contract exists to raise.
+/// a refusal rather than a silently dropped write: `ptr<T>` is an elephc systems extension whose
+/// slot holds a raw address, so turning its write into a runtime coercion would hide the
+/// compile-time error the contract exists to raise.
 #[test]
 fn test_declared_types_without_a_runtime_shaped_write_are_refused_at_compile_time() {
-    let iterable = compile_source_expect_backend_error(
-        r#"<?php
-class Box { public iterable $it; }
-function pick(mixed $value): mixed { return $value; }
-$box = new Box();
-$box->it = pick([1, 2]);
-echo "unreachable";
-"#,
-    );
-    assert!(
-        iterable.contains("prop_set") && iterable.contains("Iterable"),
-        "an iterable property write must be refused by the backend, got: {iterable}"
-    );
-
     let pointer = compile_source_expect_backend_error(
         r#"<?php
 class Box { public ptr<int> $p; }

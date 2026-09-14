@@ -857,6 +857,7 @@ fn plan_tag_actions(
         PhpType::Bool | PhpType::False => Some(bool_actions()),
         PhpType::Void | PhpType::Never => Some(null_actions()),
         PhpType::Array(_) | PhpType::AssocArray { .. } => Some(array_actions()),
+        PhpType::Iterable => Some(iterable_actions(ctx)),
         PhpType::Object(class_name) if class_name.is_empty() => Some(any_object_actions()),
         PhpType::Object(class_name) => {
             Some(object_actions(ctx, std::slice::from_ref(class_name)))
@@ -931,6 +932,24 @@ fn array_actions() -> Vec<TagAction> {
     })
 }
 
+/// `iterable` properties accept both runtime container shapes and every `Traversable` object.
+///
+/// PHP spells `iterable` as `array|Traversable`, so an object is decided BY CLASS through the same
+/// object plan a class-typed property uses instead of a blanket object rejection. That is what
+/// makes a refused ordinary object name its runtime class the way php-src names it.
+fn iterable_actions(ctx: &FunctionContext<'_>) -> Vec<TagAction> {
+    let traversable = [TRAVERSABLE_INTERFACE.to_string()];
+    let class_ids = compatible_class_ids(ctx, &traversable);
+    actions_for(|tag| match tag {
+        4 | 5 => TagAction::Accept,
+        6 => TagAction::ObjectClasses(ObjectPlan {
+            accepted: class_ids.clone(),
+            ..ObjectPlan::default()
+        }),
+        _ => TagAction::Reject,
+    })
+}
+
 /// The bare `object` type accepts every object and refuses every non-object.
 fn any_object_actions() -> Vec<TagAction> {
     actions_for(|tag| match tag {
@@ -992,7 +1011,11 @@ fn union_actions(
     members: &[PhpType],
     declared: &PhpType,
 ) -> Result<Option<Vec<TagAction>>> {
-    let Some(kinds) = members
+    let expanded = members
+        .iter()
+        .flat_map(expand_union_member)
+        .collect::<Vec<_>>();
+    let Some(kinds) = expanded
         .iter()
         .map(classify_member)
         .collect::<Option<Vec<_>>>()
@@ -1125,6 +1148,22 @@ fn union_string_action(kinds: &[MemberKind]) -> TagAction {
     TagAction::Reject
 }
 
+/// Expands one declared union member into the members the guard classifies.
+///
+/// `iterable` is PHP's shorthand for `array|Traversable`, so it contributes BOTH of those rather
+/// than a kind of its own: `?iterable` then reuses the same array arm and the same by-class object
+/// plan every other union already resolves with, instead of acquiring a parallel rule. The printed
+/// spelling is composed from the DECLARED members, so expanding here does not change any message.
+fn expand_union_member(member: &PhpType) -> Vec<PhpType> {
+    match member {
+        PhpType::Iterable => vec![
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            PhpType::Object(TRAVERSABLE_INTERFACE.to_string()),
+        ],
+        other => vec![other.clone()],
+    }
+}
+
 /// Classifies one declared union member, or answers `None` for a member this slice cannot
 /// reason about. See `types_the_guard_does_not_model()` for what those are and why.
 fn classify_member(member: &PhpType) -> Option<MemberKind> {
@@ -1153,13 +1192,6 @@ fn types_the_guard_does_not_model() -> Vec<(PhpType, &'static str)> {
             PhpType::Callable,
             "`callable` is not a legal PHP property type and the checker already refuses it with \
              `Property C::$p cannot use type callable`, so there is no assignment to guard",
-        ),
-        (
-            PhpType::Iterable,
-            "declared `iterable` properties have no backend slot contract at all: even a fully \
-             static `$o->it = [1]` fails EIR lowering with `prop_set assigning PHP type \
-             Array(Int) ... with PHP type Iterable`, so there is no accepted write for a \
-             runtime-shaped value to join",
         ),
         (
             PhpType::Pointer(None),
@@ -1496,6 +1528,7 @@ mod tests {
             PhpType::Str,
             PhpType::Bool,
             PhpType::Mixed,
+            PhpType::Iterable,
             PhpType::Object(String::new()),
             PhpType::Object("Box".to_string()),
             PhpType::php_array(),

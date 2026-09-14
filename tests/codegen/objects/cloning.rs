@@ -1157,6 +1157,193 @@ var_dump($back->maybeTag);
     assert_eq!(out, "3:6;2:2;NULL\nNULL\n9;NULL\n");
 }
 
+/// Verifies a declared `iterable` property accepts every runtime shape PHP's `array|Traversable`
+/// admits when the value arrives through a `clone()` override: an indexed array, an associative
+/// array, an object implementing `Iterator`, and an object implementing `IteratorAggregate`.
+///
+/// The override value is only a boxed `Mixed` at the write, so acceptance is decided by the shared
+/// weak-mode typed-property guard and the shared store path, not by a rule the applicator owns.
+/// `IteratorAggregate` is listed separately because reading it back travels a DIFFERENT resolution
+/// path: the loop has to call `getIterator()` and iterate its result. Expected output follows PHP
+/// 8.5 semantics; no reference `php` command was run to produce it.
+#[test]
+fn test_clone_function_accepts_iterable_property_overrides() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $current;
+    private int $end;
+    public function __construct(int $start, int $end) {
+        $this->current = $start;
+        $this->end = $end;
+    }
+    public function rewind(): void {}
+    public function valid(): bool { return $this->current < $this->end; }
+    public function current(): int { return $this->current; }
+    public function key(): int { return $this->current; }
+    public function next(): void { $this->current = $this->current + 1; }
+}
+class Values implements IteratorAggregate {
+    public function getIterator(): Iterator { return new Range(0, 3); }
+}
+class Holder { public iterable $it; }
+function dump(iterable $items): void {
+    foreach ($items as $k => $v) {
+        echo $k;
+        echo '=';
+        echo $v;
+        echo ';';
+    }
+    echo '|';
+}
+$base = new Holder();
+$indexed = clone($base, ["it" => [10, 20]]);
+dump($indexed->it);
+$assoc = clone($base, ["it" => ["a" => 1, "b" => 2]]);
+dump($assoc->it);
+$iterator = clone($base, ["it" => new Range(2, 5)]);
+dump($iterator->it);
+$aggregate = clone($base, ["it" => new Values()]);
+dump($aggregate->it);
+"#,
+    );
+    assert_eq!(out, "0=10;1=20;|a=1;b=2;|2=2;3=3;4=4;|0=0;1=1;2=2;|");
+}
+
+/// Verifies a declared `iterable` property refuses a scalar and an ordinary non-`Traversable`
+/// object with the same catchable `TypeError` every other typed property raises, and that the
+/// refusal stops the override loop before any later entry is applied.
+///
+/// The later key routes to `__set`, so its echo is the observable proof that php's
+/// stop-at-first-error rule held: the applicator throws out of the `foreach` and never reaches it.
+/// Expected output follows PHP 8.5 semantics; no reference `php` command was run to produce it.
+#[test]
+fn test_clone_function_rejects_non_iterable_property_overrides() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain { public int $v = 1; }
+class Holder {
+    public iterable $it;
+    public function __set(string $name, mixed $value): void { echo "set:" . $name . ";"; }
+}
+function dump(iterable $items): void {
+    foreach ($items as $v) {
+        echo $v;
+        echo ';';
+    }
+}
+$base = new Holder();
+try {
+    clone($base, ["it" => 5, "later" => 1]);
+    echo "no throw;";
+} catch (TypeError $e) {
+    echo "caught:" . $e->getMessage() . ";";
+}
+try {
+    clone($base, ["it" => new Plain(), "later" => 1]);
+    echo "no throw;";
+} catch (TypeError $e) {
+    echo "caught:" . $e->getMessage() . ";";
+}
+$ok = clone($base, ["it" => [7]]);
+dump($ok->it);
+"#,
+    );
+    assert_eq!(
+        out,
+        "caught:Cannot assign int to property Holder::$it of type Traversable|array;\
+caught:Cannot assign Plain to property Holder::$it of type Traversable|array;7;"
+    );
+}
+
+/// Verifies a nullable `iterable` property accepts both `null` and a valid iterable override.
+///
+/// `?iterable` is stored as a boxed union rather than the raw pointer a bare `iterable` slot holds,
+/// so it resolves through the union arm of the same guard: the array shapes and `Traversable` join
+/// the declared `null` member instead of the slot growing its own rule. Expected output follows PHP
+/// 8.5 semantics; no reference `php` command was run to produce it.
+#[test]
+fn test_clone_function_accepts_nullable_iterable_property_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { public ?iterable $it = null; }
+$base = new Holder();
+$filled = clone($base, ["it" => [4, 5]]);
+$items = $filled->it;
+foreach ($items as $k => $v) {
+    echo $k;
+    echo '=';
+    echo $v;
+    echo ';';
+}
+$emptied = clone($filled, ["it" => null]);
+var_dump($emptied->it);
+"#,
+    );
+    assert_eq!(out, "0=4;1=5;NULL\n");
+}
+
+/// Verifies repeated `iterable` clone overrides leave the heap balanced under `--heap-debug`.
+///
+/// The `iterable` store is the one place in this change that moves an owner: it promotes the
+/// PAYLOAD out of the boxed override value, retains that payload for the slot, and releases the
+/// slot's previous contents through `__rt_decref_any`. Every container shape and both object
+/// protocols run through it here, repeatedly and inside a function so the locals are released on
+/// return, which is what turns a one-per-write leak, a double release or a use-after-free into a
+/// visible failure rather than a passing assertion. Expected output follows PHP 8.5 semantics; no
+/// reference `php` command was run to produce it.
+#[test]
+fn test_clone_function_iterable_overrides_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Range implements Iterator {
+    private int $current;
+    private int $end;
+    public function __construct(int $start, int $end) {
+        $this->current = $start;
+        $this->end = $end;
+    }
+    public function rewind(): void {}
+    public function valid(): bool { return $this->current < $this->end; }
+    public function current(): int { return $this->current; }
+    public function key(): int { return $this->current; }
+    public function next(): void { $this->current = $this->current + 1; }
+}
+class Values implements IteratorAggregate {
+    public function getIterator(): Iterator { return new Range(0, 2); }
+}
+class Holder { public iterable $it; }
+function dump(iterable $items): void {
+    foreach ($items as $v) {
+        echo $v;
+    }
+    echo '|';
+}
+function cycle(): void {
+    $base = new Holder();
+    for ($i = 0; $i < 3; $i = $i + 1) {
+        $indexed = clone($base, ["it" => [1, 2]]);
+        dump($indexed->it);
+        $assoc = clone($indexed, ["it" => ["a" => 3]]);
+        dump($assoc->it);
+        $iterator = clone($assoc, ["it" => new Range(4, 6)]);
+        dump($iterator->it);
+        $aggregate = clone($iterator, ["it" => new Values()]);
+        dump($aggregate->it);
+    }
+}
+cycle();
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "12|3|45|01|12|3|45|01|12|3|45|01|", "{}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies an UNTYPED property that is also a reference gives an override the `mixed` PAYLOAD.
 ///
 /// `property_reference_slots` says the slot physically holds a shared cell; `properties[slot].1`

@@ -122,6 +122,13 @@ fn load_accepted_property_store_value_to_result(
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
             PhpType::Object(_) => property_values::emit_mixed_object_for_property_store(ctx),
+            // An `iterable` slot stores the raw container/object pointer, not the cell wrapping
+            // it, so the payload is promoted out of the box and retained on its own. The box's
+            // own reference then has no owner left here, which is what the release ends.
+            PhpType::Iterable => {
+                emit_mixed_iterable_for_property_store(ctx);
+                release_adopted_mixed_source(ctx, value, &PhpType::Iterable)?;
+            }
             _ => {}
         }
         return Ok(());
@@ -137,6 +144,36 @@ fn load_accepted_property_store_value_to_result(
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty.codegen_repr());
     }
     Ok(())
+}
+
+/// The `__rt_mixed_unbox` tags an `iterable` slot can hold: both array shapes and an object.
+const ITERABLE_MIXED_TAGS: [u8; 3] = [4, 5, 6];
+
+/// Promotes the array or `Traversable` payload of a boxed `Mixed` into `iterable` storage.
+///
+/// An `iterable` slot holds the same raw heap pointer a statically typed `array`/`Traversable`
+/// write stores: `__rt_decref_any` and the `iterable` foreach dispatch both read the heap kind off
+/// that pointer, so storing the Mixed cell itself would publish a cell where a container is
+/// expected. The retained owner is therefore the PAYLOAD, taken out of the cell.
+///
+/// The weak-mode guard already refused every tag this slot cannot hold, so the fallback only
+/// normalizes to a null pointer rather than republishing an unrelated payload as a heap pointer,
+/// which both `__rt_incref` and the slot's later `__rt_decref_any` already ignore.
+fn emit_mixed_iterable_for_property_store(ctx: &mut FunctionContext<'_>) {
+    let payload_label = ctx.next_label("prop_store_mixed_iterable_payload");
+    let done = ctx.next_label("prop_store_mixed_iterable_done");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    for tag in ITERABLE_MIXED_TAGS {
+        super::super::enums::emit_mixed_tag_branch(ctx, result_reg, i64::from(tag), &payload_label);
+    }
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0); // normalize a payload `iterable` cannot hold to a null pointer
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&payload_label);
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    abi::emit_reg_move(ctx.emitter, result_reg, payload_reg); // promote the unboxed iterable pointer into the result register
+    ctx.emitter.label(&done);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Iterable); // retain the payload independently for property storage
 }
 
 /// Releases a boxed source the slot was expected to adopt but did not keep a pointer to.
