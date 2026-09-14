@@ -791,6 +791,66 @@ var_dump($c->fromNull);
     );
 }
 
+/// Verifies a FIRST-CLASS CALLABLE `clone(...)` gives untyped slots the same `mixed` treatment.
+///
+/// The builtin check hook does not run for this shape: the call is checked through the callable
+/// signature, so nothing recorded the override destination. The inferred-`int` slot answered
+/// `int(0)` for a string override and the defaultless slot failed the whole build with
+/// `prop_set assigning PHP type Mixed to U::$noDefault with PHP type Void`.
+#[test]
+fn test_clone_function_writes_untyped_properties_through_a_first_class_callable() {
+    let out = compile_and_run(
+        r#"<?php
+class U { public $fromInt = 0; public $noDefault; }
+$ov = ["fromInt" => "hello", "noDefault" => [1, 2]];
+$f = clone(...);
+$c = $f(new U(), $ov);
+var_dump($c->fromInt);
+var_dump($c->noDefault);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(5) \"hello\"\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n"
+    );
+}
+
+/// Verifies `call_user_func('clone', ...)` gives untyped slots the same `mixed` treatment.
+#[test]
+fn test_clone_function_writes_untyped_properties_through_call_user_func() {
+    let out = compile_and_run(
+        r#"<?php
+class U { public $fromInt = 0; public $noDefault; }
+$ov = ["fromInt" => "hello", "noDefault" => [1, 2]];
+$c = call_user_func('clone', new U(), $ov);
+var_dump($c->fromInt);
+var_dump($c->noDefault);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(5) \"hello\"\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n"
+    );
+}
+
+/// Verifies `call_user_func_array('clone', ...)` gives untyped slots the same `mixed` treatment.
+#[test]
+fn test_clone_function_writes_untyped_properties_through_call_user_func_array() {
+    let out = compile_and_run(
+        r#"<?php
+class U { public $fromInt = 0; public $noDefault; }
+$ov = ["fromInt" => "hello", "noDefault" => [1, 2]];
+$c = call_user_func_array('clone', [new U(), $ov]);
+var_dump($c->fromInt);
+var_dump($c->noDefault);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(5) \"hello\"\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n"
+    );
+}
+
 /// Verifies a DECLARED array, associative-array and nullable slot materializes a runtime override
 /// value safely, including `null` for every nullable form.
 ///

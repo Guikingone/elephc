@@ -978,11 +978,22 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
         if let CallableTarget::Function(name) = target {
-            if php_symbol_key(name.as_str()) == "preg_replace_callback" {
-                return crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
-                    self, args, span, env,
-                )
-                .map(Some);
+            match php_symbol_key(name.as_str()).as_str() {
+                "preg_replace_callback" => {
+                    return crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
+                        self, args, span, env,
+                    )
+                    .map(Some);
+                }
+                // The clone builtin's check hook does not run here: the call is checked through
+                // the callable signature. Record the override destination the hook would have
+                // recorded so untyped property slots still reach runtime-shaped storage.
+                "clone" => {
+                    crate::types::checker::clone_override_storage::record_callable_clone_override_destination(
+                        self, args, env,
+                    )?;
+                }
+                _ => {}
             }
         }
         Ok(None)

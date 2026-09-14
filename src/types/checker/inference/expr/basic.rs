@@ -119,24 +119,36 @@ impl Checker {
                         "Cannot infer type of empty associative array literal",
                     ));
                 }
-                let mut key_ty = normalized_array_key_type(
-                    &pairs[0].0,
-                    self.infer_type(&pairs[0].0, env)?,
-                );
-                let mut val_ty = self.infer_type(&pairs[0].1, env)?;
-                for (k, v) in &pairs[1..] {
-                    let kt = normalized_array_key_type(k, self.infer_type(k, env)?);
-                    let vt = self.infer_type(v, env)?;
-                    if kt != key_ty {
-                        key_ty = merge_array_key_types(key_ty, kt);
-                    }
-                    if vt != val_ty {
-                        val_ty = PhpType::Mixed;
-                    }
+                let mut key_ty: Option<PhpType> = None;
+                let mut val_ty: Option<PhpType> = None;
+                for (k, v) in pairs {
+                    // A spread entry is carried as a pair whose key IS the spread and whose value
+                    // is an inert null placeholder. Inferring that pair as an ordinary entry would
+                    // type the key from the spread node itself and the value from the placeholder,
+                    // so the literal claimed a `null` slot for everything the source merges in.
+                    // The source is still inferred exactly once, keeping its narrowing, warnings
+                    // and undefined-variable diagnostics.
+                    let (kt, vt) = match crate::parser::ast::assoc_spread_source(k, v) {
+                        Some(inner) => self.assoc_spread_entry_types(inner, env)?,
+                        None => (
+                            normalized_array_key_type(k, self.infer_type(k, env)?),
+                            self.infer_type(v, env)?,
+                        ),
+                    };
+                    key_ty = Some(match key_ty {
+                        Some(current) if current == kt => current,
+                        Some(current) => merge_array_key_types(current, kt),
+                        None => kt,
+                    });
+                    val_ty = Some(match val_ty {
+                        Some(current) if current == vt => current,
+                        Some(_) => PhpType::Mixed,
+                        None => vt,
+                    });
                 }
                 Ok(PhpType::AssocArray {
-                    key: Box::new(key_ty),
-                    value: Box::new(val_ty),
+                    key: Box::new(key_ty.unwrap_or(PhpType::Mixed)),
+                    value: Box::new(val_ty.unwrap_or(PhpType::Mixed)),
                 })
             }
             ExprKind::Match {

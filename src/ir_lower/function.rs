@@ -2360,29 +2360,63 @@ fn direct_closure_return_assoc_literal_type(
     let mut key_ty = PhpType::Never;
     let mut value_ty = PhpType::Never;
     for (key, value) in pairs {
-        let next_key = crate::types::normalized_array_key_type(
-            key,
-            crate::types::checker::infer_expr_type_syntactic(key),
-        );
-        key_ty = if matches!(key_ty, PhpType::Never) {
-            next_key
-        } else {
-            crate::types::merge_array_key_types(key_ty, next_key)
-        };
-        value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(
-            value_ty,
-            direct_closure_return_array_item_type(
-                value,
+        // A spread entry carries no key of its own: the pair's key IS the spread and its value is
+        // an inert null placeholder. Typing that pair as an ordinary entry stamped the literal
+        // from the placeholder instead of from the source the lowering actually merges in.
+        let (next_key, next_value) = match crate::parser::ast::assoc_spread_source(key, value) {
+            Some(inner) => direct_closure_return_assoc_spread_entry_types(
+                inner,
                 captures,
                 params,
                 classes,
                 builtin_call_types,
             ),
-        );
+            None => (
+                crate::types::normalized_array_key_type(
+                    key,
+                    crate::types::checker::infer_expr_type_syntactic(key),
+                ),
+                direct_closure_return_array_item_type(
+                    value,
+                    captures,
+                    params,
+                    classes,
+                    builtin_call_types,
+                ),
+            ),
+        };
+        key_ty = if matches!(key_ty, PhpType::Never) {
+            next_key
+        } else {
+            crate::types::merge_array_key_types(key_ty, next_key)
+        };
+        value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(value_ty, next_value);
     }
     PhpType::AssocArray {
         key: Box::new(key_ty),
         value: Box::new(value_ty),
+    }
+}
+
+/// Returns the `(key, value)` storage types one spread entry of a directly returned associative
+/// literal contributes, resolved against the closure's captures and parameters.
+///
+/// Mirrors `crate::ir_lower::expr::assoc_array_literals`'s spread typing: an indexed source
+/// contributes integer keys, a hash source contributes its own key type, and a source this pass
+/// cannot name stays `Mixed` on both slots.
+fn direct_closure_return_assoc_spread_entry_types(
+    inner: &crate::parser::ast::Expr,
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+) -> (PhpType, PhpType) {
+    let source =
+        direct_closure_return_array_item_type(inner, captures, params, classes, builtin_call_types);
+    match source.codegen_repr() {
+        PhpType::Array(elem) => (PhpType::Int, elem.codegen_repr()),
+        PhpType::AssocArray { key, value } => (key.codegen_repr(), value.codegen_repr()),
+        _ => (PhpType::Mixed, PhpType::Mixed),
     }
 }
 

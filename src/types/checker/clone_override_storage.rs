@@ -27,7 +27,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::types::PhpType;
+use crate::errors::CompileError;
+use crate::parser::ast::{Expr, ExprKind};
+use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
 
@@ -55,6 +57,52 @@ impl CloneOverrideDestinations {
     fn is_empty(&self) -> bool {
         !self.any_class && self.classes.is_empty()
     }
+}
+
+/// Records the widening destination a first-class `clone()` callable call reaches.
+///
+/// `clone(...)` is checked through its callable SIGNATURE, not through the builtin check hook, so
+/// nothing recorded the destination for `$f = clone(...); $f($object, [...])`. An untyped
+/// `public $u = 0;` slot then coerced an override's string back to `int(0)`, and an untyped
+/// `public $u;` slot failed the build with `prop_set assigning PHP type Mixed to U::$u with PHP
+/// type Void`, exactly the two failures `widen_clone_override_property_storage` exists to prevent.
+///
+/// Only a site that can actually carry the optional `withProperties` argument records anything,
+/// and a statically named first argument records only its own class, so unrelated classes are
+/// left alone.
+pub(in crate::types::checker) fn record_callable_clone_override_destination(
+    checker: &mut Checker,
+    args: &[Expr],
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    if !clone_call_may_carry_overrides(args) {
+        return Ok(());
+    }
+    match args.first() {
+        // An unpack or a named argument does not pin which expression is the object, so the
+        // destination really is unknowable and every user class has to be widened.
+        Some(object)
+            if !matches!(object.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. }) =>
+        {
+            let object_ty = checker.infer_type(object, env)?;
+            checker.clone_override_destinations.record(&object_ty);
+        }
+        _ => checker.clone_override_destinations.any_class = true,
+    }
+    Ok(())
+}
+
+/// Returns whether a `clone()` call site can carry the optional `withProperties` overrides.
+///
+/// A one-argument `clone($object)` never writes a property, so it must not widen anything.
+fn clone_call_may_carry_overrides(args: &[Expr]) -> bool {
+    args.len() >= 2
+        || args.iter().any(|arg| match &arg.kind {
+            // An unpack carries an unknown number of values, so the overrides may be inside it.
+            ExprKind::Spread(_) => true,
+            ExprKind::NamedArg { name, .. } => name == "withProperties",
+            _ => false,
+        })
 }
 
 /// Widens every undeclared property slot a `clone()` override can write to `mixed`.

@@ -450,7 +450,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
 ///
 /// `Some(true)` is a warning-free read, `Some(false)` is a known missing offset that can warn
 /// but cannot throw, and `None` means runtime type/key behavior remains dynamic.
-fn statically_known_array_read(array: &Expr, index: &Expr) -> Option<bool> {
+pub(super) fn statically_known_array_read(array: &Expr, index: &Expr) -> Option<bool> {
     match (&array.kind, &index.kind) {
         (ExprKind::ArrayLiteral(items), ExprKind::IntLiteral(index))
             if items
@@ -460,22 +460,41 @@ fn statically_known_array_read(array: &Expr, index: &Expr) -> Option<bool> {
             let len = i64::try_from(items.len()).ok()?;
             Some(*index >= 0 && *index < len)
         }
-        (ExprKind::ArrayLiteralAssoc(items), ExprKind::IntLiteral(index)) => Some(
-            items
-                .iter()
-                .any(|(key, _)| matches!(key.kind, ExprKind::IntLiteral(key) if key == *index)),
-        ),
-        (ExprKind::ArrayLiteralAssoc(items), ExprKind::StringLiteral(index)) => Some(
-            items.iter().any(
-                |(key, _)| matches!(&key.kind, ExprKind::StringLiteral(key) if key == index),
-            ),
-        ),
+        (ExprKind::ArrayLiteralAssoc(items), ExprKind::IntLiteral(index))
+            if !assoc_literal_has_spread(items) =>
+        {
+            Some(
+                items
+                    .iter()
+                    .any(|(key, _)| matches!(key.kind, ExprKind::IntLiteral(key) if key == *index)),
+            )
+        }
+        (ExprKind::ArrayLiteralAssoc(items), ExprKind::StringLiteral(index))
+            if !assoc_literal_has_spread(items) =>
+        {
+            Some(
+                items.iter().any(
+                    |(key, _)| matches!(&key.kind, ExprKind::StringLiteral(key) if key == index),
+                ),
+            )
+        }
         (ExprKind::StringLiteral(value), ExprKind::IntLiteral(index)) => {
             let len = i64::try_from(value.len()).ok()?;
             Some((*index >= 0 && *index < len) || (*index < 0 && -*index <= len))
         }
         _ => None,
     }
+}
+
+/// Returns whether an associative array literal carries a spread entry.
+///
+/// A spread is carried as a pair whose key IS the spread, so scanning keys for a literal match
+/// silently skips it. Any key the spread source supplies is therefore unknowable here, and a
+/// literal that has one can never answer "this offset is definitely missing".
+pub(super) fn assoc_literal_has_spread(items: &[(Expr, Expr)]) -> bool {
+    items
+        .iter()
+        .any(|(key, value)| crate::parser::ast::assoc_spread_source(key, value).is_some())
 }
 
 /// Returns the effect for the target of an `InstanceOf` expression.

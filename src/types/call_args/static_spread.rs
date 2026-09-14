@@ -146,7 +146,13 @@ fn static_assoc_spread_has_named_args(expr: &Expr) -> bool {
     let ExprKind::ArrayLiteralAssoc(pairs) = &expr.kind else {
         return false;
     };
-    pairs.iter().any(|(key, _)| {
+    pairs.iter().any(|(key, value)| {
+        // A nested spread contributes its source's keys, which are unknowable here. Answering
+        // "yes, this may carry named arguments" is the safe direction: every caller treats `true`
+        // as "decline the static shortcut and keep the call dynamic".
+        if crate::parser::ast::assoc_spread_source(key, value).is_some() {
+            return true;
+        }
         matches!(static_assoc_spread_key(key), Some(StaticAssocSpreadKey::Named(_)))
     })
 }
@@ -174,6 +180,12 @@ fn expand_static_assoc_spread(
     let mut positional_args = Vec::new();
     let mut named_args: Vec<(String, Expr)> = Vec::new();
     for (key, value) in pairs {
+        // A nested spread is carried as a pair whose key IS the spread and whose value is an inert
+        // null placeholder. Flattening it would push that placeholder as an argument and drop the
+        // source entirely, so the whole unpack stays dynamic and keeps its single evaluation.
+        if crate::parser::ast::assoc_spread_source(key, value).is_some() {
+            return None;
+        }
         match static_assoc_spread_key(key)? {
             StaticAssocSpreadKey::Positional => positional_args.push((
                 Expr::new(value.kind.clone(), spread_span),
@@ -319,5 +331,34 @@ mod tests {
             ExpandedArgOrigin::Source,
         ]);
         assert!(expand_planned_positional_spreads(&expanded.args).is_none());
+    }
+
+    /// An unpacked literal that itself contains a spread stays one dynamic argument.
+    ///
+    /// The nested spread is a pair whose key IS the spread and whose value is an inert `null`.
+    /// Flattening it would push that placeholder as an argument and drop the source entirely, so
+    /// the whole unpack keeps its original node and its single evaluation.
+    #[test]
+    fn nested_assoc_spread_keeps_the_whole_unpack_dynamic() {
+        let arg = Expr::new(
+            ExprKind::Spread(Box::new(Expr::new(
+                ExprKind::ArrayLiteralAssoc(vec![
+                    (Expr::string_lit("a"), Expr::int_lit(10)),
+                    crate::parser::ast::assoc_spread_entry(Expr::new(
+                        ExprKind::Spread(Box::new(Expr::var("extra"))),
+                        Span::dummy(),
+                    )),
+                ]),
+                Span::dummy(),
+            ))),
+            Span::dummy(),
+        );
+        let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()]);
+        assert_eq!(expanded.args, vec![arg.clone()]);
+        assert!(expanded.origins == vec![ExpandedArgOrigin::Source]);
+        // The nested source can supply named keys, so the static named-argument shortcut declines.
+        assert!(has_named_args(&[arg.clone()]));
+        assert!(expand_planned_positional_spreads(&[arg.clone()]).is_none());
+        assert!(coalesce_planned_indexed_spreads(&[arg.clone(), arg], |_| true).is_none());
     }
 }
