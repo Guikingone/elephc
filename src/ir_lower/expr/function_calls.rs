@@ -231,6 +231,11 @@ pub(super) fn emit_builtin_call_value(
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let mut operands = operands;
             let roots = root_non_aliasing_callback_operands(ctx, def, &mut operands, &php_type, span);
+            // A builtin whose effects carry MAY_THROW can reach a codegen guard that jumps
+            // straight to __rt_throw_current while these operands are still pure SSA. Pin them
+            // in the unwind chain for the duration of the call so a caught guard releases them
+            // exactly once instead of stranding them.
+            let pins = pin_throwing_builtin_operands(ctx, def, &operands, &roots, &php_type, span);
             let lowered = crate::builtins::semantics::lower_registry_call(
                 ctx,
                 def,
@@ -313,6 +318,7 @@ pub(super) fn emit_builtin_call_value(
                     }
                 }
             };
+            unpin_in_flight_owners(ctx, pins, span);
             for (_, slot) in roots.iter().rev() {
                 retire_owned_call_operand(ctx, *slot, span);
             }

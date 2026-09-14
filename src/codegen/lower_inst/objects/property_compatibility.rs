@@ -40,6 +40,14 @@ pub(super) fn ensure_property_value_supported(
     if value_ty == &slot.php_type {
         return Ok(());
     }
+    // A runtime-shaped value carries no compile-time type to compare against the declared
+    // slot, so the weak-mode guard decides it at run time. Rejecting it here instead is what
+    // made the runtime-class dispatch drop a whole class and silently lose the write.
+    if matches!(value_ty.codegen_repr(), PhpType::Mixed)
+        && property_type_accepts_runtime_shaped_value(ctx, slot)?
+    {
+        return Ok(());
+    }
     if can_store_object_for_object_property(ctx, value_ty, &slot.php_type) {
         return Ok(());
     }

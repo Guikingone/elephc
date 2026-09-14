@@ -10,12 +10,37 @@
 use super::*;
 
 /// Loads an SSA value in the shape required by a typed object property store.
+///
+/// A value that is only known as a boxed `Mixed`/`Union` runs the weak-mode typed-property
+/// guard first. The guard reads the box and never touches the destination, so a value PHP
+/// rejects throws `TypeError` while the slot still owns its previous contents.
 pub(super) fn load_property_store_value_to_result(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
-    slot_ty: &PhpType,
+    slot: &PropertySlot,
 ) -> Result<()> {
+    let slot_ty = &slot.php_type;
     let value_ty = ctx.value_php_type(value)?;
+    let coerced_done_label = if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
+        emit_mixed_property_type_guard(ctx, value, slot)?
+    } else {
+        None
+    };
+    load_accepted_property_store_value_to_result(ctx, value, slot_ty, &value_ty)?;
+    if let Some(done_label) = coerced_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
+}
+
+/// Materializes a property-store value the weak-mode guard has already accepted.
+fn load_accepted_property_store_value_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    slot_ty: &PhpType,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let value_ty = value_ty.clone();
     if can_box_value_for_mixed_property(&value_ty, slot_ty) {
         let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
         // Property stores do not consume the SSA source; explicit release ops still
@@ -78,6 +103,10 @@ pub(super) fn load_property_store_value_to_result(
                 coerce_loaded_value_to_tagged_scalar(ctx, &value_ty)?;
             }
         }
+        // Inline tagged storage copies the payload OUT of the source box and keeps no pointer
+        // to it, so a source EIR expects the consumer to adopt has no owner left afterwards.
+        // Without this release a `?int` slot leaked one boxed cell per runtime-shaped write.
+        release_adopted_mixed_source(ctx, value, &PhpType::TaggedScalar)?;
         return Ok(());
     }
     if can_coerce_tagged_scalar_to_int_property(&value_ty, slot_ty) {
@@ -107,6 +136,29 @@ pub(super) fn load_property_store_value_to_result(
     } else if slot_ty.codegen_repr().is_refcounted() {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty.codegen_repr());
     }
+    Ok(())
+}
+
+/// Releases a boxed source the slot was expected to adopt but did not keep a pointer to.
+///
+/// `value_can_own_mixed_box_source()` is EIR's promise that this consumer takes the box over, so
+/// EIR emits no cleanup of its own for it. A slot that copies the payload instead of storing the
+/// box has to end that ownership here.
+pub(super) fn release_adopted_mixed_source(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    result_ty: &PhpType,
+) -> Result<()> {
+    if !matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed)
+        || !ctx.value_can_own_mixed_box_source(value)?
+    {
+        return Ok(());
+    }
+    let result_ty = result_ty.codegen_repr();
+    abi::emit_push_result_value(ctx.emitter, &result_ty);
+    ctx.load_value_to_result(value)?;
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    restore_property_store_result(ctx, &result_ty);
     Ok(())
 }
 

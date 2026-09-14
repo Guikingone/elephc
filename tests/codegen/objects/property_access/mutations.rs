@@ -781,3 +781,44 @@ echo "unreachable";
         error
     );
 }
+
+/// A declared property written through a `mixed`-typed receiver actually reaches the object.
+///
+/// The Mixed receiver path used to hand EVERY static-name write to the stdClass helper, which
+/// understands stdClass alone and silently dropped the rest. The write was not diagnosed, not
+/// applied, and not visible: the reads below returned the class defaults. Compiled PHP now
+/// dispatches on the receiver's runtime class id and stores into the declared slot, so this
+/// prints what reference PHP prints.
+///
+/// The fixture covers both slot representations that can be reached this way (an `int` slot and
+/// a `string` slot, which owns its payload), a second class declaring the SAME property name so
+/// the dispatch has to discriminate on the class id rather than on the name alone, and an
+/// unrelated stdClass receiver so the dynamic-property fallback is still exercised.
+#[test]
+fn test_declared_property_write_through_a_mixed_receiver_reaches_the_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public int $k = 1;
+    public string $s = "a";
+}
+class Crate {
+    public int $k = 100;
+}
+function pick(int $which): mixed {
+    if ($which === 0) { return new Box(); }
+    if ($which === 1) { return new Crate(); }
+    return new stdClass();
+}
+$b = pick(0);
+$b->k = 4;
+$b->s = "z";
+$c = pick(1);
+$c->k = 7;
+$d = pick(2);
+$d->k = 9;
+echo $b->k . "|" . $b->s . "|" . $c->k . "|" . $d->k;
+"#,
+    );
+    assert_eq!(out, "4|z|7|9");
+}

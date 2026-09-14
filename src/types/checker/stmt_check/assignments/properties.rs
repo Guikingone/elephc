@@ -299,7 +299,12 @@ fn check_object_property_write(
                 ),
             ));
         }
-        if class_info.visible_property_is_declared(property) {
+        // A `mixed` value carries no compile-time type to compare with the declared slot, and
+        // PHP checks exactly this assignment at run time under weak-mode property typing. The
+        // codegen guard raises the catchable `TypeError` there, so rejecting the write here
+        // would forbid a program PHP accepts whenever the runtime value happens to fit.
+        let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed);
+        if class_info.visible_property_is_declared(property) && !defers_to_runtime_property_typing {
             checker.require_compatible_arg_type(
                 &expected_ty,
                 val_ty,

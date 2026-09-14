@@ -6,6 +6,9 @@
 //!
 //! Key details:
 //! - Declared-slot dispatch and Mixed object validation preserve value ownership.
+//! - A static-name write through a Mixed receiver dispatches on the runtime class id across
+//!   the classes that declare that name, and only falls back to the dynamic-property helper
+//!   when no declared slot matches.
 
 use super::*;
 
@@ -27,7 +30,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
         return lower_nullable_prop_set(ctx, inst, object, value, &class_name, &property);
     }
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed) {
-        return lower_mixed_prop_set(ctx, object, value, &property);
+        return lower_mixed_named_prop_set(ctx, object, value, &property, inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, &property);
@@ -87,7 +90,7 @@ pub(super) fn lower_const_dynamic_prop_set(
         ctx.value_php_type(object)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return lower_mixed_prop_set(ctx, object, value, property);
+        return lower_mixed_named_prop_set(ctx, object, value, property, inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, property);
@@ -177,6 +180,128 @@ pub(super) fn lower_runtime_object_prop_set(
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Lowers a STATIC-name property write whose receiver is only known to be a boxed Mixed.
+///
+/// `__rt_mixed_property_set` understands stdClass alone, so routing every Mixed receiver
+/// there silently DROPPED writes to declared slots of ordinary classes. PHP has no such
+/// hole: `$o = pick(); $o->k = 4;` stores into `k` whatever concrete class `pick()`
+/// returned. The name is a compile-time constant here, so the dispatch narrows to the
+/// classes that actually declare it and each arm reuses the ordinary declared-slot store.
+/// Receivers that match no declared arm keep the previous helper, which still covers
+/// stdClass and leaves non-object payloads alone.
+pub(super) fn lower_mixed_named_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    let candidates = declared_mixed_named_property_set_candidates(ctx, value, property, inst)?;
+    if candidates.is_empty() {
+        return lower_mixed_prop_set(ctx, object, value, property);
+    }
+    let done_label = ctx.next_label("mixed_named_prop_set_done");
+    let miss_label = ctx.next_label("mixed_named_prop_set_miss");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_named_prop_set_{}_{}",
+                candidate.class_id,
+                label_fragment(&candidate.slot.property)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_mixed_unboxed_not_object(ctx, &done_label);
+    push_mixed_unboxed_object_payload(ctx);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        emit_branch_if_stacked_object_class_matches(ctx, candidate.class_id, 0, label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 0);
+        emit_property_store(ctx, value, &candidate.slot, base_reg)?;
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&miss_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    lower_mixed_prop_set(ctx, object, value, property)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Collects the declared slots named `property` that can accept this value, by class id.
+///
+/// stdClass is excluded because its properties are dynamic, and the miss path already
+/// routes it to the dynamic-property helper.
+fn declared_mixed_named_property_set_candidates(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<Vec<MixedPropertyCandidate>> {
+    let value_ty = ctx.value_php_type(value)?;
+    let mut candidates = Vec::new();
+    for (class_name, class_info) in &ctx.module.class_infos {
+        if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+            continue;
+        }
+        if !class_info
+            .properties
+            .iter()
+            .any(|(declared, _)| declared == property)
+        {
+            continue;
+        }
+        let Ok(slot) = resolve_property_slot_for_class(ctx, class_name, property, inst) else {
+            continue;
+        };
+        if ensure_property_value_supported(ctx, &slot, value, &value_ty, inst).is_err() {
+            continue;
+        }
+        candidates.push(MixedPropertyCandidate {
+            class_id: class_info.class_id,
+            slot,
+        });
+    }
+    candidates.sort_by_key(|candidate| candidate.class_id);
+    Ok(candidates)
+}
+
+/// Branches to `matched_label` when a stacked object payload has the given class id.
+fn emit_branch_if_stacked_object_class_matches(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    object_stack_offset: usize,
+    matched_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", object_stack_offset);
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the stacked receiver's runtime class id
+            abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
+            ctx.emitter.instruction("cmp x10, x11");                            // compare it with this candidate class
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // take the candidate's declared-slot store
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", object_stack_offset);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the stacked receiver's runtime class id
+            abi::emit_load_int_immediate(ctx.emitter, "r12", class_id as i64);
+            ctx.emitter.instruction("cmp r10, r12");                            // compare it with this candidate class
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // take the candidate's declared-slot store
+        }
+    }
 }
 
 /// Lowers a runtime-name write when the receiver is a boxed Mixed object.
@@ -316,11 +441,14 @@ pub(super) fn emit_branch_if_mixed_unboxed_not_object(ctx: &mut FunctionContext<
 }
 
 /// Pushes the object payload returned by `__rt_mixed_unbox` onto the temp stack.
+///
+/// The payload register is read from the shared unbox contract rather than restated, because
+/// it is NOT the first argument register on AArch64 and a local restatement is exactly how
+/// that contract drifts.
 pub(super) fn push_mixed_unboxed_object_payload(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => abi::emit_push_reg(ctx.emitter, "x1"),
-        Arch::X86_64 => abi::emit_push_reg(ctx.emitter, "rdi"),
-    }
+    let payload_reg =
+        crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    abi::emit_push_reg(ctx.emitter, payload_reg);
 }
 
 /// Branches when both the stacked object class id and runtime property name match.

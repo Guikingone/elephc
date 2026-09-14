@@ -58,6 +58,7 @@ mod predicates;
 mod property_values;
 mod receiver_place;
 mod runtime_calls;
+mod runtime_class_messages;
 mod scoped_constants;
 mod static_locals;
 mod static_properties;

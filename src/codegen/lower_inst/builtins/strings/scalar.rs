@@ -262,6 +262,57 @@ pub(crate) fn emit_weak_float_result_to_int(
     ctx.emitter.label(&done);
 }
 
+/// Diagnoses the float in the float-result register against PHP's implicit int-coercion rules.
+///
+/// Jumps to `not_representable` for `NaN`, the infinities, and anything outside the PHP int
+/// range, which php-src refuses rather than wrapping. Otherwise it emits PHP 8.5's
+/// `Implicit conversion from float ... to int loses precision` deprecation when truncation is
+/// lossy and falls through, leaving the conversion itself to the caller.
+///
+/// Split out of `emit_weak_float_result_to_int` so the typed-property guard raises its OWN
+/// `TypeError` wording for an unrepresentable float instead of a builtin-argument one, while
+/// the deprecation text, the exactness test, and the scratch frame stay defined once here.
+pub(crate) fn emit_float_result_int_coercion_diagnostics(
+    ctx: &mut FunctionContext<'_>,
+    not_representable: &str,
+) {
+    let invalid = ctx.next_label("float_to_int_diag_invalid");
+    let exact = ctx.next_label("float_to_int_diag_exact");
+    let done = ctx.next_label("float_to_int_diag_done");
+    abi::emit_reserve_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    save_float_result_bits(ctx);
+    super::super::super::mixed_narrowing::emit_float_result_fits_i64_or_jump(ctx, &invalid);
+    abi::emit_store_to_sp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        FLOAT_TO_INT_VALUE_OFFSET,
+    );
+    restore_float_result_bits(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", FLOAT_TO_INT_VALUE_OFFSET);
+            ctx.emitter.instruction("scvtf d1, x10");                           // reconstruct the truncated value for an exactness check
+            ctx.emitter.instruction("fcmp d0, d1");                             // detect fractional precision loss
+            ctx.emitter.instruction(&format!("b.eq {exact}"));                  // integral floats require no deprecation
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", FLOAT_TO_INT_VALUE_OFFSET);
+            ctx.emitter.instruction("cvtsi2sd xmm1, r11");                      // reconstruct the truncated value for an exactness check
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // detect fractional precision loss
+            ctx.emitter.instruction(&format!("jp {invalid}"));                  // keep unordered values out of the equality branch
+            ctx.emitter.instruction(&format!("je {exact}"));                    // integral floats require no deprecation
+        }
+    }
+    emit_float_precision_deprecation(ctx);
+    ctx.emitter.label(&exact);
+    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid);
+    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    abi::emit_jump(ctx.emitter, not_representable);
+    ctx.emitter.label(&done);
+}
+
 /// Converts an explicit float cast while warning for values outside the PHP int range.
 pub(crate) fn emit_explicit_float_result_to_int(ctx: &mut FunctionContext<'_>) {
     emit_nonweak_float_result_to_int(ctx, false, false);

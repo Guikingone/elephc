@@ -162,7 +162,9 @@ use merge_temps::*;
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
-pub(crate) use call_operand_owners::{root_owned_call_operand, retire_owned_call_operand};
+pub(crate) use call_operand_owners::{
+    pin_in_flight_owners, retire_owned_call_operand, root_owned_call_operand, unpin_in_flight_owners,
+};
 pub(crate) use callable_tracking::{
     lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
     reflection_class_binding_for_expr, reflection_function_binding_for_expr,

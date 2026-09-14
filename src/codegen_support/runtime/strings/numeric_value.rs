@@ -3,6 +3,9 @@
 //!
 //! Called from:
 //! - Boxed array sum and product helpers after unboxing a string entry.
+//! - The weak-mode typed-property guard, for a string assigned to a union declaring both
+//!   `int` and `float`: the tag this returns IS php-src's `IS_LONG`/`IS_DOUBLE` verdict, so it
+//!   picks the union member, and the value it returns is boxed without a second parse.
 //!
 //! Key details:
 //! - A private length-sized buffer avoids shared C-string scratch limits and reentrant aliasing.

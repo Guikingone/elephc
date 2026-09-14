@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Tag values and payload register conventions must match `__rt_mixed_from_value`.
+//! - `mixed_unbox_payload_reg()` is the matching contract for the OTHER direction: it names
+//!   the register `__rt_mixed_unbox` returns its payload low word in, which is not the first
+//!   argument register on AArch64.
 //! - Owned boxing paths transfer or release references without double-freeing payloads.
 //! - Mixed-element indexed arrays may contain promoted hash storage, so boxing probes their kind.
 
@@ -14,6 +17,21 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
 use crate::types::PhpType;
 
+
+/// Names the register `__rt_mixed_unbox` returns its payload LOW word in, per target.
+///
+/// The helper answers a triple: the runtime tag, the payload low word, and the payload high
+/// word. On AArch64 those are `x0`, `x1`, `x2`; on x86_64 they are `rax`, `rdi`, `rdx`. The
+/// payload therefore lands in the FIRST ARGUMENT register on x86_64 but NOT on AArch64, where
+/// that register carries the tag instead. Deriving the payload register from the argument-register
+/// helper looks correct on x86_64 and silently yields the constant tag value on every AArch64
+/// target, so the contract is named once here and read from this one place.
+pub(crate) fn mixed_unbox_payload_reg(target: crate::codegen_support::platform::Target) -> &'static str {
+    match target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    }
+}
 
 /// Returns the runtime value tag byte for a PhpType.
 pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {

@@ -36,7 +36,7 @@ pub(super) fn emit_property_store(
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             release_previous_property_value(
                 ctx,
@@ -51,7 +51,7 @@ pub(super) fn emit_property_store(
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, float_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
@@ -59,7 +59,7 @@ pub(super) fn emit_property_store(
         PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Void | PhpType::Never => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
@@ -68,7 +68,7 @@ pub(super) fn emit_property_store(
             let int_reg = abi::int_result_reg(ctx.emitter);
             let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_to_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
@@ -76,7 +76,7 @@ pub(super) fn emit_property_store(
         ty if is_pointer_sized_property_type(&ty) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             release_previous_property_value(
                 ctx,
@@ -256,7 +256,7 @@ pub(super) fn emit_reference_property_write(
     base_reg: &str,
 ) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, base_reg);
-    load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+    load_property_store_value_to_result(ctx, value, slot)?;
     abi::emit_pop_reg(ctx.emitter, base_reg);
     let pointer_reg = reference_pointer_reg(ctx, base_reg);
     abi::emit_load_from_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
@@ -415,6 +415,12 @@ pub(super) fn restore_property_store_result(ctx: &mut FunctionContext<'_>, resul
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        }
+        // Inline tagged storage is a PAIR. Popping one register for it would leave the tag
+        // word holding the payload and read every saved null back as a value.
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, abi::int_result_reg(ctx.emitter), tag_reg);
         }
         PhpType::Void | PhpType::Never => {}
         _ => {

@@ -47,6 +47,11 @@ pub(in crate::codegen) fn emit_mixed_string_for_persistent_store(ctx: &mut Funct
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the generic cast path after the direct string persist
             ctx.emitter.label(&non_string);
             abi::emit_pop_reg(ctx.emitter, mixed_arg);
+            // `__rt_mixed_cast_string` unboxes from the int RESULT register, which the probing
+            // `__rt_mixed_unbox` above overwrote with the runtime tag. Without restoring the
+            // boxed pointer the cast reads a tag as a Mixed cell and every non-string value
+            // lands in the destination as an empty string.
+            ctx.emitter.instruction("mov rax, rdi");                            // restore the boxed value in the cast helper's input register
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
         }

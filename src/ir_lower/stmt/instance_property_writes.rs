@@ -52,6 +52,16 @@ pub(super) fn lower_property_assign(
     // untyped property widened to Mixed needs a boxed cell even when this assignment is scalar.
     let property_ty = object_property_type(ctx, object.value, property);
     let value = match property_ty {
+        // A runtime-shaped value assigned to a class-typed property stays BOXED here. Unboxing
+        // it now would promote whatever the cell holds to an object pointer sight unseen, and
+        // a null or an unrelated class would be stored instead of raising PHP's `TypeError`.
+        // The backend's weak-mode property guard checks the runtime class and then unboxes.
+        Some(ty)
+            if declared_property_type(ctx, object.value, property)
+                && boxed_value_for_class_typed_property(ctx, &ty, value) =>
+        {
+            value
+        }
         Some(ty) => coerce_typed_assign_value(ctx, value, &ty, span),
         None => value,
     };
@@ -73,6 +83,24 @@ pub(super) fn lower_property_assign(
         return;
     }
     let data = ctx.intern_string(property);
+    // A declared property store carries MAY_THROW: the weak typed-property guard raises PHP's
+    // catchable TypeError, and a Stringable receiver can throw out of its own __toString. Both
+    // jump to __rt_throw_current with the assigned temporary still pure SSA, so pin it in the
+    // unwind chain for the store and retire the pin without releasing once the store returns.
+    //
+    // Only a store that keeps an INDEPENDENT owner is pinned, which is exactly the condition
+    // `release_property_assignment_source_after_retaining_store` releases under. A store that
+    // instead transfers the temporary into the slot owes no release afterwards, and pinning it
+    // would leave one reference nothing retires.
+    let stored_property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
+    let pins = if property_store_keeps_independent_ref(
+        &stored_property_ty,
+        &ctx.builder.value_php_type(value.value),
+    ) {
+        crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span)
+    } else {
+        Vec::new()
+    };
     ctx.emit_void(
         Op::PropSet,
         vec![object.value, value.value],
@@ -80,6 +108,7 @@ pub(super) fn lower_property_assign(
         Op::PropSet.default_effects(),
         Some(span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     // Undeclared dynamic properties store boxed Mixed values. Boxing retains a
     // concrete temporary payload just like a declared property store does.
     let property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
@@ -280,4 +309,31 @@ pub(in crate::ir_lower) fn contextualize_property_array_value(
         Op::ArrayToHash.default_effects(),
         Some(span),
     )
+}
+
+/// Returns true when a boxed value is assigned to a class-typed property slot.
+fn boxed_value_for_class_typed_property(
+    ctx: &LoweringContext<'_, '_>,
+    property_ty: &PhpType,
+    value: LoweredValue,
+) -> bool {
+    matches!(property_ty.codegen_repr(), PhpType::Object(_))
+        && ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed
+}
+
+/// Returns true when the receiver's class declares a PHP type for this property.
+///
+/// An untyped property has no weak-mode property typing to enforce, so its writes keep the
+/// previous unboxing lowering.
+fn declared_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return false;
+    };
+    ctx.classes
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|class_info| class_info.visible_property_is_declared(property))
 }

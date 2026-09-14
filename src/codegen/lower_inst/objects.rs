@@ -140,6 +140,7 @@ mod property_stores;
 mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
+mod mixed_property_type_guard;
 
 #[allow(unused_imports)]
 use fixed_new::*;
@@ -191,6 +192,8 @@ use property_store_values::*;
 use typed_property_guards::*;
 #[allow(unused_imports)]
 use instanceof_helpers::*;
+#[allow(unused_imports)]
+use mixed_property_type_guard::*;
 
 pub(super) use dynamic_property_read_entry::{lower_dynamic_prop_get, lower_nullsafe_prop_get};
 pub(super) use fiber_dynamic_entry::{

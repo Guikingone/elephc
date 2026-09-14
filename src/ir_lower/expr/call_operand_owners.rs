@@ -3,12 +3,17 @@
 //!
 //! Called from:
 //! - User calls, descriptor invocation, callback builtins and eval call lowering.
+//! - Any lowering that emits an instruction whose effects carry `MAY_THROW` over owned
+//!   expression temporaries, through `pin_in_flight_owners`.
 //!
 //! Key details:
 //! - Scoped unwind records retire roots before same-frame catches; frame cleanup sees cleared slots.
 //! - Borrowed local loads remain subject to final storage-aware release pruning.
 //! - A call's own owned result is staged in a record published OUTSIDE every operand root, so
 //!   retiring those roots cannot strand it; the runtime pop is LIFO and never names a record.
+//! - Rooting MOVES ownership into a slot; pinning does not. A pin only parks the pointer for
+//!   the window one throwing instruction occupies, so the operand's existing release still runs
+//!   on the normal path and only the unwinding path releases through the record.
 
 use super::*;
 
@@ -460,4 +465,169 @@ pub(crate) fn retire_owned_call_operand(
         Op::ReleaseLocalSlot.default_effects(),
         Some(span),
     );
+}
+
+/// One in-flight owned temporary pinned in an unwind-visible frame slot for a single
+/// throwing instruction.
+///
+/// The pin does NOT move ownership. The slot receives a plain `OwnedTemp` store, which retains
+/// nothing, so the SSA temporary keeps its single reference and its ordinary post-instruction
+/// release stays correct on the normal path.
+pub(crate) struct PinnedInFlightOwner {
+    /// Hidden `OwnedTemp` the operand pointer is parked in for the throwing window.
+    temp_name: String,
+    /// Owner slot published in the unwind chain for the duration of that window.
+    slot: crate::ir::LocalSlotId,
+}
+
+/// Pins the owned SSA temporaries an instruction that can THROW is about to read.
+///
+/// A codegen guard that raises a catchable `Error`/`TypeError` jumps straight to
+/// `__rt_throw_current`, which only releases what the activation chain can see. An expression
+/// temporary is pure SSA at that point: `count(pick(new Other()))` holds the boxed `Mixed` the
+/// inner call produced in nothing the unwinder can reach, so a caught `TypeError` used to resume
+/// with that box and its object stranded (issue: repeated caught guards leak one operand per
+/// iteration).
+///
+/// Pinning publishes a record over the throwing window only. On the throwing path
+/// `__rt_cleanup_call_operand_owner` CLEARS the slot before releasing it, so the frame cleanup
+/// that follows cannot release the same owner twice, and the never-reached SSA release cannot
+/// either. On the normal path the record is detached and the slot is zeroed with `UnsetLocal`,
+/// which retires the pin WITHOUT releasing, leaving the operand's existing ownership discipline
+/// exactly as it was.
+///
+/// Only a temporary that OWNS independent storage is pinned. A persistent literal, a borrowed
+/// projection and every load out of a variable are left alone, because a pin retains nothing and
+/// would otherwise publish a reference some other owner is still responsible for. Repeated
+/// operands (`f($x, $x)`) are pinned once: two records over one reference would release it twice.
+pub(crate) fn pin_in_flight_owners(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &[crate::ir::ValueId],
+    span: Span,
+) -> Vec<PinnedInFlightOwner> {
+    let mut pinned: Vec<crate::ir::ValueId> = Vec::new();
+    let mut records = Vec::new();
+    for operand in operands {
+        if pinned.contains(operand) {
+            continue;
+        }
+        let value = LoweredValue {
+            value: *operand,
+            ir_type: ctx.builder.value_type(*operand),
+        };
+        // The test is ownership of INDEPENDENT storage, not "this path emits a release".
+        // `value_needs_release_after_use` also answers yes for a plain `Str` load out of a PHP
+        // local, whose payload the local slot still owns: parking that pointer would let the
+        // record free storage the frame cleanup frees again (`explode("", $local)` double-freed
+        // exactly that way). Rooting can use the wider test because it acquires first; a pin
+        // acquires nothing, so it must see a temporary that owns what it parks.
+        if !ctx.value_is_owning_temporary(value) {
+            continue;
+        }
+        // A load out of a variable is never such a temporary, whatever the provisional
+        // ownership says. `value_is_owned_unboxed_local_load` marks an array/hash/object load
+        // owned so a release can be emitted and pruned later, and the variable keeps owning the
+        // payload either way: publishing it would run the element destructors of a LIVE `$values`
+        // during the unwind, before the catch body that PHP runs first
+        // (`implode(",", $values)` with a throwing `__toString` reordered exactly that way).
+        if matches!(
+            ctx.builder.value_defining_op(value.value),
+            Some(Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell | Op::LoadGlobal),
+        ) {
+            continue;
+        }
+        let ty = ctx.builder.value_php_type(value.value);
+        // A raw buffer carries no refcount, and a type with no lifetime state has nothing an
+        // unwind could strand.
+        if matches!(ty.codegen_repr(), PhpType::Buffer(_))
+            || !Ownership::php_type_needs_lifetime_tracking(&ty)
+        {
+            continue;
+        }
+        let temp_name = ctx.declare_owned_hidden_temp(ty.clone());
+        ctx.store_local(&temp_name, value, ty, Some(span));
+        let slot = ctx.local_slots[&temp_name];
+        register_owned_call_operand(ctx, slot, span);
+        pinned.push(*operand);
+        records.push(PinnedInFlightOwner { temp_name, slot });
+    }
+    records
+}
+
+/// Retires in-flight pins in reverse publication order once the throwing window has closed.
+///
+/// `UnsetLocal` zeroes the parking slot without releasing it: the reference never left the SSA
+/// temporary, and its own release still follows.
+pub(crate) fn unpin_in_flight_owners(
+    ctx: &mut LoweringContext<'_, '_>,
+    records: Vec<PinnedInFlightOwner>,
+    span: Span,
+) {
+    for record in records.into_iter().rev() {
+        unregister_owned_call_operand(ctx, record.slot, span);
+        ctx.clear_owned_hidden_temp(&record.temp_name, Some(span));
+    }
+}
+
+/// Pins the owned operands a throwing registry builtin is about to read.
+///
+/// The rule is the builtin's own effect contract, not its name: any builtin whose resolved
+/// effects carry `MAY_THROW` can reach a codegen guard that jumps to `__rt_throw_current` with
+/// its operands still in flight, so every one of them gets the same treatment. `count()` is the
+/// case the leak was found on; `intdiv()`, the `ValueError` argument guards and the weak
+/// float-to-int coercions reach the same helper through the same path.
+///
+/// Operands already rooted by `root_non_aliasing_callback_operands` are skipped: they carry a
+/// record of their own, and a second record over one reference would release it twice.
+pub(super) fn pin_throwing_builtin_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    def: &crate::builtins::registry::BuiltinDef,
+    operands: &[crate::ir::ValueId],
+    rooted: &[(usize, crate::ir::LocalSlotId)],
+    result_type: &PhpType,
+    span: Span,
+) -> Vec<PinnedInFlightOwner> {
+    let arg_types = operands
+        .iter()
+        .map(|operand| ctx.builder.value_php_type(*operand))
+        .collect::<Vec<_>>();
+    let input = crate::builtins::semantics::BuiltinSemanticInput {
+        name: def.name,
+        args: &[],
+        arg_types: &arg_types,
+        span,
+    };
+    if !crate::builtins::semantics::resolve_builtin_effects(def, &input)
+        .contains(crate::ir::Effects::MAY_THROW)
+    {
+        return Vec::new();
+    }
+    // A result that may alias an argument suppresses that argument's post-call release, so the
+    // call, not this path, decides the operand's fate. Pinning it would add a reference nothing
+    // retires. Only an independently owned result leaves the caller still owing the release a
+    // pin stands in for while the call can throw.
+    //
+    // A result whose storage carries no lifetime state at all settles the same question from the
+    // other side: `count()` sits in the default `MayAliasArguments` bucket, but it answers a raw
+    // machine integer, which `release_owned_call_arg_temporaries` already knows cannot alias its
+    // boxed operand, so that operand's release is emitted and the pin stands in for it.
+    let independent_result = matches!(
+        def.spec.semantics.result_ownership,
+        crate::builtins::semantics::BuiltinResultOwnership::NonHeap
+            | crate::builtins::semantics::BuiltinResultOwnership::Fresh
+            | crate::builtins::semantics::BuiltinResultOwnership::Independent
+    ) || !Ownership::php_type_needs_lifetime_tracking(result_type);
+    if !independent_result {
+        return Vec::new();
+    }
+    let pinnable = operands
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !rooted.iter().any(|(root, _)| root == index))
+        // A mutating by-reference parameter is caller storage the builtin writes back through,
+        // never a temporary this path releases.
+        .filter(|(index, _)| !def.ref_params.get(*index).copied().unwrap_or(false))
+        .map(|(_, operand)| *operand)
+        .collect::<Vec<_>>();
+    pin_in_flight_owners(ctx, &pinnable, span)
 }
