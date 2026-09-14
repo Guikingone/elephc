@@ -422,7 +422,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // reads it to run the HMAC handshake. Keep it like a `.env` secret.
     if let Some(key) = ir_module.probe_key {
         let sidecar = output_paths.bin.with_extension("key");
-        if let Err(err) = crate::pipeline::artifact_io::write_artifact(
+        if let Err(err) = crate::pipeline::artifact_io::write_private_artifact(
             &sidecar,
             crate::probe_key::to_hex(&key).as_bytes(),
         ) {

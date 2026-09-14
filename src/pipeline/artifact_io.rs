@@ -26,6 +26,50 @@ use std::path::{Path, PathBuf};
 
 use super::output::OutputPaths;
 
+/// Which generated files the selected command will actually produce.
+///
+/// The validation below refuses a destination before any work runs, so it must describe the
+/// run that is about to happen and no more: `--check` and `--emit-ir` produce none of these
+/// files, and `--emit-asm` stops after the assembly. Checking a path the command will never
+/// write turns an unrelated symlink or directory sitting at that name into a refusal of a
+/// perfectly valid command.
+pub(super) struct ArtifactPlan {
+    assembly: bool,
+    source_map: bool,
+    /// The object file, the binary or library, its C header, and the probe-key sidecar —
+    /// everything downstream of the assembler, which one flag decides together.
+    linked: bool,
+    probe_key: bool,
+}
+
+impl ArtifactPlan {
+    /// Derives the plan from the flags that decide where `compile()` stops.
+    pub(super) fn for_run(
+        check_only: bool,
+        emit_ir: bool,
+        emit_asm: bool,
+        emit_source_map: bool,
+        probe: bool,
+    ) -> Self {
+        // Both return before the backend stage runs, so nothing in `OutputPaths` is written.
+        if check_only || emit_ir {
+            return Self {
+                assembly: false,
+                source_map: false,
+                linked: false,
+                probe_key: false,
+            };
+        }
+        let linked = !emit_asm;
+        Self {
+            assembly: true,
+            source_map: emit_source_map,
+            linked,
+            probe_key: linked && probe,
+        }
+    }
+}
+
 /// Rejects every generated-artifact destination that is a symbolic link, or that exists as
 /// something other than a regular file.
 ///
@@ -35,20 +79,30 @@ use super::output::OutputPaths;
 /// `main.s` is the normal case. What is refused is a destination whose write would land
 /// somewhere else (a symlink) or would not be a file write at all (a directory, a FIFO, a
 /// device node).
-pub(super) fn reject_unsafe_destinations(paths: &OutputPaths) -> Result<(), String> {
-    let mut destinations: Vec<&Path> = vec![
-        paths.asm.as_path(),
-        paths.obj.as_path(),
-        paths.bin.as_path(),
-        paths.source_map.as_path(),
-    ];
-    if let Some(header) = paths.header.as_deref() {
-        destinations.push(header);
+pub(super) fn reject_unsafe_destinations(
+    paths: &OutputPaths,
+    plan: &ArtifactPlan,
+) -> Result<(), String> {
+    let mut destinations: Vec<&Path> = Vec::new();
+    if plan.assembly {
+        destinations.push(paths.asm.as_path());
+    }
+    if plan.source_map {
+        destinations.push(paths.source_map.as_path());
+    }
+    if plan.linked {
+        destinations.push(paths.obj.as_path());
+        destinations.push(paths.bin.as_path());
+        if let Some(header) = paths.header.as_deref() {
+            destinations.push(header);
+        }
     }
     // The probe-key sidecar is derived from the binary path at write time rather than stored
     // in `OutputPaths`; it is an output-path symlink target like any other.
     let sidecar = paths.bin.with_extension("key");
-    destinations.push(sidecar.as_path());
+    if plan.probe_key {
+        destinations.push(sidecar.as_path());
+    }
 
     for destination in destinations {
         reject_unsafe_destination(destination)?;
@@ -61,8 +115,20 @@ fn reject_unsafe_destination(path: &Path) -> Result<(), String> {
     // `symlink_metadata` does NOT follow the final component, which is the whole point:
     // `metadata` would report the TARGET's kind and happily call a symlink-to-a-regular-file
     // a regular file.
-    let Ok(metadata) = std::fs::symlink_metadata(path) else {
-        return Ok(()); // Does not exist: the write will create it.
+    //
+    // ONLY `NotFound` MEANS "the write will create it". A permission error, an I/O error or
+    // an `ELOOP` says the destination could not be inspected — treating those as absence
+    // would let exactly the paths that cannot be vouched for through the check.
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "refusing to write the generated file '{}': its destination could not be \
+                 inspected ({error})",
+                path.display()
+            ))
+        }
     };
     if metadata.file_type().is_symlink() {
         return Err(format!(
@@ -91,7 +157,27 @@ fn reject_unsafe_destination(path: &Path) -> Result<(), String> {
 /// is what makes the up-front check a diagnostic rather than the safety mechanism for the
 /// paths this process writes itself.
 pub(crate) fn write_artifact(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_staged(path, bytes, None)
+}
+
+/// Writes one generated artifact that must never be readable by anyone but its owner.
+///
+/// The permissions are applied to the STAGED file, before the rename — so the bytes are
+/// never reachable at the destination's well-known name under a permissive umask, not even
+/// for the instant between creating the file and a `set_permissions` call afterwards. The
+/// probe key is the monitoring HMAC credential and the `.key` path is derived from the
+/// binary's, so on a shared build host that instant repeats on every rebuild.
+///
+/// `mode(0o600)` is an upper bound, not an assignment: the umask can only clear further
+/// bits, so the file is never MORE permissive than this.
+pub(crate) fn write_private_artifact(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_staged(path, bytes, Some(0o600))
+}
+
+/// Stages, writes, syncs and renames one artifact, optionally with an explicit creation mode.
+fn write_staged(path: &Path, bytes: &[u8], mode: Option<u32>) -> io::Result<()> {
     use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
 
     let directory = path.parent().unwrap_or(Path::new("."));
     let file_name = path
@@ -100,10 +186,12 @@ pub(crate) fn write_artifact(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .unwrap_or("artifact");
     let temporary = unique_temporary_path(directory, file_name);
 
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    if let Some(mode) = mode {
+        options.mode(mode);
+    }
+    let mut file = options.open(&temporary)?;
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     drop(file);
     if let Err(error) = written {
@@ -226,6 +314,98 @@ mod tests {
             .filter(|name| name.ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "staging files left behind: {leftovers:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A destination that cannot be INSPECTED is refused, not waved through.
+    ///
+    /// Treating every `symlink_metadata` failure as absence let a path whose kind is
+    /// unknown — a permission error, an I/O error, a symlink loop — reach the write or the
+    /// external tool unchecked. `ELOOP` is the one such failure a test can produce
+    /// portably, and it is also the most pointed: a symlink cycle is precisely a
+    /// destination that is a symlink.
+    #[test]
+    fn an_uninspectable_destination_is_refused() {
+        let dir = scratch("eloop");
+        let looped = dir.join("main.s");
+        std::os::unix::fs::symlink(&looped, &looped).expect("self-link must be creatable");
+
+        let error =
+            reject_unsafe_destination(&looped).expect_err("an unreadable destination is refused");
+        assert!(
+            error.contains("could not be inspected") || error.contains("symbolic link"),
+            "diagnostic was {error:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The probe key is created owner-only BEFORE it reaches its well-known name, so a
+    /// permissive umask never exposes the monitoring credential even briefly.
+    #[test]
+    fn a_private_artifact_is_never_group_or_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = scratch("private");
+        let sidecar = dir.join("main.key");
+
+        write_private_artifact(&sidecar, b"0123456789abcdef").expect("write must succeed");
+
+        let mode = std::fs::metadata(&sidecar)
+            .expect("key must exist")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode & 0o077, 0, "key is reachable by others: {mode:o}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A command validates the destinations it will WRITE and no others.
+    ///
+    /// `--check` and `--emit-ir` return before the backend runs, and `--emit-asm` stops
+    /// after the assembly, so an unrelated symlink at `main`, `main.o` or `main.key` must
+    /// not refuse any of them.
+    #[test]
+    fn validation_covers_only_the_artifacts_the_command_produces() {
+        let dir = scratch("plan");
+        let paths = OutputPaths {
+            asm: dir.join("main.s"),
+            obj: dir.join("main.o"),
+            bin: dir.join("main"),
+            source_map: dir.join("main.map"),
+            header: None,
+        };
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"original").expect("victim must be writable");
+        for planted in ["main.o", "main", "main.key"] {
+            std::os::unix::fs::symlink(&victim, dir.join(planted))
+                .expect("symlink must be creatable");
+        }
+
+        let check = ArtifactPlan::for_run(true, false, false, true, true);
+        reject_unsafe_destinations(&paths, &check)
+            .expect("--check writes nothing and must not be refused");
+        let ir = ArtifactPlan::for_run(false, true, false, true, true);
+        reject_unsafe_destinations(&paths, &ir)
+            .expect("--emit-ir writes none of these and must not be refused");
+        let asm = ArtifactPlan::for_run(false, false, true, false, true);
+        reject_unsafe_destinations(&paths, &asm)
+            .expect("--emit-asm writes only the assembly and must not be refused");
+
+        // The full build does reach all of them, and is refused.
+        let full = ArtifactPlan::for_run(false, false, false, true, true);
+        reject_unsafe_destinations(&paths, &full)
+            .expect_err("a full build must still refuse the planted symlinks");
+
+        // A build without monitoring writes no key, so a symlink at `main.key` alone is
+        // not its problem: remove the two it does write and it must pass.
+        std::fs::remove_file(dir.join("main.o")).expect("planted link must be removable");
+        std::fs::remove_file(dir.join("main")).expect("planted link must be removable");
+        let unmonitored = ArtifactPlan::for_run(false, false, false, true, false);
+        reject_unsafe_destinations(&paths, &unmonitored)
+            .expect("a build with no probe key must ignore a symlink at the key path");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

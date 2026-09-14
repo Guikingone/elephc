@@ -94,7 +94,14 @@ pub(crate) fn compile(config: CliConfig) {
     // tree someone else controls chooses them; refusing a symlink destination up front is
     // the only way to cover the ones an external assembler or linker writes, which this
     // process never opens itself (issue #888).
-    if let Err(error) = artifact_io::reject_unsafe_destinations(&output_paths) {
+    let artifact_plan = artifact_io::ArtifactPlan::for_run(
+        check_only,
+        emit_ir,
+        emit_asm,
+        emit_source_map,
+        with_crates.contains("probe"),
+    );
+    if let Err(error) = artifact_io::reject_unsafe_destinations(&output_paths, &artifact_plan) {
         eprintln!("error: {error}");
         process::exit(1);
     }
