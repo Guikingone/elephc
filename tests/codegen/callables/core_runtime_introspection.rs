@@ -511,6 +511,29 @@ fn test_core_get_error_handler_aot_result_is_callable_and_null_during_dispatch()
     assert_eq!(out, "inner-null|outer-null|inner-null|called");
 }
 
+/// Verifies `get_error_handler()` through qualified, dynamic, first-class, and CUF forms.
+#[test]
+fn test_core_get_error_handler_aot_callable_forms() {
+    let out = compile_and_run(
+        r#"<?php
+        function form_get_error_handler(int $level, string $message): bool { return true; }
+        set_error_handler("form_get_error_handler");
+        echo GeT_ErRoR_HaNdLeR() === "form_get_error_handler" ? "S|" : "bad|";
+        echo \get_error_handler() === "form_get_error_handler" ? "q|" : "bad|";
+        $name = "get_error_handler";
+        echo $name() === "form_get_error_handler" ? "d|" : "bad|";
+        $first_class = get_error_handler(...);
+        echo $first_class() === "form_get_error_handler" ? "f|" : "bad|";
+        echo call_user_func("get_error_handler") === "form_get_error_handler" ? "u|" : "bad|";
+        echo call_user_func_array("get_error_handler", []) === "form_get_error_handler" ? "U|" : "bad|";
+        restore_error_handler();
+        echo is_null($name()) ? "n|" : "bad|";
+        echo is_null($first_class()) && is_null(call_user_func("get_error_handler")) ? "N" : "bad";
+        "#,
+    );
+    assert_eq!(out, "S|q|d|f|u|U|n|N");
+}
+
 /// Verifies `get_exception_handler()` through direct, dynamic, first-class, and CUF forms.
 #[test]
 fn test_core_get_exception_handler_aot_registrations_and_call_forms() {
@@ -581,6 +604,39 @@ fn test_core_get_handlers_cross_aot_eval_boundary() {
         "#,
     );
     assert_eq!(out, "E|X|e|x|A|O|a|o|z|r|N");
+}
+
+/// Verifies both handler getters answer dynamic, first-class, and CUF forms inside eval.
+#[test]
+fn test_core_handler_getters_eval_callable_forms() {
+    let out = compile_and_run(
+        r#"<?php
+        function eval_form_error_handler(int $level, string $message): bool { return true; }
+        function eval_form_exception_handler(Throwable $error): void {}
+        set_error_handler("eval_form_error_handler");
+        set_exception_handler("eval_form_exception_handler");
+        $forms = '$error_name = "get_error_handler";'
+            . ' $exception_name = "get_exception_handler";'
+            . ' $error_first = get_error_handler(...);'
+            . ' $exception_first = get_exception_handler(...);'
+            . ' echo $error_name() === "eval_form_error_handler" ? "d|" : "bad|";'
+            . ' echo $exception_name() === "eval_form_exception_handler" ? "D|" : "bad|";'
+            . ' echo $error_first() === "eval_form_error_handler" ? "f|" : "bad|";'
+            . ' echo $exception_first() === "eval_form_exception_handler" ? "F|" : "bad|";'
+            . ' echo call_user_func("get_error_handler") === "eval_form_error_handler" ? "u|" : "bad|";'
+            . ' echo call_user_func("get_exception_handler") === "eval_form_exception_handler" ? "U|" : "bad|";'
+            . ' echo call_user_func_array("get_error_handler", []) === "eval_form_error_handler" ? "a|" : "bad|";'
+            . ' echo call_user_func_array("get_exception_handler", []) === "eval_form_exception_handler" ? "A|" : "bad|";'
+            . ' restore_error_handler();'
+            . ' restore_exception_handler();'
+            . ' echo is_null($error_name()) ? "z|" : "bad|";'
+            . ' echo is_null(call_user_func("get_exception_handler")) ? "Z|" : "bad|";'
+            . ' $runtime = ' . $argc . ';';
+        eval($forms);
+        echo is_null(get_error_handler()) && is_null(get_exception_handler()) ? "N" : "bad";
+        "#,
+    );
+    assert_eq!(out, "d|D|f|F|u|U|a|A|z|Z|N");
 }
 
 /// Verifies flat and categorized constant inventories contain builtin and user values.
