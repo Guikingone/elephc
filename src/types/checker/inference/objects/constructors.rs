@@ -118,12 +118,28 @@ impl Checker {
                         .map(|sig| (sig, owner_name, owner_info))
                 });
             if let Some((sig, owner_name, owner_info)) = constructor_owner {
+                // The class PHP NAMES for this constructor, which is where it is declared — not
+                // the class being instantiated. `new Child()` on a `private __construct` declared
+                // by `Owner` reports `Owner::__construct()` in php-src, for the visibility error
+                // and for the arity error alike (`Too few arguments to function
+                // Owner::__construct()`). #796 made the visibility half say so; the arity half
+                // still said `Child::__construct` (issue #870).
+                //
+                // This moves the name for EVERY INHERITED constructor, not only a private one.
+                // An inherited PUBLIC or PROTECTED constructor IS in the descendant's own method
+                // map, so the owner walk stops at the descendant — but `method_declaring_classes`
+                // still points at the ancestor that wrote it, and php-src names that ancestor
+                // too (`new Sub()` on `Base`'s constructor reports
+                // `Too few arguments to function Base::__construct()`, where elephc said
+                // `Sub::__construct`). Only a class that declares its OWN constructor is
+                // unchanged, because there the two names are the same class.
+                let declaring_class = owner_info
+                    .method_declaring_classes
+                    .get("__construct")
+                    .map(String::as_str)
+                    .unwrap_or(owner_name);
+                let constructor_label = format!("Constructor '{}::__construct'", declaring_class);
                 if let Some(visibility) = owner_info.method_visibilities.get("__construct") {
-                    let declaring_class = owner_info
-                        .method_declaring_classes
-                        .get("__construct")
-                        .map(String::as_str)
-                        .unwrap_or(owner_name);
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
                         && !self.can_construct_pdo_row_from_prelude_fetch(&class_name)
@@ -146,7 +162,7 @@ impl Checker {
                     &effective_sig,
                     args,
                     expr.span,
-                    &format!("Constructor '{}::__construct'", class_name),
+                    &constructor_label,
                     env,
                 )?;
                 let effective_sig = if matches!(
@@ -166,7 +182,7 @@ impl Checker {
                     &normalized_args,
                     expr.span,
                     env,
-                    &format!("Constructor '{}::__construct'", class_name),
+                    &constructor_label,
                     class_name.as_str(),
                 )?;
                 for (i, arg) in normalized_args.iter().enumerate() {
