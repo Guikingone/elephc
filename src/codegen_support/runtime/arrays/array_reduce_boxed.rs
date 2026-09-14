@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Consumes a callable descriptor and borrows validated source and initial-value cells.
+//! - The fourth ABI argument carries the invocation-site lexical class id to nested callbacks.
 //! - A payload snapshot protects iteration against callback writes through COW.
 //! - A native exception boundary owns every intermediate, including a pending callback result.
 
@@ -30,6 +31,7 @@ const BORROWED_INITIAL: usize = 80;
 const ENTRY: usize = 112;
 const PREVIOUS: usize = 120;
 const PENDING: usize = 128;
+const INVOCATION_SCOPE: usize = 136;
 
 /// Emits the owned-descriptor, borrowed-source, borrowed-initial reduction entry on every target.
 pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
@@ -40,6 +42,11 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
     for (index, offset) in [CALLBACK, BORROWED_SOURCE, BORROWED_INITIAL].into_iter().enumerate() {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
+    abi::store_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 3),
+        INVOCATION_SCOPE,
+    );
     for offset in [SOURCE, CARRY, INPUT, ARGUMENTS, NEXT, CURSOR, PENDING] {
         clear_slot(emitter, offset);
     }
@@ -74,6 +81,11 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
     prepare_callback_arguments(emitter);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CALLBACK);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENTS);
+    abi::load_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 2),
+        INVOCATION_SCOPE,
+    );
     clear_slot(emitter, ARGUMENTS);
     abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
     abi::store_at_offset(emitter, result, NEXT);

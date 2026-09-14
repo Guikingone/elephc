@@ -60,6 +60,7 @@ const TEST_MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 unsafe extern "C" fn fake_native_invoker(
     _descriptor: *mut c_void,
     _args: *mut RuntimeCell,
+    _invocation_scope: i64,
 ) -> *mut RuntimeCell {
     std::ptr::null_mut()
 }

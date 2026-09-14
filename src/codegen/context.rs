@@ -84,6 +84,21 @@ pub(crate) struct FunctionContext<'a> {
 }
 
 impl<'a> FunctionContext<'a> {
+    /// Returns the dense id for this function's lexical class, or `-1` at global scope.
+    ///
+    /// Runtime callable dispatch transports this invocation-site value through a hidden ABI
+    /// argument. It must never be inferred from the callable descriptor because an escaped
+    /// first-class callable is checked in the scope where it is invoked, not where it was made.
+    pub(super) fn lexical_class_id(&self) -> i64 {
+        let Some(class_name) = self.function.lexical_class.as_deref() else {
+            return -1;
+        };
+        self.module
+            .class_infos
+            .get(class_name)
+            .map_or(-1, |class| class.class_id as i64)
+    }
+
     /// Creates a lowering context with finalized frame and value-placement metadata.
     pub(super) fn new(
         module: &'a Module,

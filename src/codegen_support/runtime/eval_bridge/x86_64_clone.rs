@@ -6,6 +6,11 @@
 //!
 //! Key details:
 //! - Runtime-managed payload rejection and Mixed boxing preserve ownership.
+//! - The Mixed cell is built by hand so the allocator's single clone reference is
+//!   TRANSFERRED into it. Boxing through `__rt_mixed_from_value` would retain a second
+//!   owner that nothing releases, and compensating for that with a refcount decrement
+//!   would mutate an object refcount by hand. Neither is needed: the cell simply adopts
+//!   the reference the allocation already produced.
 
 use super::*;
 
@@ -142,10 +147,14 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + r10], 0");                        // clear the clone's dynamic-property hash slot
 
     emitter.label("__elephc_eval_value_object_clone_shallow_box_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // move the cloned object pointer into the Mixed payload
-    emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
-    emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
-    emitter.instruction("call __rt_mixed_from_value");                          // box the cloned object for Rust
+    emitter.instruction("mov rax, 24");                                         // a Mixed cell stores a runtime tag and two payload words
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the Mixed cell that will own the fresh clone
+    emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the Mixed-cell heap kind marker
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform Mixed-cell heap header
+    emitter.instruction("mov QWORD PTR [rax], 6");                              // runtime tag 6 = object
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the clone, which still holds the allocator's only reference
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // move that reference into the Mixed cell rather than retaining a second one
+    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // object payloads do not use a high word
     emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_done_x86"); // skip the null sentinel after a successful clone
 
     emitter.label("__elephc_eval_value_object_clone_shallow_null_x86");

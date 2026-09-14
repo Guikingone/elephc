@@ -10,6 +10,7 @@
 //! - Recursive mode descends through actual runtime array tags and preserves each logical key.
 //! - Partially built callback arguments remain owned by the outer exception boundary.
 //! - Active entry borrows are registered across visible native callbacks and restored on unwind.
+//! - A hidden ABI argument is framed and forwarded unchanged through recursive callback visits.
 //! - Opaque descriptor kinds fail closed because their reference escapes cannot be audited.
 
 use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
@@ -32,9 +33,10 @@ const PENDING: usize = 48;
 const ARGUMENTS: usize = 56;
 const CALLBACK_RESULT: usize = 64;
 const BORROW_HEAD: usize = 72;
+const INVOCATION_SCOPE: usize = 80;
 const ARGUMENT_OWNER_OFFSET: usize = CALLBACK_RESULT - ARGUMENTS;
 
-const VISIT_FRAME: usize = 128;
+const VISIT_FRAME: usize = 144;
 const VISIT_CALLBACK: usize = 8;
 const VISIT_CELL: usize = 16;
 const VISIT_MODE: usize = 24;
@@ -48,6 +50,7 @@ const VISIT_CELL_VALUE: usize = 80;
 const VISIT_ARGUMENT_OWNER: usize = 88;
 const VISIT_BORROW_CELL: usize = 96;
 const VISIT_BORROW_PREVIOUS: usize = 104;
+const VISIT_INVOCATION_SCOPE: usize = 112;
 
 /// Emits the boxed walk owner boundary and the recursive storage-neutral visitor.
 ///
@@ -65,7 +68,10 @@ fn emit_entry(emitter: &mut Emitter) {
     emitter.comment("--- runtime: boxed array walk ---");
     emitter.label_global("__rt_array_walk_boxed");
     abi::emit_frame_prologue(emitter, FRAME);
-    for (index, offset) in [CALLBACK, BORROWED_SOURCE, MODE].into_iter().enumerate() {
+    for (index, offset) in [CALLBACK, BORROWED_SOURCE, MODE, INVOCATION_SCOPE]
+        .into_iter()
+        .enumerate()
+    {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
     for offset in [SOURCE, PENDING, ARGUMENTS, CALLBACK_RESULT, BORROW_HEAD] {
@@ -86,6 +92,11 @@ fn emit_entry(emitter: &mut Emitter) {
         emitter,
         abi::int_arg_reg_name(emitter.target, 3),
         CALLBACK_RESULT,
+    );
+    abi::load_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 4),
+        INVOCATION_SCOPE,
     );
     abi::emit_call_label(emitter, "__rt_array_walk_boxed_visit");
     abi::emit_jump(emitter, "__rt_array_walk_boxed_cleanup");
@@ -135,6 +146,7 @@ fn emit_visitor(emitter: &mut Emitter) {
         VISIT_CELL,
         VISIT_MODE,
         VISIT_ARGUMENT_OWNER,
+        VISIT_INVOCATION_SCOPE,
     ]
         .into_iter()
         .enumerate()
@@ -209,6 +221,7 @@ fn emit_visitor(emitter: &mut Emitter) {
         VISIT_CELL_VALUE,
         VISIT_MODE,
         VISIT_ARGUMENT_OWNER,
+        VISIT_INVOCATION_SCOPE,
     ]
         .into_iter()
         .enumerate()
@@ -238,6 +251,11 @@ fn emit_visitor(emitter: &mut Emitter) {
     );
     abi::load_at_offset(emitter, scratch_reg(emitter), VISIT_ARGUMENT_OWNER);
     store_zero_indirect_at(emitter, scratch_reg(emitter), ARGUMENT_OWNER_OFFSET);
+    abi::load_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 2),
+        VISIT_INVOCATION_SCOPE,
+    );
     install_visit_borrow(emitter);
     abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
     restore_visit_borrow(emitter);

@@ -59,7 +59,11 @@ fn emit_aarch64_descriptor_callback_wrapper(
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
-    emit_call_descriptor_invoker_from_wrapper(emitter, "x19");
+    emit_call_descriptor_invoker_from_wrapper(
+        emitter,
+        "x19",
+        wrapper.invocation_scope_class_id,
+    );
     emit_cast_descriptor_mixed_result_for_callback(emitter, return_ty, &wrapper.label);
 
     emitter.instruction(&format!("ldp x21, x22, [sp, #{}]", saved_runtime_offset)); // restore runtime-loop callee-saved registers after descriptor invocation
@@ -99,7 +103,11 @@ fn emit_x86_64_descriptor_callback_wrapper(
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
-    emit_call_descriptor_invoker_from_wrapper(emitter, "r12");
+    emit_call_descriptor_invoker_from_wrapper(
+        emitter,
+        "r12",
+        wrapper.invocation_scope_class_id,
+    );
     emit_cast_descriptor_mixed_result_for_callback(emitter, return_ty, &wrapper.label);
 
     abi::load_at_offset(emitter, "r15", saved_runtime_count_offset);
@@ -149,7 +157,11 @@ fn emit_aarch64_extern_callback_trampoline(
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
-    emit_call_descriptor_invoker_from_wrapper(emitter, "x19");
+    emit_call_descriptor_invoker_from_wrapper(
+        emitter,
+        "x19",
+        wrapper.invocation_scope_class_id,
+    );
     emit_cast_descriptor_mixed_result_for_callback(emitter, &trampoline.return_type, &trampoline.label);
 
     emitter.instruction(&format!("ldp x21, x22, [sp, #{}]", saved_runtime_offset)); // restore runtime-loop registers after descriptor invocation
@@ -189,7 +201,11 @@ fn emit_x86_64_extern_callback_trampoline(
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
-    emit_call_descriptor_invoker_from_wrapper(emitter, "r12");
+    emit_call_descriptor_invoker_from_wrapper(
+        emitter,
+        "r12",
+        wrapper.invocation_scope_class_id,
+    );
     emit_cast_descriptor_mixed_result_for_callback(emitter, &trampoline.return_type, &trampoline.label);
 
     abi::load_at_offset(emitter, "r15", saved_runtime_count_offset);
@@ -211,6 +227,7 @@ fn extern_trampoline_wrapper_view(
         capture_types: Vec::new(),
         descriptor_prefix_types: Vec::new(),
         descriptor_return_type: Some(trampoline.return_type.clone()),
+        invocation_scope_class_id: -1,
     }
 }
 
@@ -375,12 +392,21 @@ fn emit_box_descriptor_arg_array_as_mixed(
 }
 
 /// Transfers the boxed argument owner to the exception-safe descriptor invocation boundary.
-fn emit_call_descriptor_invoker_from_wrapper(emitter: &mut Emitter, descriptor_reg: &str) {
+fn emit_call_descriptor_invoker_from_wrapper(
+    emitter: &mut Emitter,
+    descriptor_reg: &str,
+    invocation_scope_class_id: i64,
+) {
     let descriptor_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
 
     if descriptor_reg != descriptor_arg_reg {
         emitter.instruction(&format!("mov {}, {}", descriptor_arg_reg, descriptor_reg)); // pass the selected callable descriptor to the uniform invoker
     }
+    abi::emit_load_int_immediate(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 2),
+        invocation_scope_class_id,
+    );
     abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
 }
 
@@ -514,12 +540,24 @@ mod tests {
             capture_types: Vec::new(),
             descriptor_prefix_types: Vec::new(),
             descriptor_return_type: Some(PhpType::Bool),
+            invocation_scope_class_id: 17,
         };
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_descriptor_callback_wrapper(&mut emitter, &wrapper, &PhpType::Bool);
             let asm = emitter.output();
             assert_eq!(asm.matches("__rt_callable_invoke_owned_args").count(), 1, "{name}: {asm}");
+            let scope_arg = match Target::parse(name).unwrap().arch {
+                Arch::AArch64 => "mov x2, #17",
+                Arch::X86_64 => "mov rdx, 17",
+            };
+            let scope = asm
+                .find(scope_arg)
+                .unwrap_or_else(|| panic!("{name}: missing callback scope argument: {asm}"));
+            let invoke = asm
+                .find("__rt_callable_invoke_owned_args")
+                .expect("descriptor boundary call");
+            assert!(scope < invoke, "{name}: {asm}");
             assert!(!asm.lines().any(|line| {
                 let instruction = line.trim_start();
                 instruction.starts_with("blr ") || instruction.starts_with("call r")
@@ -534,6 +572,11 @@ mod tests {
             emit_extern_callback_trampoline(&mut emitter, &trampoline);
             let asm = emitter.output();
             assert_eq!(asm.matches("__rt_callable_invoke_owned_args").count(), 1, "{name}: {asm}");
+            let global_scope_arg = match Target::parse(name).unwrap().arch {
+                Arch::AArch64 => "mov x2, #-1",
+                Arch::X86_64 => "mov rdx, -1",
+            };
+            assert!(asm.contains(global_scope_arg), "{name}: {asm}");
         }
     }
 }

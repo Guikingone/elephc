@@ -55,6 +55,11 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
     for (index, offset) in [(1, 0), (2, 32)] {
         abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, index), offset);
     }
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        ctx.lexical_class_id(),
+    );
     abi::emit_call_label(ctx.emitter, "__rt_array_reduce_boxed");
     abi::emit_release_temporary_stack(ctx.emitter, BORROWED_BYTES);
     store_if_result(ctx, inst)

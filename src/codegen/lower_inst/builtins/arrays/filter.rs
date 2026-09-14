@@ -54,6 +54,11 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), DESCRIPTOR_OFFSET);
     abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), MODE_OFFSET);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        ctx.lexical_class_id(),
+    );
     abi::emit_call_label(ctx.emitter, "__rt_array_predicate_boxed");
     abi::emit_release_temporary_stack(ctx.emitter, STACK_BYTES);
     store_if_result(ctx, inst)

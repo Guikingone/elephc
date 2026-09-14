@@ -2585,6 +2585,13 @@ fn emit_owned_descriptor_args_boundary(ctx: &mut FunctionContext<'_>, owns_descr
     } else {
         "__rt_callable_invoke_owned_args"
     };
+    // The descriptor itself may have escaped from another scope. Transport the scope of this
+    // invocation as hidden ABI state instead of capturing descriptor-creation context.
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        ctx.lexical_class_id(),
+    );
     abi::emit_call_label(ctx.emitter, entry);
 }
 

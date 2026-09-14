@@ -6,7 +6,8 @@
 //! - `crate::codegen::lower_inst::emit_runtime_callable_invoker_inline()`.
 //!
 //! Key details:
-//! - The invoker accepts only normalized boxed Mixed argument containers.
+//! - The invoker accepts a descriptor, a normalized boxed Mixed argument container and the
+//!   invocation-site lexical class id. It forwards the scope as a trailing hidden ABI argument.
 //! - Capture values are loaded from the callable descriptor, not caller frame state.
 //! - Argument materialization supports indexed arrays, associative arrays, defaults, variadics,
 //!   by-reference marker cells, and target-aware ABI calls without depending on `Context`.
@@ -67,9 +68,11 @@ const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
 /// Spill slot for the boxed argument container across the eval exception-boundary `setjmp`.
 const INVOKER_ARG_ARRAY_OFFSET: usize = 24;
+/// Invocation-site lexical class id, with `-1` representing global scope.
+const INVOKER_SCOPE_OFFSET: usize = 32;
 /// First frame slot of the callee-saved register save area (issue #487).
 /// Placed after descriptor/concat/arg-array so the eval boundary path can reuse those slots.
-const INVOKER_SAVED_REGS_OFFSET: usize = 32;
+const INVOKER_SAVED_REGS_OFFSET: usize = 40;
 /// AArch64 save-area width (8 callee-saved scratch regs × 8 bytes); sizes the shared frame.
 const INVOKER_CALLEE_SAVE_BYTES: usize = 8 * 8;
 /// Exclusive end of the callee-saved save area (`INVOKER_SAVED_REGS_OFFSET` … end-8).
@@ -237,6 +240,11 @@ fn emit_runtime_callable_invoker_impl(
         emitter,
         abi::int_arg_reg_name(emitter.target, 1),
         INVOKER_ARG_ARRAY_OFFSET,
+    );
+    abi::store_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 2),
+        INVOKER_SCOPE_OFFSET,
     );
     emit_invoker_exception_boundary_push(
         emitter,
@@ -2571,7 +2579,19 @@ fn call_target_with_pushed_args(
     emitter: &mut Emitter,
     owns_string_return: bool,
 ) {
-    let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
+    // Every descriptor entry receives one trailing native argument after its complete PHP ABI
+    // shape. Ordinary PHP functions ignore the extra register or stack word. The synthetic
+    // `clone()` wrapper alone declares the hidden parameter and consumes it for hook visibility.
+    abi::load_at_offset(
+        emitter,
+        abi::int_result_reg(emitter),
+        INVOKER_SCOPE_OFFSET,
+    );
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+    let mut abi_arg_types = arg_types.to_vec();
+    abi_arg_types.push(PhpType::Int);
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, &abi_arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
     save_concat_offset_before_nested_call(emitter);
     emit_restore_invoker_php_frame_head(emitter);
@@ -3377,6 +3397,49 @@ mod tests {
         };
         emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
         emitter.output()
+    }
+
+    /// Every target forwards the framed invocation scope after the complete PHP ABI shape.
+    #[test]
+    fn invoker_forwards_hidden_invocation_scope_on_all_targets() {
+        let sig = crate::types::first_class_callable_builtin_sig("clone").unwrap();
+        assert_eq!(sig.params.len(), 2);
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let asm = emit_invoker_asm(name, &sig, "clone_scope_invoker");
+            let store = match target.arch {
+                Arch::AArch64 => format!("stur x2, [x29, #-{INVOKER_SCOPE_OFFSET}]"),
+                Arch::X86_64 => {
+                    format!("mov QWORD PTR [rbp - {INVOKER_SCOPE_OFFSET}], rdx")
+                }
+            };
+            let load = match target.arch {
+                Arch::AArch64 => format!("ldur x0, [x29, #-{INVOKER_SCOPE_OFFSET}]"),
+                Arch::X86_64 => {
+                    format!("mov rax, QWORD PTR [rbp - {INVOKER_SCOPE_OFFSET}]")
+                }
+            };
+            let stored = asm
+                .find(&store)
+                .unwrap_or_else(|| panic!("{name}: missing scope input store: {asm}"));
+            let loaded = asm
+                .find(&load)
+                .unwrap_or_else(|| panic!("{name}: missing trailing scope load: {asm}"));
+            let invoked = asm[loaded..]
+                .find(match target.arch {
+                    Arch::AArch64 => "blr x19",
+                    Arch::X86_64 => "call r12",
+                })
+                .map(|offset| offset + loaded)
+                .unwrap_or_else(|| panic!("{name}: missing target invoke: {asm}"));
+            assert!(stored < loaded && loaded < invoked, "{name}: {asm}");
+        }
     }
 
     /// Descriptor targets inherit the real PHP frame reader across their invisible wrapper.

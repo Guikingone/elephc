@@ -7,6 +7,8 @@
 //! Key details:
 //! - The argument box is consumed on normal and exceptional exits.
 //! - Separate entries distinguish borrowed descriptors from caller-transferred descriptor owners.
+//! - A third hidden ABI argument carries the invocation-site lexical class id through the
+//!   exception boundary. The value is frame-owned, so nesting, throws and fibers cannot clobber it.
 //! - A local native handler keeps cleanup below the caller's exception boundary.
 //! - Slots are cleared before release so a cleanup throw cannot release an owner twice.
 
@@ -23,8 +25,9 @@ const RESULT: usize = 24;
 const PENDING: usize = 32;
 const PREVIOUS: usize = 40;
 const OWNED_DESCRIPTOR: usize = 48;
+const INVOCATION_SCOPE: usize = 56;
 
-/// Emits a consuming argument-container boundary using the descriptor's two-argument native ABI.
+/// Emits a consuming argument-container boundary using the descriptor's three-argument native ABI.
 /// Returns an owned Mixed cell, or rethrows only after releasing the arguments and interrupted result.
 pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
@@ -54,6 +57,11 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     abi::emit_branch_if_int_result_nonzero(emitter, caught);
     abi::load_at_offset(emitter, descriptor_arg, DESCRIPTOR);
     abi::load_at_offset(emitter, array_arg, ARGUMENTS);
+    abi::load_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 2),
+        INVOCATION_SCOPE,
+    );
     callable_descriptor::emit_load_invoker_from_descriptor(emitter, invoker, descriptor_arg);
     abi::emit_call_reg(emitter, invoker);
     abi::store_at_offset(emitter, result, RESULT);
@@ -101,6 +109,11 @@ fn emit_owned_args_entry(emitter: &mut Emitter, label: &str, owns_descriptor: bo
     let descriptor = abi::int_arg_reg_name(emitter.target, 0);
     abi::store_at_offset(emitter, descriptor, DESCRIPTOR);
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENTS);
+    abi::store_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 2),
+        INVOCATION_SCOPE,
+    );
     if owns_descriptor {
         abi::store_at_offset(emitter, descriptor, OWNED_DESCRIPTOR);
     } else {
@@ -166,6 +179,104 @@ fn previous_exception_reg(emitter: &Emitter) -> &'static str {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// The invocation-site scope is copied through the exception boundary without shared state.
+    #[test]
+    fn owned_argument_boundary_frames_invocation_scope_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_callable_invoke_owned_args(&mut emitter);
+            let asm = emitter.output();
+            let store = match target.arch {
+                Arch::AArch64 => format!("stur x2, [x29, #-{INVOCATION_SCOPE}]"),
+                Arch::X86_64 => {
+                    format!("mov QWORD PTR [rbp - {INVOCATION_SCOPE}], rdx")
+                }
+            };
+            let load = match target.arch {
+                Arch::AArch64 => format!("ldur x2, [x29, #-{INVOCATION_SCOPE}]"),
+                Arch::X86_64 => {
+                    format!("mov rdx, QWORD PTR [rbp - {INVOCATION_SCOPE}]")
+                }
+            };
+            let stored = asm
+                .find(&store)
+                .unwrap_or_else(|| panic!("{name}: missing framed scope store: {asm}"));
+            let loaded = asm
+                .find(&load)
+                .unwrap_or_else(|| panic!("{name}: missing framed scope load: {asm}"));
+            let invoke = asm[loaded..]
+                .find(if target.arch == Arch::AArch64 {
+                    "blr "
+                } else {
+                    "call r"
+                })
+                .map(|offset| offset + loaded)
+                .unwrap();
+            assert!(stored < loaded && loaded < invoke, "{name}: {asm}");
+            assert!(!asm.contains("_callable_invocation_scope"), "{name}: {asm}");
+        }
+    }
+
+    /// Runtime array helpers forward their callsite scope into every nested descriptor callback.
+    #[test]
+    fn boxed_callback_helpers_forward_invocation_scope_on_all_targets() {
+        let helpers: [(&str, fn(&mut Emitter)); 4] = [
+            (
+                "array_reduce",
+                crate::codegen_support::runtime::arrays::emit_array_reduce_boxed,
+            ),
+            (
+                "array_predicate",
+                crate::codegen_support::runtime::arrays::emit_array_predicate_boxed,
+            ),
+            (
+                "array_walk",
+                crate::codegen_support::runtime::arrays::emit_array_walk_boxed,
+            ),
+            (
+                "array_udiff",
+                crate::codegen_support::runtime::arrays::emit_array_udiff_uintersect,
+            ),
+        ];
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            for (helper_name, emit) in helpers {
+                let mut emitter = Emitter::new(target);
+                emit(&mut emitter);
+                let asm = emitter.output();
+                let invoke = asm
+                    .find(if target.arch == Arch::AArch64 {
+                        "bl __rt_callable_invoke_owned_args"
+                    } else {
+                        "call __rt_callable_invoke_owned_args"
+                    })
+                    .unwrap_or_else(|| panic!("{name}/{helper_name}: missing callback: {asm}"));
+                let before = &asm[invoke.saturating_sub(500)..invoke];
+                let scope_load = match target.arch {
+                    Arch::AArch64 => "ldur x2, [x29",
+                    Arch::X86_64 => "mov rdx, QWORD PTR [rbp",
+                };
+                assert!(
+                    before.contains(scope_load),
+                    "{name}/{helper_name}: missing framed scope forwarding: {before}",
+                );
+            }
+        }
+    }
 
     /// Darwin dead stripping keeps the shared body reachable from the borrowed-descriptor entry.
     #[test]

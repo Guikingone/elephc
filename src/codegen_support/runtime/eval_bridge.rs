@@ -45,6 +45,16 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter) {
     backtrace::emit_backtrace_entry_wrapper(emitter);
 }
 
+/// Emits the boxed shallow-clone adapter shared by Magician and PHP 8.5 `clone()`.
+pub(crate) fn emit_object_clone_shallow_runtime(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: boxed object shallow clone ---");
+    match emitter.target.arch {
+        Arch::AArch64 => emit_aarch64_object_clone_shallow_wrapper(emitter),
+        Arch::X86_64 => emit_x86_64_object_clone_shallow_wrapper(emitter),
+    }
+}
+
 
 mod aarch64_values_classes;
 mod aarch64_arrays;
@@ -179,6 +189,41 @@ mod tests {
         let mut emitter = Emitter::new(target);
         emit_eval_bridge_runtime(&mut emitter);
         emitter.output()
+    }
+
+    /// The shared boxed shallow-clone adapter is emitted EXACTLY ONCE per program on every
+    /// supported target, with and without the eval bridge.
+    ///
+    /// It used to live inside the eval-only class wrappers, so an ordinary `clone()` program
+    /// had no adapter to call while an eval-enabled one would now define it twice. Counting the
+    /// label definition is what keeps both halves of that move honest.
+    #[test]
+    fn the_boxed_shallow_clone_adapter_is_defined_once_per_program() {
+        use crate::codegen_support::runtime::emit_runtime;
+        use crate::codegen_support::runtime_features::RuntimeFeatures;
+
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            for features in [RuntimeFeatures::none(), RuntimeFeatures::all()] {
+                let mut emitter = Emitter::new(target);
+                emit_runtime(&mut emitter, features);
+                let asm = emitter.output();
+                let definition = format!(
+                    "{}:\n",
+                    target.extern_symbol("__elephc_eval_value_object_clone_shallow")
+                );
+                assert_eq!(
+                    asm.matches(&definition).count(),
+                    1,
+                    "{target:?}: the clone adapter must be defined exactly once"
+                );
+            }
+        }
     }
 
     /// Byte views bypass allocating string casts on both architectures and all Apple variants.

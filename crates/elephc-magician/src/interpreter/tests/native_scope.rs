@@ -158,6 +158,7 @@ fn execute_program_cleans_native_raw_ref_slots_after_null_invoker_return() {
 unsafe extern "C" fn fake_native_null_descriptor(
     _descriptor: *mut std::ffi::c_void,
     _args: *mut crate::value::RuntimeCell,
+    _invocation_scope: i64,
 ) -> *mut crate::value::RuntimeCell {
     std::ptr::null_mut()
 }

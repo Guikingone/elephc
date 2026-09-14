@@ -6,6 +6,11 @@
 //!
 //! Key details:
 //! - Runtime-managed payload rejection and Mixed boxing preserve ownership.
+//! - The Mixed cell is built by hand so the allocator's single clone reference is
+//!   TRANSFERRED into it. Boxing through `__rt_mixed_from_value` would retain a second
+//!   owner that nothing releases, and compensating for that with a refcount decrement
+//!   would mutate an object refcount by hand. Neither is needed: the cell simply adopts
+//!   the reference the allocation already produced.
 
 use super::*;
 
@@ -154,10 +159,15 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x11, x13]");                                 // clear the clone's dynamic-property hash slot
 
     emitter.label("__elephc_eval_value_object_clone_shallow_box");
-    emitter.instruction("ldr x1, [sp, #8]");                                    // move the cloned object pointer into the Mixed payload
-    emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
-    emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the cloned object for Rust
+    emitter.instruction("mov x0, #24");                                         // a Mixed cell stores a runtime tag and two payload words
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Mixed cell that will own the fresh clone
+    emitter.instruction("mov x9, #5");                                          // heap kind 5 marks Mixed cells for the ownership helpers
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the uniform Mixed-cell heap header
+    emitter.instruction("mov x9, #6");                                          // runtime tag 6 = object
+    emitter.instruction("str x9, [x0]");                                        // store the runtime tag at mixed[0]
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the clone, which still holds the allocator's only reference
+    emitter.instruction("str x9, [x0, #8]");                                    // move that reference into the Mixed cell rather than retaining a second one
+    emitter.instruction("str xzr, [x0, #16]");                                  // object payloads do not use a high word
     emitter.instruction("b __elephc_eval_value_object_clone_shallow_done");     // skip the null sentinel after a successful clone
 
     emitter.label("__elephc_eval_value_object_clone_shallow_null");

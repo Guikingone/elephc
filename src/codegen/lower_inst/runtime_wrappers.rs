@@ -208,6 +208,15 @@ fn build_runtime_call_wrapper_function(
             return Ok(function);
         }
     }
+    let carries_invocation_scope = matches!(
+        kind,
+        RuntimeCallWrapperKind::Builtin { .. }
+    ) && crate::builtins::registry::lookup(name).is_some_and(|def| {
+        def.spec.semantics.runtime_functions
+            == crate::builtins::semantics::BuiltinRuntimeFunctions::One(
+                crate::ir::RuntimeFnId::CloneWith,
+            )
+    });
     let return_php_type = wrapper_return_php_type(&sig.return_type);
     let mut function = Function::new(
         label.to_string(),
@@ -215,7 +224,16 @@ fn build_runtime_call_wrapper_function(
         return_php_type.clone(),
     );
     function.signature = Some(sig.clone());
-    let params = wrapper_function_params(sig);
+    let mut params = wrapper_function_params(sig);
+    if carries_invocation_scope {
+        params.push(FunctionParam {
+            name: "__elephc_invocation_scope".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+    }
     function.params = params.clone();
     for param in params {
         function.add_local(
@@ -231,7 +249,14 @@ fn build_runtime_call_wrapper_function(
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
     builder.position_at_end(entry);
-    let operands = wrapper_param_operands(&mut builder, sig);
+    let mut operands = wrapper_param_operands(&mut builder, sig);
+    if carries_invocation_scope {
+        operands.push(builder.emit_load_local(
+            LocalSlotId::from_raw(sig.params.len() as u32),
+            IrType::I64,
+            PhpType::Int,
+        ));
+    }
     let result = match kind {
         RuntimeCallWrapperKind::Builtin { strict_php } => {
             let def = crate::builtins::registry::lookup(name).ok_or_else(|| {
@@ -472,6 +497,51 @@ pub(super) fn wrapper_value_ir_type(php_type: &PhpType) -> IrType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The public callable signature stays at two PHP arguments while the clone wrapper alone
+    /// consumes the descriptor invoker's trailing invocation-scope id.
+    #[test]
+    fn clone_callable_wrapper_consumes_hidden_invocation_scope_on_all_targets() {
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let sig = crate::builtins::registry::first_class_callable_sig("clone").unwrap();
+            let wrapper = build_runtime_call_wrapper_function(
+                &mut module,
+                "clone_scope_probe",
+                "clone",
+                &sig,
+                RuntimeCallWrapperKind::Builtin { strict_php: false },
+            )
+            .unwrap();
+            assert_eq!(sig.params.len(), 2, "{target}");
+            assert_eq!(wrapper.signature.as_ref().unwrap().params.len(), 2, "{target}");
+            assert_eq!(wrapper.params.len(), 3, "{target}");
+            assert_eq!(wrapper.params[2].name, "__elephc_invocation_scope", "{target}");
+            let call = wrapper
+                .instructions
+                .iter()
+                .find(|inst| {
+                    matches!(
+                        inst.immediate,
+                        Some(Immediate::RuntimeCall(
+                            crate::ir::RuntimeCallTarget::ProfiledFunction {
+                                target: crate::ir::RuntimeFnId::CloneWith,
+                                ..
+                            }
+                        ))
+                    )
+                })
+                .expect("clone wrapper RuntimeCall");
+            assert_eq!(call.operands.len(), 3, "{target}");
+            assert_eq!(wrapper.value(call.operands[2]).unwrap().php_type, PhpType::Int);
+        }
+    }
 
     /// The callable signature and wrapper keep `debug_backtrace()` as a raw PHP array.
     #[test]

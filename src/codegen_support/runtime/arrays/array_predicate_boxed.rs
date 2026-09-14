@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Consumes a descriptor and borrows a validated source triple.
+//! - The fourth ABI argument carries the invocation-site lexical class id to nested callbacks.
 //! - A separate payload snapshot keeps iteration stable across callback mutation.
 //! - Every temporary has an owner slot covered by a resumable native exception boundary.
 
@@ -34,6 +35,7 @@ const KEY_LO: usize = 128;
 const KEY_HI: usize = 136;
 const PREVIOUS: usize = 144;
 const PENDING: usize = 152;
+const INVOCATION_SCOPE: usize = 160;
 
 /// Borrows a source and consumes a descriptor: modes 0/1/2 search, modes 3/4/5 filter value/both/key.
 /// A null descriptor selects callback-free filtering; every mode returns an owned Mixed cell.
@@ -45,6 +47,11 @@ pub fn emit_array_predicate_boxed(emitter: &mut Emitter) {
     for (index, offset) in [CALLBACK, BORROWED_SOURCE, MODE].into_iter().enumerate() {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
+    abi::store_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 3),
+        INVOCATION_SCOPE,
+    );
     for offset in [SOURCE, CURSOR, INPUT, KEY, ARGUMENTS, NEXT, ANSWER, PENDING] {
         clear_slot(emitter, offset);
     }
@@ -82,6 +89,11 @@ pub fn emit_array_predicate_boxed(emitter: &mut Emitter) {
     prepare_arguments(emitter);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CALLBACK);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENTS);
+    abi::load_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 2),
+        INVOCATION_SCOPE,
+    );
     clear_slot(emitter, ARGUMENTS);
     abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
     abi::store_at_offset(emitter, result, NEXT);

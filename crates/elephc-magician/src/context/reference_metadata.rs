@@ -12,7 +12,7 @@ use super::*;
 
 /// Native descriptor-invoker ABI registered by generated code for AOT functions.
 pub type NativeFunctionInvoker =
-    unsafe extern "C" fn(*mut c_void, *mut RuntimeCell) -> *mut RuntimeCell;
+    unsafe extern "C" fn(*mut c_void, *mut RuntimeCell, i64) -> *mut RuntimeCell;
 
 /// Snapshot of eval execution stacks used to restore caller-sensitive access checks.
 #[derive(Debug, Clone, PartialEq, Eq)]

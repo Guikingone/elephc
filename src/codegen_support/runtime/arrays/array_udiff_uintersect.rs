@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Consumes a descriptor and borrows two validated array triples.
+//! - The fifth ABI argument carries the invocation-site lexical class id to nested callbacks.
 //! - Independent payload snapshots preserve iteration across callback mutation.
 //! - The O(n*m) scan preserves first-array keys, duplicate values and value ownership.
 //! - A resumable native exception boundary owns all intermediate cells.
@@ -40,6 +41,7 @@ const COMPARISON: usize = 168;
 const PREVIOUS: usize = 176;
 const PENDING: usize = 184;
 const OTHER: usize = 192;
+const INVOCATION_SCOPE: usize = 200;
 
 /// Takes descriptor/first/second/mode in C arguments and returns an owned boxed keyed array.
 /// Mode zero keeps unmatched entries; mode one keeps entries with any comparator-equal value.
@@ -51,6 +53,11 @@ pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
     for (index, offset) in [CALLBACK, BORROWED_FIRST, BORROWED_SECOND, MODE].into_iter().enumerate() {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
+    abi::store_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 4),
+        INVOCATION_SCOPE,
+    );
     for offset in [FIRST, SECOND, INPUT, OTHER, KEY, ARGUMENTS, NEXT, ANSWER, FIRST_CURSOR, PENDING] {
         clear_slot(emitter, offset);
     }
@@ -85,6 +92,11 @@ pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
     prepare_arguments(emitter);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CALLBACK);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENTS);
+    abi::load_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 2),
+        INVOCATION_SCOPE,
+    );
     clear_slot(emitter, ARGUMENTS);
     abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
     abi::store_at_offset(emitter, result, NEXT);
