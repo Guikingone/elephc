@@ -230,6 +230,22 @@ fn test_cast_keywords_are_case_insensitive() {
     }
 }
 
+/// Verifies that `<?php $v = (object) ['k' => 1];` parses to a `Cast` expression with target
+/// `Object`. The parser used to stop at the cast and report `Expected ']'` (issue #836).
+#[test]
+fn test_cast_object_parses() {
+    let stmts = parse_source("<?php $v = (object) ['k' => 1];");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::Cast { target, .. } => {
+                assert_eq!(target, &elephc::parser::ast::CastType::Object);
+            }
+            other => panic!("expected cast expression, got {:?}", other),
+        },
+        other => panic!("expected assignment statement, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php echo (1 + 2);` parses as a parenthesized expression, NOT as a cast.
 /// Parentheses around an arithmetic expression must not be interpreted as cast syntax.
 #[test]

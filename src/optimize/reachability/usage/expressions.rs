@@ -12,7 +12,7 @@ use std::collections::HashSet;
 
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{
-    CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver, TypeExpr,
+    CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget, StaticReceiver, TypeExpr,
 };
 use crate::types::FunctionSig;
 
@@ -139,8 +139,21 @@ impl Scanner<'_> {
             ExprKind::BinaryOp { left, right, .. } => { self.scan_expr(left); self.scan_expr(right); }
             ExprKind::Negate(e) | ExprKind::Not(e) | ExprKind::BitNot(e) | ExprKind::Throw(e)
             | ExprKind::Clone(e) | ExprKind::ErrorSuppress(e) | ExprKind::Print(e)
-            | ExprKind::Spread(e) | ExprKind::Cast { expr: e, .. } | ExprKind::PtrCast { expr: e, .. }
+            | ExprKind::Spread(e) | ExprKind::PtrCast { expr: e, .. }
             | ExprKind::YieldFrom(e) | ExprKind::IncludeValue { path: e, .. } => self.scan_expr(e),
+            // A `(object)` cast has no call syntax, but `ir_lower::expr::lower_cast` lowers it
+            // to a call into the `object_cast_prelude` helpers. Recording both here is what
+            // keeps the cast's callee reachable — otherwise the prelude is pruned and the
+            // lowered call resolves to nothing. The dynamic helper calls the static one, so
+            // the static helper is reachable through either arm, but both are recorded so a
+            // future change to the lowering's arm selection cannot silently prune one.
+            ExprKind::Cast { target, expr: e } => {
+                if matches!(target, CastType::Object) {
+                    self.record_callable(crate::object_cast_prelude::CAST_HELPER);
+                    self.record_callable(crate::object_cast_prelude::DYNAMIC_CAST_HELPER);
+                }
+                self.scan_expr(e);
+            }
             ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default }
             | ExprKind::Pipe { value, callable: default } => { self.scan_expr(value); self.scan_expr(default); }
             ExprKind::Assignment { target, value, result_target, prelude, .. } => {

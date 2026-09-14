@@ -291,6 +291,10 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
+    // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
+    // `(object)` cast that only appears in an autoloaded class file is still detected.
+    let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
+        .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
@@ -436,6 +440,11 @@ pub(crate) fn compile_and_run_files_with_defines(
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
+    // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
+    // `(object)` cast that only appears in an autoloaded class file is still detected.
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
+        .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");

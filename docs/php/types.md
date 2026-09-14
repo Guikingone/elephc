@@ -178,7 +178,16 @@ $b = (bool)0;        // false
 $a = (array)42;      // [42]
 $o = (array)$obj;    // property name => value hash, with PHP's visibility-mangled keys
 $m = (array)$mixed;  // dispatches on the runtime tag: arrays pass through, scalars wrap, objects project
+$p = (object)['k' => 1]; // stdClass with a `k` property
+$q = (object)42;         // stdClass with a `scalar` property
 ```
+
+`(object)` converts an array to a `stdClass` whose property names are the
+array's keys rendered as strings (so `(object)['x', 'y']` has the properties
+`0` and `1`, reachable as `->{'0'}`), `null` to an empty `stdClass`, and every
+other non-object value to a `stdClass` carrying it in a single `scalar`
+property. An object source is returned **unchanged** — `(object)$obj === $obj`
+— rather than copied.
 
 `(array)` on an object projects all of its properties into a string-keyed hash
 using PHP's exact key mangling — `x` for a public property, `"\0*\0y"` for a

@@ -264,7 +264,8 @@ pub fn scan(program: &[Stmt], web: bool) -> Vec<Sensitivity> {
                 SymbolKind::PipeOperator
                 | SymbolKind::PropertyHooks
                 | SymbolKind::AsymmetricVisibility
-                | SymbolKind::TypedClassConst => Symbol::syntactic(watched.symbol_kind),
+                | SymbolKind::TypedClassConst
+                | SymbolKind::ObjectCast => Symbol::syntactic(watched.symbol_kind),
             };
             detect::first_reference(program, symbol).map(|span| Sensitivity {
                 symbol: watched.symbol,

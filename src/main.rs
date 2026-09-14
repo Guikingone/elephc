@@ -42,6 +42,7 @@ mod name_resolver;
 mod native_deps;
 mod names;
 mod numeric_string;
+mod object_cast_prelude;
 mod opcache;
 mod opcache_prelude;
 mod optimize;

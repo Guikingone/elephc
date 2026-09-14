@@ -1177,6 +1177,7 @@ fn cast_type(target: &CastType) -> &'static str {
         CastType::String => "String",
         CastType::Bool => "Bool",
         CastType::Array => "Array",
+        CastType::Object => "Object",
     }
 }
 

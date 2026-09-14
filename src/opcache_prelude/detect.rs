@@ -44,7 +44,7 @@
 
 use crate::names::Name;
 use crate::parser::ast::{
-    CallableTarget, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
+    CallableTarget, CastType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     InstanceOfTarget, PackedField, Stmt, StmtKind, TraitUse, TypeExpr,
 };
 use crate::span::Span;
@@ -91,6 +91,12 @@ pub(crate) enum SymbolKind {
     AsymmetricVisibility,
     /// A TYPED CLASS CONSTANT (`const string N = 'v'`), a PHP 8.3 form.
     TypedClassConst,
+    /// The OBJECT CAST (`(object) $value`), matched as a syntactic form rather than by name.
+    ///
+    /// `object_cast_prelude` injects the PHP helper the cast lowers to, and it must be
+    /// injected exactly when the program spells the cast anywhere — including inside a
+    /// function body, a class member initializer, or a closure.
+    ObjectCast,
 }
 
 /// How a call's first argument narrows a FUNCTION match.
@@ -258,6 +264,29 @@ pub(crate) fn program_declares(program: &[Stmt], target: &str) -> bool {
     program.iter().any(|stmt| stmt_declares(stmt, target))
 }
 
+/// Returns the span of the program's own declaration of `target`, if it has one.
+///
+/// [`program_declares`] answers the question a prelude that lets the USER definition win needs;
+/// this answers the one a prelude that must REJECT the collision needs, so the diagnostic can
+/// point at the offending declaration instead of at the start of the program.
+pub(crate) fn first_declaration(program: &[Stmt], target: &str) -> Option<Span> {
+    program.iter().find_map(|stmt| stmt_declaration_span(stmt, target))
+}
+
+/// Returns the span of one statement's declaration of `target`, recursing into the same
+/// declaration-carrying blocks [`stmt_declares`] walks.
+fn stmt_declaration_span(stmt: &Stmt, target: &str) -> Option<Span> {
+    match &stmt.kind {
+        StmtKind::FunctionDecl { name, .. } if name.eq_ignore_ascii_case(target) => Some(stmt.span),
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => body
+            .iter()
+            .find_map(|stmt| stmt_declaration_span(stmt, target)),
+        _ => None,
+    }
+}
+
 /// Returns whether a CALL position names `target`, compared case-insensitively on its
 /// unqualified last segment.
 ///
@@ -273,7 +302,8 @@ fn name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::PipeOperator
         | SymbolKind::PropertyHooks
         | SymbolKind::AsymmetricVisibility
-        | SymbolKind::TypedClassConst => false,
+        | SymbolKind::TypedClassConst
+        | SymbolKind::ObjectCast => false,
     }
 }
 
@@ -294,7 +324,8 @@ fn const_name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::PipeOperator
         | SymbolKind::PropertyHooks
         | SymbolKind::AsymmetricVisibility
-        | SymbolKind::TypedClassConst => false,
+        | SymbolKind::TypedClassConst
+        | SymbolKind::ObjectCast => false,
     }
 }
 
@@ -509,7 +540,13 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         } => expr_refs(condition, target)
             .or_else(|| expr_refs(then_expr, target))
             .or_else(|| expr_refs(else_expr, target)),
-        ExprKind::Cast { expr, .. } | ExprKind::PtrCast { expr, .. } => expr_refs(expr, target),
+        ExprKind::Cast {
+            target: cast_target,
+            expr: inner,
+        } => (target.kind == SymbolKind::ObjectCast && *cast_target == CastType::Object)
+            .then_some(expr.span)
+            .or_else(|| expr_refs(inner, target)),
+        ExprKind::PtrCast { expr, .. } => expr_refs(expr, target),
         ExprKind::Closure { params, body, .. } => params_ref(params, target)
             .or_else(|| body.iter().find_map(|stmt| stmt_refs(stmt, target))),
         ExprKind::NamedArg { value, .. } => expr_refs(value, target),

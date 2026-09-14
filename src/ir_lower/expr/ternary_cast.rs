@@ -60,6 +60,9 @@ pub(super) fn lower_ternary(
 
 /// Lowers a cast expression.
 pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr, expr: &Expr) -> LoweredValue {
+    if matches!(target, CastType::Object) {
+        return lower_object_cast(ctx, inner, expr);
+    }
     let value = lower_expr(ctx, inner);
     // Keep the original producer visible for a no-op string cast. Wrapping an
     // owned string temporary in `Cast(Str)` would hide its ownership from the
@@ -85,6 +88,44 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     result
+}
+
+/// Lowers PHP's `(object)` cast.
+///
+/// An object source is returned UNCHANGED — PHP's `(object)` is the identity on an object,
+/// so no copy is made and `(object) $o === $o` holds. Every other source is converted by the
+/// elephc-PHP helpers `object_cast_prelude` injects, which is what keeps the conversion
+/// (array keys become property names, `null` becomes an empty stdClass, a scalar becomes a
+/// `scalar` property) correct on every supported target with no per-target assembly.
+///
+/// The source is lowered ONCE into a synthetic local, and the helper call then names that
+/// local — the same rewrite `ref_place_args` uses — so the ordinary user-call path handles
+/// argument lowering, the return type, and owned-temporary release, and the source's side
+/// effects happen exactly once.
+fn lower_object_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    inner: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let value = lower_expr(ctx, inner);
+    let source_type = ctx.builder.value_php_type(value.value);
+    if matches!(source_type.codegen_repr(), PhpType::Object(_)) {
+        return value;
+    }
+    let helper = if matches!(
+        source_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        crate::object_cast_prelude::DYNAMIC_CAST_HELPER
+    } else {
+        crate::object_cast_prelude::CAST_HELPER
+    };
+    let local_type = normalize_value_php_type(source_type);
+    let temp = ctx.declare_synthetic_php_local(local_type.clone());
+    ctx.store_local(&temp, value, local_type, Some(inner.span));
+    let argument = Expr::new(ExprKind::Variable(temp), inner.span);
+    let name = Name::from(helper.to_string());
+    lower_function_call(ctx, &name, std::slice::from_ref(&argument), expr)
 }
 
 /// Releases an owning temporary when a scalar coercion cannot alias its source storage.
@@ -145,5 +186,20 @@ pub(super) fn cast_php_type(target: &CastType, source_type: &PhpType) -> PhpType
                 PhpType::Mixed | PhpType::Union(_)
             ) => PhpType::Mixed,
         CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+        // Mirrors the checker's `(object)` arms in
+        // `types::checker::inference::expr::basic`: identity on an object, `mixed` for a
+        // runtime-typed source that may already hold an unrelated class, stdClass otherwise.
+        CastType::Object if matches!(source_type.codegen_repr(), PhpType::Object(_)) => {
+            source_type.clone()
+        }
+        CastType::Object
+            if matches!(
+                source_type.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) =>
+        {
+            PhpType::Mixed
+        }
+        CastType::Object => PhpType::Object("stdClass".to_string()),
     }
 }
