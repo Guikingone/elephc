@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - Class-scope closures implicitly capture the runtime called-class id so
+//!   `static::` keeps late-static semantics after the enclosing method returns.
 
 use super::*;
 

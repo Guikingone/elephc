@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - Closure binding preserves the compiler-owned called-class capture after
+//!   replacing an auto-captured `$this`.
 
 use super::*;
 

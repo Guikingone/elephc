@@ -1273,6 +1273,34 @@ echo $a(), " ", $b();
     assert_eq!(out, "42 42");
 }
 
+/// Verifies every native bind spelling preserves the hidden called-class capture
+/// while replacing `$this`.
+#[test]
+fn test_closure_bind_consumers_preserve_late_static_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public string $value;
+    const LABEL = "base";
+    public function __construct(string $value) { $this->value = $value; }
+    public function reader() {
+        return function() { return $this->value . ":" . static::LABEL; };
+    }
+}
+class Child extends Base {
+    const LABEL = "child";
+}
+$source = new Child("source");
+$replacement = new Child("replacement");
+$f = $source->reader();
+$staticBound = Closure::bind($f, $replacement);
+$methodBound = $f->bindTo($replacement);
+echo $staticBound(), "|", $methodBound(), "|", $f->call($replacement);
+"#,
+    );
+    assert_eq!(out, "replacement:child|replacement:child|replacement:child");
+}
+
 /// Verifies `$closure->call($newThis, ...$args)` binds `$this` and invokes the
 /// closure in one step, passing through the trailing arguments.
 #[test]
