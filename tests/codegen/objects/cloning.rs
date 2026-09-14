@@ -1426,6 +1426,211 @@ echo $m->n;
     assert_eq!(out, "2:new:1;set(later=x);5");
 }
 
+/// Verifies a live foreach-by-reference alias makes the corresponding clone override illegal.
+#[test]
+fn test_clone_function_rejects_live_foreach_reference_override() {
+    let out = compile_and_run(
+        r#"<?php
+class RefBox { public int $u = 0; }
+$overrides = ["u" => 1];
+foreach ($overrides as &$value) {}
+try {
+    clone(new RefBox(), $overrides);
+    echo "no throw";
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign by reference when cloning with updated properties"
+    );
+}
+
+/// Verifies removing the only local alias leaves an ordinary by-value clone override.
+#[test]
+fn test_clone_function_accepts_foreach_reference_after_last_alias_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class RefBox { public int $u = 0; }
+$overrides = ["u" => 1];
+foreach ($overrides as &$value) {}
+unset($value);
+$copy = clone(new RefBox(), $overrides);
+echo $copy->u;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies one surviving local alias keeps the entry referenced after its sibling is unset.
+#[test]
+fn test_clone_function_keeps_multiple_foreach_aliases_referenced() {
+    let out = compile_and_run(
+        r#"<?php
+class RefBox { public int $u = 0; }
+$overrides = ["u" => 1];
+foreach ($overrides as &$value) {}
+$other =& $value;
+unset($value);
+try {
+    clone(new RefBox(), $overrides);
+    echo "no throw";
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign by reference when cloning with updated properties"
+    );
+}
+
+/// Verifies a COW split preserves the shared PHP reference cell in both resulting hashes.
+#[test]
+fn test_clone_function_preserves_reference_identity_across_hash_cow() {
+    let out = compile_and_run(
+        r#"<?php
+class RefBox { public int $u = 0; }
+$original = ["u" => 1];
+foreach ($original as &$value) {}
+$copy = $original;
+$copy["extra"] = 2;
+unset($value);
+try {
+    clone(new RefBox(), $original);
+    echo "original:no throw;";
+} catch (Error $e) {
+    echo "original:" . $e->getMessage() . ";";
+}
+try {
+    clone(new RefBox(), $copy);
+    echo "copy:no throw";
+} catch (Error $e) {
+    echo "copy:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "original:Cannot assign by reference when cloning with updated properties;\
+copy:Cannot assign by reference when cloning with updated properties"
+    );
+}
+
+/// Verifies writing through a foreach alias changes the value without ending the reference set.
+#[test]
+fn test_clone_function_rejects_reference_override_after_write_through() {
+    let out = compile_and_run(
+        r#"<?php
+class RefBox { public int $u = 0; }
+$overrides = ["u" => 1];
+foreach ($overrides as &$value) {}
+$value = 9;
+echo $overrides["u"] . ":";
+try {
+    clone(new RefBox(), $overrides);
+    echo "no throw";
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "9:Cannot assign by reference when cloning with updated properties"
+    );
+}
+
+/// Verifies the internal entry marker is absent from ordinary reads and `var_dump()` output.
+#[test]
+fn test_clone_function_hides_reference_marker_from_reads_and_var_dump() {
+    let out = compile_and_run(
+        r#"<?php
+$overrides = ["u" => 1];
+foreach ($overrides as &$value) {}
+unset($value);
+var_dump($overrides);
+echo $overrides["u"];
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [\"u\"]=>\n  int(1)\n}\n1");
+}
+
+/// Verifies every target emits both the explicit hash provenance and clone guard paths.
+#[test]
+fn test_every_supported_target_emits_clone_reference_override_guard() {
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_clone_reference_override_targets_{}_{:?}",
+        std::process::id(),
+        std::thread::current().id(),
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("clone_dynamic.php"),
+        r#"<?php
+class TargetCloneReference {
+    public int $u = 0;
+}
+#[Export]
+function exerciseCloneReference(): int {
+    $overrides = ["u" => 1];
+    foreach ($overrides as &$value) {}
+    try { clone(new TargetCloneReference(), $overrides); } catch (Error $e) {}
+    return 1;
+}
+exerciseCloneReference();
+"#,
+    )
+    .unwrap();
+
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = emit_clone_dynamic_property_assembly(&dir, target);
+        for expected in [
+            "__rt_hash_to_mixed",
+            "Cannot assign by reference when cloning with updated properties",
+        ] {
+            assert!(
+                assembly.contains(expected),
+                "{target}: clone reference lowering is missing {expected}"
+            );
+        }
+        let target_needles = if target == "linux-x86_64" {
+            [
+                "lea r10, [r11 + 8]",
+                "or QWORD PTR [r10], r11",
+                "cmp r9, 7",
+                "test r8, r11",
+                "cmp DWORD PTR [rcx - 12], 1",
+            ]
+        } else {
+            [
+                "add x10, x9, #8",
+                "orr x12, x12, x11",
+                "cmp x5, #7",
+                "tst x4, x9",
+                "ldr w10, [x3, #-12]",
+            ]
+        };
+        for expected in target_needles {
+            assert!(
+                assembly.contains(expected),
+                "{target}: clone reference lowering is missing {expected}"
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// Verifies every supported target emits the clone-only dynamic-property path from shared helpers.
 ///
 /// Only two of the five targets can run here, and the creation probe, the deprecation fragments and

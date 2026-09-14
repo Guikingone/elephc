@@ -28,6 +28,9 @@ use crate::codegen::abi;
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
 use crate::codegen::Result;
+use crate::codegen_support::runtime::{
+    HASH_ENTRY_REFERENCE_COUNT_MASK, HASH_ENTRY_REFERENCE_FLAG,
+};
 use crate::ir::{CloneOverrideApplicator, ValueId};
 use crate::types::PhpType;
 
@@ -35,6 +38,9 @@ use super::super::super::{
     direct_call_stack_pad_bytes, emit_call_arg_temp_cleanups, emit_ref_arg_writebacks,
     materialize_method_call_args_with_receiver_reg_and_refs, RefArgCellLifetime,
 };
+
+const REFERENCE_OVERRIDE_MESSAGE: &str =
+    "Cannot assign by reference when cloning with updated properties";
 
 /// Applies `$withProperties` to the clone parked in the caller's temporary stack slot.
 ///
@@ -48,6 +54,7 @@ pub(super) fn emit_property_overrides(
     if super::value_is_empty_array_literal(ctx, properties)? {
         return Ok(());
     }
+    emit_reference_override_guard(ctx, properties)?;
     let applicators = applicators_by_class(ctx);
     let done = ctx.next_label("clone_overrides_done");
     let miss = ctx.next_label("clone_overrides_unsupported");
@@ -82,6 +89,136 @@ pub(super) fn emit_property_overrides(
 
     ctx.emitter.label(&miss);
     super::emit_property_override_guard(ctx, properties)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Refuses override arrays whose values still belong to a PHP reference set.
+fn emit_reference_override_guard(
+    ctx: &mut FunctionContext<'_>,
+    properties: ValueId,
+) -> Result<()> {
+    let done = ctx.next_label("clone_reference_overrides_done");
+    let scan_done = ctx.next_label("clone_reference_overrides_scan_done");
+    let reject = ctx.next_label("clone_reference_overrides_reject");
+    let ty = ctx.value_php_type(properties)?.codegen_repr();
+    match ty {
+        PhpType::AssocArray { .. } => {
+            ctx.load_value_to_result(properties)?;
+        }
+        PhpType::Array(_) => {
+            ctx.load_value_to_result(properties)?;
+            let result = abi::int_result_reg(ctx.emitter).to_string();
+            abi::emit_push_reg(ctx.emitter, &result);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #3");                      // heap kind 3 identifies a runtime-promoted associative array
+                    let hash = ctx.next_label("clone_reference_overrides_hash");
+                    ctx.emitter.instruction(&format!("b.eq {hash}"));           // only hash entries can carry the persistent reference marker
+                    abi::emit_pop_reg(ctx.emitter, &result);
+                    ctx.emitter.instruction(&format!("b {done}"));              // indexed arrays have no hash-entry reference metadata
+                    ctx.emitter.label(&hash);
+                    abi::emit_pop_reg(ctx.emitter, &result);
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 3");                      // heap kind 3 identifies a runtime-promoted associative array
+                    let hash = ctx.next_label("clone_reference_overrides_hash");
+                    ctx.emitter.instruction(&format!("je {hash}"));             // only hash entries can carry the persistent reference marker
+                    abi::emit_pop_reg(ctx.emitter, &result);
+                    ctx.emitter.instruction(&format!("jmp {done}"));            // indexed arrays have no hash-entry reference metadata
+                    ctx.emitter.label(&hash);
+                    abi::emit_pop_reg(ctx.emitter, &result);
+                }
+            }
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(properties)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #5");                      // only associative arrays can carry hash-entry reference state
+                    ctx.emitter.instruction(&format!("b.ne {done}"));           // other runtime array shapes have no marked hash entries
+                    ctx.emitter.instruction("mov x0, x1");                      // select the associative-array payload for the marker scan
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 5");                      // only associative arrays can carry hash-entry reference state
+                    ctx.emitter.instruction(&format!("jne {done}"));            // other runtime array shapes have no marked hash entries
+                    ctx.emitter.instruction("mov rax, rdi");                    // select the associative-array payload for the marker scan
+                }
+            }
+        }
+        other => {
+            return Err(crate::codegen::CodegenIrError::unsupported(format!(
+                "clone() reference override guard for {other:?}",
+            )))
+        }
+    }
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    let result = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_store_to_sp(ctx.emitter, &result, 0);
+    abi::emit_load_int_immediate(ctx.emitter, &result, 0);
+    abi::emit_store_to_sp(ctx.emitter, &result, 8);
+    let scan = ctx.next_label("clone_reference_overrides_scan");
+    ctx.emitter.label(&scan);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+            ctx.emitter.instruction("cmn x0, #1");                              // did the reference-state scan reach the end of the hash?
+            ctx.emitter.instruction(&format!("b.eq {scan_done}"));              // all override entries are safe to apply
+            abi::emit_store_to_sp(ctx.emitter, "x0", 8);
+            ctx.emitter.instruction("cmp x5, #7");                              // reference metadata is valid only beside a boxed Mixed cell
+            ctx.emitter.instruction(&format!("b.ne {scan}"));                   // concrete entry values cannot represent PHP references here
+            abi::emit_load_int_immediate(ctx.emitter, "x9", HASH_ENTRY_REFERENCE_FLAG);
+            ctx.emitter.instruction("tst x4, x9");                              // is this entry part of a persistent PHP reference set?
+            ctx.emitter.instruction(&format!("b.eq {scan}"));                   // unmarked Mixed values are ordinary by-value overrides
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x10",
+                HASH_ENTRY_REFERENCE_COUNT_MASK,
+            );
+            ctx.emitter.instruction("and x10, x4, x10");                        // isolate the live direct-local alias count
+            ctx.emitter.instruction(&format!("cbnz x10, {reject}"));            // a live alias makes the override assignment by reference
+            ctx.emitter.instruction("ldr w10, [x3, #-12]");                     // load the shared boxed Mixed cell's owner count
+            ctx.emitter.instruction("cmp w10, #1");                             // do multiple hash entries still share this reference cell?
+            ctx.emitter.instruction(&format!("b.hi {reject}"));                 // shared entry ownership preserves PHP reference identity
+            ctx.emitter.instruction(&format!("b {scan}"));                      // inspect the next override entry
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+            ctx.emitter.instruction("cmp rax, -1");                             // did the reference-state scan reach the end of the hash?
+            ctx.emitter.instruction(&format!("je {scan_done}"));                // all override entries are safe to apply
+            abi::emit_store_to_sp(ctx.emitter, "rax", 8);
+            ctx.emitter.instruction("cmp r9, 7");                               // reference metadata is valid only beside a boxed Mixed cell
+            ctx.emitter.instruction(&format!("jne {scan}"));                    // concrete entry values cannot represent PHP references here
+            abi::emit_load_int_immediate(ctx.emitter, "r11", HASH_ENTRY_REFERENCE_FLAG);
+            ctx.emitter.instruction("test r8, r11");                            // is this entry part of a persistent PHP reference set?
+            ctx.emitter.instruction(&format!("jz {scan}"));                     // unmarked Mixed values are ordinary by-value overrides
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "r11",
+                HASH_ENTRY_REFERENCE_COUNT_MASK,
+            );
+            ctx.emitter.instruction("mov r10, r8");                             // copy the reference state before masking its flag
+            ctx.emitter.instruction("and r10, r11");                            // isolate the live direct-local alias count
+            ctx.emitter.instruction(&format!("jnz {reject}"));                  // a live alias makes the override assignment by reference
+            ctx.emitter.instruction("cmp DWORD PTR [rcx - 12], 1");             // do multiple hash entries still share this reference cell?
+            ctx.emitter.instruction(&format!("ja {reject}"));                   // shared entry ownership preserves PHP reference identity
+            ctx.emitter.instruction(&format!("jmp {scan}"));                    // inspect the next override entry
+        }
+    }
+
+    ctx.emitter.label(&scan_done);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&reject);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    super::super::super::exceptions::emit_error(ctx, REFERENCE_OVERRIDE_MESSAGE);
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -125,8 +262,8 @@ fn emit_class_id_dispatch(
         ctx.emitter
             .instruction(&format!("cmp {class_id_reg}, {compare_reg}"));
         match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),
-            Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),
+            Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")), // select the matching generated clone override applicator
+            Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),    // select the matching generated clone override applicator
         }
     }
     abi::emit_jump(ctx.emitter, miss);
