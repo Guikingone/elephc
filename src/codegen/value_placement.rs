@@ -11,14 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::ir::{Function, IrType, Op, ValueDef, ValueId};
-
-/// Bytes reserved for one stack-resident iterator state block.
-///
-/// Fourteen 8-byte words: source, cursor, key low/high, value low/high, value tag, value address,
-/// snapshot length, the table snapshot that detects a relocated associative source, and two
-/// owned successor-key anchors that let a by-reference walk resume after relocation and deletion.
-const ITERATOR_STATE_BYTES: usize = 112;
+use crate::ir::{Function, IrType, ValueId};
 
 /// Stack-slot table for the Phase 04 spill-everything backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +33,7 @@ pub fn allocate(func: &Function) -> ValuePlacement {
     let mut offset = 0usize;
     for (index, value) in func.values.iter().enumerate() {
         let value_id = ValueId::from_raw(index as u32);
-        let bytes = bytes_for_value(func, value_id, value.ir_type);
+        let bytes = bytes_for(value.ir_type);
         if bytes == 0 {
             continue;
         }
@@ -51,26 +44,6 @@ pub fn allocate(func: &Function) -> ValuePlacement {
         slot_of,
         total_slot_bytes: align_to_16(offset),
     }
-}
-
-/// Returns the spill-slot size for one function value, including opcode-specific state.
-fn bytes_for_value(func: &Function, value: ValueId, ty: IrType) -> usize {
-    if is_iter_start_value(func, value) {
-        return ITERATOR_STATE_BYTES;
-    }
-    bytes_for(ty)
-}
-
-/// Returns true when a value is the fixed stack-resident iterator state produced by `IterStart`.
-fn is_iter_start_value(func: &Function, value: ValueId) -> bool {
-    let Some(value) = func.value(value) else {
-        return false;
-    };
-    let ValueDef::Instruction { inst, .. } = value.def else {
-        return false;
-    };
-    func.instruction(inst)
-        .is_some_and(|instruction| instruction.op == Op::IterStart)
 }
 
 /// Returns the slot size for one EIR storage type.
@@ -98,7 +71,9 @@ mod tests {
     //! Key details:
     //! - These tests verify the stack-slot contract before instruction lowering uses it.
 
-    use crate::ir::{Builder, Function, Immediate, IrHeapKind, IrType, Op, Ownership};
+    use crate::ir::{
+        Builder, Function, Immediate, IrHeapKind, IrType, LocalSlotId, Op, Ownership,
+    };
     use crate::types::PhpType;
 
     use super::{allocate, bytes_for};
@@ -142,7 +117,7 @@ mod tests {
         assert_eq!(bytes_for(IrType::Void), 0);
     }
 
-    /// Verifies iterator handles reserve the fixed source/cursor/current-payload state.
+    /// Verifies iterator handles keep an ordinary opaque-handle spill slot.
     #[test]
     fn allocates_iter_start_value_as_iterator_state() {
         let mut function = Function::new("test".to_string(), IrType::I64, PhpType::Int);
@@ -164,11 +139,12 @@ mod tests {
             .emit(
                 Op::IterStart,
                 vec![array],
-                Some(Immediate::IterStart {
-                    by_ref: false,
-                    owner: None,
-                    origin: None,
-                }),
+                Some(Immediate::IterStart(crate::ir::IterStartMetadata::new(
+                    LocalSlotId::from_raw(0),
+                    false,
+                    None,
+                    None,
+                ))),
                 IrType::Heap(IrHeapKind::Iterable),
                 PhpType::Iterable,
                 Ownership::MaybeOwned,
@@ -178,9 +154,7 @@ mod tests {
         let placement = allocate(&function);
 
         assert_eq!(placement.slot(array), Some(8));
-        assert_eq!(placement.slot(iterator), Some(120));
-        // 8 bytes for the array plus the 112-byte iterator block, rounded up to 16-byte
-        // frame alignment.
-        assert_eq!(placement.total_slot_bytes, 128);
+        assert_eq!(placement.slot(iterator), Some(16));
+        assert_eq!(placement.total_slot_bytes, 16);
     }
 }

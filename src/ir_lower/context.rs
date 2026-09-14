@@ -54,8 +54,8 @@ pub(crate) struct LoopFrame {
     /// Innermost `break` and `continue` must not retire it here: they keep using
     /// the iterator, and the exit block owns the normal-completion retire.
     pub iterator_owner: Option<(LocalSlotId, Span)>,
-    /// Stack-resident iterator state whose owned relocation anchors need `IterEnd` cleanup.
-    pub iterator_cleanup: Option<LoopCleanup>,
+    /// Addressable iterator state whose owned relocation anchors need `IterEnd` cleanup.
+    pub iterator_cleanup: Option<(LocalSlotId, Span)>,
 }
 
 /// Cleanup that must run when control leaves a loop without visiting its exit block.
@@ -1224,7 +1224,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         source: LoweredValue,
         by_ref: bool,
         span: Span,
-    ) -> (LoweredValue, Option<LocalSlotId>) {
+    ) -> (LoweredValue, Option<LocalSlotId>, LocalSlotId) {
         self.emit_iter_start_with_origin(source, by_ref, None, span)
     }
 
@@ -1239,23 +1239,34 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         by_ref: bool,
         origin: Option<LocalSlotId>,
         span: Span,
-    ) -> (LoweredValue, Option<LocalSlotId>) {
+    ) -> (LoweredValue, Option<LocalSlotId>, LocalSlotId) {
         let source_ty = self.builder.value_php_type(source.value);
         let owner = self.publish_iter_start_owner(&source_ty, span);
+        let state = self.declare_iterator_state();
         let origin = if by_ref { origin } else { None };
         let iterator = self.emit_value(
             Op::IterStart,
             vec![source.value],
-            Some(Immediate::IterStart {
-                by_ref,
-                owner,
-                origin,
-            }),
+            Some(Immediate::IterStart(crate::ir::IterStartMetadata::new(
+                state, by_ref, owner, origin,
+            ))),
             PhpType::Iterable,
             Op::IterStart.default_effects(),
             Some(span),
         );
-        (iterator, owner)
+        (iterator, owner, state)
+    }
+
+    /// Declares one addressable stack record for an iterator's cursor and private anchors.
+    pub(crate) fn declare_iterator_state(&mut self) -> LocalSlotId {
+        let name = format!("__eir_iterator_state_{}", self.hidden_temp_counter);
+        self.hidden_temp_counter += 1;
+        self.builder.add_local(
+            Some(name),
+            IrType::Heap(crate::ir::IrHeapKind::Iterable),
+            PhpType::Iterable,
+            LocalKind::IteratorState,
+        )
     }
 
     /// Unlinks and releases a published `IterStart` `getIterator()` owner.

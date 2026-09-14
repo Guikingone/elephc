@@ -148,7 +148,7 @@ fn retire_slot(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
 fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &SpreadBindings, source: &Expr) -> String {
     let source_slot = root_value(ctx, source);
     let source = ctx.load_local(&source_slot, Some(state.span));
-    let (iterator, iterator_owner) = ctx.emit_iter_start(source, false, state.span);
+    let (iterator, iterator_owner, _) = ctx.emit_iter_start(source, false, state.span);
     let key_slot = initialize_owned_slot(
         ctx,
         PhpType::Mixed,

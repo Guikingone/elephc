@@ -136,7 +136,7 @@ pub(super) fn lower_foreach(
             }
         }
     }
-    let (iterator, iterator_owner) =
+    let (iterator, iterator_owner, iterator_state) =
         ctx.emit_iter_start_with_origin(source, value_by_ref, by_ref_origin, array.span);
     // Take the loop's own lifetime reference on a borrowed fetch-for-write source after
     // `IterStart`.
@@ -251,10 +251,7 @@ pub(super) fn lower_foreach(
         source_owner: source_owner.map(|slot| (slot, array.span)),
         source_pin,
         iterator_owner: iterator_owner.map(|slot| (slot, array.span)),
-        iterator_cleanup: by_ref_origin.map(|_| LoopCleanup {
-            value: iterator,
-            span: array.span,
-        }),
+        iterator_cleanup: by_ref_origin.map(|_| (iterator_state, array.span)),
     });
     if let Some(key_var) = key_var {
         let key = ctx.emit_value(
@@ -299,8 +296,8 @@ pub(super) fn lower_foreach(
     if by_ref_origin.is_some() {
         ctx.emit_void(
             Op::IterEnd,
-            vec![iterator.value],
-            None,
+            Vec::new(),
+            Some(Immediate::LocalSlot(iterator_state)),
             Op::IterEnd.default_effects(),
             Some(array.span),
         );

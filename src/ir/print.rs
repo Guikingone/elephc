@@ -274,16 +274,17 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::PropertyFetchMode(mode) => {
             let _ = write!(out, " fetch={}", mode.as_eir());
         }
-        Immediate::IterStart {
-            by_ref,
-            owner,
-            origin,
-        } => {
-            let _ = write!(out, " by_ref={}", if *by_ref { "true" } else { "false" });
-            if let Some(slot) = owner {
+        Immediate::IterStart(metadata) => {
+            let _ = write!(
+                out,
+                " by_ref={} state=slot[{}]",
+                if metadata.is_by_ref() { "true" } else { "false" },
+                metadata.state().as_raw(),
+            );
+            if let Some(slot) = metadata.owner() {
                 let _ = write!(out, " owner=slot[{}]", slot.as_raw());
             }
-            if let Some(slot) = origin {
+            if let Some(slot) = metadata.origin() {
                 let _ = write!(out, " origin=slot[{}]", slot.as_raw());
             }
         }
@@ -413,7 +414,7 @@ fn function_flags(function: &Function) -> Vec<&'static str> {
 #[cfg(test)]
 mod iter_start_immediate_tests {
     use super::*;
-    use crate::ir::LocalSlotId;
+    use crate::ir::{IterStartMetadata, LocalSlotId};
 
     /// Prints one `IterStart` immediate with the default data pool.
     fn printed(by_ref: bool, owner: Option<u32>, origin: Option<u32>) -> String {
@@ -421,11 +422,12 @@ mod iter_start_immediate_tests {
         print_immediate(
             &mut out,
             &DataPool::default(),
-            &Immediate::IterStart {
+            &Immediate::IterStart(IterStartMetadata::new(
+                LocalSlotId::from_raw(1),
                 by_ref,
-                owner: owner.map(LocalSlotId::from_raw),
-                origin: origin.map(LocalSlotId::from_raw),
-            },
+                owner.map(LocalSlotId::from_raw),
+                origin.map(LocalSlotId::from_raw),
+            )),
         );
         out
     }
@@ -433,7 +435,10 @@ mod iter_start_immediate_tests {
     /// The origin slot has to appear in the textual format, or EIR dumps hide the reload source.
     #[test]
     fn iter_start_prints_its_origin_slot() {
-        assert_eq!(printed(true, None, Some(4)), " by_ref=true origin=slot[4]");
+        assert_eq!(
+            printed(true, None, Some(4)),
+            " by_ref=true state=slot[1] origin=slot[4]"
+        );
     }
 
     /// Owner and origin print side by side and in a stable order.
@@ -441,7 +446,7 @@ mod iter_start_immediate_tests {
     fn iter_start_prints_owner_and_origin_together() {
         assert_eq!(
             printed(true, Some(2), Some(4)),
-            " by_ref=true owner=slot[2] origin=slot[4]"
+            " by_ref=true state=slot[1] owner=slot[2] origin=slot[4]"
         );
     }
 

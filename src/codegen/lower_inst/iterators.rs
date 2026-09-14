@@ -6,7 +6,7 @@
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - `IterStart` values reserve a fixed stack state for source, cursor, and current hash payload.
+//! - `IterStart` names an addressable stack state for source, cursor, and current hash payload.
 //! - A successful `IteratorAggregate::getIterator()` result is transferred into the
 //!   optional Mixed owner slot before the raw iterator pointer is published. The
 //!   source word then borrows that payload; the aggregate word is overwritten
@@ -113,10 +113,12 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let source_kind = iterator_source_kind_from_type(ctx, &ctx.value_php_type(source)?, inst)?;
     let by_ref = iter_start_is_by_ref(inst);
     let owner = iter_start_owner_slot(inst);
-    let result = inst.result.ok_or_else(|| {
-        CodegenIrError::invalid_module("iter_start missing result value".to_string())
-    })?;
-    let offset = ctx.value_frame_offset(result)?;
+    if inst.result.is_none() {
+        return Err(CodegenIrError::invalid_module(
+            "iter_start missing result value".to_string(),
+        ));
+    }
+    let offset = ctx.local_offset(iter_start_state_slot(inst)?)?;
     // -- statically non-iterable sources warn and skip before any value is loaded --
     // A `float` source lives in `d0`, not the integer result register, so this must run
     // BEFORE the unconditional `load_value_to_reg` below.
@@ -227,7 +229,7 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
 /// Lowers iterator advancement into a boolean result without moving past end.
 pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
-    let offset = ctx.value_frame_offset(iterator)?;
+    let offset = iterator_state_offset(ctx, iterator, inst)?;
     let by_ref = iterator_is_by_ref(ctx, iterator, inst)?;
     // -- republished containers are picked up BEFORE any dispatch reads the source word --
     // `branch_on_dynamic_source_heap_kind` probes the heap header of the source pointer, so a
@@ -277,7 +279,7 @@ pub(super) fn lower_iter_current_key(
     inst: &Instruction,
 ) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
-    let offset = ctx.value_frame_offset(iterator)?;
+    let offset = iterator_state_offset(ctx, iterator, inst)?;
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { .. } => {
             let result_reg = abi::int_result_reg(ctx.emitter);
@@ -315,7 +317,7 @@ pub(super) fn lower_iter_current_value(
     inst: &Instruction,
 ) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
-    let offset = ctx.value_frame_offset(iterator)?;
+    let offset = iterator_state_offset(ctx, iterator, inst)?;
     let result_ty = iter_current_result_type(ctx, inst)?;
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { elem } => {
@@ -397,7 +399,7 @@ pub(super) fn lower_iter_current_value_ref(
 ) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
     let slot = expect_local_slot(inst)?;
-    let offset = ctx.value_frame_offset(iterator)?;
+    let offset = iterator_state_offset(ctx, iterator, inst)?;
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { elem } => {
             bind_indexed_current_value_ref(ctx, offset, slot, &elem)?;
@@ -606,7 +608,7 @@ fn emit_empty_iterator_state(ctx: &mut FunctionContext<'_>, offset: usize) {
 /// Returns true when an `iter_start` instruction is preparing a by-reference foreach.
 fn iter_start_is_by_ref(inst: &Instruction) -> bool {
     match inst.immediate.as_ref() {
-        Some(Immediate::IterStart { by_ref, .. }) => *by_ref,
+        Some(Immediate::IterStart(metadata)) => metadata.is_by_ref(),
         _ => false,
     }
 }
@@ -614,7 +616,7 @@ fn iter_start_is_by_ref(inst: &Instruction) -> bool {
 /// Returns the optional Mixed owner slot named by an `iter_start` immediate.
 fn iter_start_owner_slot(inst: &Instruction) -> Option<LocalSlotId> {
     match inst.immediate.as_ref() {
-        Some(Immediate::IterStart { owner, .. }) => *owner,
+        Some(Immediate::IterStart(metadata)) => metadata.owner(),
         _ => None,
     }
 }
@@ -622,9 +624,29 @@ fn iter_start_owner_slot(inst: &Instruction) -> Option<LocalSlotId> {
 /// Returns the optional origin local slot named by an `iter_start` immediate.
 fn iter_start_origin_slot(inst: &Instruction) -> Option<LocalSlotId> {
     match inst.immediate.as_ref() {
-        Some(Immediate::IterStart { origin, .. }) => *origin,
+        Some(Immediate::IterStart(metadata)) => metadata.origin(),
         _ => None,
     }
+}
+
+/// Returns the addressable iterator-state slot named by an `iter_start` immediate.
+fn iter_start_state_slot(inst: &Instruction) -> Result<LocalSlotId> {
+    match inst.immediate.as_ref() {
+        Some(Immediate::IterStart(metadata)) => Ok(metadata.state()),
+        _ => Err(CodegenIrError::invalid_module(
+            "iter_start missing iterator-state metadata".to_string(),
+        )),
+    }
+}
+
+/// Returns the frame offset of the addressable state behind an iterator SSA handle.
+fn iterator_state_offset(
+    ctx: &FunctionContext<'_>,
+    iterator: ValueId,
+    inst: &Instruction,
+) -> Result<usize> {
+    let iter_start = iterator_start_instruction(ctx, iterator, inst)?;
+    ctx.local_offset(iter_start_state_slot(iter_start)?)
 }
 
 /// Where a by-reference foreach can re-read its source container after the loop body moved it.
@@ -1951,8 +1973,8 @@ pub(super) fn lower_iter_end(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             "iter_end must not produce a result".to_string(),
         ));
     }
-    let iterator = expect_operand(inst, 0)?;
-    let offset = ctx.value_frame_offset(iterator)?;
+    let state = expect_local_slot(inst)?;
+    let offset = ctx.local_offset(state)?;
     emit_release_successor_keys(ctx, offset);
     Ok(())
 }

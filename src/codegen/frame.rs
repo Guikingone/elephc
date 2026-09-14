@@ -40,6 +40,12 @@ const FRAME_FOOTER_BYTES: usize = 16;
 // Every activation has readable reader/line words, including synthetic frames hidden from backtraces.
 const EXCEPTION_ACTIVATION_BYTES: usize = 40;
 
+/// Bytes reserved for one addressable iterator state record.
+///
+/// Fourteen 8-byte words hold the source, cursor, current key/value, source snapshot, and two
+/// owned successor-key anchors used to recover from associative-table relocation.
+const ITERATOR_STATE_BYTES: usize = 112;
+
 /// Symbol name for the C-callable `--web` top-level handler.
 ///
 /// Emitted as a global label on the handler body and referenced by the
@@ -99,7 +105,12 @@ pub(super) fn layout_for_function(
             .get(local.id.as_raw() as usize)
             .map(|param| param.php_type.codegen_repr().stack_size())
             .unwrap_or(0);
-        let bytes = value_placement::bytes_for(local.ir_type)
+        let local_bytes = if local.kind == LocalKind::IteratorState {
+            ITERATOR_STATE_BYTES
+        } else {
+            value_placement::bytes_for(local.ir_type)
+        };
+        let bytes = local_bytes
             .max(local.php_type.codegen_repr().stack_size())
             .max(incoming_param_bytes);
         if bytes == 0 {

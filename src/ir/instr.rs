@@ -9,6 +9,8 @@
 //! - Each opcode exposes a conservative default effect set. Call-like opcodes
 //!   may be refined by builders once semantic metadata is available.
 
+use std::fmt;
+
 use crate::ir::effects::Effects;
 use crate::ir::function::{FunctionId, LocalSlotId};
 use crate::ir::module::DataId;
@@ -54,6 +56,11 @@ pub struct Instruction {
     /// growing it measurably shrinks the headroom before test threads overflow.
     pub origin: Option<PassOrigin>,
 }
+
+// `Instruction` is passed by value through recursive AST-to-EIR lowering. Keep this assertion in
+// production builds so ordinary `cargo check --lib` catches metadata changes that would exhaust
+// the smaller stacks used by test threads on linux-aarch64.
+const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
 
 /// Optimization pass recorded as an instruction's provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,28 +183,159 @@ pub enum Immediate {
     /// raising, warning variant, so an emitter that forgets the immediate cannot silently turn a
     /// value read into a silent probe.
     PropertyFetchMode(PropertyFetchMode),
-    /// Metadata for `Op::IterStart`: by-reference binding, optional Mixed owner, optional origin.
-    ///
-    /// `owner` is the OwnedTemp Mixed slot that holds a successful
-    /// `IteratorAggregate::getIterator()` result for the iterator lifetime. The
-    /// iterator source word then borrows that payload. `None` means this start
-    /// cannot produce such a result (arrays, direct `Iterator`, generators).
-    ///
-    /// `origin` is the local slot the by-reference source was promoted into, and it is only
-    /// set for a simple-variable by-reference foreach. Growth and copy-on-write inside the loop
-    /// body republish the replacement table into that slot, so `IterNext` reloads the live table
-    /// from the origin instead of trusting the pointer captured at `IterStart`. `None` means the
-    /// iterator must keep using its own captured source word, which is the case for by-value
-    /// loops and for element/property sources.
-    IterStart {
-        /// Whether the foreach binds each value by reference.
-        by_ref: bool,
-        /// Optional Mixed slot owning a `getIterator()` result.
-        owner: Option<LocalSlotId>,
-        /// Optional local slot that republishes a relocated by-reference source container.
-        origin: Option<LocalSlotId>,
-    },
+    /// Compact metadata for `Op::IterStart`.
+    IterStart(IterStartMetadata),
 }
+
+/// Value-semantic metadata for `Op::IterStart`.
+///
+/// `state` is the addressable local that owns the iterator's cursor and private relocation
+/// anchors. Cleanup names this slot directly instead of retaining an SSA value across exits.
+///
+/// `owner` is the OwnedTemp Mixed slot that holds a successful
+/// `IteratorAggregate::getIterator()` result for the iterator lifetime. The iterator source word
+/// then borrows that payload. `None` means this start cannot produce such a result (arrays, direct
+/// `Iterator`, generators).
+///
+/// `origin` is the local slot the by-reference source was promoted into, and it is only set for a
+/// simple-variable by-reference foreach. Growth and copy-on-write inside the loop body republish
+/// the replacement table into that slot, so `IterNext` reloads the live table from the origin
+/// instead of trusting the pointer captured at `IterStart`. `None` means the iterator must keep
+/// using its own captured source word, which is the case for by-value loops and for
+/// element/property sources.
+///
+/// The optional slots use `u32::MAX` as their absent sentinel. A real function cannot contain that
+/// slot because local tables are indexed in memory, so the encoding retains all realizable EIR
+/// while keeping this payload at 12 bytes. In particular, adding `origin` does not grow
+/// `Immediate` or the stack-sensitive `Instruction` type.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct IterStartMetadata {
+    owner: PackedOptionalLocalSlot,
+    origin: PackedOptionalLocalSlot,
+    state_and_by_ref: PackedIteratorState,
+}
+
+impl IterStartMetadata {
+    /// Creates iterator-start metadata from its semantic fields.
+    pub fn new(
+        state: LocalSlotId,
+        by_ref: bool,
+        owner: Option<LocalSlotId>,
+        origin: Option<LocalSlotId>,
+    ) -> Self {
+        Self {
+            owner: PackedOptionalLocalSlot::new(owner),
+            origin: PackedOptionalLocalSlot::new(origin),
+            state_and_by_ref: PackedIteratorState::new(state, by_ref),
+        }
+    }
+
+    /// Returns the addressable iterator-state slot.
+    pub fn state(self) -> LocalSlotId {
+        self.state_and_by_ref.state()
+    }
+
+    /// Returns whether the foreach binds each value by reference.
+    pub fn is_by_ref(self) -> bool {
+        self.state_and_by_ref.is_by_ref()
+    }
+
+    /// Returns the optional Mixed slot owning a `getIterator()` result.
+    pub fn owner(self) -> Option<LocalSlotId> {
+        self.owner.get()
+    }
+
+    /// Returns the optional local that republishes a relocated by-reference source container.
+    pub fn origin(self) -> Option<LocalSlotId> {
+        self.origin.get()
+    }
+
+    /// Iterates the mandatory state slot followed by optional owner and origin slots.
+    pub fn local_slots(self) -> impl Iterator<Item = LocalSlotId> {
+        [Some(self.state()), self.owner(), self.origin()]
+            .into_iter()
+            .flatten()
+    }
+
+    /// Replaces the optional Mixed owner slot.
+    pub fn set_owner(&mut self, owner: Option<LocalSlotId>) {
+        self.owner = PackedOptionalLocalSlot::new(owner);
+    }
+
+    /// Replaces the optional relocated-container origin slot.
+    pub fn set_origin(&mut self, origin: Option<LocalSlotId>) {
+        self.origin = PackedOptionalLocalSlot::new(origin);
+    }
+
+    /// Replaces the addressable iterator-state slot without changing reference mode.
+    pub fn set_state(&mut self, state: LocalSlotId) {
+        self.state_and_by_ref = PackedIteratorState::new(state, self.is_by_ref());
+    }
+}
+
+impl fmt::Debug for IterStartMetadata {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IterStartMetadata")
+            .field("state", &self.state())
+            .field("by_ref", &self.is_by_ref())
+            .field("owner", &self.owner())
+            .field("origin", &self.origin())
+            .finish()
+    }
+}
+
+/// Iterator-state slot packed with the by-reference flag in its high bit.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PackedIteratorState(u32);
+
+impl PackedIteratorState {
+    const BY_REF: u32 = 1 << 31;
+    const SLOT_MASK: u32 = !Self::BY_REF;
+
+    fn new(state: LocalSlotId, by_ref: bool) -> Self {
+        let raw = state.as_raw();
+        assert_eq!(
+            raw & Self::BY_REF,
+            0,
+            "iterator-state local slot exceeds the compact metadata range",
+        );
+        Self(raw | if by_ref { Self::BY_REF } else { 0 })
+    }
+
+    fn state(self) -> LocalSlotId {
+        LocalSlotId::from_raw(self.0 & Self::SLOT_MASK)
+    }
+
+    fn is_by_ref(self) -> bool {
+        self.0 & Self::BY_REF != 0
+    }
+}
+
+/// Optional local-slot encoding that does not carry `Option`'s extra discriminant word.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PackedOptionalLocalSlot(u32);
+
+impl PackedOptionalLocalSlot {
+    const NONE: u32 = u32::MAX;
+
+    fn new(slot: Option<LocalSlotId>) -> Self {
+        match slot {
+            Some(slot) => {
+                let raw = slot.as_raw();
+                assert_ne!(raw, Self::NONE, "u32::MAX is reserved for an absent local slot");
+                Self(raw)
+            }
+            None => Self(Self::NONE),
+        }
+    }
+
+    fn get(self) -> Option<LocalSlotId> {
+        (self.0 != Self::NONE).then(|| LocalSlotId::from_raw(self.0))
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<IterStartMetadata>() <= 12);
 
 /// Heap-backed operation sequence carried by a fused checked numeric chain immediate.
 #[derive(Debug, Clone, PartialEq)]
@@ -1593,6 +1731,9 @@ impl Op {
 
 #[cfg(test)]
 mod tests {
+    use super::IterStartMetadata;
+    use crate::ir::LocalSlotId;
+
     /// `Instruction` is built by value inside the recursive AST->EIR lowering
     /// paths, so its size feeds every lowering stack frame. Growing it past
     /// main's 112 bytes shrank the headroom enough that 2 MiB test threads
@@ -1602,5 +1743,44 @@ mod tests {
     fn instruction_stays_112_bytes() {
         let size = std::mem::size_of::<super::Instruction>();
         assert!(size <= 112, "Instruction grew to {size} bytes");
+    }
+
+    /// Iterator metadata must remain inside the payload space already reserved by `Immediate`.
+    #[test]
+    fn iter_start_metadata_stays_12_bytes() {
+        assert_eq!(std::mem::size_of::<IterStartMetadata>(), 12);
+    }
+
+    /// The compact encoding must preserve every semantic field exposed to EIR consumers.
+    #[test]
+    fn iter_start_metadata_round_trips_slots_and_flags() {
+        let metadata = IterStartMetadata::new(
+            LocalSlotId::from_raw(2),
+            true,
+            Some(LocalSlotId::from_raw(5)),
+            Some(LocalSlotId::from_raw(8)),
+        );
+
+        assert_eq!(metadata.state(), LocalSlotId::from_raw(2));
+        assert!(metadata.is_by_ref());
+        assert_eq!(metadata.owner(), Some(LocalSlotId::from_raw(5)));
+        assert_eq!(metadata.origin(), Some(LocalSlotId::from_raw(8)));
+    }
+
+    /// Remapping a copied payload must not mutate the source instruction's value metadata.
+    #[test]
+    fn iter_start_metadata_copies_independently() {
+        let original = IterStartMetadata::new(LocalSlotId::from_raw(2), false, None, None);
+        let mut remapped = original;
+        remapped.set_state(LocalSlotId::from_raw(3));
+        remapped.set_owner(Some(LocalSlotId::from_raw(4)));
+        remapped.set_origin(Some(LocalSlotId::from_raw(5)));
+
+        assert_eq!(original.state(), LocalSlotId::from_raw(2));
+        assert_eq!(original.owner(), None);
+        assert_eq!(original.origin(), None);
+        assert_eq!(remapped.state(), LocalSlotId::from_raw(3));
+        assert_eq!(remapped.owner(), Some(LocalSlotId::from_raw(4)));
+        assert_eq!(remapped.origin(), Some(LocalSlotId::from_raw(5)));
     }
 }

@@ -54,9 +54,10 @@ impl LocalSlotAnalysis {
             // slot from the backend, so prologue zero-init and epilogue
             // cleanup must treat it as a stored owner.
             if inst.op == Op::IterStart {
-                if let Some(Immediate::IterStart { owner: Some(slot), .. }) = inst.immediate.as_ref()
-                {
-                    stored_slots.insert(*slot);
+                if let Some(Immediate::IterStart(metadata)) = inst.immediate.as_ref() {
+                    if let Some(slot) = metadata.owner() {
+                        stored_slots.insert(slot);
+                    }
                 }
             }
             if let Some(slot) =
@@ -762,6 +763,12 @@ mod tests {
             PhpType::Mixed,
             LocalKind::OwnedTemp,
         );
+        let state = function.add_local(
+            Some("iter_state".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Iterable),
+            PhpType::Iterable,
+            LocalKind::IteratorState,
+        );
         {
             let mut builder = Builder::new(&mut function);
             let entry = builder.create_named_block("entry", Vec::new());
@@ -781,11 +788,12 @@ mod tests {
                 .emit(
                     Op::IterStart,
                     vec![source],
-                    Some(Immediate::IterStart {
-                        by_ref: false,
-                        owner: Some(owner),
-                        origin: None,
-                    }),
+                    Some(Immediate::IterStart(crate::ir::IterStartMetadata::new(
+                        state,
+                        false,
+                        Some(owner),
+                        None,
+                    ))),
                     IrType::Heap(crate::ir::IrHeapKind::Iterable),
                     PhpType::Iterable,
                     Ownership::MaybeOwned,

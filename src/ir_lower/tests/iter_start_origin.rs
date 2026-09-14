@@ -41,9 +41,9 @@ fn iter_start_immediates(source: &str, target: &str) -> Vec<(bool, bool)> {
         .flat_map(|function| &function.instructions)
         .filter(|inst| inst.op == Op::IterStart)
         .filter_map(|inst| match inst.immediate.as_ref() {
-            Some(Immediate::IterStart {
-                by_ref, origin, ..
-            }) => Some((*by_ref, origin.is_some())),
+            Some(Immediate::IterStart(metadata)) => {
+                Some((metadata.is_by_ref(), metadata.origin().is_some()))
+            }
             _ => None,
         })
         .collect()

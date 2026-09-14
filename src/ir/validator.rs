@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::block::{BlockId, SwitchCase, Terminator};
 use crate::ir::effects::Effects;
-use crate::ir::function::{Function, LocalKind};
+use crate::ir::function::{Function, LocalKind, LocalSlotId};
 use crate::ir::instr::{Immediate, InstId, Instruction, Op};
 use crate::ir::module::Module;
 use crate::ir::types::{IrHeapKind, IrType};
@@ -530,7 +530,10 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::I64(value) if crate::ir::CoreBuiltinOp::from_i64(*value).is_some())
         }),
         IterStart => require_immediate(inst_id, inst, "iter_start metadata", |imm| {
-            matches!(imm, Imm::IterStart { .. })
+            matches!(imm, Imm::IterStart(_))
+        }),
+        IterEnd => require_immediate(inst_id, inst, "iterator-state local slot", |imm| {
+            matches!(imm, Imm::LocalSlot(_))
         }),
         Nop => {
             if matches!(inst.immediate, None | Some(Imm::Data(_))) {
@@ -796,7 +799,8 @@ fn validate_opcode_rules(
                 }),
             }
         }
-        IterCurrentValueRef | IterEnd => check_count(inst_id, inst, 1, "1"),
+        IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
+        IterEnd => validate_iter_end(function, inst_id, inst),
         ArrayKeyExists | OffsetExists => check_count_at_least(inst_id, inst, 1, "at least 1"),
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")
@@ -837,7 +841,7 @@ fn validate_opcode_rules(
     }
 }
 
-/// Requires a single source operand plus live owner and origin slots when `IterStart` names them.
+/// Requires a single source operand plus valid state, owner, and origin slots.
 ///
 /// The origin slot is only meaningful for a by-reference start: it is the local that republishes
 /// the container after growth or a copy-on-write split, so `IterNext` can reload the live table.
@@ -849,16 +853,22 @@ fn validate_iter_start(
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     check_count(inst_id, inst, 1, "1")?;
-    let Some(Immediate::IterStart {
-        by_ref,
-        owner,
-        origin,
-    }) = inst.immediate.as_ref()
+    let Some(Immediate::IterStart(metadata)) = inst.immediate.as_ref()
     else {
         return Ok(());
     };
+    let by_ref = metadata.is_by_ref();
+    let state = metadata.state();
+    let owner = metadata.owner();
+    let origin = metadata.origin();
+    if !valid_iterator_state_slot(function, state) {
+        return Err(ValidationError::MissingImmediate {
+            inst: inst_id,
+            expected: "valid iter_start iterator-state local slot",
+        });
+    }
     if let Some(slot) = origin {
-        if !*by_ref {
+        if !by_ref {
             return Err(ValidationError::MissingImmediate {
                 inst: inst_id,
                 expected: "iter_start origin slot only on a by-reference start",
@@ -867,7 +877,7 @@ fn validate_iter_start(
         if !function
             .locals
             .get(slot.as_raw() as usize)
-            .is_some_and(|local| local.id == *slot)
+            .is_some_and(|local| local.id == slot)
         {
             return Err(ValidationError::MissingImmediate {
                 inst: inst_id,
@@ -879,7 +889,7 @@ fn validate_iter_start(
         return Ok(());
     };
     if function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
-        local.id == *slot
+        local.id == slot
             && local.kind == LocalKind::OwnedTemp
             && local.php_type.codegen_repr() == PhpType::Mixed
             && local.ir_type == IrType::Heap(IrHeapKind::Mixed)
@@ -891,6 +901,47 @@ fn validate_iter_start(
             expected: "valid iter_start owner local slot",
         })
     }
+}
+
+/// Requires operand-free cleanup naming one addressable iterator-state local.
+fn validate_iter_end(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 0, "0")?;
+    let Some(Immediate::LocalSlot(state)) = inst.immediate else {
+        return Ok(());
+    };
+    if valid_iterator_state_slot(function, state)
+        && function.instructions.iter().any(|candidate| {
+            candidate.op == Op::IterStart
+                && matches!(
+                    candidate.immediate.as_ref(),
+                    Some(Immediate::IterStart(metadata)) if metadata.state() == state
+                )
+        })
+    {
+        Ok(())
+    } else {
+        Err(ValidationError::MissingImmediate {
+            inst: inst_id,
+            expected: "valid iter_end iterator-state local slot",
+        })
+    }
+}
+
+/// Returns whether a slot has the frame representation reserved for iterator state.
+fn valid_iterator_state_slot(function: &Function, slot: LocalSlotId) -> bool {
+    function
+        .locals
+        .get(slot.as_raw() as usize)
+        .is_some_and(|local| {
+            local.id == slot
+                && local.kind == LocalKind::IteratorState
+                && local.php_type.codegen_repr() == PhpType::Iterable
+                && local.ir_type == IrType::Heap(IrHeapKind::Iterable)
+        })
 }
 
 /// Validates the operand/operation correspondence of one fused checked numeric chain.
@@ -1712,6 +1763,7 @@ mod iter_start_metadata_tests {
 
     /// Builds a one-operand `iter_start` carrying the supplied metadata.
     fn iter_start(
+        state: LocalSlotId,
         by_ref: bool,
         owner: Option<LocalSlotId>,
         origin: Option<LocalSlotId>,
@@ -1719,11 +1771,9 @@ mod iter_start_metadata_tests {
         Instruction::new(
             Op::IterStart,
             vec![ValueId::from_raw(0)],
-            Some(Immediate::IterStart {
-                by_ref,
-                owner,
-                origin,
-            }),
+            Some(Immediate::IterStart(crate::ir::IterStartMetadata::new(
+                state, by_ref, owner, origin,
+            ))),
             Some(ValueId::from_raw(1)),
             IrType::Heap(IrHeapKind::Iterable),
             PhpType::Iterable,
@@ -1734,22 +1784,28 @@ mod iter_start_metadata_tests {
     }
 
     /// A function with one ordinary array local that an origin can legitimately name.
-    fn function_with_array_local() -> (Function, LocalSlotId) {
+    fn function_with_array_local() -> (Function, LocalSlotId, LocalSlotId) {
         let mut function = Function::new("test".to_owned(), IrType::Void, PhpType::Void);
-        let slot = function.add_local(
+        let origin = function.add_local(
             Some("a".to_owned()),
             IrType::Heap(IrHeapKind::Hash),
             PhpType::Array(Box::new(PhpType::Mixed)),
             LocalKind::PhpLocal,
         );
-        (function, slot)
+        let state = function.add_local(
+            Some("iter_state".to_owned()),
+            IrType::Heap(IrHeapKind::Iterable),
+            PhpType::Iterable,
+            LocalKind::IteratorState,
+        );
+        (function, origin, state)
     }
 
     /// A by-reference start may name any live local as the container it reloads from.
     #[test]
     fn by_reference_origin_naming_a_live_local_is_accepted() {
-        let (function, slot) = function_with_array_local();
-        let inst = iter_start(true, None, Some(slot));
+        let (function, slot, state) = function_with_array_local();
+        let inst = iter_start(state, true, None, Some(slot));
         assert_eq!(
             validate_iter_start(&function, InstId::from_raw(0), &inst),
             Ok(())
@@ -1760,8 +1816,8 @@ mod iter_start_metadata_tests {
     /// the backend does not emit. Rejecting it keeps the metadata honest.
     #[test]
     fn by_value_start_rejects_an_origin_slot() {
-        let (function, slot) = function_with_array_local();
-        let inst = iter_start(false, None, Some(slot));
+        let (function, slot, state) = function_with_array_local();
+        let inst = iter_start(state, false, None, Some(slot));
         assert!(matches!(
             validate_iter_start(&function, InstId::from_raw(0), &inst),
             Err(ValidationError::MissingImmediate { .. })
@@ -1771,8 +1827,24 @@ mod iter_start_metadata_tests {
     /// An origin slot outside the function's local table cannot be reloaded from.
     #[test]
     fn origin_slot_outside_the_local_table_is_rejected() {
-        let (function, _) = function_with_array_local();
-        let inst = iter_start(true, None, Some(LocalSlotId::from_raw(99)));
+        let (function, _, state) = function_with_array_local();
+        let inst = iter_start(
+            state,
+            true,
+            None,
+            Some(LocalSlotId::from_raw(99)),
+        );
+        assert!(matches!(
+            validate_iter_start(&function, InstId::from_raw(0), &inst),
+            Err(ValidationError::MissingImmediate { .. })
+        ));
+    }
+
+    /// Iterator state must name the dedicated addressable local shape used by codegen.
+    #[test]
+    fn non_iterator_local_cannot_be_used_as_state() {
+        let (function, ordinary_local, _) = function_with_array_local();
+        let inst = iter_start(ordinary_local, false, None, None);
         assert!(matches!(
             validate_iter_start(&function, InstId::from_raw(0), &inst),
             Err(ValidationError::MissingImmediate { .. })
@@ -1782,9 +1854,9 @@ mod iter_start_metadata_tests {
     /// Starts without an origin keep validating exactly as before, by reference or not.
     #[test]
     fn absent_origin_leaves_existing_validation_unchanged() {
-        let (function, _) = function_with_array_local();
+        let (function, _, state) = function_with_array_local();
         for by_ref in [false, true] {
-            let inst = iter_start(by_ref, None, None);
+            let inst = iter_start(state, by_ref, None, None);
             assert_eq!(
                 validate_iter_start(&function, InstId::from_raw(0), &inst),
                 Ok(())
@@ -1795,20 +1867,20 @@ mod iter_start_metadata_tests {
     /// The owner rule still applies, and it applies independently of the origin.
     #[test]
     fn owner_slot_is_still_validated_beside_an_origin() {
-        let (mut function, slot) = function_with_array_local();
+        let (mut function, slot, state) = function_with_array_local();
         let owner = function.add_local(
             None,
             IrType::Heap(IrHeapKind::Mixed),
             PhpType::Mixed,
             LocalKind::OwnedTemp,
         );
-        let accepted = iter_start(true, Some(owner), Some(slot));
+        let accepted = iter_start(state, true, Some(owner), Some(slot));
         assert_eq!(
             validate_iter_start(&function, InstId::from_raw(0), &accepted),
             Ok(())
         );
         // The array local is not an OwnedTemp Mixed slot, so it cannot be a getIterator owner.
-        let rejected = iter_start(true, Some(slot), Some(slot));
+        let rejected = iter_start(state, true, Some(slot), Some(slot));
         assert!(matches!(
             validate_iter_start(&function, InstId::from_raw(0), &rejected),
             Err(ValidationError::MissingImmediate { .. })

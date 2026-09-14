@@ -17,8 +17,8 @@
 
 use crate::codegen::platform::Target;
 use crate::ir::{
-    validate_function, Builder, Effects, Function, Immediate, IrHeapKind, IrType, LocalKind,
-    LocalSlotId, Op, Ownership, Terminator,
+    validate_function, Builder, Effects, Function, Immediate, IrHeapKind, IrType,
+    IterStartMetadata, LocalKind, LocalSlotId, Op, Ownership, Terminator,
 };
 use crate::types::PhpType;
 use std::collections::HashMap;
@@ -89,7 +89,7 @@ fn iter_start_owners(function: &Function) -> Vec<(usize, Option<LocalSlotId>)> {
         .filter(|(_, inst)| inst.op == Op::IterStart)
         .map(|(index, inst)| {
             let owner = match inst.immediate.as_ref() {
-                Some(Immediate::IterStart { owner, .. }) => *owner,
+                Some(Immediate::IterStart(metadata)) => metadata.owner(),
                 other => panic!("IterStart must carry the structured immediate, got {other:?}"),
             };
             (index, owner)
@@ -526,6 +526,12 @@ fn function_with_iter_owner_local(
 ) -> Function {
     let mut function = Function::new("bad_owner_shape".to_string(), IrType::Void, PhpType::Void);
     let owner = function.add_local(Some("owner".to_string()), ir_type, php_type, kind);
+    let state = function.add_local(
+        Some("iterator_state".to_string()),
+        IrType::Heap(IrHeapKind::Iterable),
+        PhpType::Iterable,
+        LocalKind::IteratorState,
+    );
     {
         let mut builder = Builder::new(&mut function);
         let entry = builder.create_named_block("entry", Vec::new());
@@ -545,11 +551,12 @@ fn function_with_iter_owner_local(
             .emit(
                 Op::IterStart,
                 vec![source],
-                Some(Immediate::IterStart {
-                    by_ref: false,
-                    owner: Some(owner),
-                    origin: None,
-                }),
+                Some(Immediate::IterStart(IterStartMetadata::new(
+                    state,
+                    false,
+                    Some(owner),
+                    None,
+                ))),
                 IrType::Heap(IrHeapKind::Iterable),
                 PhpType::Iterable,
                 Ownership::MaybeOwned,
@@ -615,6 +622,12 @@ fn validator_rejects_legacy_iter_start_immediates() {
 #[test]
 fn validator_rejects_an_unknown_iter_start_owner_slot() {
     let mut function = Function::new("bad_owner".to_string(), IrType::Void, PhpType::Void);
+    let state = function.add_local(
+        Some("iterator_state".to_string()),
+        IrType::Heap(IrHeapKind::Iterable),
+        PhpType::Iterable,
+        LocalKind::IteratorState,
+    );
     {
         let mut builder = Builder::new(&mut function);
         let entry = builder.create_named_block("entry", Vec::new());
@@ -634,11 +647,12 @@ fn validator_rejects_an_unknown_iter_start_owner_slot() {
             .emit(
                 Op::IterStart,
                 vec![source],
-                Some(Immediate::IterStart {
-                    by_ref: false,
-                    owner: Some(LocalSlotId::from_raw(99)),
-                    origin: None,
-                }),
+                Some(Immediate::IterStart(IterStartMetadata::new(
+                    state,
+                    false,
+                    Some(LocalSlotId::from_raw(99)),
+                    None,
+                ))),
                 IrType::Heap(IrHeapKind::Iterable),
                 PhpType::Iterable,
                 Ownership::MaybeOwned,

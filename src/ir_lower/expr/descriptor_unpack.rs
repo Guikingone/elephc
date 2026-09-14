@@ -154,7 +154,7 @@ pub(super) fn lower_descriptor_unpack_source(
     }
     // Publish the getIterator owner inside the source/key/value LIFO stack, last,
     // so retirement below is exact reverse order.
-    let (iterator, iterator_owner) = ctx.emit_iter_start(source, false, span);
+    let (iterator, iterator_owner, _) = ctx.emit_iter_start(source, false, span);
     let header = ctx.builder.create_named_block("descriptor.unpack.next", Vec::new());
     let body = ctx.builder.create_named_block("descriptor.unpack.body", Vec::new());
     let exit = ctx.builder.create_named_block("descriptor.unpack.exit", Vec::new());

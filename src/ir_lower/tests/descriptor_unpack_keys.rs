@@ -245,10 +245,11 @@ fn assert_unpack_owners(function: &Function, target: &str) {
             let instruction = function.instruction(*instruction).expect("block instruction exists");
             if instruction.op == Op::IterStart {
                 match &instruction.immediate {
-                    Some(Immediate::IterStart { owner: Some(slot), .. }) => {
+                    Some(Immediate::IterStart(metadata)) if metadata.owner().is_some() => {
+                        let slot = metadata.owner().expect("owner checked above");
                         assert_eq!(
                             owners.last(),
-                            Some(slot),
+                            Some(&slot),
                             "{target}: getIterator owner is the innermost LIFO record at IterStart in {}",
                             block.name
                         );

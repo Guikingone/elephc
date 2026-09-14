@@ -247,7 +247,7 @@ fn slots_of(inst: &Instruction) -> Vec<LocalSlotId> {
     match inst.immediate.as_ref() {
         Some(Immediate::LocalSlot(slot)) => vec![*slot],
         Some(Immediate::LocalSlotPair { first, second }) => vec![*first, *second],
-        Some(Immediate::IterStart { owner: Some(slot), .. }) => vec![*slot],
+        Some(Immediate::IterStart(metadata)) => metadata.local_slots().collect(),
         _ => Vec::new(),
     }
 }
