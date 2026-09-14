@@ -162,6 +162,133 @@ echo Owner::makeChild() instanceof OwnedChild ? "yes" : "no";
     assert_eq!(out, "built yes");
 }
 
+/// Issue #868: an inherited private constructor with OMITTED DEFAULTS on the named
+/// (`fixed_new`) path.
+///
+/// `ir_lower::expr::object_construction::constructor_signature` read the descendant's own
+/// `methods` map, which a private ancestor constructor is deliberately absent from, so the
+/// call site saw no constructor, padded no defaults, and `fixed_new` rejected the arity with
+/// `constructor call to OwnedDefaults::__construct with 0 args for 1 params`.
+#[test]
+fn test_fixed_new_of_descendant_pads_inherited_private_constructor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class OwnerDefaults {
+    private function __construct(private int $n = 4) {}
+    public static function makeChild(): OwnerDefaults { return new OwnedDefaults(); }
+    public function n(): int { return $this->n; }
+}
+class OwnedDefaults extends OwnerDefaults {}
+echo OwnerDefaults::makeChild()->n();
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+/// Only the OMITTED arguments are padded: an explicitly passed one still wins.
+#[test]
+fn test_fixed_new_of_descendant_keeps_an_explicit_argument_over_the_default() {
+    let out = compile_and_run(
+        r#"<?php
+class OwnerMixed {
+    private function __construct(private int $a = 1, private int $b = 2) {}
+    public static function makeChild(): OwnerMixed { return new OwnedMixed(9); }
+    public function sum(): int { return $this->a * 10 + $this->b; }
+}
+class OwnedMixed extends OwnerMixed {}
+echo OwnerMixed::makeChild()->sum();
+"#,
+    );
+    assert_eq!(out, "92");
+}
+
+/// A CONTROL for the reflection half of the same lookup: an inherited PUBLIC constructor IS
+/// copied into the descendant's own `methods` map, so the direct lookup found it too and this
+/// fixture passes either way. The regression test for the changed helper is the
+/// private-ancestor one below.
+#[test]
+fn test_reflection_new_instance_pads_inherited_constructor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflOwner {
+    public function __construct(public int $n = 5) {}
+}
+class ReflChild extends ReflOwner {}
+$reflected = new ReflectionClass('ReflChild');
+echo $reflected->newInstance()->n;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// The REGRESSION test for `reflection_new_instance::constructor_signature_for_class_name`: a
+/// descendant of a class with a PRIVATE constructor, which is the only shape where the changed
+/// lookup differs from the direct one, because it is the only shape whose own `methods` map
+/// lacks the entry.
+///
+/// Measured both ways on this fixture: with the owner walk it prints `6` (the default is padded
+/// and the ancestor's constructor runs); reading the descendant's own map it prints `0` — no
+/// signature, so no padding and no constructor call at all, leaving the promoted property at
+/// its zero value.
+///
+/// NOTE ON THE SHAPE: php-src rejects this program outright with
+/// `Error: Call to private PrivOwner::__construct()`, because `newInstance()` enforces
+/// constructor visibility and elephc does not yet. That separate gap is what makes the shape
+/// reachable here at all. When it is closed this fixture should become a REJECTION test rather
+/// than being deleted — the lookup it pins is still the one doing the work, and it is what
+/// decides which class's constructor the visibility check will then be asked about.
+#[test]
+fn test_reflection_new_instance_resolves_an_inherited_private_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class PrivReflOwner {
+    private function __construct(public int $n = 6) {}
+}
+class PrivReflChild extends PrivReflOwner {}
+$reflected = new ReflectionClass('PrivReflChild');
+echo $reflected->newInstance()->n;
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// An inherited PUBLIC constructor with defaults is unaffected — the owner walk stops at the
+/// instantiated class whenever its own map HAS the entry, which a public inherited constructor
+/// does, so this path resolves exactly as before.
+#[test]
+fn test_fixed_new_of_descendant_with_an_inherited_public_constructor_still_pads() {
+    let out = compile_and_run(
+        r#"<?php
+class PublicOwner {
+    public function __construct(public int $n = 3) {}
+}
+class PublicChild extends PublicOwner {}
+echo (new PublicChild())->n, "|", (new PublicChild(8))->n;
+"#,
+    );
+    assert_eq!(out, "3|8");
+}
+
+/// A descendant that REPLACES the inherited constructor keeps its own: the owner walk stops at
+/// the first class whose map has the entry, which is the descendant itself.
+#[test]
+fn test_fixed_new_prefers_the_descendants_own_constructor_over_the_ancestors() {
+    let out = compile_and_run(
+        r#"<?php
+class ShadowOwner {
+    private function __construct(private int $n = 1) {}
+    public function n(): int { return $this->n; }
+}
+class ShadowChild extends ShadowOwner {
+    public function __construct(private int $m = 7) {}
+    public function n(): int { return $this->m; }
+}
+echo (new ShadowChild())->n();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 /// Verifies the singleton shape this defect actually reached: private constructor, static
 /// accessor, one subclass, and a call through the base type.
 #[test]

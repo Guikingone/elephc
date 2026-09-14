@@ -413,12 +413,22 @@ pub(super) fn lower_new_dynamic_object(
 }
 
 /// Returns constructor signature metadata when available for a fixed class.
+///
+/// Resolved through [`crate::types::constructor_owner`] rather than off the instantiated
+/// class's own `methods` map: a private constructor is not inherited, so a descendant of a
+/// class with one carries no `__construct` entry even though PHP instantiates it through the
+/// ancestor's constructor. Reading `methods` directly made that descendant look like it had
+/// NO constructor, so omitted defaults were never padded and `fixed_new` then rejected the
+/// arity — `new Child()` on `private function __construct(int $n = 1)` failed with
+/// `constructor call to Child::__construct with 0 args for 1 params` (issue #868).
+///
+/// An inherited public or protected constructor is unaffected: the owner walk stops at the
+/// instantiated class itself whenever its own map has the entry.
 pub(super) fn constructor_signature<'a>(
     ctx: &'a LoweringContext<'_, '_>,
     class_name: &Name,
 ) -> Option<&'a FunctionSig> {
     let key = php_symbol_key("__construct");
-    ctx.classes
-        .get(class_name.as_str().trim_start_matches('\\'))
-        .and_then(|class_info| class_info.methods.get(&key))
+    crate::types::constructor_owner(ctx.classes, class_name.as_str().trim_start_matches('\\'))
+        .and_then(|(_, class_info)| class_info.methods.get(&key))
 }
