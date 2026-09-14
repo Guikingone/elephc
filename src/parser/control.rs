@@ -563,13 +563,7 @@ fn parse_for_clause(
         // Checked BEFORE the trailing-token test below: a declaration takes no trailing `;`
         // and would otherwise leave the synthetic one unconsumed, reporting the generic
         // "trailing tokens" instead of naming what is actually wrong.
-        // `include`/`require` ARE expressions in PHP, and PHP runs them in a clause. elephc
-        // cannot yet: `resolver::engine`'s `StmtKind::For` arm resolves only the BODY, so an
-        // include left in a clause survives into the checker as a transient node every
-        // consumer treats as `unreachable!()` — `for ($v = include "f.php"; …)` reached that
-        // panic once the clause started going through the real statement parser. Reject it
-        // here with a diagnostic that names the limitation instead.
-        if crate::resolver::contains::has_includes(std::slice::from_ref(&stmt)) {
+        if clause_runs_an_include(&stmt) {
             return Err(CompileError::new(
                 piece_span,
                 "include/require is not supported in a for clause; move it above the loop",
@@ -613,6 +607,33 @@ fn parse_for_clause(
         1 => Some(Box::new(stmts.pop().expect("one statement"))),
         _ => Some(Box::new(Stmt::new(StmtKind::Synthetic(stmts), clause_span))),
     })
+}
+
+/// Returns whether a `for` clause piece runs an `include`/`require` AS THE CLAUSE.
+///
+/// `include`/`require` ARE expressions in PHP, and PHP runs them in a clause. elephc cannot
+/// yet: `resolver::engine` expands a value-include by rewriting the surrounding STATEMENT
+/// LIST, which a clause is not, and its `StmtKind::For` arm resolves only the loop body. An
+/// include left in a clause therefore survives into the checker as a transient node every
+/// consumer treats as `unreachable!()` — `for ($v = include "f.php"; …)` reached that panic
+/// once the clause started going through the real statement parser.
+///
+/// Only two shapes can reach it, which is why this is a match and not a tree walk. elephc's
+/// expression parser accepts `include` in exactly one expression position — the whole
+/// right-hand side of an assignment or a `return` — so `$a = strlen(include "f");` is already
+/// a parse error everywhere, clause or not.
+///
+/// A closure body is deliberately NOT inspected. Its include is DEFERRED: it runs when the
+/// closure is called, not while the clause is evaluated, so
+/// `for ($f = function () { include "f.php"; }; …)` is left alone. An earlier version reused
+/// the resolver's `has_includes`, which descends into closure bodies, and rejected it.
+fn clause_runs_an_include(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Include { .. } => true,
+        StmtKind::Assign { value, .. } => matches!(value.kind, ExprKind::IncludeValue { .. }),
+        StmtKind::Synthetic(pieces) => pieces.iter().any(clause_runs_an_include),
+        _ => false,
+    }
 }
 
 /// Returns the index of `terminator` that closes this clause, ignoring ones nested inside

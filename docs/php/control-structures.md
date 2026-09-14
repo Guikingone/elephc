@@ -160,8 +160,10 @@ Three limits, the first two matching PHP:
   hold the list and the condition re-runs each iteration, so it reports a diagnostic naming
   the limitation rather than mis-parsing.
 - `include` / `require` **are** expressions and PHP does run them in a clause, but elephc
-  rejects them there: include resolution rewrites the loop body and not the clauses, so an
-  include left in one would never be expanded. Move it above the loop.
+  rejects them there: include resolution expands a value-include by rewriting the surrounding
+  statement *list*, which a clause is not. Move it above the loop. An include inside a
+  **closure** in a clause is fine — it runs when the closure is called, not while the clause
+  is evaluated.
 
 ## foreach
 
