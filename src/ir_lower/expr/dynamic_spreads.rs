@@ -29,8 +29,13 @@ pub(super) fn lower_boxed_spread_args(
     if sig.variadic.is_some() || sig.ref_params.iter().any(|by_ref| *by_ref)
         || sig.defaults.iter().any(Option::is_some)
         || crate::func_args::sig_has_hidden_argc_param(sig)
-        || !args.iter().any(|arg| matches!(&arg.kind, ExprKind::Spread(source)
-            if array_literal_element_type_for_ir(ctx, source).codegen_repr() == PhpType::Mixed))
+        || !args.iter().any(|arg| match &arg.kind {
+            ExprKind::Spread(source) => {
+                array_literal_element_type_for_ir(ctx, source).codegen_repr() == PhpType::Mixed
+                    || nested_spread_assoc_literal(source)
+            }
+            _ => false,
+        })
     {
         return None;
     }
@@ -94,6 +99,21 @@ pub(super) fn lower_boxed_spread_args(
         retire_slot(ctx, &slot, span);
     }
     Some(coerce_operands_to_params(ctx, sig, operands))
+}
+
+/// Returns true for an unpack source that is an associative literal carrying a nested `...$source`.
+///
+/// The nested source contributes keys that are unknown until the literal is built, so the static
+/// named-argument expansion declines the whole unpack and the signature-ordered lowerings below it
+/// only ever see one opaque argument. The runtime walk is therefore the only lowering that can bind
+/// this shape, and it does so after evaluating the literal exactly once.
+fn nested_spread_assoc_literal(source: &Expr) -> bool {
+    let ExprKind::ArrayLiteralAssoc(pairs) = &source.kind else {
+        return false;
+    };
+    pairs
+        .iter()
+        .any(|(key, value)| crate::parser::ast::assoc_spread_source(key, value).is_some())
 }
 
 /// Stores an expression in a rooted slot whose boxed layout does not depend on its current value.
