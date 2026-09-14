@@ -62,6 +62,105 @@ fn curl_exec_writes_stdout_without_returntransfer() {
     assert_eq!(out, "hello-curlT");
 }
 
+/// Issue #875: the DEFAULT `curl_exec()` write path goes through PHP's output layer, so
+/// `ob_start(); curl_exec($ch); $html = ob_get_clean();` captures the body.
+///
+/// The bridge used to `write(1, …)` the chunks directly, bypassing the `ob_*` stack
+/// entirely: the buffer came back empty and the body appeared on stdout instead. Measured
+/// against the real interpreter for the same fixture, which captures it.
+#[test]
+fn curl_exec_default_output_is_captured_by_ob_start() {
+    if skip_without_curl_native("curl_exec_default_output_is_captured_by_ob_start") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+        ob_start();
+        $ok = curl_exec($ch);
+        $captured = ob_get_clean();
+        echo $ok === true ? "T" : "F";
+        echo ":", strlen($captured), ":", $captured;
+        "#
+    ));
+    assert_eq!(out, "T:10:hello-curl");
+}
+
+/// The captured body reaches the surrounding buffer through `ob_get_length()` too, and
+/// `ob_end_flush()` then releases it to the terminal in the right ORDER relative to ordinary
+/// `echo` output — which is what proves the chunks really travel the shared funnel rather
+/// than being spliced in afterwards.
+#[test]
+fn curl_exec_default_output_interleaves_with_echo_in_a_buffer() {
+    if skip_without_curl_native("curl_exec_default_output_interleaves_with_echo_in_a_buffer") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        ob_start();
+        echo "[";
+        curl_exec($ch);
+        echo "]";
+        $len = ob_get_length();
+        ob_end_flush();
+        echo "|", $len;
+        "#
+    ));
+    assert_eq!(out, "[hello-curl]|12");
+}
+
+/// Nested buffers behave like any other output: the inner buffer takes the body, and the
+/// outer one never sees it once the inner is discarded.
+#[test]
+fn curl_exec_default_output_respects_nested_buffers() {
+    if skip_without_curl_native("curl_exec_default_output_respects_nested_buffers") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        ob_start();
+        echo "outer-";
+        ob_start();
+        curl_exec($ch);
+        ob_end_clean();
+        echo "done";
+        echo "|", ob_get_length();
+        ob_end_flush();
+        "#
+    ));
+    assert_eq!(out, "outer-done|11");
+}
+
+/// With NO buffer active the body still reaches the terminal, in order with `echo` — the
+/// funnel's plain-syscall path. Guards against the sink swallowing output when nothing is
+/// capturing.
+#[test]
+fn curl_exec_default_output_still_reaches_stdout_without_a_buffer() {
+    if skip_without_curl_native("curl_exec_default_output_still_reaches_stdout_without_a_buffer") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        echo "<";
+        curl_exec($ch);
+        echo ">";
+        "#
+    ));
+    assert_eq!(out, "<hello-curl>");
+}
+
 /// A connection refused on a closed loopback port reports PHP's honest failure shape
 /// (`false` + non-zero `curl_errno()` + non-empty `curl_error()`) for a REAL `http://`
 /// transfer, complementing `easy_handle.rs::failed_transfer_reports_curl_error`.

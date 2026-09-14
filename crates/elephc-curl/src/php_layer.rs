@@ -31,10 +31,38 @@
 //!   function-pointer callback).
 
 use std::ffi::{c_char, c_int, c_long, c_void};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::callbacks;
 use crate::easy::{self, CURL};
 use crate::handles::{self, EasyEntry};
+
+/// The compiled program's own terminal-output funnel, or `0` when none was published.
+///
+/// Set by generated code through [`elephc_curl_set_output_sink`] before every transfer.
+/// The crate NEVER names the runtime symbol itself: it only stores and calls back through
+/// an opaque address, exactly as `crate::callbacks` does for the PHP-callable adapter, so
+/// linking this crate still requires no runtime object (its own unit tests and any
+/// non-compiled consumer simply leave the sink unset and take the direct-write fallback).
+static OUTPUT_SINK: AtomicUsize = AtomicUsize::new(0);
+
+/// The ABI of the published sink: `(ptr, len)`, no result — `__rt_stdout_write`'s own.
+type OutputSink = unsafe extern "C" fn(*const u8, usize);
+
+/// Publishes the compiled program's terminal-output funnel for the default write path.
+///
+/// PHP's default `curl_exec()` write handler goes through the ENGINE'S OUTPUT LAYER, so
+/// `ob_start(); curl_exec($ch); $html = ob_get_clean();` captures the body. Writing to fd 1
+/// directly bypassed every one of those layers — output buffering, the `print_r` capture
+/// buffer, the `--web` response capture — so the idiom above returned an empty string and
+/// the body appeared on stdout instead (issue #875).
+///
+/// Publishing an ADDRESS rather than reading a runtime symbol is what keeps the bridge
+/// linkable on its own; see [`OUTPUT_SINK`].
+#[no_mangle]
+pub extern "C" fn elephc_curl_set_output_sink(sink: usize) {
+    OUTPUT_SINK.store(sink, Ordering::Release);
+}
 
 /// `CURLOPT_RETURNTRANSFER` (19913): a PHP-only pseudo-option, never a real
 /// libcurl `CURLOPT_*` value. Frozen from `scripts/docs/curl_surface.json`'s
@@ -164,6 +192,23 @@ unsafe extern "C" fn write_callback(
 /// POSIX that is not an interruption but a write that made no progress, and
 /// retrying it would spin forever.
 fn write_all_stdout(bytes: &[u8]) -> usize {
+    // THE PUBLISHED SINK WINS when the compiled program registered one. It is
+    // `__rt_stdout_write`, the single indirection every `echo` travels through, so the body
+    // meets output buffering, the `print_r` capture buffer and the `--web` response capture
+    // exactly as PHP's own default write handler does (issue #875). It reports no failure, so
+    // the whole chunk counts as written — the same contract `echo` has, where a failing
+    // terminal write is not an error the program can observe either.
+    let sink = OUTPUT_SINK.load(Ordering::Acquire);
+    if sink != 0 {
+        // SAFETY: the address was published by generated code as `__rt_stdout_write`, whose
+        // signature is `(ptr, len)` with no result; `bytes` is valid for its own length and
+        // the callee only reads from it.
+        unsafe {
+            let sink: OutputSink = std::mem::transmute(sink);
+            sink(bytes.as_ptr(), bytes.len());
+        }
+        return bytes.len();
+    }
     let mut written = 0usize;
     while written < bytes.len() {
         // SAFETY: `bytes[written..]` is a valid slice for its own length;
