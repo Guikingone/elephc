@@ -373,7 +373,11 @@ echo $binder->bumpOther(new OtherCounter());
             .find(|function| function.flags.is_closure)
             .expect("the bound closure is lowered");
         assert_eq!(
-            closure.params.last().map(|param| param.php_type.clone()),
+            closure
+                .params
+                .iter()
+                .find(|param| param.name == "this")
+                .map(|param| param.php_type.clone()),
             Some(PhpType::Mixed),
             "{name}: an in-method bind captures its receiver as Mixed, not as the lexical class"
         );
