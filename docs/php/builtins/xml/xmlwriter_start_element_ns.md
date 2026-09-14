@@ -2,7 +2,7 @@
 title: "xmlwriter_start_element_ns()"
 description: "Starts a namespaced element."
 sidebar:
-  order: 988
+  order: 989
 ---
 
 ## xmlwriter_start_element_ns()

@@ -2,7 +2,7 @@
 title: "pcntl_setcpuaffinity()"
 description: "Changes the CPU affinity mask for a Linux process."
 sidebar:
-  order: 654
+  order: 655
 ---
 
 ## pcntl_setcpuaffinity()

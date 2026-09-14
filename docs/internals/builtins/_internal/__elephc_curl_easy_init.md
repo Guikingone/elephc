@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_init() - internals"
 description: "Compiler internals for __elephc_curl_easy_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1014
+  order: 1015
 ---
 
 ## `__elephc_curl_easy_init()` - internals

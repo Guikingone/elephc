@@ -2,7 +2,7 @@
 title: "pcntl_wifstopped() - internals"
 description: "Compiler internals for pcntl_wifstopped(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 673
+  order: 674
 ---
 
 ## `pcntl_wifstopped()` - internals

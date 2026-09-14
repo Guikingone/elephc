@@ -2,7 +2,7 @@
 title: "xmlwriter_output_memory()"
 description: "Returns the buffered output of a memory writer."
 sidebar:
-  order: 975
+  order: 976
 ---
 
 ## xmlwriter_output_memory()

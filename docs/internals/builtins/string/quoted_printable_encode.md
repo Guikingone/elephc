@@ -2,7 +2,7 @@
 title: "quoted_printable_encode() - internals"
 description: "Compiler internals for quoted_printable_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 838
+  order: 839
 ---
 
 ## `quoted_printable_encode()` - internals

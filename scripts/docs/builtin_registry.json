@@ -105968,7 +105968,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 639,
+      "codegen_line": 676,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.count` through `BuiltinLoweringContext`.",

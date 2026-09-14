@@ -2,7 +2,7 @@
 title: "curl_exec()"
 description: "Performs a cURL session."
 sidebar:
-  order: 698
+  order: 699
 ---
 
 ## curl_exec()

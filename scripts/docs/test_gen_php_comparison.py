@@ -300,7 +300,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("classes **1 / 2**", first)
         self.assertIn("constants **2 / 3**", first)
         self.assertIn(
-            "All 62 names match the PHP 8.5 Core baseline",
+            "The 62/62 Core inventory claim refers to elephc's own contract inventory",
             first,
         )
         # strrev is compiled-only, so the standard functions row diverges between backends.

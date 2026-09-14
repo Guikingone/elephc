@@ -2,7 +2,7 @@
 title: "pcntl_wifstopped()"
 description: "Reports whether a child wait status represents a stopped process."
 sidebar:
-  order: 673
+  order: 674
 ---
 
 ## pcntl_wifstopped()

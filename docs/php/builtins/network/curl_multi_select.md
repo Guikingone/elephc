@@ -2,7 +2,7 @@
 title: "curl_multi_select()"
 description: "Waits until there is activity on any cURL multi connection."
 sidebar:
-  order: 710
+  order: 711
 ---
 
 ## curl_multi_select()

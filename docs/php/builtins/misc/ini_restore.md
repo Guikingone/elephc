@@ -2,7 +2,7 @@
 title: "ini_restore()"
 description: "Implemented by the compiler-injected version prelude."
 sidebar:
-  order: 633
+  order: 634
 ---
 
 ## ini_restore()

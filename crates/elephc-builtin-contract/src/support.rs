@@ -369,9 +369,9 @@ mod tests {
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
         assert_eq!(eval_registry, 616 + curl_surface);
-        // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
+        // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
-        assert_eq!(eval_internal, 99);
+        assert_eq!(eval_internal, 100);
         // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 353);
@@ -381,7 +381,7 @@ mod tests {
         // internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
         // builtins (`xml_parse_into_struct` plus the nine handler setters), and the two
         // PHP 8.5 Core handler getters, plus `sizeof`.
-        assert_eq!(aot_registry, 659);
+        assert_eq!(aot_registry, 660);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 409 + curl_surface);
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 595 + curl_surface);
-        assert_eq!(unsupported, 452);
+        assert_eq!(unsupported, 453);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

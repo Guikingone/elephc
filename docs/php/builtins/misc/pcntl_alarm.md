@@ -2,7 +2,7 @@
 title: "pcntl_alarm()"
 description: "Schedules a SIGALRM and returns the prior alarm's remaining seconds."
 sidebar:
-  order: 643
+  order: 644
 ---
 
 ## pcntl_alarm()

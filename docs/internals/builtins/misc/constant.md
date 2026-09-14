@@ -2,7 +2,7 @@
 title: "constant() - internals"
 description: "Compiler internals for constant(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 603
+  order: 604
 ---
 
 ## `constant()` - internals

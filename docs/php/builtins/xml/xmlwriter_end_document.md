@@ -2,7 +2,7 @@
 title: "xmlwriter_end_document()"
 description: "Ends the document, closing every open node."
 sidebar:
-  order: 964
+  order: 965
 ---
 
 ## xmlwriter_end_document()

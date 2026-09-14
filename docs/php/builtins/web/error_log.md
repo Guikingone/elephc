@@ -2,7 +2,7 @@
 title: "error_log()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 910
+  order: 911
 ---
 
 ## error_log()

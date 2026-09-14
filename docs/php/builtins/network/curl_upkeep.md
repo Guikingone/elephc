@@ -2,7 +2,7 @@
 title: "curl_upkeep()"
 description: "Performs any connection upkeep checks."
 sidebar:
-  order: 725
+  order: 726
 ---
 
 ## curl_upkeep()
