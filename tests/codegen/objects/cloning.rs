@@ -984,6 +984,120 @@ var_dump($c->p);
     assert_eq!(out, "int(9)\nint(9)\nint(9)\n");
 }
 
+/// Verifies a DECLARED typed REFERENCE destination rejects a value weak mode cannot convert.
+///
+/// The reference destination must run the same weak-mode typed-property guard the ordinary slot
+/// runs, and it must run it BEFORE the shared cell is touched. This compiler used to coerce
+/// `"nope"` to `int(0)` and publish it through the cell, so every alias of the property observed a
+/// value php never stores. Expected output is real `LC_ALL=C php` 8.5 output.
+#[test]
+fn test_clone_function_rejects_invalid_typed_reference_destination_overrides() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public int $p = 1; }
+$o = new T();
+$alias = &$o->p;
+try {
+    clone($o, ["p" => "nope"]);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "|";
+}
+var_dump($alias);
+var_dump($o->p);
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign string to property T::$p of type int|int(1)\nint(1)\n"
+    );
+}
+
+/// Verifies a REFUSED reference destination releases the clone and the override value.
+///
+/// The guard throws out of the applicator with the clone already allocated and the boxed override
+/// value still live, so both have to be retired on the unwind path. The destructor position pins
+/// the clone's release and the heap-debug leak summary pins the boxed string. Expected stdout is
+/// real `LC_ALL=C php` 8.5 output.
+#[test]
+fn test_clone_function_releases_everything_when_a_reference_destination_is_refused() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Tracked {
+    public int $n = 1;
+    public function __destruct() { echo "gone;"; }
+}
+function run(): void {
+    $a = new Tracked();
+    $alias = &$a->n;
+    try { clone($a, ["n" => "nope"]); echo "no throw;"; } catch (TypeError $e) { echo "caught:" . $e->getMessage() . ";"; }
+    echo "src=" . $alias . ";";
+}
+run();
+echo "after";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "gone;caught:Cannot assign string to property Tracked::$n of type int;src=1;gone;after",
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies the same guard on a `float` and a nullable `?int` REFERENCE destination.
+///
+/// `float` and `?int` reach different backend storage from the plain `int` slot (a float register
+/// and the tagged-scalar pair), so each needs its own proof that the reference destination refuses
+/// what php refuses and coerces what php coerces. Expected output is real `LC_ALL=C php` 8.5
+/// output.
+#[test]
+fn test_clone_function_guards_float_and_nullable_reference_destinations() {
+    let out = compile_and_run(
+        r#"<?php
+class F { public float $f = 1.5; public ?int $n = 3; }
+$o = new F();
+$fAlias = &$o->f;
+$nAlias = &$o->n;
+try {
+    clone($o, ["f" => "nope"]);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "|";
+}
+try {
+    clone($o, ["n" => [1]]);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "|";
+}
+var_dump($fAlias);
+var_dump($nAlias);
+$c = clone($o, ["f" => "2.5", "n" => null]);
+var_dump($fAlias);
+var_dump($nAlias);
+var_dump($c->f);
+var_dump($c->n);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Cannot assign string to property F::$f of type float|",
+            "Cannot assign array to property F::$n of type ?int|",
+            "float(1.5)\n",
+            "int(3)\n",
+            "float(2.5)\n",
+            "NULL\n",
+            "float(2.5)\n",
+            "NULL\n",
+        )
+    );
+}
+
 /// Verifies an override whose DESTINATION property is a reference writes THROUGH the shared cell.
 ///
 /// php 8.5 permits this: every alias of the property observes the override. This compiler used to

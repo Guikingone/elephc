@@ -836,7 +836,14 @@ fn plan_tag_actions(
     // PHP applies weak-mode property typing only to properties that DECLARE a type. An
     // untyped `public $v` accepts every value, and the inferred storage type this backend
     // gives it is an implementation detail that must never reject an assignment.
-    if !slot.is_declared || slot.is_packed || slot.is_reference {
+    //
+    // A by-reference DESTINATION is deliberately NOT excluded here. php keeps the declared
+    // type on a property that also holds a shared cell, so `$alias = &$o->p;` does not make
+    // `$o->p = "nope"` legal on `public int $p`. Skipping the guard for those slots silently
+    // cast the value with `__rt_mixed_cast_int` and published the result through the cell, so
+    // every alias observed a value php never stores. A PACKED field is still excluded: its
+    // fixed-layout storage runs the stricter `PackedFieldMixedToInt` narrowing instead.
+    if !slot.is_declared || slot.is_packed {
         return Ok(None);
     }
     Ok(match &slot.php_type {
