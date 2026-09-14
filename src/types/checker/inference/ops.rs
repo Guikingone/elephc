@@ -558,6 +558,13 @@ impl Checker {
                 for arg in args {
                     self.infer_descriptor_call_arg_type(arg, env)?;
                 }
+                // The callee is resolved at runtime, so `clone` is reachable through this
+                // variable and the destination object is not knowable here. An override that
+                // this call can carry has to find runtime-shaped property storage waiting
+                // for it, exactly like a `clone($object, [...])` whose object type is boxed.
+                crate::types::checker::clone_override_storage::record_runtime_callable_clone_override_destination(
+                    self, args,
+                );
                 return Ok(PhpType::Mixed);
             }
             if let Some(target) = self.callable_array_targets.get(var).cloned() {

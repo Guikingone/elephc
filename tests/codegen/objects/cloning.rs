@@ -851,6 +851,45 @@ var_dump($c->noDefault);
     );
 }
 
+/// Verifies a RUNTIME STRING callable `clone` gives untyped slots the same `mixed` treatment.
+///
+/// `$f = 'clone'; $f($object, [...])` resolves its callee at run time, so neither the builtin
+/// check hook nor the callable-signature path ever saw a `clone` call and nothing recorded the
+/// override destination. The inferred-`int` slot answered `int(0)` for a string override.
+///
+/// The second callable is selected out of an array at run time, which is the shape that can never
+/// be narrowed to an exact string, and the last call is a plain one-argument `clone` through the
+/// same variable, which must keep working untouched. Expected output is real `LC_ALL=C php` 8.5
+/// output.
+#[test]
+fn test_clone_function_writes_untyped_properties_through_a_runtime_string_callable() {
+    let out = compile_and_run(
+        r#"<?php
+class U { public $fromInt = 0; public $noDefault; }
+$ov = ["fromInt" => "hello", "noDefault" => [1, 2]];
+$f = 'clone';
+$c = $f(new U(), $ov);
+var_dump($c->fromInt);
+var_dump($c->noDefault);
+$names = ['strtolower', 'clone'];
+$g = $names[1];
+$d = $g(new U(), $ov);
+var_dump($d->fromInt);
+$plain = $f($c);
+var_dump($plain->fromInt);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(5) \"hello\"\n",
+            "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n",
+            "string(5) \"hello\"\n",
+            "string(5) \"hello\"\n",
+        )
+    );
+}
+
 /// Verifies a DECLARED array, associative-array and nullable slot materializes a runtime override
 /// value safely, including `null` for every nullable form.
 ///
@@ -886,6 +925,63 @@ var_dump($back->maybeTag);
 "#,
     );
     assert_eq!(out, "3:6;2:2;NULL\nNULL\n9;NULL\n");
+}
+
+/// Verifies an UNTYPED property that is also a reference gives an override the `mixed` PAYLOAD.
+///
+/// `property_reference_slots` says the slot physically holds a shared cell; `properties[slot].1`
+/// says what that cell CARRIES. The widening used to skip every reference slot, so an aliased
+/// `public $u = 0;` coerced a string override back to `int(0)` while the unaliased slot next to it
+/// answered the string. Both the alias, the source and the clone observe the override, because php
+/// 8.5 writes a reference destination through the shared cell. Expected output is real
+/// `LC_ALL=C php` 8.5 output.
+#[test]
+fn test_clone_function_writes_untyped_reference_properties_without_coercion() {
+    let out = compile_and_run(
+        r#"<?php
+class U { public $u = 0; public $n; }
+$o = new U();
+$alias = &$o->u;
+$nAlias = &$o->n;
+$c = clone($o, ["u" => "hello", "n" => [1, 2]]);
+var_dump($alias);
+var_dump($o->u);
+var_dump($c->u);
+var_dump($nAlias);
+var_dump($c->n);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(5) \"hello\"\n",
+            "string(5) \"hello\"\n",
+            "string(5) \"hello\"\n",
+            "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n",
+            "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n",
+        )
+    );
+}
+
+/// Verifies a DECLARED typed property that is also a reference keeps its DECLARED payload type.
+///
+/// The undeclared-payload widening must not reach it: a widened slot would have stored the string
+/// `"9"` verbatim, while php applies weak-mode property typing and stores `int(9)` through the
+/// shared cell. Expected output is real `LC_ALL=C php` 8.5 output.
+#[test]
+fn test_clone_function_keeps_declared_typed_reference_property_coercion() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public int $p = 1; }
+$o = new T();
+$alias = &$o->p;
+$c = clone($o, ["p" => "9"]);
+var_dump($alias);
+var_dump($o->p);
+var_dump($c->p);
+"#,
+    );
+    assert_eq!(out, "int(9)\nint(9)\nint(9)\n");
 }
 
 /// Verifies an override whose DESTINATION property is a reference writes THROUGH the shared cell.

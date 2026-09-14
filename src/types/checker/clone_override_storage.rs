@@ -4,6 +4,8 @@
 //!
 //! Called from:
 //! - `crate::builtins::callables::clone`'s check hook, which records the destination classes.
+//! - `Checker::infer_closure_call_type`, for a runtime string or boxed callable whose callee may
+//!   be `clone` and whose destination is therefore unknowable.
 //! - `crate::types::checker::check_types_with_options`, which applies the widening once every
 //!   body has been checked.
 //!
@@ -22,8 +24,11 @@
 //!   object type is runtime-shaped widens every user class.
 //! - Declared slots keep their declared type. PHP applies weak-mode property typing to them, and
 //!   `mixed_property_type_guard` already implements it for runtime-shaped values.
-//! - Reference slots and packed/extern classes are left alone: their slot holds a cell pointer or
-//!   a packed field rather than a value, so a Mixed stamp would describe the wrong storage.
+//! - Packed/extern classes are left alone: their slot holds a packed field rather than a value, so
+//!   a Mixed stamp would describe the wrong storage.
+//! - A reference slot IS widened when its property is undeclared. `property_reference_slots`
+//!   records that the slot physically holds a shared cell; `properties[slot].1` records that
+//!   cell's PAYLOAD, and an undeclared property's payload is `mixed` with or without an alias.
 
 use std::collections::BTreeSet;
 
@@ -90,6 +95,29 @@ pub(in crate::types::checker) fn record_callable_clone_override_destination(
         _ => checker.clone_override_destinations.any_class = true,
     }
     Ok(())
+}
+
+/// Records the widening a runtime string or boxed callable invocation can reach.
+///
+/// `$f = 'clone'; $f($object, [...])` resolves its callee at runtime, so neither the builtin check
+/// hook nor the callable-signature path ever sees a `clone` call. The callable set behind such a
+/// variable is not tracked as an exact string, so it MAY be `clone`, and the only sound record is
+/// the runtime-shaped one: every user class this program declares is widened, exactly like a
+/// `clone($object, [...])` whose first argument type is boxed.
+///
+/// The widening it requests is PHP-correct on its own terms: it only re-stamps property slots that
+/// carry no declared type, and a PHP property without a declared type IS `mixed`. A declared slot,
+/// a packed class and a checker-injected class are all left alone by `widen_class`.
+///
+/// A one-argument invocation can never write a property, so it records nothing.
+pub(in crate::types::checker) fn record_runtime_callable_clone_override_destination(
+    checker: &mut Checker,
+    args: &[Expr],
+) {
+    if !clone_call_may_carry_overrides(args) {
+        return;
+    }
+    checker.clone_override_destinations.any_class = true;
 }
 
 /// Returns whether a `clone()` call site can carry the optional `withProperties` overrides.
@@ -161,14 +189,13 @@ fn widen_class(checker: &mut Checker, class_name: &str) {
         if declared {
             continue;
         }
-        if info
-            .property_reference_slots
-            .get(slot)
-            .copied()
-            .unwrap_or(false)
-        {
-            continue;
-        }
+        // A reference slot is NOT skipped. `property_reference_slots` says the slot physically
+        // holds a shared cell, while `properties[slot].1` says what that cell's PAYLOAD is, and an
+        // undeclared property's payload is `mixed` whether or not an alias exists. Skipping it made
+        // `$alias = &$o->u; clone($o, ["u" => "hello"]);` coerce the override back to the payload
+        // type the default happened to infer. Declared slots already left this loop above, so a
+        // declared typed reference property keeps its declared payload type and its PHP weak-mode
+        // coercion and type-error behavior.
         // A hooked property has no backing value of its own to widen, and its accessors carry
         // their own declared types.
         if info
@@ -179,5 +206,55 @@ fn widen_class(checker: &mut Checker, class_name: &str) {
             continue;
         }
         info.properties[slot].1 = PhpType::Mixed;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::span::Span;
+
+    /// Wraps one argument expression in `...$arg`.
+    fn spread(arg: Expr) -> Expr {
+        Expr::new(ExprKind::Spread(Box::new(arg)), Span::dummy())
+    }
+
+    /// Wraps one argument expression in `name: $arg`.
+    fn named(name: &str, arg: Expr) -> Expr {
+        Expr::new(
+            ExprKind::NamedArg {
+                name: name.to_string(),
+                value: Box::new(arg),
+            },
+            Span::dummy(),
+        )
+    }
+
+    /// A one-argument invocation writes no property, so it must never widen any storage.
+    ///
+    /// This is the gate every recording path shares, including the runtime string callable one
+    /// where the callee is not knowable and the widening would otherwise reach every user class.
+    #[test]
+    fn one_argument_clone_invocations_never_widen_property_storage() {
+        assert!(!clone_call_may_carry_overrides(&[]));
+        assert!(!clone_call_may_carry_overrides(&[Expr::var("object")]));
+        assert!(!clone_call_may_carry_overrides(&[named(
+            "object",
+            Expr::var("object")
+        )]));
+    }
+
+    /// Every shape that can carry `withProperties` records a widening destination.
+    #[test]
+    fn clone_invocations_that_can_carry_overrides_are_recorded() {
+        assert!(clone_call_may_carry_overrides(&[
+            Expr::var("object"),
+            Expr::var("overrides"),
+        ]));
+        assert!(clone_call_may_carry_overrides(&[spread(Expr::var("args"))]));
+        assert!(clone_call_may_carry_overrides(&[named(
+            "withProperties",
+            Expr::var("overrides")
+        )]));
     }
 }
