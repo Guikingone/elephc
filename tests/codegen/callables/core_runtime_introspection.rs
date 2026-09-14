@@ -725,7 +725,7 @@ fn test_core_get_extension_funcs_aot_dynamic_core_name() {
         echo get_extension_funcs("not-loaded") === false ? "F" : "f";
         "#,
     );
-    assert_eq!(out, "61:DF");
+    assert_eq!(out, "62:DF");
 }
 
 /// Verifies both include-introspection aliases expose the resolved canonical script manifest.

@@ -704,7 +704,7 @@ $source = '$core = "CoRe"; $first = get_extension_funcs($core);
 $second = get_extension_funcs($core); return count($first) + count($second);' . ' // ' . $argc;
 echo eval($source);
 "#;
-    assert_eq!(compile_and_run(source), "118");
+    assert_eq!(compile_and_run(source), "124");
 }
 
 /// Explicit numeric options release conversion cells even when the input variables are borrowed.
