@@ -577,10 +577,25 @@ fn test_error_non_nullable_by_ref_parameter_rejects_a_null_variable() {
 /// giving the variable boxed storage.
 #[test]
 fn test_by_ref_null_recovery_compiles() {
+    // Recovery 1: initialize the variable with a value of the declared type.
     assert!(check_source(
         "<?php function out(int &$slot) { $slot = 7; } $value = 0; out($value); echo $value;"
     )
     .is_ok());
+
+    // Recovery 2: make BOTH the parameter and the variable nullable. The parameter alone is
+    // not enough -- `?int &$slot` needs boxed storage on the caller's side, so a bare
+    // `$value = null` still fails the mixed/union/nullable-storage rule. That is why the
+    // diagnostic names the variable in this branch too; the first version of the message
+    // said "declare the parameter nullable" and that advice did not compile.
+    assert!(check_source(
+        "<?php function out(?int &$slot) { $slot = 7; } ?int $value = null; out($value); echo $value;"
+    )
+    .is_ok());
+    assert!(check_source(
+        "<?php function out(?int &$slot) { $slot = 7; } $value = null; out($value);"
+    )
+    .is_err());
 }
 
 // -- Include/require path expression errors --

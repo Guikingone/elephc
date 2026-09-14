@@ -235,11 +235,16 @@ impl Checker {
         if *actual_ty == PhpType::Void && !Self::declared_type_accepts_null(expected_ty) {
             return Err(CompileError::new(
                 span,
+                // The recovery names the VARIABLE in both branches, deliberately. Saying
+                // "declare the parameter nullable" alone is advice that does not work:
+                // `?int &$slot` needs the caller's variable to have nullable storage too, so
+                // a bare `$v = null` still fails the boxed-storage rule above. `?int $v =
+                // null` is the spelling that compiles.
                 &format!(
                     "{} expects {:?}, got Void — a by-reference parameter writes back \
                      through the caller's variable, so that variable must already hold the \
-                     declared type; initialize it (for example `= 0`) or declare the \
-                     parameter nullable",
+                     declared type; initialize it (for example `= 0`), or declare BOTH the \
+                     parameter and the variable nullable (`?int &$p` with `?int $v = null`)",
                     context, expected_ty
                 ),
             ));
