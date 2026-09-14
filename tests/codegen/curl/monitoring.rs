@@ -28,11 +28,17 @@
 //!   does. `--with-monitoring` is a compiler feature (probe emission, instrumented frames),
 //!   not a link-plan one, so `compile_and_run`'s bare `ld` invocation cannot produce the
 //!   binary this needs. The managed native packages therefore resolve through the
-//!   PRODUCTION resolver, which keys artifacts on the toolchain fingerprint — so a cache
-//!   that satisfies `skip_without_curl_native`'s structural discovery can still fail here
-//!   if it was built by a different compiler. That failure is deliberately LOUD: a second
-//!   silent skip gate is exactly the shape `scripts/ci/run_curl_codegen_shard.sh` exists to
-//!   prevent, and CI materializes the cache with `native install --locked` in the same job.
+//!   PRODUCTION resolver, which keys artifacts on the toolchain fingerprint — and that
+//!   fingerprint covers `PATH` and `TMPDIR`, not just the compiler
+//!   (`native_deps::toolchain::fingerprinted_environment`). `skip_without_curl_native`'s
+//!   structural discovery ignores all of it, so a cache that satisfies the gate can be
+//!   unusable here after nothing more than a shell change, and the local cure is a
+//!   multi-minute from-source rebuild of the whole curl closure. This fixture therefore
+//!   skips on that one diagnostic — REPORTING IT THROUGH `SKIP_GATE_MARKER`, so
+//!   `scripts/ci/run_curl_codegen_shard.sh` turns it into a hard CI failure exactly as it
+//!   does for a missing cache. CI materializes the cache with `native install --locked` in
+//!   the same job and therefore the same environment, so reaching that branch there means
+//!   the shard really did lose curl coverage. Every other compile failure still panics.
 //! - THE CONTROL IS WHAT MAKES THE ASSERTION MEAN ANYTHING. An absolute "network wait is
 //!   small" bound would also pass on a build that stopped recording wait altogether. The
 //!   two runs do identical work — one transfer, one burn — and differ ONLY in which side of
@@ -97,45 +103,62 @@ function burn(int $rounds): int {{
 // inside `curl_easy_perform()`. Its time is part of the transfer's wall clock and must not
 // be part of the transfer's network wait.
 //
-// Both functions RETURN the burn's result and print the bytes they saw, so neither the
+// Both functions RETURN the burn's result and report the bytes they saw, so neither the
 // work nor the transfer can be eliminated as dead, and the two runs are comparable only if
-// they print the same thing.
+// they report the same thing.
+//
+// THE CALLBACK BURNS ON ITS FIRST INVOCATION ONLY. libcurl does not promise to deliver a
+// ten-byte body in one callback, and burning per chunk would make the amount of work depend
+// on how it happened to split — the control burns exactly once, so the two sides would stop
+// being comparable for a reason that has nothing to do with wait accounting. `$chunks` is
+// reported as well, so a split is visible rather than merely survived.
 function burn_inside_callback(string $url): int {{
     $seen = 0;
+    $chunks = 0;
     $burned = 0;
     $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $handle, string $data) use (&$seen, &$burned): int {{
+    curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $handle, string $data) use (&$seen, &$chunks, &$burned): int {{
         $seen += strlen($data);
-        $burned += burn({BURN_ROUNDS});
+        $chunks++;
+        if ($chunks === 1) {{
+            $burned += burn({BURN_ROUNDS});
+        }}
         return strlen($data);
     }});
     curl_exec($ch);
-    echo $seen, ";";
+    echo "<<", $seen, ";", $chunks, ";";
     return $burned;
 }}
 
-// The control: identical work, identical transfer, the same burn — moved to AFTER the
-// transfer, where it was never in any danger of being counted as wait.
+// The control: identical work, identical transfer, the same single burn — moved to AFTER
+// the transfer, where it was never in any danger of being counted as wait.
 function burn_after_transfer(string $url): int {{
     $seen = 0;
+    $chunks = 0;
     $burned = 0;
     $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $handle, string $data) use (&$seen): int {{
+    curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $handle, string $data) use (&$seen, &$chunks): int {{
         $seen += strlen($data);
+        $chunks++;
         return strlen($data);
     }});
     curl_exec($ch);
     $burned += burn({BURN_ROUNDS});
-    echo $seen, ";";
+    echo "<<", $seen, ";", $chunks, ";";
     return $burned;
 }}
 
 $url = "{url}";
 // One binary, two shapes: a single `curl_exec` node per run is what makes the two captures
 // comparable, and a program that ran both would merge them into one.
+//
+// The `<<`/`>>` delimiters are what the harness reads between. The program's stdout is
+// interleaved with the monitor's own report on the same stream, and "the first line" only
+// worked because the report happens to open with a newline today.
 echo getenv("ELEPHC_FIXTURE_BURN") === "inside"
     ? burn_inside_callback($url)
     : burn_after_transfer($url);
+echo ">>";
 "#
         ),
     )
@@ -148,12 +171,39 @@ echo getenv("ELEPHC_FIXTURE_BURN") === "inside"
         .env("ELEPHC_NATIVE_CACHE", &cache)
         .output()
         .expect("curl monitor fixture: run the compiler");
-    assert!(
-        compile.status.success(),
-        "--with-curl --with-monitoring compile failed\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&compile.stdout),
-        String::from_utf8_lossy(&compile.stderr)
-    );
+    if !compile.status.success() {
+        let stderr = String::from_utf8_lossy(&compile.stderr);
+        // The PRODUCTION resolver keys artifacts on the toolchain fingerprint — which
+        // includes `PATH` and `TMPDIR` (`native_deps::toolchain::fingerprinted_environment`)
+        // — while `skip_without_curl_native`'s structural discovery does not. So a cache
+        // that satisfies the gate above can still be unusable here, and on a developer
+        // machine the cure is a multi-minute from-source rebuild of the whole curl closure.
+        //
+        // That is a skip, not a failure — but it is reported through the SAME marker the
+        // gate above uses, so `scripts/ci/run_curl_codegen_shard.sh` turns it into a hard
+        // CI failure exactly as it does for a missing cache. CI materializes the cache with
+        // `native install --locked` in the same job and therefore the same environment, so
+        // reaching this branch there means the shard really did lose curl coverage.
+        if stderr.contains("native integrity error")
+            || stderr.contains("requires managed native package")
+        {
+            eprintln!(
+                "{SKIP_GATE_MARKER} skipping \
+                 curl_monitor_excludes_write_callback_cpu_from_network_wait: the managed \
+                 native curl archives in this cache were not built by the current \
+                 toolchain, so the production resolver cannot use them \
+                 (run: elephc native install --locked --target {} --manifest-path \
+                 examples/curl-get/elephc.toml)\n{stderr}",
+                target().as_str()
+            );
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        panic!(
+            "--with-curl --with-monitoring compile failed\nstdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&compile.stdout)
+        );
+    }
 
     let run = |shape: &str, capture: &str| -> (String, serde_json::Value) {
         let monitored = elephc_cli_command(&dir)
@@ -173,12 +223,18 @@ echo getenv("ELEPHC_FIXTURE_BURN") === "inside"
         );
         let saved = fs::read_to_string(dir.join(capture))
             .unwrap_or_else(|_| panic!("the `{shape}` run saved no capture:\n{report}"));
-        let program_output = report
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        // The fixture brackets its own output with `<<`/`>>` and the harness reads between
+        // them. The program and the monitor's report share one stdout, so anything that
+        // depends on where the report happens to put its newlines — "the first line", say —
+        // is one formatting change away from comparing report text instead.
+        let start = report
+            .find("<<")
+            .unwrap_or_else(|| panic!("the `{shape}` run printed no fixture output:\n{report}"));
+        let end = report[start..]
+            .find(">>")
+            .map(|offset| start + offset)
+            .unwrap_or_else(|| panic!("the `{shape}` run's output was truncated:\n{report}"));
+        let program_output = report[start + 2..end].to_string();
         (
             program_output,
             serde_json::from_str(&saved).expect("curl monitor fixture: capture must be JSON"),
@@ -188,15 +244,26 @@ echo getenv("ELEPHC_FIXTURE_BURN") === "inside"
     let (inside_output, inside) = run("inside", "inside.json");
     let (after_output, after) = run("after", "after.json");
 
-    // The two runs are only comparable if they did the same work: the same ten-byte body
-    // delivered, and `burn` (which is pure) run exactly once on each side.
+    // The two runs are only comparable if they did the same work. Each prints
+    // `<bytes>;<chunks>;<burn result>`: the same ten-byte body delivered, and `burn` (which
+    // is pure) run exactly once on each side, so equal results mean equal work. The chunk
+    // count is reported rather than asserted equal — the burn is already pinned to the
+    // first invocation, so a split body no longer changes the work, but seeing the split in
+    // the failure message is worth more than hiding it.
     assert!(
         inside_output.starts_with("10;"),
         "the in-callback run did not receive the fixture body: {inside_output:?}"
     );
+    let burn_result = |output: &str| -> String {
+        output
+            .rsplit_once(';')
+            .map(|(_, burned)| burned.to_string())
+            .unwrap_or_default()
+    };
     assert_eq!(
-        inside_output, after_output,
-        "the two runs must transfer the same body and burn the same amount"
+        burn_result(&inside_output),
+        burn_result(&after_output),
+        "the two runs must burn the same amount; inside={inside_output:?} after={after_output:?}"
     );
 
     // `curl_exec()` is the prelude function on the stack when the bridge reports the
