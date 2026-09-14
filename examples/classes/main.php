@@ -25,6 +25,10 @@ class Counter {
         return $this->count;
     }
 
+    public static function hasStep() {
+        return defined('static::STEP');
+    }
+
     public function show() {
         echo "Count: " . $this->count . "\n";
     }
@@ -40,6 +44,7 @@ $c->inc();
 $c->show();
 echo "Triple step: " . Counter::TRIPLE_STEP . "\n";
 echo defined('Counter::STEP') ? "defined STEP\n" : "missing STEP\n";
+echo Counter::hasStep() ? "late-static STEP\n" : "missing late-static STEP\n";
 echo defined('Counter::MISSING') ? "defined MISSING\n" : "missing MISSING\n";
 
 $c->dec();
