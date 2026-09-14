@@ -651,6 +651,12 @@ class Base {
     public function instanceProbe(): string {
         return defined('static::CHILD') ? '1' : '0';
     }
+    public function instanceClosureProbe(): string {
+        $probe = static function (): string {
+            return defined('static::CHILD') ? '1' : '0';
+        };
+        return $probe();
+    }
     public static function closureProbe(): string {
         $probe = static function (): string {
             return defined('static::CHILD') ? '1' : '0';
@@ -667,9 +673,10 @@ class Grand extends Child {}
 echo Base::probe(), "|", Child::probe(), "|", Grand::probe();
 echo "|", (new Base())->instanceProbe(), (new Child())->instanceProbe();
 echo "|", Base::closureProbe(), Child::closureProbe();
+echo "|", (new Base())->instanceClosureProbe(), (new Child())->instanceClosureProbe();
 "#,
     );
-    assert_eq!(out, "100011|111010|111010|01|01");
+    assert_eq!(out, "100011|111010|111010|01|01|01");
 }
 
 /// Verifies trait constants are exposed through using classes, but not the trait receiver itself.

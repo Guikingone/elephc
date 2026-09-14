@@ -9,6 +9,8 @@
 
 use super::*;
 
+const CALLED_CLASS_ID_CAPTURE: &str = "__elephc_called_class_id";
+
 /// Lowers a closure expression into a callable descriptor backed by an EIR closure function.
 pub(super) fn lower_closure(
     ctx: &mut LoweringContext<'_, '_>,
@@ -159,6 +161,37 @@ pub(super) fn lower_closure_with_context(
         }
         captured_values.push(ClosureCapture { value: captured.value });
         capture_params.push((capture.clone(), php_type, by_ref));
+    }
+    if ctx.current_class.is_some()
+        && (ctx.local_slots.contains_key(CALLED_CLASS_ID_CAPTURE)
+            || ctx.local_slots.contains_key("this"))
+        && !capture_params
+            .iter()
+            .any(|(name, _, _)| name == CALLED_CLASS_ID_CAPTURE)
+    {
+        let called_class_id = ctx.emit_value(
+            Op::LoadCalledClassId,
+            Vec::new(),
+            None,
+            PhpType::Int,
+            Op::LoadCalledClassId.default_effects(),
+            Some(expr.span),
+        );
+        ctx.emit_void(
+            Op::ClosureCapture,
+            vec![called_class_id.value],
+            None,
+            Op::ClosureCapture.default_effects(),
+            Some(expr.span),
+        );
+        captured_values.push(ClosureCapture {
+            value: called_class_id.value,
+        });
+        capture_params.push((
+            CALLED_CLASS_ID_CAPTURE.to_string(),
+            PhpType::Int,
+            false,
+        ));
     }
     let name = ctx.next_closure_name();
     let loop_storage_scope =

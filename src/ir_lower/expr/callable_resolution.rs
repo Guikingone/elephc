@@ -251,8 +251,8 @@ pub(super) fn lower_bound_closure_immediate_call(
 /// overrides the binding's return type with the bound receiver's property type so a
 /// by-reference return binds correctly. Returns the binding together with the lowered closure
 /// descriptor value (the still-unbound `closure_new`), which callers may store in the assigned
-/// variable. `None` unless the call is the single auto-captured `$this` shape — the only form
-/// whose `$this` is fully known at compile time. Shared by the immediate-invoke path
+/// variable. `None` unless the call has the auto-captured `$this` shape, optionally followed by
+/// the compiler's hidden called-class capture. Shared by the immediate-invoke path
 /// (`Closure::bind(...)()`) and the variable-assignment path (`$b = Closure::bind(...)`).
 pub(super) fn build_bound_closure_binding(
     ctx: &mut LoweringContext<'_, '_>,
@@ -278,19 +278,24 @@ pub(super) fn build_bound_closure_binding(
     else {
         return None;
     };
-    // Only the single auto-captured `$this` shape is supported here.
-    if captures.len() != 1 {
+    let forwards_called_class = ctx.current_class.is_some()
+        && (ctx.local_slots.contains_key("__elephc_called_class_id")
+            || ctx.local_slots.contains_key("this"));
+    let expected_capture_count = 1 + usize::from(forwards_called_class);
+    if captures.len() != expected_capture_count {
         return None;
     }
     let new_this_value = lower_expr(ctx, &new_this);
     let boxed_this = ctx.box_value_as_mixed(new_this_value, PhpType::Mixed, Some(expr.span));
     signature.return_type = result_type;
+    let mut bound_captures = vec![ClosureCapture {
+        value: boxed_this.value,
+    }];
+    bound_captures.extend(captures.into_iter().skip(1));
     let bound = StaticCallableBinding::Closure {
         name,
         signature,
-        captures: vec![ClosureCapture {
-            value: boxed_this.value,
-        }],
+        captures: bound_captures,
     };
     Some((bound, closure_value))
 }
