@@ -37,7 +37,14 @@ const fn defined_semantics() -> BuiltinSemantics {
 /// be resolved at compile time. Returns `PhpType::Bool` on success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(cx.args[0].kind, ExprKind::StringLiteral(_)) {
+    let is_literal = match &cx.args[0].kind {
+        ExprKind::StringLiteral(_) => true,
+        ExprKind::NamedArg { name, value } if name == "constant_name" => {
+            matches!(value.kind, ExprKind::StringLiteral(_))
+        }
+        _ => false,
+    };
+    if !is_literal {
         return Err(CompileError::new(
             cx.span,
             "defined() first argument must be a string literal in AOT mode",

@@ -52,9 +52,7 @@ pub(super) fn lower_static_defined_call(
     if php_symbol_key(name.as_str().trim_start_matches('\\')) != "defined" || args.len() != 1 {
         return None;
     }
-    let ExprKind::StringLiteral(constant_name) = &args[0].kind else {
-        return None;
-    };
+    let constant_name = static_defined_name_arg(&args[0])?;
     if let Some(message) = crate::types::class_like_constant_scope_error(
         ctx.classes,
         constant_name,
@@ -95,6 +93,18 @@ pub(super) fn lower_static_defined_call(
         PhpType::Bool,
         expr,
     ))
+}
+
+/// Returns the literal name from positional or PHP-named `defined()` syntax.
+fn static_defined_name_arg(arg: &Expr) -> Option<&str> {
+    match &arg.kind {
+        ExprKind::StringLiteral(value) => Some(value.as_str()),
+        ExprKind::NamedArg { name, value } if name == "constant_name" => match &value.kind {
+            ExprKind::StringLiteral(value) => Some(value.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Returns true when a literal `defined()` name exists as a global or class-like constant.
