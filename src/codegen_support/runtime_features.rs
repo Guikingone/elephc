@@ -98,6 +98,12 @@ pub struct RuntimeFeatures {
     /// `globfree` and `close`. Those three plus `pclose` were every libc import a trivial program
     /// had apart from the `getrlimit` stack probe.
     pub directory_resource: bool,
+    /// True when native code can push, pop, inspect, or restore a PHP error or exception
+    /// handler registration. The linked-stack helpers are otherwise omitted from the runtime.
+    pub handler_state: bool,
+    /// True when lowered native code can clone an object. The boxed clone adapter is also
+    /// required by the full eval bridge, which exposes the same operation to Magician.
+    pub object_clone: bool,
 }
 
 impl RuntimeFeatures {
@@ -129,6 +135,8 @@ impl RuntimeFeatures {
             | ((self.generator as u64) << 9)
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
+            | ((self.handler_state as u64) << 12)
+            | ((self.object_clone as u64) << 13)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -146,6 +154,8 @@ impl RuntimeFeatures {
             generator: false,
             popen_resource: false,
             directory_resource: false,
+            handler_state: false,
+            object_clone: false,
         }
     }
 
@@ -165,6 +175,8 @@ impl RuntimeFeatures {
             generator: true,
             popen_resource: true,
             directory_resource: true,
+            handler_state: true,
+            object_clone: true,
         }
     }
 }

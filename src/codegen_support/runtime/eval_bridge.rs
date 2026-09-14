@@ -193,8 +193,8 @@ mod tests {
         emitter.output()
     }
 
-    /// The shared boxed shallow-clone adapter is emitted EXACTLY ONCE per program on every
-    /// supported target, with and without the eval bridge.
+    /// The shared boxed shallow-clone adapter is emitted exactly once when native clone or the
+    /// eval bridge can reach it, and is absent from an unrelated runtime.
     ///
     /// It used to live inside the eval-only class wrappers, so an ordinary `clone()` program
     /// had no adapter to call while an eval-enabled one would now define it twice. Counting the
@@ -211,7 +211,23 @@ mod tests {
             Target::new(Platform::Linux, Arch::AArch64),
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
-            for features in [RuntimeFeatures::none(), RuntimeFeatures::all()] {
+            for (features, expected) in [
+                (RuntimeFeatures::none(), 0),
+                (
+                    RuntimeFeatures {
+                        object_clone: true,
+                        ..RuntimeFeatures::none()
+                    },
+                    1,
+                ),
+                (
+                    RuntimeFeatures {
+                        eval_bridge: true,
+                        ..RuntimeFeatures::none()
+                    },
+                    1,
+                ),
+            ] {
                 let mut emitter = Emitter::new(target);
                 emit_runtime(&mut emitter, features);
                 let asm = emitter.output();
@@ -221,8 +237,8 @@ mod tests {
                 );
                 assert_eq!(
                     asm.matches(&definition).count(),
-                    1,
-                    "{target:?}: the clone adapter must be defined exactly once"
+                    expected,
+                    "{target:?}: wrong clone adapter definition count"
                 );
             }
         }

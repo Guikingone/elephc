@@ -207,9 +207,11 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     io::emit_backtrace_print_arg(emitter);
     arrays::emit_object_free_deep(emitter, features);
     arrays::emit_refcount(emitter);
-    // Both ordinary PHP 8.5 `clone()` calls and Magician use this compact boxed adapter.
-    // Emit it once in every runtime object so user assembly can select it without enabling eval.
-    eval_bridge::emit_object_clone_shallow_runtime(emitter);
+    // Native `clone()` and Magician share this compact boxed adapter. Omit it when neither
+    // surface is reachable so native-only literal eval keeps its runtime dependency-pure.
+    if features.object_clone || features.eval_bridge {
+        eval_bridge::emit_object_clone_shallow_runtime(emitter);
+    }
     if features.eval_bridge {
         eval_bridge::emit_eval_bridge_runtime(emitter);
     } else if features.eval_scope {
