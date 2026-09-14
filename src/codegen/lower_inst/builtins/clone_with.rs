@@ -35,7 +35,7 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::Visibility;
 use crate::types::PhpType;
 
-mod overrides;
+pub(crate) mod overrides;
 
 use super::super::{
     direct_call_stack_pad_bytes, emit_call_arg_temp_cleanups, emit_ref_arg_writebacks,

@@ -55,6 +55,12 @@ pub mod method_exists;
 pub mod preg_replace_callback;
 pub mod property_exists;
 
+// Internal clone-override refusal, reached only from the generated clone override
+// applicator body. `clone()`'s own by-reference refusal has no PHP-visible spelling
+// to alias either.
+#[allow(non_snake_case)]
+pub mod __elephc_clone_override_reference_guard;
+
 // Internal object-introspection aliases used by the injected `var_export`
 // prelude. They have no PHP-visible counterpart to alias: PHP would use
 // `get_object_vars()` / `$v instanceof UnitEnum`, neither of which elephc can

@@ -399,6 +399,7 @@ pub enum RuntimeFnId {
     Sqrt,
     Tan,
     Tanh,
+    ElephcCloneOverrideReferenceGuard,
     ElephcObjectIsEnum,
     ElephcObjectPropCount,
     ElephcObjectPropName,
@@ -1220,6 +1221,14 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_GLOBAL.bits()
                     | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
+            // The clone override guard only reads one hash entry's reference state, and
+            // raises the catchable refusal itself when that entry is still a PHP reference.
+            RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::MAY_THROW.bits(),
+                )
+            }
             RuntimeFnId::GetClass
             | RuntimeFnId::GetParentClass => {
                 crate::ir::Effects::from_bits_retain(
@@ -1802,6 +1811,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
                 | RuntimeFnId::IconvSetEncoding
+                // The clone override reference guard answers nothing at all: it returns or
+                // throws, so a result temporary would only keep the override array alive.
+                | RuntimeFnId::ElephcCloneOverrideReferenceGuard
         ) {
             return BuiltinResultOwnership::NonHeap;
         }
@@ -2454,6 +2466,9 @@ impl RuntimeFnId {
             RuntimeFnId::Sqrt => "sqrt",
             RuntimeFnId::Tan => "tan",
             RuntimeFnId::Tanh => "tanh",
+            RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
+                "__elephc_clone_override_reference_guard"
+            }
             RuntimeFnId::ElephcObjectIsEnum => "__elephc_object_is_enum",
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",

@@ -1638,6 +1638,37 @@ try {
     );
 }
 
+/// Verifies an override applied BEFORE a referenced entry survives that entry's refusal.
+///
+/// php evaluates `clone($o, $withProperties)` entry by entry, so it writes every earlier
+/// override and only throws once iteration REACHES the reference. The refusal used to be a
+/// whole-array pre-scan that threw before the applicator ran at all, which silently dropped
+/// writes php had already performed. The earlier write is observed through a destination
+/// reference alias the clone shares with the source object, so it cannot be mistaken for a
+/// value read back out of the discarded clone.
+#[test]
+fn test_clone_function_applies_prior_override_before_later_reference_error() {
+    let out = compile_and_run(
+        r#"<?php
+class Pair { public int $a = 1; public int $b = 2; }
+$o = new Pair();
+$alias = &$o->a;
+$overrides = ["a" => 7, "b" => 8];
+foreach ($overrides as &$value) {}
+try {
+    clone($o, $overrides);
+    echo "no throw";
+} catch (Error $e) {
+    echo $alias . ":" . $o->a . ":" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "7:7:Cannot assign by reference when cloning with updated properties"
+    );
+}
+
 /// Verifies the internal entry marker is absent from ordinary reads and `var_dump()` output.
 #[test]
 fn test_clone_function_hides_reference_marker_from_reads_and_var_dump() {
@@ -1703,7 +1734,7 @@ exerciseCloneReference();
                 "or QWORD PTR [r10], r11",
                 "cmp r9, 7",
                 "test r8, r11",
-                "cmp DWORD PTR [rcx - 12], 1",
+                "mov r10d, DWORD PTR [rcx - 12]",
             ]
         } else {
             [

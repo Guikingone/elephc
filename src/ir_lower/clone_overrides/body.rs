@@ -14,6 +14,11 @@
 //! - Keys are stringified exactly once with `(string)`, which is what turns the integer key `7`
 //!   into the property name `"7"`.
 //! - A NUL-prefixed name is refused before any arm runs, matching php-src's mangled-name guard.
+//! - An override entry that still belongs to a PHP reference set is refused right there, in
+//!   iteration order, by the internal `__elephc_clone_override_reference_guard` builtin. php
+//!   applies every earlier entry first and only throws once iteration REACHES the referenced
+//!   one, so the refusal cannot be hoisted to a whole-array pre-scan without dropping writes
+//!   php had already performed.
 //! - A scope-selected ancestor private slot is written through `super::scoped_setters`, whose
 //!   `$this` is typed with that ancestor, rather than through this body's own receiver.
 
@@ -33,6 +38,8 @@ const KEY_LOCAL: &str = "__elephc_clone_key";
 const VALUE_LOCAL: &str = "__elephc_clone_value";
 /// Stringified property name local.
 const NAME_LOCAL: &str = "__elephc_clone_name";
+/// Internal builtin refusing one override entry that is still a PHP reference.
+const REFERENCE_GUARD: &str = "__elephc_clone_override_reference_guard";
 
 /// One declared property name plus the arm it resolves to and the symbol that arm calls.
 pub(super) struct ResolvedArm {
@@ -63,6 +70,7 @@ pub(super) fn build(
             span,
         ),
         nul_name_guard(),
+        reference_override_guard(),
     ];
     body.push(name_dispatch_chain(class_name, arms, unknown));
     vec![stmt(
@@ -91,6 +99,25 @@ fn nul_name_guard() -> Stmt {
             elseif_clauses: Vec::new(),
             else_body: None,
         },
+        Span::dummy(),
+    )
+}
+
+/// Builds php's refusal for an entry whose value still belongs to a PHP reference set.
+///
+/// The loop's own value local travels with the call: a by-value `foreach` retains the entry's
+/// boxed Mixed cell, and the guard has to discount that borrow rather than read it as a second
+/// owner of the reference cell.
+fn reference_override_guard() -> Stmt {
+    stmt(
+        StmtKind::ExprStmt(expr(ExprKind::FunctionCall {
+            name: Name::unqualified(REFERENCE_GUARD),
+            args: vec![
+                variable(OVERRIDES_PARAM),
+                variable(NAME_LOCAL),
+                variable(VALUE_LOCAL),
+            ],
+        })),
         Span::dummy(),
     )
 }
