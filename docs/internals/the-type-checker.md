@@ -591,11 +591,16 @@ distinct user-visible defect:
 | Consumer | Question it asks |
 |---|---|
 | `checker::inference::objects::constructors` | visibility, arity, and the class NAMED in both diagnostics |
-| `ir_lower::expr::object_construction` | the signature whose defaults pad a `new Child()` call |
-| `ir_lower::expr::reflection_new_instance` | the same, for `ReflectionClass::newInstance()` |
+| `ir_lower::expr::reflection_constructors` | which class's `__construct` a `ReflectionMethod` on the descendant resolves to |
 | `codegen::lower_inst::objects::fixed_new` / `dynamic_factory` | the constructor the allocation calls |
+| `codegen::lower_inst::objects::reflection::names_constants` | the synthetic member `getConstructor()` returns when the descendant's own map has none |
 | `codegen::lower_inst::objects::reflection::class_metadata` | `getConstructor()`'s member and `isInstantiable()` |
 | `codegen_support::runtime::data::user` | the eval ReflectionMethod lookup row, keyed by the descendant and carrying the OWNER as its declaring class |
+
+`ir_lower::expr::object_construction` and `ir_lower::expr::reflection_new_instance` ask the
+same question for a different purpose — the signature whose defaults pad a `new Child()` or
+`ReflectionClass::newInstance()` call — and both still read `class_info.methods` directly.
+That is the defect issue #868 tracks; they join the table when it lands.
 
 A descendant that declares its OWN constructor hides the ancestor's, private or not: the walk
 stops at the descendant, which is what makes `new static()` from the ancestor's scope report
