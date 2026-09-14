@@ -712,3 +712,19 @@ fn test_declaring_the_object_cast_helper_without_a_cast_is_accepted() {
         "<?php function __elephc_cast_object(mixed $v): int { return 1; } echo __elephc_cast_object(2);",
     );
 }
+
+/// Issue #476: the `for` clause parser now delegates to the general statement parser, which
+/// buys every assignment form for free — and would also accept a DECLARATION, which PHP's
+/// clause grammar does not.
+///
+/// Measured on PHP 8.5.10: `for (function f() {}; false; ) {}` is
+/// `syntax error, unexpected identifier "f", expecting "("` — php-src reads `function` as the
+/// start of a CLOSURE there, so a named declaration cannot appear. It was rejected here
+/// before the delegation too, and has to stay rejected.
+#[test]
+fn test_error_for_clause_rejects_a_declaration() {
+    expect_error(
+        "<?php for (function f() {}; false; ) {} echo 1;",
+        "A declaration is not allowed in a for clause",
+    );
+}
