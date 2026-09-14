@@ -552,7 +552,7 @@ fn builtin_scope_owns_inherited_storage(
     };
     let is_checker_injected = |name| {
         elephc_builtin_contract::lookup_class(name).is_some_and(|contract| {
-            contract.route == elephc_builtin_contract::ClassRoute::CheckerInjected
+            contract.aot == elephc_builtin_contract::ClassRoute::CheckerInjected
         })
     };
     scope == class_name
