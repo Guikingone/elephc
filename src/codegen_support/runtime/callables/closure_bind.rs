@@ -16,7 +16,7 @@
 //! - Closures with any other capture shape (extra `use` variables, no `$this`)
 //!   are not yet supported and abort with a fatal diagnostic rather than
 //!   copying an unretained user capture.
-//! - Verified on aarch64 (macOS/Linux) and x86_64 (Linux).
+//! - Verified on macOS, iOS device/Simulator, and Linux AArch64 plus Linux x86_64.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -291,7 +291,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{AppleVariant, Platform, Target};
 
-    /// Verifies both supported architectures validate and copy the optional
+    /// Verifies every supported target validates and copies the optional
     /// called-class capture while retaining the top-level `$this`-only size.
     #[test]
     fn test_closure_bind_emits_both_supported_descriptor_sizes() {
