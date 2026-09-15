@@ -232,17 +232,20 @@ try {
 #[test]
 fn execute_program_clears_method_scope_inside_called_global_function() {
     let program = parse_fragment(
-        br#"function eval_read_private_from_global($object) {
+        br#"function eval_global_scope_noop() {}
+function eval_read_private_from_global($object) {
     return $object->hidden;
 }
 class EvalGlobalFunctionScopeBox {
     private string $hidden = "private";
     public function probe() {
+        eval_global_scope_noop();
+        $afterNormalReturn = $this->hidden;
         try {
             eval_read_private_from_global($this);
             return "leaked class scope";
         } catch (Error $error) {
-            return "caught:" . $this->hidden;
+            return $afterNormalReturn . ":caught:" . $this->hidden;
         }
     }
 }
@@ -256,8 +259,37 @@ return (new EvalGlobalFunctionScopeBox())->probe();"#,
 
     assert_eq!(
         values.get(result),
-        FakeValue::String("caught:private".to_string())
+        FakeValue::String("private:caught:private".to_string())
     );
+}
+
+/// Verifies an argument-binding failure pops only the global lexical-scope sentinels.
+#[test]
+fn execute_context_function_binding_error_restores_calling_class_scopes() {
+    let program = parse_fragment(
+        br#"function eval_required_scope_argument($value) { return $value; }"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("register eval function");
+
+    context.push_class_scope("EvalCallingScope");
+    context.push_called_class_scope("EvalCalledScope");
+    let error = execute_context_function_zero_args(
+        &mut context,
+        "eval_required_scope_argument",
+        &mut values,
+    )
+    .expect_err("missing required argument must fail binding");
+
+    assert_eq!(error, EvalStatus::RuntimeFatal);
+    assert_eq!(context.current_class_scope(), Some("EvalCallingScope"));
+    assert_eq!(context.current_called_class_scope(), Some("EvalCalledScope"));
+    context.pop_called_class_scope();
+    context.pop_class_scope();
 }
 
 /// Verifies an ancestor's private name remains available for a distinct child dynamic property.
