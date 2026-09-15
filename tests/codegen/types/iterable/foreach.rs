@@ -1553,9 +1553,10 @@ foreach ($o->x as &$v) { $v = $v * 2; }
 //
 // A NOTE ON THE HEAP ASSERTIONS BELOW. Two of these fixtures sit on top of leaks that exist
 // without any `foreach` at all: a bare `$r = &$o->x;` leaks 4 blocks / 184 bytes, and a bare
-// `$t = $o->undeclared;` through `__get` leaks 4 blocks / 192 bytes. Those tests therefore assert
-// that the by-reference loop adds NOTHING to the heap the same program already leaks without it,
-// which is the property this fix owns and which keeps passing once the unrelated leaks are fixed.
+// `$t = $o->undeclared;` through `__get` leaks 4 blocks / 192 bytes. The magic-get comparison also
+// normalizes both retained arrays through the same by-reference loop. Indexed-to-hash promotion
+// changes the graph's allocation sizes even when it adds no owner, so comparing against a
+// by-value indexed baseline would report representation growth as a leak.
 
 /// Returns the `live_bytes=N` figure from a heap-debug run's stderr.
 ///
@@ -1595,9 +1596,10 @@ foreach ($o->inner->x as &$v) { $v *= 2; echo $v; }
 /// Regression for issue #642: a `__get` magic getter is the same hazard as a get hook — a fresh
 /// object whose only owner is the read — and must be declined for the same reason.
 ///
-/// The `__get` receiver itself leaks without any loop, so this compares against that baseline
-/// instead of asserting a clean heap: what the fix owns is that the by-reference loop adds
-/// nothing on top.
+/// The `__get` receiver itself leaks without any loop, so this compares the unstable chain with
+/// an equivalent by-reference loop through a stable local receiver. Both retained graphs undergo
+/// the required indexed-to-hash promotion; any additional owner introduced by the unstable-chain
+/// fallback still increases its live-byte total.
 #[test]
 fn test_regression_642_by_ref_foreach_property_chain_through_magic_get() {
     let classes = r#"<?php
@@ -1609,9 +1611,10 @@ $o = new Outer();
         "{classes}foreach ($o->inner->x as &$v) {{ $v *= 2; echo $v; }}\n"
     ));
     let baseline = compile_and_run_with_heap_debug(&format!(
-        "{classes}$t = $o->inner;\nforeach ($t->x as $v) {{ echo $v * 2; }}\n"
+        "{classes}$t = $o->inner;\nforeach ($t->x as &$v) {{ echo $v * 2; }}\n"
     ));
     assert_eq!(by_ref.stdout, "24");
+    assert_eq!(baseline.stdout, "24");
     assert_eq!(
         heap_debug_live_bytes(&by_ref.stderr),
         heap_debug_live_bytes(&baseline.stderr),
