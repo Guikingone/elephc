@@ -12,6 +12,49 @@ use crate::codegen::platform::Target;
 use crate::ir::{Effects, Immediate, LocalKind, Op, Ownership};
 use std::path::Path;
 
+/// Optimized managed element arguments keep EIR ledger cleanup authoritative.
+///
+/// Identity folding may erase the `Borrow` around `AcquireRefCell`. The backend must still
+/// recognize the explicit owner-slot release and avoid adding a second ABI pop/release pair.
+#[test]
+fn folded_managed_element_argument_has_one_cleanup_owner_on_every_target() {
+    let source = r#"<?php
+function replace_untyped(&$value): void { $value = "changed"; }
+$items = ["key" => 1];
+replace_untyped($items["key"]);
+echo $items["key"];
+"#;
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let main = assembly
+            .split_once("main:\n")
+            .expect("main assembly")
+            .1
+            .split_once("# @endfn name=main")
+            .expect("main end marker")
+            .0;
+        assert_eq!(
+            main.matches("detach temporary call operand owner").count(),
+            2,
+            "{name}: evaluation handoff and EIR retirement only"
+        );
+        assert!(main.contains("__rt_reference_cell_release"), "{name}");
+    }
+}
+
 /// Repeated and nested associative references reload their writable receiver after publication.
 #[test]
 fn associative_reference_receivers_are_reloaded_in_publication_order_on_every_target() {

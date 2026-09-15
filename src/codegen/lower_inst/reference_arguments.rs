@@ -377,8 +377,13 @@ fn value_is_acquired_array_element_ref_cell(
 }
 
 /// Finds managed cell owners acquired during EIR argument evaluation without an EIR ledger.
-/// A ledger-protected operand carries an outer `Borrow`, while a bare `AcquireRefCell` delegates
-/// normal-path retirement to the shared ABI call cleanup.
+///
+/// A ledger-protected operand normally carries an outer `Borrow`, while a bare
+/// `AcquireRefCell` delegates normal-path retirement to the shared ABI call cleanup. IR identity
+/// folding can remove that `Borrow`, however, so the durable distinction is the explicit
+/// `ReleaseLocalRefCell` for the same unique owner slot. Treating the folded acquisition as
+/// preleased would pop the ledger's unwind record and release its cell here, then let the EIR
+/// cleanup pop and release both a second time, corrupting the native stack before frame cleanup.
 pub(super) fn plan_preleased_ref_arg_cells(
     ctx: &FunctionContext<'_>,
     args: &[ValueId],
@@ -442,6 +447,12 @@ fn preleased_ref_cell_owner(
             "preleased reference-cell argument has no owner slot",
         ));
     };
+    if ctx.function.instructions.iter().any(|candidate| {
+        candidate.op == Op::ReleaseLocalRefCell
+            && candidate.immediate == Some(Immediate::LocalSlot(owner_slot))
+    }) {
+        return Ok(None);
+    }
     Ok(Some((owner_slot, inst.as_raw())))
 }
 
