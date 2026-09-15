@@ -378,6 +378,28 @@ pub trait RuntimeValueOps {
         position: usize,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Reports whether the object has a public dynamic-property entry with this exact name.
+    ///
+    /// Pure interpreter implementations can derive this from their visible-property iterator.
+    /// The generated runtime overrides it because user-class dynamic hashes are layout-specific
+    /// and deliberately absent from the stdClass-oriented object iterator.
+    fn object_dynamic_property_exists(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<bool, EvalStatus> {
+        let property_count = self.object_property_len(object)?;
+        for position in 0..property_count {
+            let key = self.object_property_iter_key(object, position)?;
+            let key_bytes = self.string_bytes(key);
+            self.release(key)?;
+            if key_bytes? == property.as_bytes() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Calls a named method on a runtime object held in a boxed Mixed cell.
     fn method_call(
         &mut self,

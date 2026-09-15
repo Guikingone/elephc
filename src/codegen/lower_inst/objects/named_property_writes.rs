@@ -150,6 +150,8 @@ fn emit_dynamic_plan_write(
             })?;
             let hash_offset =
                 dynamic_property_hash_offset_for_class(ctx, &arm.class_name, property)?;
+            let recursive_refusal =
+                magic_set_recursive_refusal(ctx, &arm.class_name, property);
             lower_direct_magic_set(
                 ctx,
                 object,
@@ -157,6 +159,7 @@ fn emit_dynamic_plan_write(
                 value,
                 &arm.class_name,
                 hash_offset,
+                recursive_refusal.as_deref(),
             )
         }
         PropertyRuntimeAction::MagicGet => Err(CodegenIrError::invalid_module(

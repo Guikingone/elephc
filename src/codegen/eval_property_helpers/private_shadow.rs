@@ -1,16 +1,16 @@
 //! Purpose:
-//! Separates non-private eval child fields from same-named private native parent slots.
+//! Separates eval runtime-child names from private native parent slots.
 //!
 //! Called from:
 //! - Native property-name dispatch after the parent's private visibility check fails.
 //!
 //! Key details:
-//! - The callback only chooses extra storage and does not authorize native private access.
+//! - The callback only identifies an eval runtime child and does not authorize native access.
 //! - All receiver/name inputs come from the enclosing getter or setter frame.
 
 use super::{abi, Arch, Emitter, Module};
 
-/// Routes a real eval child field past the private parent slot, failing closed for other objects.
+/// Routes an eval runtime child's name past the private parent slot, failing closed otherwise.
 pub(super) fn emit_separate_property_probe(
     module: &Module,
     emitter: &mut Emitter,
@@ -38,7 +38,7 @@ pub(super) fn emit_separate_property_probe(
             emitter.instruction("ldr x9, [x9]");                                // restore class dispatch state before skipping this parent slot
         }
         Arch::X86_64 => {
-            emitter.instruction("test rax, rax");                               // check whether an independent eval field actually exists
+            emitter.instruction("test rax, rax");                               // check whether the receiver is an eval runtime child
             emitter.instruction(&format!("jz {fail}"));                         // keep the native private field inaccessible
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // recover the receiver after the metadata callback
             emitter.instruction("mov r11, QWORD PTR [r11]");                    // restore class dispatch state before skipping this parent slot

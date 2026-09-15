@@ -11,7 +11,7 @@
 
 use super::{abi, Arch, Emitter, Module};
 
-const SLOT_HELPER: &str = "__elephc_eval_property_hash_slot";
+pub(super) const SLOT_HELPER: &str = "__elephc_eval_property_hash_slot";
 
 /// Returns a permitted object's property-hash slot address, or zero without touching its fields.
 pub(super) fn emit_property_hash_slot_helper(module: &Module, emitter: &mut Emitter) {
@@ -204,6 +204,26 @@ mod tests {
             assert!(!asm.contains(&callback), "{name}");
             let offset = if target.arch == Arch::AArch64 { "#24" } else { "[rdi + 24]" };
             assert!(asm.contains(offset), "{name}: missing one-property tail offset");
+        }
+    }
+
+    /// The exact-key probe uses hash-get's entry address so false and null values still exist.
+    #[test]
+    fn dynamic_property_existence_uses_hash_entry_presence_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let module = Module::new(target);
+            let mut emitter = Emitter::new(target);
+            emit_property_hash_slot_helper(&module, &mut emitter);
+            super::super::emit_dynamic_property_exists_helper(&module, &mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_hash_get"), "{name}");
+            let presence_probe = if target.arch == Arch::AArch64 {
+                "cmp x4, #0"
+            } else {
+                "test r8, r8"
+            };
+            assert!(asm.contains(presence_probe), "{name}");
         }
     }
 }

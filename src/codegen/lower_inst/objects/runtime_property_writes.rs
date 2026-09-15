@@ -269,6 +269,7 @@ pub(super) fn lower_runtime_object_prop_set(
                         value,
                         &arm.class_name,
                         dynamic_property_hash_offset_for_class(ctx, &arm.class_name, "")?,
+                        None,
                         16,
                         32,
                     )
@@ -359,6 +360,11 @@ pub(super) fn lower_mixed_named_prop_set(
                 abi::emit_release_temporary_stack(ctx.emitter, 16);
                 abi::emit_jump(ctx.emitter, &done_label);
             }
+            MixedPropertyWriteAction::MagicSetRecursiveRefusal { .. } => {
+                return Err(CodegenIrError::invalid_module(
+                    "literal Mixed property write retained a runtime-name magic-set refusal",
+                ));
+            }
         }
     }
 
@@ -397,6 +403,13 @@ enum MixedPropertyWriteAction {
         class_name: String,
         /// That class's own `8 + slots * 16` hash offset.
         hash_offset: usize,
+    },
+    /// Invoke `__set`, but preserve this visibility error if the same receiver/name pair reenters.
+    MagicSetRecursiveRefusal {
+        /// Runtime class whose magic setter PHP selects.
+        class_name: String,
+        /// Access error raised when the active pair suppresses recursive dispatch.
+        message: String,
     },
 }
 
@@ -473,6 +486,8 @@ fn emit_runtime_name_stacked_write_arm(
             // php answers an accessor on this class, which a runtime name cannot reach yet. The
             // arm must not store into any slot, so it stores nothing at all.
             PropertyRuntimeAction::MagicDeferred => {
+                let recursive_refusal =
+                    magic_set_recursive_refusal(ctx, &arm.class_name, property);
                 lower_runtime_magic_set(
                     ctx,
                     expect_operand(inst, 0)?,
@@ -480,6 +495,7 @@ fn emit_runtime_name_stacked_write_arm(
                     value,
                     &arm.class_name,
                     dynamic_property_hash_offset_for_class(ctx, &arm.class_name, "")?,
+                    recursive_refusal.as_deref(),
                     16,
                     32,
                 )?;
@@ -615,6 +631,15 @@ fn mixed_property_write_candidate(
         // php answers an accessor on this class. The write is peeled off upstream for a direct
         // name and deferred for a runtime one; either way this arm must not store into a slot,
         // so the class simply does not contribute one.
+        PropertyRuntimeAction::MagicDeferred if kind == PropertyAccessKind::RuntimeWrite => {
+            let Some(message) = magic_set_recursive_refusal(ctx, class_name, property) else {
+                return Ok(None);
+            };
+            MixedPropertyWriteAction::MagicSetRecursiveRefusal {
+                class_name: class_name.to_string(),
+                message,
+            }
+        }
         PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::MagicDeferred => return Ok(None),
     };
     Ok(Some(MixedPropertyWriteCandidate {
@@ -717,6 +742,7 @@ fn lower_runtime_magic_set(
     value: ValueId,
     class_name: &str,
     hash_offset: Option<usize>,
+    recursive_refusal: Option<&str>,
     receiver_stack_offset: usize,
     staged_stack_bytes: usize,
 ) -> Result<()> {
@@ -729,6 +755,7 @@ fn lower_runtime_magic_set(
         class_name,
         hash_offset,
         &target,
+        recursive_refusal,
         receiver_stack_offset,
         staged_stack_bytes,
     )
@@ -742,6 +769,7 @@ pub(super) fn lower_direct_magic_set(
     value: ValueId,
     class_name: &str,
     hash_offset: Option<usize>,
+    recursive_refusal: Option<&str>,
 ) -> Result<()> {
     let object_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(object, object_reg)?;
@@ -756,6 +784,7 @@ pub(super) fn lower_direct_magic_set(
         value,
         class_name,
         hash_offset,
+        recursive_refusal,
         16,
         32,
     )
@@ -776,6 +805,7 @@ fn emit_runtime_magic_set_call(
     class_name: &str,
     hash_offset: Option<usize>,
     target: &super::super::MethodCallTarget,
+    recursive_refusal: Option<&str>,
     receiver_stack_offset: usize,
     staged_stack_bytes: usize,
 ) -> Result<()> {
@@ -784,14 +814,16 @@ fn emit_runtime_magic_set_call(
     let caught_label = ctx.next_label("runtime_magic_set_caught");
     let done_label = ctx.next_label("runtime_magic_set_done");
 
-    if let Some(hash_offset) = hash_offset {
-        emit_branch_if_stacked_runtime_hash_contains(
-            ctx,
-            hash_offset,
-            receiver_stack_offset,
-            0,
-            &existing_label,
-        );
+    if recursive_refusal.is_none() {
+        if let Some(hash_offset) = hash_offset {
+            emit_branch_if_stacked_runtime_hash_contains(
+                ctx,
+                hash_offset,
+                receiver_stack_offset,
+                0,
+                &existing_label,
+            );
+        }
     }
 
     abi::emit_reserve_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);
@@ -834,37 +866,42 @@ fn emit_runtime_magic_set_call(
 
     ctx.emitter.label(&recursive_label);
     abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);
-    if let Some(hash_offset) = hash_offset {
-        emit_dynamic_property_creation_deprecation(
-            ctx,
-            class_name,
-            hash_offset,
-            receiver_stack_offset,
-            0,
-        )?;
-        lower_runtime_allow_dynamic_prop_set(
-            ctx,
-            value,
-            hash_offset,
-            receiver_stack_offset,
-            0,
-            staged_stack_bytes,
-        )?;
-        abi::emit_jump(ctx.emitter, &done_label);
+    if let Some(message) = recursive_refusal {
+        abi::emit_release_temporary_stack(ctx.emitter, staged_stack_bytes);
+        super::super::exceptions::emit_error(ctx, message);
     } else {
-        emit_readonly_runtime_dynamic_property_error(ctx, class_name, 0, staged_stack_bytes);
-    }
+        if let Some(hash_offset) = hash_offset {
+            emit_dynamic_property_creation_deprecation(
+                ctx,
+                class_name,
+                hash_offset,
+                receiver_stack_offset,
+                0,
+            )?;
+            lower_runtime_allow_dynamic_prop_set(
+                ctx,
+                value,
+                hash_offset,
+                receiver_stack_offset,
+                0,
+                staged_stack_bytes,
+            )?;
+            abi::emit_jump(ctx.emitter, &done_label);
+        } else {
+            emit_readonly_runtime_dynamic_property_error(ctx, class_name, 0, staged_stack_bytes);
+        }
 
-    ctx.emitter.label(&existing_label);
-    if let Some(hash_offset) = hash_offset {
-        lower_runtime_allow_dynamic_prop_set(
-            ctx,
-            value,
-            hash_offset,
-            receiver_stack_offset,
-            0,
-            staged_stack_bytes,
-        )?;
+        ctx.emitter.label(&existing_label);
+        if let Some(hash_offset) = hash_offset {
+            lower_runtime_allow_dynamic_prop_set(
+                ctx,
+                value,
+                hash_offset,
+                receiver_stack_offset,
+                0,
+                staged_stack_bytes,
+            )?;
+        }
     }
     ctx.emitter.label(&done_label);
     Ok(())
@@ -1135,6 +1172,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
             &arm.class_name,
             arm.hash_offset,
             &arm.target,
+            None,
             16,
             32,
         )?;
@@ -1188,6 +1226,23 @@ pub(super) fn lower_runtime_mixed_prop_set(
                     16,
                 )?;
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
+                abi::emit_jump(ctx.emitter, &done_label);
+            }
+            MixedPropertyWriteAction::MagicSetRecursiveRefusal {
+                class_name,
+                message,
+            } => {
+                lower_runtime_magic_set(
+                    ctx,
+                    object,
+                    property_value,
+                    value,
+                    class_name,
+                    dynamic_property_hash_offset_for_class(ctx, class_name, "")?,
+                    Some(message),
+                    16,
+                    32,
+                )?;
                 abi::emit_jump(ctx.emitter, &done_label);
             }
         }

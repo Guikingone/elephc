@@ -307,6 +307,21 @@ macro_rules! impl_collection_call_ops {
         })
     }
 
+    /// Probes the generated user class's dynamic-property hash without exposing declared slots.
+    fn object_dynamic_property_exists(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<bool, EvalStatus> {
+        Ok(unsafe {
+            __elephc_eval_value_dynamic_property_exists(
+                object.as_ptr(),
+                property.as_ptr(),
+                property.len() as u64,
+            )
+        } != 0)
+    }
+
     /// Calls a boxed Mixed object method through the generated user helper.
     fn method_call(
         &mut self,

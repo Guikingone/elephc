@@ -977,6 +977,25 @@ fn property_access_error_message(
     )
 }
 
+/// Returns the visibility refusal a suppressed `__set` reentry must preserve for this name.
+///
+/// A missing or strict-ancestor-private name is dynamic and may be stored after PHP suppresses a
+/// recursive receiver/name pair. A private or protected slot owned by the runtime class remains
+/// inaccessible, so suppression must raise the original access error instead of turning the name
+/// into a public dynamic hash entry.
+pub(super) fn magic_set_recursive_refusal(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) -> Option<String> {
+    match resolve_property_name_in_current_scope(ctx, class_name, property) {
+        PropertyNameResolution::Inaccessible(visibility) => Some(
+            property_access_error_message(&visibility, class_name, property),
+        ),
+        _ => None,
+    }
+}
+
 /// Builds the slot metadata for a private property the INVOCATION SCOPE declares.
 ///
 /// The offset is computed from the scope class's own layout index, which is also the receiver's:

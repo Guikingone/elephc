@@ -1060,16 +1060,7 @@ pub(super) fn eval_object_public_property_exists(
     property_name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let property_count = values.object_property_len(object)?;
-    for position in 0..property_count {
-        let key = values.object_property_iter_key(object, position)?;
-        let key_bytes = values.string_bytes(key);
-        values.release(key)?;
-        if key_bytes? == property_name.as_bytes() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    values.object_dynamic_property_exists(object, property_name)
 }
 
 /// Validates that an object property may be used as a by-reference method argument.

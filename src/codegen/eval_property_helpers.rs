@@ -72,6 +72,7 @@ pub(super) fn emit_eval_property_helpers(
     emit_property_set_helper(module, emitter, data, &slots);
     unset::emit_property_unset_helper(module, emitter, data, &slots);
     emit_property_hash_slot_helper(module, emitter);
+    emit_dynamic_property_exists_helper(module, emitter);
 }
 
 /// Returns true when the EIR module contains a function that can call eval.
@@ -300,6 +301,92 @@ fn emit_property_set_helper(
         Arch::AArch64 => emit_property_set_aarch64(module, emitter, data, slots),
         Arch::X86_64 => emit_property_set_x86_64(module, emitter, data, slots),
     }
+}
+
+/// Emits `__elephc_eval_value_dynamic_property_exists(Mixed*, name, len) -> bool`.
+///
+/// This is intentionally distinct from the object-property iterator. That iterator is a public
+/// projection used by JSON and reflection, while this probe answers only whether the generated
+/// user-class property hash already owns one exact key before Magician considers `__set`.
+fn emit_dynamic_property_exists_helper(module: &Module, emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: dynamic property existence probe ---");
+    label_c_global(
+        module,
+        emitter,
+        "__elephc_eval_value_dynamic_property_exists",
+    );
+    match module.target.arch {
+        Arch::AArch64 => emit_dynamic_property_exists_aarch64(emitter),
+        Arch::X86_64 => emit_dynamic_property_exists_x86_64(emitter),
+    }
+}
+
+/// Emits the ARM64 dynamic-property existence probe.
+fn emit_dynamic_property_exists_aarch64(emitter: &mut Emitter) {
+    let miss = "__elephc_eval_value_dynamic_property_exists_miss";
+    let done = "__elephc_eval_value_dynamic_property_exists_done";
+    emitter.instruction("sub sp, sp, #48");                                     // reserve an aligned frame for the key and saved caller state
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // preserve the requested dynamic-property name
+    emitter.instruction("str x2, [sp, #8]");                                    // preserve the requested name length
+    emitter.instruction(&format!("cbz x0, {miss}"));                            // a null boxed receiver owns no dynamic entry
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the receiver tag and native object payload
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 identifies an object payload
+    emitter.instruction(&format!("b.ne {miss}"));                               // non-object values own no dynamic entry
+    emitter.instruction("mov x0, x1");                                          // pass the raw native object to the layout-specific slot helper
+    abi::emit_call_label(emitter, dynamic_properties::SLOT_HELPER);
+    emitter.instruction(&format!("cbz x0, {miss}"));                            // objects without permitted hash storage cannot contain the key
+    emitter.instruction("ldr x0, [x0]");                                        // load the current per-instance property hash
+    emitter.instruction(&format!("cbz x0, {miss}"));                            // an unallocated hash has no entries
+    emitter.instruction("ldr x1, [sp, #0]");                                    // restore the requested property name for lookup
+    emitter.instruction("ldr x2, [sp, #8]");                                    // restore the requested property-name length
+    abi::emit_call_label(emitter, "__rt_hash_get");
+    emitter.instruction("cmp x4, #0");                                          // use the entry-address result, including false and null values
+    emitter.instruction("cset x0, ne");                                         // return true exactly when the hash contains the key
+    emitter.instruction(&format!("b {done}"));                                  // join the common helper epilogue
+    emitter.label(miss);
+    emitter.instruction("mov x0, xzr");                                         // report that no public dynamic entry exists
+    emitter.label(done);
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #48");                                     // release the temporary helper frame
+    emitter.instruction("ret");                                                 // return the exact-key existence flag
+}
+
+/// Emits the x86_64 dynamic-property existence probe.
+fn emit_dynamic_property_exists_x86_64(emitter: &mut Emitter) {
+    let miss = "__elephc_eval_value_dynamic_property_exists_miss_x";
+    let done = "__elephc_eval_value_dynamic_property_exists_done_x";
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve aligned spills for the requested key
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // preserve the requested dynamic-property name
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the requested name length
+    emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver is null
+    emitter.instruction(&format!("jz {miss}"));                                 // a null boxed receiver owns no dynamic entry
+    emitter.instruction("mov rax, rdi");                                        // pass the boxed receiver through the mixed-unbox ABI
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the receiver tag and native object payload
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 identifies an object payload
+    emitter.instruction(&format!("jne {miss}"));                                // non-object values own no dynamic entry
+    abi::emit_call_label(emitter, dynamic_properties::SLOT_HELPER);
+    emitter.instruction("test rax, rax");                                       // inspect the layout-specific hash-slot address
+    emitter.instruction(&format!("jz {miss}"));                                 // objects without permitted hash storage cannot contain the key
+    emitter.instruction("mov rdi, QWORD PTR [rax]");                            // load the current per-instance property hash
+    emitter.instruction("test rdi, rdi");                                       // check whether a hash was allocated
+    emitter.instruction(&format!("jz {miss}"));                                 // an unallocated hash has no entries
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // restore the requested property name for lookup
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the requested property-name length
+    abi::emit_call_label(emitter, "__rt_hash_get");
+    emitter.instruction("test r8, r8");                                         // use the entry-address result, including false and null values
+    emitter.instruction("setne al");                                            // materialize true when the hash contains the key
+    emitter.instruction("movzx rax, al");                                       // widen the boolean return value to the C ABI word
+    emitter.instruction(&format!("jmp {done}"));                                // join the common helper epilogue
+    emitter.label(miss);
+    emitter.instruction("xor eax, eax");                                        // report that no public dynamic entry exists
+    emitter.label(done);
+    emitter.instruction("leave");                                               // release spills and restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the exact-key existence flag
 }
 
 /// Emits the ARM64 property-get helper body.
