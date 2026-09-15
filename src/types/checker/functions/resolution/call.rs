@@ -365,6 +365,8 @@ impl Checker {
             } else if arg_idx < decl.params.len() {
                 let supplied_reference = decl.ref_params.get(arg_idx).copied().unwrap_or(false)
                     && !defaults.get(arg_idx).copied().unwrap_or(false);
+                let can_widen_by_ref_local =
+                    self.by_ref_argument_can_widen_local_to_mixed(arg);
                 if supplied_reference
                     && descriptor_projections
                         .get(arg_idx)
@@ -443,9 +445,10 @@ impl Checker {
                             &ty,
                             arg,
                             caller_env,
+                            can_widen_by_ref_local,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
-                        self.record_php_array_reference_output(arg, &declared_ty, &ty, span);
+                        self.record_boxed_reference_output(arg, &declared_ty, &ty, span);
                     }
                     if !proven_callable_array {
                         self.require_bound_param_arg_type(
@@ -470,8 +473,11 @@ impl Checker {
                 let storage_ty = if supplied_reference {
                     PhpType::Mixed
                 } else {
-                    ty
+                    ty.clone()
                 };
+                if supplied_reference {
+                    self.record_boxed_reference_output(arg, &storage_ty, &ty, span);
+                }
                 param_types.push((decl.params[arg_idx].clone(), storage_ty));
                 arg_idx += 1;
             } else {

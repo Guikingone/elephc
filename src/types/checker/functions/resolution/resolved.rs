@@ -139,6 +139,7 @@ impl Checker {
         let mut param_idx = 0usize;
         for arg in args {
             let actual_ty = self.infer_type(arg, caller_env)?;
+            let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg);
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }
@@ -201,9 +202,12 @@ impl Checker {
                             &actual_ty,
                             arg,
                             caller_env,
+                            can_widen_by_ref_local,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
-                        self.record_php_array_reference_output(arg, expected_ty, &actual_ty, span);
+                    }
+                    if supplied_reference {
+                        self.record_boxed_reference_output(arg, expected_ty, &actual_ty, span);
                     }
                     // PHP's parameter binding only applies to a *declared* parameter type.
                     // An inferred parameter's "expected" type is just what earlier call sites

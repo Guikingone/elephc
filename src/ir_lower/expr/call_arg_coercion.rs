@@ -50,12 +50,40 @@ pub(super) fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
+    promote_boxed_reference_local_argument(ctx, sig, index, arg);
     promote_reference_return_local_argument(ctx, sig, index, arg);
     if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, arg) {
         return lowered.value;
     }
     let lowered = lower_expr(ctx, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Gives an eligible whole-local reference the canonical boxed payload required by the callee.
+///
+/// The checker permits this only for a local that was not already part of another reference set.
+/// Promotion therefore changes one complete binding, rather than relabelling a concrete cell that
+/// another alias would still read with its earlier payload representation.
+fn promote_boxed_reference_local_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) {
+    if !sig.ref_params.get(index).copied().unwrap_or(false)
+        || !sig
+            .params
+            .get(index)
+            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+    {
+        return;
+    }
+    let ExprKind::Variable(name) = &arg.kind else {
+        return;
+    };
+    if !ctx.is_ref_bound_local(name) && ctx.local_is_promotable_to_ref_cell(name) {
+        ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
+    }
 }
 
 /// Materializes a proven callable array as the descriptor required by a Callable slot.

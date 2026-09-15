@@ -201,6 +201,7 @@ impl Checker {
         actual_ty: &PhpType,
         arg: &Expr,
         env: &TypeEnv,
+        can_widen_local: bool,
         context: &str,
     ) -> Result<(), CompileError> {
         if expected_ty.codegen_repr() != PhpType::Mixed
@@ -224,6 +225,9 @@ impl Checker {
         if requires_by_ref_boxed_storage(expected_ty)
             && !supports_by_ref_boxed_storage(actual_ty)
         {
+            if expected_ty.codegen_repr() == PhpType::Mixed && can_widen_local {
+                return Ok(());
+            }
             // `lower_by_ref_array_element_arg_with_signature` widens a local
             // indexed array to Mixed slots before taking the element address.
             // Only that addressable shape has this conversion, not arbitrary
@@ -243,6 +247,24 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    /// Returns whether a by-reference call may give one ordinary local canonical Mixed storage.
+    pub(crate) fn by_ref_argument_can_widen_local_to_mixed(&self, arg: &Expr) -> bool {
+        let mut arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            arg = value;
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            return false;
+        };
+        !self.active_ref_params.contains(name)
+            && !self.ref_aliased_locals.contains(name)
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+            && !self.typed_local_names.contains(name)
+            && !self.name_is_seeded_program_storage(name)
+            && !self.top_level_binding_is_program_global(name)
     }
 
     /// Identifies reference arguments whose writable cell stores a canonical boxed Mixed value.

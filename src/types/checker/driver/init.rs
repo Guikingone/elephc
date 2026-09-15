@@ -110,7 +110,7 @@ impl Checker {
             scope_dynamic_mutation_targets: Default::default(),
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
-            php_array_reference_outputs: HashMap::new(),
+            boxed_reference_outputs: HashMap::new(),
             loop_storage_types: HashMap::new(),
             string_incdec_locals: HashSet::new(),
             strict_locals: false,

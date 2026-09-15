@@ -557,7 +557,7 @@ impl Checker {
             _ => self.infer_type(expr, env),
         };
         if result.is_ok() {
-            self.apply_php_array_reference_outputs(expr.span, env);
+            self.apply_boxed_reference_outputs(expr.span, env);
         }
         result
     }

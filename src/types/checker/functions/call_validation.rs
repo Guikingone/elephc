@@ -698,6 +698,7 @@ impl Checker {
             } else {
                 self.infer_type(arg, caller_env)?
             };
+            let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg);
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }
@@ -749,9 +750,12 @@ impl Checker {
                             &actual_ty,
                             arg,
                             caller_env,
+                            can_widen_by_ref_local,
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
-                        self.record_php_array_reference_output(arg, expected_ty, &actual_ty, span);
+                    }
+                    if supplied_reference {
+                        self.record_boxed_reference_output(arg, expected_ty, &actual_ty, span);
                     }
                     // `strict_types` applies to every declared parameter type, including the
                     // closure and first-class-callable surfaces that stay off the coercive
