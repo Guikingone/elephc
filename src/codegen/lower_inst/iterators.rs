@@ -974,14 +974,21 @@ fn ensure_unique_static_iter_source(
     source: ValueId,
     source_kind: &IteratorSourceKind,
 ) -> Result<()> {
+    let source_local = source_load_local_slot(ctx, source)?;
     let helper = match source_kind {
         // Every indexed by-reference source becomes a hash before iteration. Hash entries carry
         // the persistent tag-11 reference-set marker, so the last alias can safely outlive a
         // literal or function-result source without introducing a second indexed wrapper format.
         IteratorSourceKind::Indexed { .. } => {
+            // Loading a concrete container from boxed PHP-array storage retained its payload.
+            // Retire and clear the old box before the consuming conversion, then publish the
+            // converted owner below. Raw concrete slots need no release here.
+            if let Some(slot) = source_local {
+                ctx.release_mutated_source_local_owner(slot, source)?;
+            }
             convert_loaded_indexed_source_to_hash(ctx);
             ctx.store_result_value(source)?;
-            if let Some(slot) = source_load_local_slot(ctx, source)? {
+            if let Some(slot) = source_local {
                 ctx.store_value_to_local(slot, source)?;
             }
             return Ok(());
@@ -991,12 +998,18 @@ fn ensure_unique_static_iter_source(
         IteratorSourceKind::Hash => "__rt_hash_to_mixed",
         _ => return Ok(()),
     };
+    // HashToMixed can replace the payload at its copy-on-write boundary. Transfer a raw boxed
+    // local's payload owner into that operation so storeback neither leaks the previous box nor
+    // leaves the iterator's origin pointing at a retired generation.
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, source)?;
+    }
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the foreach source pointer to the COW helper
     }
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(source)?;
-    if let Some(slot) = source_load_local_slot(ctx, source)? {
+    if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, source)?;
     }
     Ok(())

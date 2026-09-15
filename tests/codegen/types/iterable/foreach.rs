@@ -1477,13 +1477,14 @@ echo implode(',', $o->x);
     assert_eq!(out, "2;2;2,4");
 }
 
-/// Regression for issue #642: the separated container must be published back into the PROPERTY
-/// slot, on every supported target. A split whose result is not
+/// Regression for issue #642: the separated container must be published back through the
+/// property's promoted reference cell on every supported target. A split whose result is not
 /// written back leaves the loop iterating a container the property does not own, which is how
 /// the property ended up freed. The assertion is structural: inside the `prop_get_for_write`
-/// block the boxed slot is read, its zval is cloned, the old owner is released, and the result
-/// is stored back to that same slot, in that order. Run under `ELEPHC_TEST_TARGET` to cover
-/// the non-host architectures. The declared PHP array property uses Mixed storage.
+/// block the boxed cell payload is read, its zval is cloned, the old owner is released, the cell
+/// is reloaded after those calls, and the result is stored through it, in that order. Run under
+/// `ELEPHC_TEST_TARGET` to cover the non-host architectures. The declared PHP array property uses
+/// Mixed storage and by-reference iteration intentionally promotes its slot to reference storage.
 #[test]
 fn test_regression_642_prop_get_for_write_publishes_split_into_property_slot() {
     let dir = make_cli_test_dir("elephc_prop_get_for_write_publish");
@@ -1509,11 +1510,12 @@ foreach ($o->x as &$v) { $v = $v * 2; }
         .expect("missing iter_start after prop_get_for_write");
     let body = &body[..end];
 
-    let (slot_load, slot_store) = match target().arch {
-        Arch::AArch64 => ("ldr x0, [x9, #8]", "str x0, [x9, #8]"),
+    let (slot_load, cell_reload, cell_store) = match target().arch {
+        Arch::AArch64 => ("ldr x0, [x9, #8]", "ldr x10, [x9, #8]", "str x0, [x10]"),
         Arch::X86_64 => (
             "mov rax, QWORD PTR [r11 + 8]",
-            "mov QWORD PTR [r11 + 8], rax",
+            "mov r10, QWORD PTR [r11 + 8]",
+            "mov QWORD PTR [r10], rax",
         ),
     };
     let call = match target().arch {
@@ -1529,12 +1531,18 @@ foreach ($o->x as &$v) { $v = $v * 2; }
     let release_pos = body
         .find("__rt_decref_mixed")
         .unwrap_or_else(|| panic!("missing old property zval release in:\n{body}"));
+    let cell_reload_pos = body
+        .find(cell_reload)
+        .unwrap_or_else(|| panic!("missing property cell reload `{cell_reload}` in:\n{body}"));
     let store_pos = body
-        .find(slot_store)
-        .unwrap_or_else(|| panic!("missing slot republish `{slot_store}` in:\n{body}"));
+        .find(cell_store)
+        .unwrap_or_else(|| panic!("missing cell republish `{cell_store}` in:\n{body}"));
     assert!(
-        load_pos < call_pos && call_pos < release_pos && release_pos < store_pos,
-        "expected slot load -> clone -> old owner release -> slot republish, got:\n{body}"
+        load_pos < call_pos
+            && call_pos < release_pos
+            && release_pos < cell_reload_pos
+            && cell_reload_pos < store_pos,
+        "expected cell payload load -> clone -> old owner release -> cell reload -> republish, got:\n{body}"
     );
 }
 
