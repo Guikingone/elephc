@@ -159,7 +159,19 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_value(
     arg: &Expr,
 ) -> LoweredValue {
     let value = match &arg.kind {
-        ExprKind::Variable(name) => lower_invoker_ref_arg_marker(ctx, name, arg.span),
+        ExprKind::Variable(name) => {
+            // Type checking authorizes this promotion only for signature-unknown calls, where
+            // the runtime descriptor decides whether the marker binds by value or by reference.
+            // Canonicalize eligible caller locals before capturing their address, so an untyped
+            // `mixed &$value` target never interprets a narrower scalar slot as a boxed cell.
+            if ctx.boxed_reference_promotion_is_authorized(name, arg.span)
+                && !ctx.is_ref_bound_local(name)
+                && ctx.local_is_promotable_to_ref_cell(name)
+            {
+                ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
+            }
+            lower_invoker_ref_arg_marker(ctx, name, arg.span)
+        }
         _ => lower_expr(ctx, arg),
     };
     coerce_descriptor_invoker_mixed_value(ctx, value, arg.span)

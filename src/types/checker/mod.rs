@@ -746,6 +746,21 @@ impl Checker {
     pub(crate) fn record_unresolved_callee_argument_aliases(&mut self, args: &[Expr]) {
         for arg in args {
             self.record_reference_alias_root(arg);
+            let mut value = arg;
+            while let ExprKind::NamedArg { value: inner, .. }
+                | ExprKind::ErrorSuppress(inner) = &value.kind
+            {
+                value = inner;
+            }
+            let ExprKind::Variable(name) = &value.kind else {
+                continue;
+            };
+            if value.span.identifies_a_node() {
+                self.boxed_reference_promotion_sites
+                    .entry((self.current_loop_storage_scope.clone(), value.span))
+                    .or_default()
+                    .insert(name.clone());
+            }
         }
     }
 }

@@ -24,7 +24,8 @@ for ($i = 0; $i < 3; $i++) {
     $factory = nativeDefaultCapture(...);
     $second = $factory(value: $i);
     unset($factory);
-    $third = call_user_func_array("nativeDefaultCapture", ["value" => $i]);
+    $runtimeFactory = $argc > 0 ? "nativeDefaultCapture" : "nativeDefaultCapture";
+    $third = $runtimeFactory(value: $i);
     echo $first(), ":", $second(), ":", $third(), "|";
     echo $first(), ":", $second(), ":", $third(), "|";
     unset($first, $second, $third);
@@ -67,7 +68,8 @@ function descriptorDefault(array &$items = [], int $value = 0): int {
 }
 $callback = descriptorDefault(...);
 for ($i = 1; $i < 4; $i++) {
-    echo $callback(value: $i), ":", call_user_func_array("descriptorDefault", ["value" => $i]), "|";
+    $runtimeCallback = $argc > 0 ? "descriptorDefault" : "descriptorDefault";
+    echo $callback(value: $i), ":", $runtimeCallback(value: $i), "|";
 }
 unset($callback);
 echo "done";
