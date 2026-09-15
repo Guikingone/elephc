@@ -228,6 +228,38 @@ try {
     assert_eq!(values.get(result), FakeValue::String("1:private".to_string()));
 }
 
+/// Verifies a named function cannot inherit private-property access from its method caller.
+#[test]
+fn execute_program_clears_method_scope_inside_called_global_function() {
+    let program = parse_fragment(
+        br#"function eval_read_private_from_global($object) {
+    return $object->hidden;
+}
+class EvalGlobalFunctionScopeBox {
+    private string $hidden = "private";
+    public function probe() {
+        try {
+            eval_read_private_from_global($this);
+            return "leaked class scope";
+        } catch (Error $error) {
+            return "caught:" . $this->hidden;
+        }
+    }
+}
+return (new EvalGlobalFunctionScopeBox())->probe();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("caught:private".to_string())
+    );
+}
+
 /// Verifies an ancestor's private name remains available for a distinct child dynamic property.
 #[test]
 fn execute_program_creates_dynamic_property_named_like_ancestor_private_slot() {

@@ -72,6 +72,10 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let static_names = static_var_names(function.body());
     context.push_function(function.name());
+    // Named functions have global lexical scope even when a method calls them. Empty sentinels
+    // hide the caller's class and late-static scopes until this activation returns.
+    context.push_class_scope(String::new());
+    context.push_called_class_scope(String::new());
     let bound_call = match bind_evaluated_function_args_with_ref_mode(
         function.params(),
         function.parameter_types(),
@@ -85,6 +89,8 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     ) {
         Ok(args) => args,
         Err(status) => {
+            context.pop_called_class_scope();
+            context.pop_class_scope();
             context.pop_function();
             return Err(status);
         }
@@ -139,6 +145,8 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         values,
     );
     let return_result = release_function_args(return_result, context, values);
+    context.pop_called_class_scope();
+    context.pop_class_scope();
     context.pop_function();
     return_result
 }

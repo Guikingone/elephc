@@ -391,7 +391,9 @@ impl ElephcEvalContext {
 
     /// Returns the current eval class scope, if execution is inside a method.
     pub fn current_class_scope(&self) -> Option<&str> {
-        self.class_stack.last().map(String::as_str)
+        self.class_stack
+            .last()
+            .and_then(|name| (!name.is_empty()).then_some(name.as_str()))
     }
 
     /// Starts one readonly reinitialization phase for a newly cloned object.
@@ -440,7 +442,9 @@ impl ElephcEvalContext {
 
     /// Returns the current late-static-bound eval class scope, if execution is inside a method.
     pub fn current_called_class_scope(&self) -> Option<&str> {
-        self.called_class_stack.last().map(String::as_str)
+        self.called_class_stack
+            .last()
+            .and_then(|name| (!name.is_empty()).then_some(name.as_str()))
     }
 
     /// Returns a dynamic called-class override for a generated/AOT frame entering eval.
