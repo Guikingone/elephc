@@ -547,6 +547,7 @@ impl Checker {
             } => {
                 self.infer_type_with_assignment_effects(subject, env)?;
                 let mut errors = Vec::new();
+                let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
                 for (values, _) in cases {
                     for v in values {
                         self.infer_type_with_assignment_effects(v, env)?;
@@ -554,9 +555,11 @@ impl Checker {
                 }
                 self.break_continue_depth += 1;
                 for (_, body) in cases {
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
                     errors.extend(self.check_body(body, env));
                 }
                 if let Some(body) = default {
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                     errors.extend(self.check_body(body, env));
                 }
                 self.break_continue_depth -= 1;
@@ -609,6 +612,7 @@ impl Checker {
                     let branch_entry_targets = self.callable_array_targets.clone();
                     let branch_entry_target_versions =
                         self.callable_array_target_versions.clone();
+                    let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
 
                     if let Some(guard) = self.guard_narrowing(cond, env)? {
                         applied_any_guard = true;
@@ -646,6 +650,7 @@ impl Checker {
                         }
                         self.callable_array_targets = branch_entry_targets;
                         self.callable_array_target_versions = branch_entry_target_versions;
+                        self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                         restore_narrowed_var(env, &guard.var, &saved);
 
                         // The fallthrough env for the rest of the chain (next elseif or else)
@@ -665,6 +670,7 @@ impl Checker {
                         }
                         self.callable_array_targets = branch_entry_targets;
                         self.callable_array_target_versions = branch_entry_target_versions;
+                        self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                     }
                 }
 
@@ -832,12 +838,14 @@ impl Checker {
                 finally_body,
             } => {
                 let mut errors = Vec::new();
+                let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
                 for s in try_body {
                     if let Err(error) = self.check_stmt(s, env) {
                         errors.extend(error.flatten());
                     }
                 }
                 for catch_clause in catches {
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
                     let mut resolved_types = Vec::new();
                     for raw_exception_type in &catch_clause.exception_types {
                         let exception_type =
@@ -874,6 +882,7 @@ impl Checker {
                     }
                 }
                 if let Some(body) = finally_body {
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                     self.finally_break_continue_bases
                         .push(self.break_continue_depth);
                     errors.extend(self.check_body(body, env));

@@ -118,6 +118,8 @@ impl Checker {
             local_conditional_depth: 0,
             local_binding_depth: HashMap::new(),
             ref_aliased_locals: HashSet::new(),
+            boxed_ref_aliased_locals: HashSet::new(),
+            conditional_boxed_ref_invalidations: Vec::new(),
             static_local_names: HashSet::new(),
             typed_local_names: HashSet::new(),
             local_bind_kill_sites: HashMap::new(),

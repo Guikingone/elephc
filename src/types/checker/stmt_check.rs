@@ -13,6 +13,8 @@ mod assignments;
 mod control_flow;
 mod narrowing;
 
+use std::collections::HashSet;
+
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::types::TypeEnv;
@@ -221,9 +223,25 @@ impl Checker {
     where
         F: FnOnce(&mut Self, &mut TypeEnv) -> Result<(), CompileError>,
     {
+        let mut boxed_ref_aliased = self.boxed_ref_aliased_locals.clone();
+        self.conditional_boxed_ref_invalidations.push(HashSet::new());
+        // The group may execute zero or multiple times. Do not lend an inherited affirmative
+        // storage proof to a path whose binding a prior arm or iteration may have replaced.
+        // A managed alias established inside the current path is recorded again and remains
+        // usable for the rest of that path.
+        self.boxed_ref_aliased_locals.clear();
         self.local_conditional_depth += 1;
         let result = f(self, env);
         self.local_conditional_depth -= 1;
+        // Provenance is an affirmative storage proof for the current binding. A conditional
+        // body may not execute, so new facts cannot escape. Conversely, invalidating an entry
+        // fact on any path makes it unsafe at the join, even when another path preserves it.
+        let invalidated = self
+            .conditional_boxed_ref_invalidations
+            .pop()
+            .expect("conditional provenance scope must be balanced");
+        boxed_ref_aliased.retain(|name| !invalidated.contains(name));
+        self.boxed_ref_aliased_locals = boxed_ref_aliased;
         result
     }
 

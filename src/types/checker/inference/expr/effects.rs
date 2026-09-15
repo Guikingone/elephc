@@ -367,6 +367,10 @@ impl Checker {
                             let ExprKind::Variable(var) = &arg.kind else {
                                 continue;
                             };
+                            // `unset($var)` ends this binding even when escaped-reference
+                            // conservatism keeps the name in `ref_aliased_locals`. A later `=&`
+                            // assignment must establish fresh cell provenance for the new binding.
+                            self.invalidate_boxed_ref_alias_binding(var);
                             // Detaching a promoted reference is separate from killing its type
                             // binding: escaped aliases still prohibit incompatible reassignments.
                             if arg.span.identifies_a_node() {

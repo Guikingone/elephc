@@ -323,6 +323,11 @@ pub(crate) struct Checker {
     /// A reference can escape through a callee, so the alias is permanent for the rest of the
     /// body.
     pub ref_aliased_locals: HashSet<String>,
+    /// Current local bindings that alias a managed container entry whose physical cell payload
+    /// is canonical boxed `Mixed`, even when the checker's logical value type is narrower.
+    pub boxed_ref_aliased_locals: HashSet<String>,
+    /// Per-conditional-group bindings whose entry provenance was invalidated on any path.
+    pub conditional_boxed_ref_invalidations: Vec<HashSet<String>>,
     /// Names declared `static` in the current body. Their storage outlives the call, so the
     /// binding is never killable.
     pub static_local_names: HashSet<String>,
@@ -457,6 +462,8 @@ pub(crate) struct SavedLocalBindingScope {
     conditional_depth: u32,
     binding_depth: HashMap<String, u32>,
     ref_aliased: HashSet<String>,
+    boxed_ref_aliased: HashSet<String>,
+    boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
     typed: HashSet<String>,
     mixed_storage: HashSet<String>,
@@ -604,6 +611,10 @@ impl Checker {
             conditional_depth: self.local_conditional_depth,
             binding_depth: std::mem::take(&mut self.local_binding_depth),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
+            boxed_ref_aliased: std::mem::take(&mut self.boxed_ref_aliased_locals),
+            boxed_ref_invalidations: std::mem::take(
+                &mut self.conditional_boxed_ref_invalidations,
+            ),
             statics: std::mem::take(&mut self.static_local_names),
             typed: std::mem::take(&mut self.typed_local_names),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
@@ -629,6 +640,8 @@ impl Checker {
         self.local_conditional_depth = saved.conditional_depth;
         self.local_binding_depth = saved.binding_depth;
         self.ref_aliased_locals = saved.ref_aliased;
+        self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
+        self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
         self.static_local_names = saved.statics;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
@@ -642,6 +655,7 @@ impl Checker {
     /// captures, or reflected class of the binding that is gone — that is how a stale
     /// `$f()` signature would survive an `unset($f)`.
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
+        self.invalidate_boxed_ref_alias_binding(name);
         self.closure_return_types.remove(name);
         self.callable_sigs.remove(name);
         self.callable_captures.remove(name);
@@ -650,6 +664,14 @@ impl Checker {
         self.first_class_callable_targets.remove(name);
         self.reflection_class_targets.remove(name);
         self.foreach_key_locals.remove(name);
+    }
+
+    /// Ends the current binding's managed-cell provenance and records conditional uncertainty.
+    pub(crate) fn invalidate_boxed_ref_alias_binding(&mut self, name: &str) {
+        self.boxed_ref_aliased_locals.remove(name);
+        for invalidations in &mut self.conditional_boxed_ref_invalidations {
+            invalidations.insert(name.to_string());
+        }
     }
 
     /// Records that one local's callable-array target fact was assigned or invalidated.

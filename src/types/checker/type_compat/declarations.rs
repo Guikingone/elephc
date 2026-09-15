@@ -225,6 +225,15 @@ impl Checker {
         if requires_by_ref_boxed_storage(expected_ty)
             && !supports_by_ref_boxed_storage(actual_ty)
         {
+            if matches!(expected_ty, PhpType::Mixed)
+                && matches!(
+                    &arg.kind,
+                    ExprKind::Variable(name)
+                        if self.boxed_ref_aliased_locals.contains(name)
+                )
+            {
+                return Ok(());
+            }
             if expected_ty.codegen_repr() == PhpType::Mixed && can_widen_local {
                 return Ok(());
             }

@@ -1239,6 +1239,25 @@ echo "done\n";
     assert_clean(out, "drop1|2|drop2|done\n");
 }
 
+/// A copied alias keeps the managed entry's boxed-cell provenance for a later Mixed ref call.
+#[test]
+fn copied_managed_entry_alias_can_be_replaced_through_mixed_ref_parameter() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class CopiedManagedAliasValue {}
+function replace_copied_alias(mixed &$value): void { $value = "changed"; }
+
+$values = ["k" => new CopiedManagedAliasValue()];
+$alias =& $values["k"];
+$copy =& $alias;
+replace_copied_alias($copy);
+echo $values["k"], "|", $alias, "|", $copy, "\n";
+unset($values, $alias, $copy);
+"#,
+    );
+    assert_clean(out, "changed|changed|changed\n");
+}
+
 /// An early borrowed ref-cell argument stays alive while a later argument replaces its alias.
 #[test]
 fn borrowed_ref_cell_call_argument_is_pinned_across_later_reassignment() {

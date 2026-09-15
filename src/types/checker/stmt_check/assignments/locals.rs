@@ -232,6 +232,15 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    let mut target_has_boxed_ref_provenance = match &source.kind {
+        ExprKind::Variable(source_name) => {
+            checker.boxed_ref_aliased_locals.contains(source_name)
+        }
+        _ => false,
+    };
+    // `=&` always replaces the target binding. Preserve provenance only when the new source is
+    // itself the same managed Mixed cell, never from a prior binding of this name.
+    checker.invalidate_boxed_ref_alias_binding(target);
     // Both sides of `$target =& <source>` share one cell from here on, so neither binding can
     // be killed or re-bound independently. Recorded before the per-shape checks so an aliasing
     // that fails a later validation is still treated as an alias.
@@ -269,6 +278,11 @@ pub(super) fn check_ref_assign(
         }
         ExprKind::ArrayAccess { array, index } => {
             let array_ty = checker.infer_type(array, env)?;
+            target_has_boxed_ref_provenance = match array_ty.codegen_repr() {
+                PhpType::AssocArray { .. } | PhpType::Mixed => true,
+                PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+                _ => false,
+            };
             let index_ty = checker.infer_type(index, env)?;
             let normalized_index_ty = normalized_array_key_type(index, index_ty);
             let valid_php_key = matches!(
@@ -310,6 +324,9 @@ pub(super) fn check_ref_assign(
     if let Err(error) = result {
         poison_unbound_local(env, target);
         return Err(error);
+    }
+    if target_has_boxed_ref_provenance {
+        checker.boxed_ref_aliased_locals.insert(target.to_string());
     }
     Ok(())
 }

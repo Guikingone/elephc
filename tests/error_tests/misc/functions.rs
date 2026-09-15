@@ -573,6 +573,29 @@ fn test_error_untyped_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
     }
 }
 
+/// Rebinding a managed-entry alias to a concrete scalar cell clears the old boxed provenance.
+#[test]
+fn test_error_mixed_by_ref_rebound_scalar_alias_still_requires_boxed_storage() {
+    expect_error(
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; $scalar = 1; $alias =& $scalar; replaceScalar($alias);",
+        "requires a variable with mixed/union/nullable storage when passed by reference",
+    );
+}
+
+/// Managed provenance created on only one control-flow path cannot authorize the join binding.
+#[test]
+fn test_error_conditional_managed_alias_does_not_relabel_scalar_reference_cell() {
+    for source in [
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $scalar = 1; $alias =& $scalar; if ($argc > 1) { $items = ['k' => new stdClass()]; $alias =& $items['k']; } replaceScalar($alias);",
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; if ($argc > 1) { $scalar = 1; $alias =& $scalar; } replaceScalar($alias);",
+    ] {
+        expect_error(
+            source,
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
+}
+
 // -- Include/require path expression errors --
 
 /// Verifies that a static closure cannot capture `$this` from the enclosing scope.
