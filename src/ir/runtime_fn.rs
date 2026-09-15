@@ -2080,6 +2080,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::PrintR
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
+                // `str_repeat()` allocates the repeated bytes independently of its subject.
+                // Marking it as possibly aliasing made closure return analysis conservative,
+                // so callers failed to publish the fresh result before argument cleanup that
+                // can run a throwing destructor.
+                | RuntimeFnId::StrRepeat
                 | RuntimeFnId::StrSplit
                 // Every `str_word_count()` shape allocates its own result: format 0 is a plain
                 // integer, format 1 pushes persisted copies into a brand-new indexed array, and
