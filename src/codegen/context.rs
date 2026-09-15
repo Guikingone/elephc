@@ -918,7 +918,9 @@ impl<'a> FunctionContext<'a> {
     ) -> Result<()> {
         let source_ty = self.load_value_to_result(value)?;
         let target_ty = self.local_php_type(slot)?;
-        if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+        if target_ty.codegen_repr() == PhpType::Mixed
+            && source_ty.codegen_repr() != PhpType::Mixed
+        {
             if self.value_can_own_mixed_box_source(value)? {
                 emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
             } else {

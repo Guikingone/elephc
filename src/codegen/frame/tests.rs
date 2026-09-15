@@ -10,7 +10,7 @@
 use super::*;
 use crate::codegen::generate_user_asm_from_ir;
 use crate::codegen::platform::{Arch, Platform, Target};
-use crate::ir::{Builder, FunctionParam, IrType, Module, Terminator};
+use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership, Terminator};
 use crate::types::FunctionSig;
 
 /// Plain programs skip the clock read, while timing metrics and eval keep it enabled.
@@ -228,6 +228,84 @@ fn callable_frames_do_not_emit_a_second_stack_budget_guard() {
         assert!(asm.contains("call-stack overflow guard"), "{target:?}: {asm}");
         assert!(!asm.contains("recursion_stack_bytes"), "{target:?}: {asm}");
     }
+}
+
+/// Declared PHP-array unions use boxed local storage on every target.
+#[test]
+fn concrete_arrays_are_boxed_before_entering_php_array_union_storage() {
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let target = Target::parse(name).unwrap();
+        let mut module = Module::new(target);
+        module.add_function(union_array_store_fixture());
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        let asm = generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(
+            asm.matches("__rt_mixed_from_value").count(),
+            1,
+            "{name}: a raw php-array union store must box its concrete source\n{asm}"
+        );
+    }
+}
+
+/// Builds a raw local store of a concrete array into declared `array` union storage.
+fn union_array_store_fixture() -> Function {
+    let declared_array = PhpType::php_array();
+    let concrete_array = PhpType::Array(Box::new(PhpType::Int));
+    let mut function = Function::new(
+        "store_local_array".to_string(),
+        IrType::Void,
+        PhpType::Void,
+    );
+    let slot = function.add_local(
+        Some("array".to_string()),
+        IrType::from_php(&declared_array),
+        declared_array,
+        LocalKind::PhpLocal,
+    );
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let array = builder
+            .emit(
+                Op::ArrayNew,
+                Vec::new(),
+                Some(Immediate::Capacity(0)),
+                IrType::from_php(&concrete_array),
+                concrete_array,
+                Ownership::Owned,
+            )
+            .expect("array_new produces a value");
+        builder.emit(
+            Op::StoreLocal,
+            vec![array],
+            Some(Immediate::LocalSlot(slot)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    function
 }
 
 /// Builds a callable with an owned string parameter followed by a borrowed Mixed parameter.
