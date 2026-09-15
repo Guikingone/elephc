@@ -84,8 +84,7 @@ pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error
 // Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel
 // for `__unset` that the write path needs for `__set`.
 pub(crate) use instance_property_writes::{
-    borrow_receiver_as_runtime_class, box_value_for_runtime_shaped_receiver,
-    emit_receiver_instanceof, magic_accessor_subclasses,
+    borrow_receiver_as_runtime_class, emit_receiver_instanceof, magic_accessor_subclasses,
 };
 pub(super) use typed_foreach::coerce_typed_assign_value;
 pub(crate) use typed_foreach::promote_by_ref_foreach_source;

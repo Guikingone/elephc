@@ -215,7 +215,7 @@ fn emit_named_dynamic_property_creation_deprecation(
         key_len as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &skip_label);           // an existing key is a plain write, which php does not report
+    emit_branch_if_hash_entry_found(ctx, &skip_label);                          // an existing key is a plain write, including false and null
     emit_property_warning_fragment(
         ctx,
         format!(
@@ -432,7 +432,7 @@ pub(super) fn emit_stacked_named_dynamic_property_creation_deprecation(
     abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &key_label);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &skip_label);           // an existing key is a plain write, which php does not report
+    emit_branch_if_hash_entry_found(ctx, &skip_label);                          // an existing key is a plain write, including false and null
     emit_property_warning_fragment(
         ctx,
         format!(
@@ -566,7 +566,7 @@ pub(super) fn emit_dynamic_property_creation_deprecation(
         name_offset + 8,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &skip_label);
+    emit_branch_if_hash_entry_found(ctx, &skip_label);
     emit_property_warning_fragment(
         ctx,
         format!("Deprecated: Creation of dynamic property {}::$", class_name).as_bytes(),
@@ -582,4 +582,19 @@ pub(super) fn emit_dynamic_property_creation_deprecation(
     emit_property_warning_fragment(ctx, b" is deprecated\n", true);
     ctx.emitter.label(&skip_label);
     Ok(())
+}
+
+/// Branches on `__rt_hash_get`'s entry-address output, which distinguishes a missing key from a
+/// present key whose stored value is false or null.
+pub(super) fn emit_branch_if_hash_entry_found(ctx: &mut FunctionContext<'_>, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x4, #0");                              // test the matching entry address, not its possibly-false value
+            ctx.emitter.instruction(&format!("b.ne {label}"));                  // skip creation behavior when the key is already present
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test r8, r8");                             // test the matching entry address, not its possibly-false value
+            ctx.emitter.instruction(&format!("jnz {label}"));                   // skip creation behavior when the key is already present
+        }
+    }
 }

@@ -564,7 +564,8 @@ echo $object->calls, ":", $object->outer, ":", $object->inner;
 fn test_direct_name_subclass_setter_reentry_uses_runtime_guard() {
     let out = compile_and_run_capture(
         r#"<?php
-class DirectSetBase {}
+class DirectSetAncestor { private mixed $stored = null; }
+class DirectSetBase extends DirectSetAncestor {}
 class DirectSetChild extends DirectSetBase {
     public int $calls = 0;
     public function __set(string $name, mixed $value): void {
@@ -730,8 +731,9 @@ class RuntimeEvalInitialSetGuard {
 }
 $first = new RuntimeEvalSetGuard();
 $outer = chr(111) . 'uter';
+$inner = chr(105) . 'nner';
 $first->{$outer} = 'value';
-echo $first->{$outer}, ':', $first->inner, '|';
+echo $first->{$outer}, ':', $first->{$inner}, '|';
 $second = new RuntimeEvalInitialSetGuard();
 $name = chr(101) . 'val';
 $value = 'stored';

@@ -1006,7 +1006,7 @@ fn emit_branch_if_stacked_runtime_hash_contains(
         name_offset + 8,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, found_label);
+    emit_branch_if_hash_entry_found(ctx, found_label);
 }
 
 /// Adds the caller-owned stack node unless the active chain already contains this pair.

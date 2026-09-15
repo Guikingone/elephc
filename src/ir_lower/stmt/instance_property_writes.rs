@@ -56,7 +56,7 @@ pub(super) fn lower_property_assign(
             span,
         );
     }
-    lower_property_assign_value(ctx, object, property, value_expr, lowered_value, span)
+    lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span)
 }
 
 /// Emits the `instanceof` chain that hands a runtime subclass's `__set` its own call.
@@ -100,7 +100,10 @@ fn lower_property_assign_guarding_magic_subclasses(
         branch_to(ctx, merge);
         ctx.builder.position_at_end(next_block);
     }
-    lower_property_assign_value(ctx, object, property, value_expr, lowered_value, span);
+    // Preserve the literal as an operand on the ordinary arm too. The backend still materializes
+    // every runtime-class arm, including the accessor subclasses peeled off above, and their
+    // deferred magic call needs the name even though control flow cannot reach it on this arm.
+    lower_property_assign_value(ctx, object, property, value_expr, lowered_value, true, span);
     branch_to(ctx, merge);
     ctx.builder.position_at_end(merge);
 }
@@ -112,6 +115,7 @@ fn lower_property_assign_value(
     property: &str,
     value_expr: &Expr,
     lowered_value: LoweredValue,
+    preserve_property_operand: bool,
     span: Span,
 ) {
     let value = contextualize_property_array_assignment(
@@ -176,13 +180,31 @@ fn lower_property_assign_value(
     } else {
         Vec::new()
     };
-    ctx.emit_void(
-        Op::PropSet,
-        vec![object.value, value.value],
-        Some(Immediate::Data(data)),
-        Op::PropSet.default_effects(),
-        Some(span),
-    );
+    if preserve_property_operand {
+        let property_name = ctx.emit_value(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            PhpType::Str,
+            Op::ConstStr.default_effects(),
+            Some(span),
+        );
+        ctx.emit_void(
+            Op::DynamicPropSet,
+            vec![object.value, property_name.value, value.value],
+            None,
+            Op::DynamicPropSet.default_effects(),
+            Some(span),
+        );
+    } else {
+        ctx.emit_void(
+            Op::PropSet,
+            vec![object.value, value.value],
+            Some(Immediate::Data(data)),
+            Op::PropSet.default_effects(),
+            Some(span),
+        );
+    }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     // Undeclared dynamic properties store boxed Mixed values. Boxing retains a
     // concrete temporary payload just like a declared property store does.

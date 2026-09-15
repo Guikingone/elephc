@@ -186,7 +186,8 @@ impl Checker {
             "Array index must be integer"
                 | "Cannot index non-array"
                 | "Property access requires an object or typed pointer"
-        ) || (message.starts_with("Cannot call $") && message.contains("not a callable"))
+        ) || message.starts_with("Undefined property: ")
+            || (message.starts_with("Cannot call $") && message.contains("not a callable"))
             || (message.contains(" parameter $")
                 && message.ends_with(" expects Callable, got Void"))
     }
