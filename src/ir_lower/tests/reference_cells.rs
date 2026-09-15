@@ -180,7 +180,7 @@ unset($callback);
     }
 }
 
-/// Named regular references use caller element addresses for direct, method and spread calls.
+/// Named regular references preserve caller element places for direct, method and spread calls.
 #[test]
 fn named_array_element_references_preserve_places_on_every_target() {
     let source = r#"<?php
@@ -200,8 +200,14 @@ echo $direct[0], $method[0], $static[0], $spread[0];
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
-        let addresses = module.functions.iter().flat_map(|function| &function.instructions)
-            .filter(|inst| inst.op == Op::ArrayElemAddr).collect::<Vec<_>>();
+        let addresses = module
+            .functions
+            .iter()
+            .flat_map(|function| &function.instructions)
+            .filter(|inst| {
+                matches!(inst.op, Op::ArrayElemAddr | Op::LoadArrayElemRefCell)
+            })
+            .collect::<Vec<_>>();
         assert_eq!(addresses.len(), 4, "{name}: each named place needs its actual element address");
         for address in addresses {
             assert_eq!(address.result_php_type, crate::types::PhpType::Pointer(None), "{name}");

@@ -195,6 +195,7 @@ fn contextual_by_ref_closure_parameters_remain_mixed_on_all_targets() {
     let source = r#"<?php
 $values = [1, 2];
 array_walk($values, function (&$value): void { $value = "changed"; });
+echo $values[0];
 "#;
     for target in [
         "macos-aarch64",
