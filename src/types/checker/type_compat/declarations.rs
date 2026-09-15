@@ -203,7 +203,7 @@ impl Checker {
         env: &TypeEnv,
         context: &str,
     ) -> Result<(), CompileError> {
-        if expected_ty != &PhpType::Mixed
+        if expected_ty.codegen_repr() != PhpType::Mixed
             && self.by_ref_argument_uses_mixed_or_hash_storage(actual_ty, arg, env)?
         {
             return Err(CompileError::new(
