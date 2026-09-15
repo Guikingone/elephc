@@ -42,11 +42,36 @@ impl Checker {
             arg = value;
         }
         if let ExprKind::Variable(name) = &arg.kind {
+            if output_ty == PhpType::Mixed && arg.span.identifies_a_node() {
+                self.boxed_reference_promotion_sites
+                    .entry((self.current_loop_storage_scope.clone(), arg.span))
+                    .or_default()
+                    .insert(name.clone());
+            }
             self.boxed_reference_outputs
                 .entry((self.current_loop_storage_scope.clone(), call_span))
                 .or_default()
                 .insert(name.clone(), output_ty);
         }
+    }
+
+    /// Returns whether this call has already approved boxing the same local for an earlier slot.
+    pub(crate) fn boxed_reference_promotion_pending(
+        &self,
+        arg: &Expr,
+        call_span: Span,
+    ) -> bool {
+        let mut arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            arg = value;
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            return false;
+        };
+        self.boxed_reference_outputs
+            .get(&(self.current_loop_storage_scope.clone(), call_span))
+            .and_then(|outputs| outputs.get(name))
+            .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
     }
 
     /// Applies one successful call's storage changes before checking subsequent expressions.

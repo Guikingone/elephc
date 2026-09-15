@@ -99,6 +99,7 @@ pub(crate) fn lower_main(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -227,6 +228,7 @@ pub(crate) fn lower_user_function(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -343,6 +345,7 @@ pub(crate) fn lower_class_method(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -385,8 +388,10 @@ fn eval_aot_decision_maps() -> (
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    std::collections::HashMap<(String, Span), std::collections::HashSet<String>>,
 ) {
     (
+        std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         std::collections::HashMap::new(),
@@ -424,7 +429,13 @@ pub(crate) fn lower_eval_aot_function(
     );
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
-    let (bind_kill_sites, ref_detach_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
+    let (
+        bind_kill_sites,
+        ref_detach_sites,
+        retype_sites,
+        mixed_storage_store_sites,
+        boxed_reference_promotion_sites,
+    ) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -447,6 +458,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &bind_kill_sites,
@@ -541,7 +553,13 @@ pub(crate) fn lower_eval_aot_scope_function(
             scope_flush_writes.clone(),
         )
     });
-    let (bind_kill_sites, ref_detach_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
+    let (
+        bind_kill_sites,
+        ref_detach_sites,
+        retype_sites,
+        mixed_storage_store_sites,
+        boxed_reference_promotion_sites,
+    ) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -564,6 +582,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &bind_kill_sites,
@@ -673,6 +692,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -1034,6 +1054,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -1151,6 +1172,7 @@ pub(crate) fn lower_clone_override_function(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
@@ -1307,6 +1329,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.packed_classes,
             &check_result.throw_access_sites,
             &check_result.builtin_call_types,
+            &check_result.boxed_reference_promotion_sites,
             &check_result.loop_storage_types,
             &check_result.string_incdec_locals,
             &check_result.local_bind_kill_sites,
@@ -1519,6 +1542,7 @@ fn lower_closure_function_with_signature(
         parent.packed_classes,
         parent.throw_access_sites,
         parent.builtin_call_types,
+        parent.boxed_reference_promotion_sites,
         parent.loop_storage_types,
         parent.string_incdec_locals,
         parent.bind_kill_sites,
@@ -1569,6 +1593,10 @@ fn lower_body_into_function(
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    boxed_reference_promotion_sites: &std::collections::HashMap<
+        (String, Span),
+        std::collections::HashSet<String>,
+    >,
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
     bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
@@ -1629,6 +1657,7 @@ fn lower_body_into_function(
         packed_classes,
         throw_access_sites,
         builtin_call_types,
+        boxed_reference_promotion_sites,
         loop_storage_types,
         string_incdec_locals,
         bind_kill_sites,

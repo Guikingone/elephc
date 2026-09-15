@@ -74,13 +74,16 @@ fn promote_boxed_reference_local_argument(
         || !sig
             .params
             .get(index)
-            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+            .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed))
     {
         return;
     }
     let ExprKind::Variable(name) = &arg.kind else {
         return;
     };
+    if !ctx.boxed_reference_promotion_is_authorized(name, arg.span) {
+        return;
+    }
     if !ctx.is_ref_bound_local(name) && ctx.local_is_promotable_to_ref_cell(name) {
         ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
     }

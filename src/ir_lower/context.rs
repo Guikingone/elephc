@@ -271,6 +271,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls in this source module.
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
+    /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
+    pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
     /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
@@ -396,6 +398,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         packed_classes: &'m HashMap<String, PackedClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
+        boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
@@ -458,6 +461,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             packed_classes,
             throw_access_sites,
             builtin_call_types,
+            boxed_reference_promotion_sites,
             loop_storage_types,
             string_incdec_locals,
             bind_kill_sites,
@@ -1093,6 +1097,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_slots
             .get(name)
             .is_some_and(|slot| self.initialized_slots.contains(slot))
+    }
+
+    /// Returns whether type checking approved widening this exact call argument local to Mixed.
+    pub(crate) fn boxed_reference_promotion_is_authorized(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> bool {
+        span.identifies_a_node()
+            && self
+                .boxed_reference_promotion_sites
+                .get(&(self.loop_storage_scope.clone(), span))
+                .is_some_and(|names| names.contains(name))
     }
 
     /// Returns true when a local is currently modeled as a by-reference alias.

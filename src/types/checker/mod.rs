@@ -289,6 +289,9 @@ pub(crate) struct Checker {
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
     /// Scoped call sites keep recursive signature checking from changing another body's env.
     pub boxed_reference_outputs: HashMap<(String, Span), HashMap<String, PhpType>>,
+    /// Argument sites where the checker authorized widening an ordinary local to a Mixed cell.
+    /// EIR lowering consumes this instead of inferring permission from a broad builtin signature.
+    pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
     /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
@@ -895,6 +898,7 @@ pub fn check_types_with_options(
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
+        boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
         loop_storage_types: checker.loop_storage_types,

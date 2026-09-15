@@ -173,6 +173,65 @@ impl Checker {
         }
     }
 
+    /// Validates one source value collected by a user-visible by-reference variadic.
+    ///
+    /// The collector transports reference markers in `array<mixed>`, so even an untyped
+    /// declaration needs canonical boxed caller storage. Eligibility is captured before the
+    /// alias is recorded, then the successful call publishes the widened local type to later
+    /// expressions. Named variadic entries retain their source key in the planner, but bind the
+    /// value expression underneath that wrapper.
+    pub(crate) fn validate_by_ref_variadic_argument(
+        &mut self,
+        arg: &Expr,
+        actual_ty: &PhpType,
+        caller_env: &TypeEnv,
+        call_span: crate::span::Span,
+        callee_desc: &str,
+        variadic_name: &str,
+        descriptor_invocation: bool,
+    ) -> Result<(), CompileError> {
+        let can_widen_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
+            || self.boxed_reference_promotion_pending(arg, call_span);
+        let storage_arg = match &arg.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => arg,
+        };
+        if matches!(storage_arg.kind, ExprKind::ArrayAccess { .. }) {
+            let detail = if descriptor_invocation {
+                "through callable descriptor dispatch"
+            } else {
+                "for a by-reference variadic call"
+            };
+            return Err(CompileError::new(
+                storage_arg.span,
+                &format!(
+                    "{} variadic parameter ${} cannot bind an array element by reference {}; bind the element to a reference variable first",
+                    callee_desc, variadic_name, detail
+                ),
+            ));
+        }
+        if !self.is_by_ref_argument_lvalue(storage_arg, caller_env)? {
+            return Err(CompileError::new(
+                storage_arg.span,
+                &format!(
+                    "{} variadic parameter ${} must be passed a variable",
+                    callee_desc, variadic_name
+                ),
+            ));
+        }
+        self.require_boxed_by_ref_storage(
+            &PhpType::Mixed,
+            actual_ty,
+            arg,
+            caller_env,
+            can_widen_local,
+            &format!("{} variadic parameter ${}", callee_desc, variadic_name),
+        )?;
+        self.record_boxed_reference_output(arg, &PhpType::Mixed, actual_ty, call_span);
+        self.record_reference_alias_root(arg);
+        Ok(())
+    }
+
     /// Mirrors the recursive receiver shapes prepared by EIR reference-argument lowering.
     fn is_addressable_ref_array_receiver(
         &mut self,
@@ -617,11 +676,7 @@ impl Checker {
             .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
             .count();
         let has_spread = source_has_spread;
-        let regular_param_count = if sig.variadic.is_some() {
-            sig.params.len().saturating_sub(1)
-        } else {
-            sig.params.len()
-        };
+        let regular_param_count = call_args::regular_param_count(sig);
         let spread_projects_into_reference = descriptor_projections
             .iter()
             .enumerate()
@@ -698,7 +753,8 @@ impl Checker {
             } else {
                 self.infer_type(arg, caller_env)?
             };
-            let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg);
+            let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
+                || self.boxed_reference_promotion_pending(arg, span);
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }
@@ -742,10 +798,10 @@ impl Checker {
                     let runtime_descriptor_projection = actual_ty.codegen_repr() == PhpType::Mixed
                         && descriptor_projected
                         && !supplied_reference;
-                    if supplied_reference
+                    let tracks_boxed_reference_output = supplied_reference
                         && (sig.declared_params.get(param_idx).copied().unwrap_or(false)
-                            || expected_ty.codegen_repr() == PhpType::Mixed)
-                    {
+                            || matches!(expected_ty, PhpType::Mixed));
+                    if tracks_boxed_reference_output {
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
@@ -754,8 +810,6 @@ impl Checker {
                             can_widen_by_ref_local,
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
-                    }
-                    if supplied_reference {
                         self.record_boxed_reference_output(arg, expected_ty, &actual_ty, span);
                     }
                     // `strict_types` applies to every declared parameter type, including the
@@ -824,32 +878,15 @@ impl Checker {
                     .copied()
                     .unwrap_or(false);
                 if variadic_by_ref {
-                    if matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
-                        let vname = sig.variadic.as_deref().unwrap_or("args");
-                        let detail = if descriptor_invocation {
-                            "through callable descriptor dispatch"
-                        } else {
-                            "for a by-reference variadic call"
-                        };
-                        return Err(CompileError::new(
-                            arg.span,
-                            &format!(
-                                "{} variadic parameter ${} cannot bind an array element by reference {}; bind the element to a reference variable first",
-                                callee_desc, vname, detail
-                            ),
-                        ));
-                    }
-                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
-                        let vname = sig.variadic.as_deref().unwrap_or("args");
-                        return Err(CompileError::new(
-                            arg.span,
-                            &format!(
-                                "{} variadic parameter ${} must be passed a variable",
-                                callee_desc, vname
-                            ),
-                        ));
-                    }
-                    self.record_reference_alias_root(arg);
+                    self.validate_by_ref_variadic_argument(
+                        arg,
+                        &actual_ty,
+                        caller_env,
+                        span,
+                        callee_desc,
+                        sig.variadic.as_deref().unwrap_or("args"),
+                        descriptor_invocation,
+                    )?;
                 }
                 if let (Some(vname), Some(expected_ty)) =
                     (sig.variadic.as_ref(), variadic_elem_ty.as_ref())

@@ -74,12 +74,11 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
     let owner = publish_constructed_container(ctx, array, span);
     let mut positional_index = 0usize;
     for arg in args {
-        let value = if let Some(var_name) = invoker_ref_arg_variable(ctx, sig, positional_index, arg) {
-            lower_invoker_ref_arg_marker(ctx, var_name, arg.span)
-        } else {
-            let value = lower_expr(ctx, arg);
-            coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
-        };
+        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, positional_index, arg)
+            .unwrap_or_else(|| {
+                let value = lower_expr(ctx, arg);
+                coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
+            });
         let array = load_published_container(ctx, owner, array_ty.clone(), arg.span);
         ctx.emit_void(
             Op::ArrayPush,
@@ -136,10 +135,13 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                 let param_index = sig.and_then(|sig| {
                     let regular_param_count = crate::types::call_args::regular_param_count(sig);
                     crate::types::call_args::named_param_index(sig, regular_param_count, name)
+                        .or_else(|| {
+                            (sig.variadic.is_some() && variadic_param_is_by_ref(sig))
+                                .then_some(regular_param_count)
+                        })
                 });
                 let value = if let Some(index) = param_index {
-                    invoker_ref_arg_variable(ctx, sig, index, value)
-                        .map(|var_name| lower_invoker_ref_arg_marker(ctx, var_name, value.span))
+                    lower_signature_invoker_ref_arg_marker(ctx, sig, index, value)
                 } else {
                     None
                 }
@@ -147,13 +149,13 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                 bind_descriptor_unpack_named(ctx, &state, key, value, None, arg.span);
             }
             _ => {
-                let value = if let Some(var_name) =
-                    invoker_ref_arg_variable(ctx, sig, positional_index, arg)
-                {
-                    lower_invoker_ref_arg_marker(ctx, var_name, arg.span)
-                } else {
-                    lower_expr(ctx, arg)
-                };
+                let value = lower_signature_invoker_ref_arg_marker(
+                    ctx,
+                    sig,
+                    positional_index,
+                    arg,
+                )
+                .unwrap_or_else(|| lower_expr(ctx, arg));
                 positional_index += 1;
                 bind_descriptor_unpack_positional(ctx, &state, value, None, arg.span);
             }
@@ -176,11 +178,39 @@ pub(super) fn invoker_ref_arg_variable<'a>(
         return None;
     };
     if let Some(sig) = sig {
-        if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        let regular_param_count = crate::types::call_args::regular_param_count(sig);
+        let variadic_reference = index >= regular_param_count && variadic_param_is_by_ref(sig);
+        if !sig.ref_params.get(index).copied().unwrap_or(false) && !variadic_reference {
             return None;
         }
     }
     Some(name.as_str())
+}
+
+/// Emits a signature-driven reference marker after normalizing its caller storage.
+pub(super) fn lower_signature_invoker_ref_arg_marker(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    index: usize,
+    item: &Expr,
+) -> Option<LoweredValue> {
+    let var_name = invoker_ref_arg_variable(ctx, sig, index, item)?;
+    if let Some(sig) = sig {
+        let regular_param_count = crate::types::call_args::regular_param_count(sig);
+        let expects_mixed = (index >= regular_param_count && variadic_param_is_by_ref(sig))
+            || sig
+                .params
+                .get(index)
+                .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed));
+        if expects_mixed
+            && ctx.boxed_reference_promotion_is_authorized(var_name, item.span)
+            && !ctx.is_ref_bound_local(var_name)
+            && ctx.local_is_promotable_to_ref_cell(var_name)
+        {
+            ctx.promote_local_mixed_ref_cell(var_name, Some(item.span));
+        }
+    }
+    Some(lower_invoker_ref_arg_marker(ctx, var_name, item.span))
 }
 
 /// Returns true when a local slot can be passed directly to a descriptor ref param.
@@ -189,10 +219,25 @@ pub(super) fn invoker_ref_arg_storage_compatible(
     sig: &FunctionSig,
     index: usize,
     var_name: &str,
+    span: Span,
 ) -> bool {
-    let Some((_, param_ty)) = sig.params.get(index) else {
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let variadic_reference = index >= regular_param_count && variadic_param_is_by_ref(sig);
+    let param = if variadic_reference {
+        crate::types::signatures::variadic_param_index(sig)
+            .and_then(|variadic_index| sig.params.get(variadic_index))
+    } else {
+        sig.params.get(index)
+    };
+    let Some((_, param_ty)) = param else {
         return true;
     };
+    if variadic_reference || matches!(param_ty, PhpType::Mixed) {
+        return ctx.local_type(var_name).codegen_repr() == PhpType::Mixed
+            || (!ctx.is_ref_bound_local(var_name)
+                && ctx.local_is_promotable_to_ref_cell(var_name)
+                && ctx.boxed_reference_promotion_is_authorized(var_name, span));
+    }
     value_ir_type(&param_ty.codegen_repr()) == value_ir_type(&ctx.local_type(var_name).codegen_repr())
 }
 

@@ -139,7 +139,8 @@ impl Checker {
         let mut param_idx = 0usize;
         for arg in args {
             let actual_ty = self.infer_type(arg, caller_env)?;
-            let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg);
+            let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
+                || self.boxed_reference_promotion_pending(arg, span);
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }
@@ -190,14 +191,14 @@ impl Checker {
                         && self
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
-                    if supplied_reference
+                    let tracks_boxed_reference_output = supplied_reference
                         && (effective_sig
                             .declared_params
                             .get(param_idx)
                             .copied()
                             .unwrap_or(false)
-                            || expected_ty.codegen_repr() == PhpType::Mixed)
-                    {
+                            || matches!(expected_ty, PhpType::Mixed));
+                    if tracks_boxed_reference_output {
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
@@ -206,8 +207,6 @@ impl Checker {
                             can_widen_by_ref_local,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
-                    }
-                    if supplied_reference {
                         self.record_boxed_reference_output(arg, expected_ty, &actual_ty, span);
                     }
                     // PHP's parameter binding only applies to a *declared* parameter type.
@@ -249,7 +248,15 @@ impl Checker {
                     .copied()
                     .unwrap_or(false)
                 {
-                    self.record_reference_alias_root(arg);
+                    self.validate_by_ref_variadic_argument(
+                        arg,
+                        &actual_ty,
+                        caller_env,
+                        span,
+                        &format!("Function '{}'", name),
+                        effective_sig.variadic.as_deref().unwrap_or("args"),
+                        false,
+                    )?;
                 }
                 if let (Some(vname), Some(expected_ty)) =
                     (effective_sig.variadic.as_ref(), variadic_elem_ty.as_ref())

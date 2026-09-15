@@ -365,8 +365,8 @@ impl Checker {
             } else if arg_idx < decl.params.len() {
                 let supplied_reference = decl.ref_params.get(arg_idx).copied().unwrap_or(false)
                     && !defaults.get(arg_idx).copied().unwrap_or(false);
-                let can_widen_by_ref_local =
-                    self.by_ref_argument_can_widen_local_to_mixed(arg);
+                let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
+                    || self.boxed_reference_promotion_pending(arg, span);
                 if supplied_reference
                     && descriptor_projections
                         .get(arg_idx)
@@ -499,7 +499,15 @@ impl Checker {
                 // `decl.params` excludes the variadic, which is why this cannot be handled by
                 // the regular-parameter branch above.
                 if decl.variadic_by_ref {
-                    self.record_reference_alias_root(arg);
+                    self.validate_by_ref_variadic_argument(
+                        arg,
+                        &ty,
+                        caller_env,
+                        span,
+                        &format!("Function '{}'", name),
+                        decl.variadic.as_deref().unwrap_or("args"),
+                        false,
+                    )?;
                 }
                 // Argument collected into the variadic parameter: enforce its declared element
                 // type (`int ...$xs`) against every passed argument, matching PHP.

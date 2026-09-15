@@ -319,12 +319,11 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
     );
     let owner = publish_constructed_container(ctx, array, span);
     for (index, item) in items.iter().enumerate() {
-        let value = if let Some(var_name) = invoker_ref_arg_variable(ctx, sig, index, item) {
-            lower_invoker_ref_arg_marker(ctx, var_name, item.span)
-        } else {
-            let value = lower_expr(ctx, item);
-            coerce_variadic_tail_value(ctx, value, &array_ty, item.span)
-        };
+        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, index, item)
+            .unwrap_or_else(|| {
+                let value = lower_expr(ctx, item);
+                coerce_variadic_tail_value(ctx, value, &array_ty, item.span)
+            });
         let array = load_published_container(ctx, owner, array_ty.clone(), item.span);
         ctx.emit_void(
             Op::ArrayPush,
@@ -392,14 +391,16 @@ pub(super) fn call_user_func_has_incompatible_ref_marker_arg(
     let Some(sig) = sig else {
         return false;
     };
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
     args.iter().enumerate().any(|(index, arg)| {
-        if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        let variadic_reference = index >= regular_param_count && variadic_param_is_by_ref(sig);
+        if !sig.ref_params.get(index).copied().unwrap_or(false) && !variadic_reference {
             return false;
         }
         let ExprKind::Variable(name) = &arg.kind else {
             return false;
         };
-        !invoker_ref_arg_storage_compatible(ctx, sig, index, name)
+        !invoker_ref_arg_storage_compatible(ctx, sig, index, name, arg.span)
     })
 }
 

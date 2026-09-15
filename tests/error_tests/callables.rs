@@ -934,6 +934,22 @@ fn test_error_by_ref_variadic_arguments_require_supported_lvalues() {
         "<?php function gather(&...$values): void {} $callback = gather(...); $items = ['k' => 1]; call_user_func_array($callback, [$items['k']]);",
         "cannot bind an array element by reference through callable descriptor dispatch",
     );
+    expect_error(
+        "<?php function gather(&...$values): void {} $first = 1; gather($first); gather(2);",
+        "variadic parameter $values must be passed a variable",
+    );
+    expect_error(
+        "<?php function gather(&...$values): void {} $callback = gather(...); $callback(1);",
+        "variadic parameter $values must be passed a variable",
+    );
+    expect_error(
+        "<?php function gather(&...$values): void { func_num_args(); } gather(1);",
+        "variadic parameter $values must be passed a variable",
+    );
+    expect_error(
+        "<?php function gather(&...$values): void {} $callback = gather(...); $value = 1; call_user_func_array($callback, ['named' => $value]);",
+        "does not support associative argument literals for callbacks with by-reference parameters",
+    );
 }
 
 /// Hidden actual-count storage is a real ABI difference between source declarations. A source

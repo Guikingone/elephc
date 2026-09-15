@@ -64,7 +64,7 @@ pub(super) fn specialize_dynamic_assoc_variadic_user_callback(
 /// Validates call user func array dynamic arg array and returns a compile error when it is unsupported.
 fn validate_call_user_func_array_dynamic_arg_array(
     checker: &mut Checker,
-    _sig: &crate::types::FunctionSig,
+    sig: &crate::types::FunctionSig,
     arg_array: &Expr,
     _span: crate::span::Span,
     env: &TypeEnv,
@@ -74,6 +74,14 @@ fn validate_call_user_func_array_dynamic_arg_array(
         return Err(CompileError::new(
             arg_array.span,
             "call_user_func_array() second argument must be an array",
+        ));
+    }
+    if matches!(arg_array.kind, ExprKind::ArrayLiteralAssoc(_))
+        && sig.ref_params.iter().any(|is_ref| *is_ref)
+    {
+        return Err(CompileError::new(
+            arg_array.span,
+            "call_user_func_array() does not support associative argument literals for callbacks with by-reference parameters",
         ));
     }
     Ok(())
@@ -1177,6 +1185,34 @@ fn is_keyed_array_predicate_callback(label: &str) -> bool {
     matches!(label, "array_find() callback" | "array_any() callback" | "array_all() callback")
 }
 
+/// Converts a static `call_user_func_array()` argument container into ordinary call arguments.
+///
+/// String keys become named arguments while integer keys remain positional, matching the EIR
+/// helper that lowers the same literal container into descriptor arguments.
+fn static_call_user_func_array_args(arg_array: &Expr) -> Option<Vec<Expr>> {
+    match &arg_array.kind {
+        ExprKind::ArrayLiteral(items) => Some(items.clone()),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            let mut args = Vec::with_capacity(pairs.len());
+            for (key, value) in pairs {
+                match &key.kind {
+                    ExprKind::StringLiteral(name) => args.push(Expr::new(
+                        ExprKind::NamedArg {
+                            name: name.clone(),
+                            value: Box::new(value.clone()),
+                        },
+                        value.span,
+                    )),
+                    ExprKind::IntLiteral(_) => args.push(value.clone()),
+                    _ => return None,
+                }
+            }
+            Some(args)
+        }
+        _ => None,
+    }
+}
+
 
 /// Type-checks a `call_user_func_array` call: resolves the callback (first-class callable,
 /// variable-bound callable, string name, extern/builtin, or object/array descriptor),
@@ -1191,13 +1227,21 @@ pub(crate) fn check_call_user_func_array(
     for arg in args {
         checker.infer_type(arg, env)?;
     }
+    let static_args = static_call_user_func_array_args(&args[1]);
     if let ExprKind::FirstClassCallable(target) = &args[0].kind {
-        let sig = if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+        let sig = if let Some(elems) = static_args.as_deref() {
             checker.specialize_first_class_callable_target(target, elems, span, env)?
         } else {
             checker.resolve_first_class_callable_sig(target, span, env)?
         };
         validate_call_user_func_array_dynamic_arg_array(checker, &sig, &args[1], span, env)?;
+        if let Some(elems) = static_args.as_deref() {
+            if let Some(ret_ty) = checker
+                .infer_contextual_first_class_builtin_call(target, elems, span, env)?
+            {
+                return Ok(ret_ty);
+            }
+        }
         let arg_array_ty = checker.infer_type(&args[1], env)?;
         specialize_dynamic_assoc_variadic_first_class_callback(
             checker,
@@ -1205,7 +1249,7 @@ pub(crate) fn check_call_user_func_array(
             &sig,
             &arg_array_ty,
         )?;
-        if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+        if let Some(elems) = static_args.as_deref() {
             let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,
                 elems,
@@ -1219,7 +1263,7 @@ pub(crate) fn check_call_user_func_array(
     }
     if let ExprKind::Variable(var_name) = &args[0].kind {
         if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() {
-            let sig = if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+            let sig = if let Some(elems) = static_args.as_deref() {
                 checker.specialize_first_class_callable_target(&target, elems, span, env)?
             } else {
                 checker.resolve_first_class_callable_sig(&target, span, env)?
@@ -1235,6 +1279,13 @@ pub(crate) fn check_call_user_func_array(
                 span,
                 env,
             )?;
+            if let Some(elems) = static_args.as_deref() {
+                if let Some(ret_ty) = checker
+                    .infer_contextual_first_class_builtin_call(&target, elems, span, env)?
+                {
+                    return Ok(ret_ty);
+                }
+            }
             let arg_array_ty = checker.infer_type(&args[1], env)?;
             specialize_dynamic_assoc_variadic_first_class_callback(
                 checker,
@@ -1242,7 +1293,7 @@ pub(crate) fn check_call_user_func_array(
                 &sig,
                 &arg_array_ty,
             )?;
-            if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+            if let Some(elems) = static_args.as_deref() {
                 let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                     &sig,
                     elems,
@@ -1257,7 +1308,7 @@ pub(crate) fn check_call_user_func_array(
     }
     if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
         if let Some(extern_name) = checker.canonical_extern_function_name_folded(cb_name) {
-            if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+            if let Some(elems) = static_args.as_deref() {
                 let ret_ty =
                     checker.check_extern_function_call(&extern_name, elems, span, env)?;
                 return Ok(ret_ty);
@@ -1267,19 +1318,8 @@ pub(crate) fn check_call_user_func_array(
             }
         }
         if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
-            if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
-                if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name) {
-                    checker.check_known_callable_call_allowing_by_ref_spread(
-                        &sig,
-                        elems,
-                        span,
-                        env,
-                        "call_user_func_array() callback",
-                    )?;
-                }
-                if let Some(ret_ty) =
-                    checker.check_builtin(&builtin_name, elems, span, env)?
-                {
+            if let Some(elems) = static_args.as_deref() {
+                if let Some(ret_ty) = checker.check_builtin(&builtin_name, elems, span, env)? {
                     return Ok(ret_ty);
                 }
             }
@@ -1294,7 +1334,7 @@ pub(crate) fn check_call_user_func_array(
         if !checker.functions.contains_key(cb_name.as_str()) {
             if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
                 if decl.ref_params.iter().any(|is_ref| *is_ref)
-                    && !matches!(args[1].kind, ExprKind::ArrayLiteral(_))
+                    && static_args.is_none()
                 {
                     let param_types =
                         checker.initial_function_param_types(&cb_name, &decl)?;
@@ -1323,7 +1363,7 @@ pub(crate) fn check_call_user_func_array(
                     &sig,
                 )?;
             }
-            if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+            if let Some(elems) = static_args.as_deref() {
                 let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                     &sig,
                     elems,
@@ -1335,7 +1375,7 @@ pub(crate) fn check_call_user_func_array(
             }
             return Ok(sig.return_type.clone());
         }
-        if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+        if let Some(elems) = static_args.as_deref() {
             let ret_ty = checker.check_function_call(&cb_name, elems, span, env)?;
             return Ok(ret_ty);
         }
@@ -1404,7 +1444,7 @@ pub(crate) fn check_call_user_func_array(
     }
     if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
         validate_call_user_func_array_dynamic_arg_array(checker, &sig, &args[1], span, env)?;
-        if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+        if let Some(elems) = static_args.as_deref() {
             let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,
                 elems,
@@ -1460,6 +1500,14 @@ pub(crate) fn check_call_user_func(
     let has_traversable_spread =
         checker.descriptor_call_has_traversable_spread(&args[1..], env)?;
     if let ExprKind::FirstClassCallable(target) = &args[0].kind {
+        if let Some(ret_ty) = checker.infer_contextual_first_class_builtin_call(
+            target,
+            &args[1..],
+            span,
+            env,
+        )? {
+            return Ok(ret_ty);
+        }
         let sig = if has_traversable_spread {
             checker.resolve_first_class_callable_sig(target, span, env)?
         } else {
@@ -1481,6 +1529,14 @@ pub(crate) fn check_call_user_func(
     }
     if let ExprKind::Variable(var_name) = &args[0].kind {
         if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() {
+            if let Some(ret_ty) = checker.infer_contextual_first_class_builtin_call(
+                &target,
+                &args[1..],
+                span,
+                env,
+            )? {
+                return Ok(ret_ty);
+            }
             let sig = if has_traversable_spread {
                 checker.resolve_first_class_callable_sig(&target, span, env)?
             } else {

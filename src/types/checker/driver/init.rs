@@ -111,6 +111,7 @@ impl Checker {
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
             boxed_reference_outputs: HashMap::new(),
+            boxed_reference_promotion_sites: HashMap::new(),
             loop_storage_types: HashMap::new(),
             string_incdec_locals: HashSet::new(),
             strict_locals: false,

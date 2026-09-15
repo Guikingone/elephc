@@ -1069,7 +1069,7 @@ impl Checker {
     }
 
     /// Type-checks first-class builtin invocations that need builtin-specific argument context.
-    fn infer_contextual_first_class_builtin_call(
+    pub(crate) fn infer_contextual_first_class_builtin_call(
         &mut self,
         target: &CallableTarget,
         args: &[Expr],
@@ -1077,22 +1077,20 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
         if let CallableTarget::Function(name) = target {
-            match php_symbol_key(name.as_str()).as_str() {
-                "preg_replace_callback" => {
-                    return crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
-                        self, args, span, env,
-                    )
-                    .map(Some);
-                }
-                // The clone builtin's check hook does not run here: the call is checked through
-                // the callable signature. Record the override destination the hook would have
-                // recorded so untyped property slots still reach runtime-shaped storage.
-                "clone" => {
+            if crate::name_resolver::is_builtin_function(name.as_str()) {
+                let builtin = php_symbol_key(name.as_str());
+                if builtin == "clone" {
+                    // Clone's callable signature owns its normal argument validation, while this
+                    // side channel records the property destination its dedicated lowering needs.
                     crate::types::checker::clone_override_storage::record_callable_clone_override_destination(
                         self, args, env,
                     )?;
+                    return Ok(None);
                 }
-                _ => {}
+                // A builtin's checker hook is authoritative for argument storage. Its catalogue
+                // signature may intentionally expose broad `mixed` parameters to reflection,
+                // which must not by itself authorize local-to-Mixed reference-cell promotion.
+                return self.check_builtin(&builtin, args, span, env);
             }
         }
         Ok(None)

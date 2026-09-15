@@ -245,7 +245,16 @@ pub(super) fn lower_variadic_tail_source_value(
     array_ty: &PhpType,
 ) -> LoweredValue {
     if by_ref_variadic {
+        if let Some(value) = prelowered {
+            return lowered_value_from_id(ctx, value);
+        }
         if let ExprKind::Variable(name) = &expr.kind {
+            if ctx.boxed_reference_promotion_is_authorized(name, expr.span)
+                && !ctx.is_ref_bound_local(name)
+                && ctx.local_is_promotable_to_ref_cell(name)
+            {
+                ctx.promote_local_mixed_ref_cell(name, Some(expr.span));
+            }
             return lower_invoker_ref_arg_marker(ctx, name, expr.span);
         }
     }

@@ -111,7 +111,27 @@ fn lower_planned_source_arg(
             }
         }
     }
-    let value = lower_call_source_arg(ctx, &plan.source_args[source_index]);
+    let value = if plan.source_values.iter().any(|source| {
+        source.source_index() == source_index
+            && source.param_idx().is_none()
+            && variadic_param_is_by_ref(sig)
+    }) {
+        let source = plan
+            .source_values
+            .iter()
+            .find(|source| source.source_index() == source_index)
+            .expect("planned variadic reference source");
+        lower_variadic_tail_source_value(
+            ctx,
+            source.expr(),
+            true,
+            None,
+            &variadic_array_type(sig),
+        )
+        .value
+    } else {
+        lower_call_source_arg(ctx, &plan.source_args[source_index])
+    };
     if source_index + 1 < plan.source_args.len() {
         let lowered = lowered_value_from_id(ctx, value);
         root_evaluated_call_argument(ctx, lowered, plan.source_args[source_index].span).value

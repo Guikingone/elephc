@@ -85,6 +85,8 @@ pub struct CheckResult {
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
+    pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
     /// Reads proven to use native buffers on every checker visit to the source span.
     /// Buffer bounds checks cannot invoke PHP warning handlers.
     pub buffer_read_sites: HashSet<Span>,
@@ -178,6 +180,11 @@ impl CheckResult {
             .chain(self.local_ref_detach_sites.keys())
             .chain(self.local_retype_sites.keys())
             .chain(self.mixed_storage_store_sites.keys())
+            .chain(
+                self.boxed_reference_promotion_sites
+                    .keys()
+                    .map(|(_, span)| span),
+            )
             .copied()
             .collect()
     }
