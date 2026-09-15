@@ -35,19 +35,6 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
-    // An unset-capable untyped slot can hold the removed marker instead of a container.
-    // `PropGetForWrite` promises a borrowed mutable container and has no result shape for
-    // PHP's warning-plus-null absent answer, so accepting the slot would feed the marker to a
-    // COW helper as a boxed value. Refuse this uncommon compound operation until lowering can
-    // recreate the property before publishing a borrow.
-    if slot_supports_untyped_unset_marker(&slot) {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} for unset-capable untyped property {}::${}",
-            inst.op.name(),
-            slot.class_name,
-            slot.property
-        )));
-    }
     let Some(split) = property_container_split(&slot) else {
         return Err(CodegenIrError::unsupported(format!(
             "{} for property {}::${} with PHP type {:?}",
@@ -65,7 +52,9 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
         abi::int_arg_reg_name(ctx.emitter.target, 0)
     };
     ctx.load_value_to_reg(object, base_reg)?;
-    if slot.is_declared {
+    if slot_supports_untyped_unset_marker(&slot) {
+        emit_recreate_removed_untyped_property_for_write(ctx, object, &slot, base_reg)?;
+    } else if slot.is_declared {
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     abi::emit_load_from_address(ctx.emitter, arg_reg, base_reg, slot.offset);
@@ -97,6 +86,52 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
         abi::emit_store_to_address(ctx.emitter, result_reg, base_reg, slot.offset);
     }
     store_if_result(ctx, inst)
+}
+
+/// Recreates an unset untyped property as boxed null before its mutable fetch.
+///
+/// PHP materializes null for a compound write through an unset untyped slot. The following
+/// iterator operation then reports the ordinary non-array warning. Publishing the box first
+/// keeps the slot valid while `__rt_mixed_clone` performs the normal fetch-for-write split.
+fn emit_recreate_removed_untyped_property_for_write(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    slot: &PropertySlot,
+    object_reg: &str,
+) -> Result<()> {
+    let initialized_label = ctx.next_label("untyped_prop_write_present");
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, marker_reg, object_reg, slot.offset + 8);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        sentinel_reg,
+        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the untyped property marker with the removed-state sentinel
+            ctx.emitter
+                .instruction(&format!("b.ne {}", initialized_label)); // keep the present boxed value in the fixed property slot
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the untyped property marker with the removed-state sentinel
+            ctx.emitter
+                .instruction(&format!("jne {}", initialized_label)); // keep the present boxed value in the fixed property slot
+        }
+    }
+    emit_boxed_null(ctx);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        object_reg,
+        slot.offset,
+    );
+    ctx.emitter.label(&initialized_label);
+    Ok(())
 }
 
 /// Describes how `PropGetForWrite` reaches and republishes one property's container.
