@@ -4590,15 +4590,12 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
 
 /// Returns whether releasing a value of this storage type can reach a user destructor.
 pub(super) fn php_type_cleanup_may_invoke_user_code(php_type: &PhpType) -> bool {
-    matches!(
-        php_type.codegen_repr(),
-        PhpType::Object(_)
-            | PhpType::Mixed
-            | PhpType::Iterable
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Callable
-    )
+    match php_type.codegen_repr() {
+        PhpType::Object(_) | PhpType::Mixed | PhpType::Iterable | PhpType::Callable => true,
+        PhpType::Array(value) => php_type_cleanup_may_invoke_user_code(&value),
+        PhpType::AssocArray { value, .. } => php_type_cleanup_may_invoke_user_code(&value),
+        _ => false,
+    }
 }
 
 /// Returns the value type an indexed or associative mutation may remove from its container.

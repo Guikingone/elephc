@@ -8,6 +8,41 @@
 //! Key details:
 //! - A checker-approved `Callable` parameter operand must already be a descriptor in EIR.
 //! - Descriptor invocations may walk Traversable spreads without direct-call specialization.
+//! - Container cleanup reaches user code only when its stored values can own objects or closures.
+
+/// Typed scalar containers cannot run PHP cleanup hooks, while nested object and callable
+/// containers can release user-observable owners.
+#[test]
+fn callable_fact_cleanup_classification_inspects_container_values() {
+    use crate::types::PhpType;
+
+    let scalar_indexed = PhpType::Array(Box::new(PhpType::Int));
+    let scalar_hash = PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Int),
+    };
+    let nested_object = PhpType::Array(Box::new(PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Object("CleanupProbe".to_string())),
+    }));
+    let nested_callable = PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Array(Box::new(PhpType::Callable))),
+    };
+
+    assert!(!super::super::context::php_type_cleanup_may_invoke_user_code(
+        &scalar_indexed,
+    ));
+    assert!(!super::super::context::php_type_cleanup_may_invoke_user_code(
+        &scalar_hash,
+    ));
+    assert!(super::super::context::php_type_cleanup_may_invoke_user_code(
+        &nested_object,
+    ));
+    assert!(super::super::context::php_type_cleanup_may_invoke_user_code(
+        &nested_callable,
+    ));
+}
 
 /// Identical static callable-array targets survive an `if` join as descriptor operands.
 #[test]
