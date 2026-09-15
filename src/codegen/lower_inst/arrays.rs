@@ -1104,12 +1104,12 @@ fn lower_array_set_mixed_key_aarch64(
     }
     abi::emit_push_reg(ctx.emitter, "x0");
     ctx.load_value_to_reg(array, "x0")?;
-    // Hand the helper an OWNED reference, mirroring `Op::ArrayToHash`. Its promote paths abandon
-    // the source indexed array for a freshly built hash and must release it; without this acquire
-    // the helper would be releasing the caller's only reference — a use-after-free. With it, the
-    // ledger closes: the in-place paths hand the `+1` back inside the returned pointer, the promote
-    // paths consume it, and `store_local` then releases whatever the slot held before.
-    abi::emit_incref_if_refcounted(ctx.emitter, &ctx.value_php_type(array)?);
+    // A raw StoreLocal transfers its existing slot owner into the helper. Stores through a ref
+    // cell, static, or global retire their previous owner after publication, so those paths need a
+    // separate helper owner. Acquiring for the raw-local path would leak an abandoned array.
+    if mixed_key_storeback_retires_source(ctx, array)? {
+        abi::emit_incref_if_refcounted(ctx.emitter, &ctx.value_php_type(array)?);
+    }
     ctx.load_value_to_reg(key, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
@@ -1132,15 +1132,42 @@ fn lower_array_set_mixed_key_x86_64(
     }
     abi::emit_push_reg(ctx.emitter, "rax");
     ctx.load_value_to_reg(array, "rax")?;
-    // See the AArch64 twin: the helper is handed an OWNED reference so its promote paths can
-    // release the source array they abandon. `emit_incref_if_refcounted` retains the pointer in the
-    // int-result register, so the array is loaded there first and moved into the ABI register after.
-    abi::emit_incref_if_refcounted(ctx.emitter, &ctx.value_php_type(array)?);
-    ctx.emitter.instruction("mov rdi, rax");                                    // publish the retained array as the helper's first argument
+    // See the AArch64 twin: only a storeback that retires its previous owner needs a distinct
+    // owner for the helper. The retain helper consumes and returns the integer result register.
+    if mixed_key_storeback_retires_source(ctx, array)? {
+        abi::emit_incref_if_refcounted(ctx.emitter, &ctx.value_php_type(array)?);
+    }
+    ctx.emitter.instruction("mov rdi, rax");                                    // publish the transferred or retained helper owner
     ctx.load_value_to_reg(key, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
     Ok(())
+}
+
+/// Returns whether the destination storeback retires the owner currently in storage.
+fn mixed_key_storeback_retires_source(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::invalid_module(
+            "array_set_mixed_key destination must be loaded from writable storage",
+        ));
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    match inst_ref.op {
+        Op::LoadLocal => Ok(false),
+        Op::LoadRefCell | Op::LoadStaticLocal | Op::LoadGlobal => Ok(true),
+        other => Err(CodegenIrError::invalid_module(format!(
+            "array_set_mixed_key destination was produced by {} instead of a writable load",
+            other.name()
+        ))),
+    }
 }
 
 /// Lowers an indexed-array append through the runtime helper for the value type.
