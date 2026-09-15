@@ -10,6 +10,7 @@
 
 use crate::ir::{
     validate_function, Builder, Function, IrType, Op, Ownership, Terminator, ValidationError,
+    ValueDef,
 };
 use crate::types::PhpType;
 
@@ -218,6 +219,7 @@ fn sibling_unreachable_value_use_is_invalid() {
 fn unreachable_same_block_use_before_definition_is_invalid() {
     let mut function = Function::new("dead_order".to_string(), IrType::Void, PhpType::Void);
     let dead;
+    let value;
     {
         let mut builder = Builder::new(&mut function);
         let entry = builder.create_named_block("entry", vec![]);
@@ -226,7 +228,7 @@ fn unreachable_same_block_use_before_definition_is_invalid() {
         builder.position_at_end(entry);
         builder.terminate(Terminator::Return { value: None });
         builder.position_at_end(dead);
-        let value = builder.emit_const_i64(1);
+        value = builder.emit_const_i64(1);
         let _ = builder.emit_with_effects(
             Op::EchoValue,
             vec![value],
@@ -240,6 +242,14 @@ fn unreachable_same_block_use_before_definition_is_invalid() {
         builder.terminate(Terminator::Unreachable);
     }
     function.blocks[dead.as_raw() as usize].instructions.swap(0, 1);
+    let ValueDef::Instruction { index, .. } = &mut function
+        .value_mut(value)
+        .expect("constant value")
+        .def
+    else {
+        panic!("constant must remain instruction-defined");
+    };
+    *index = 1;
     assert!(matches!(
         validate_function(&function),
         Err(ValidationError::UseNotDominated { .. })

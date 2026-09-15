@@ -266,14 +266,22 @@ echo probeOwnedInstanceof("InstOwnedBase") ? "1" : "0";
         // The operand the predicate reads is the rooted (acquired) value published in the frame
         // slot, not the raw `ObjectNew` result the root retires internally.
         let rooted_operand = function.instructions[predicate].operands[0];
+        let root = function
+            .instructions
+            .iter()
+            .find(|inst| inst.op == Op::StoreLocal && inst.operands == [rooted_operand])
+            .unwrap_or_else(|| panic!("{target}: the predicate operand must have a root owner"));
+        let Some(Immediate::LocalSlot(root_slot)) = root.immediate else {
+            panic!("{target}: the root must identify its slot");
+        };
         let push = function
             .instructions
             .iter()
-            .position(|inst| inst.op == Op::PushCallOperandOwner)
+            .position(|inst| {
+                inst.op == Op::PushCallOperandOwner
+                    && inst.immediate == Some(Immediate::LocalSlot(root_slot))
+            })
             .unwrap_or_else(|| panic!("{target}: an owned value operand must be rooted"));
-        let Some(Immediate::LocalSlot(root_slot)) = function.instructions[push].immediate else {
-            panic!("{target}: the root must identify its slot");
-        };
         assert!(push < predicate, "{target}: the root is published before the predicate");
         let pop = function
             .instructions

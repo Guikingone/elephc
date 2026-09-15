@@ -138,7 +138,7 @@ function exerciseArguments(ArgumentSource $source, ArgumentTargets $target): voi
 /// A by-reference first argument remains a caller place while a later argument throws.
 #[test]
 fn by_reference_first_argument_is_not_detached_into_an_evaluation_owner() {
-    use crate::ir::Op;
+    use crate::ir::{Op, ValueDef};
 
     let source = r#"<?php
 function byRefTarget(string &$text, int $later): void {}
@@ -160,10 +160,24 @@ function exerciseByRef(string &$text): void {
             .iter()
             .find(|function| function.name == "exerciseByRef")
             .unwrap();
-        assert!(!function.instructions.iter().any(|inst| {
-            inst.span.is_some_and(|span| span.line == 5)
-                && inst.op == Op::PushCallOperandOwner
-        }));
+        let call = function
+            .instructions
+            .iter()
+            .filter(|inst| inst.op == Op::Call)
+            .last()
+            .expect("by-reference target call");
+        let ValueDef::Instruction { inst, .. } = function
+            .value(call.operands[0])
+            .expect("by-reference call operand")
+            .def
+        else {
+            panic!("{target}: by-reference argument must remain instruction-defined");
+        };
+        assert_ne!(
+            function.instruction(inst).unwrap().op,
+            Op::Borrow,
+            "{target}: an incidental evaluation owner must not replace the reference place",
+        );
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

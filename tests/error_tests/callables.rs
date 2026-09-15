@@ -932,7 +932,7 @@ fn test_error_by_ref_variadic_arguments_require_supported_lvalues() {
     );
     expect_error(
         "<?php function gather(&...$values): void {} $callback = gather(...); $items = ['k' => 1]; call_user_func_array($callback, [$items['k']]);",
-        "cannot bind an array element by reference through callable descriptor dispatch",
+        "cannot bind an array element by reference for a by-reference variadic call",
     );
     expect_error(
         "<?php function gather(&...$values): void {} $first = 1; gather($first); gather(2);",
