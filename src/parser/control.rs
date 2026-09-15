@@ -618,10 +618,15 @@ fn parse_for_clause(
 /// consumer treats as `unreachable!()` — `for ($v = include "f.php"; …)` reached that panic
 /// once the clause started going through the real statement parser.
 ///
-/// Only two shapes can reach it, which is why this is a match and not a tree walk. elephc's
-/// expression parser accepts `include` in exactly one expression position — the whole
-/// right-hand side of an assignment or a `return` — so `$a = strlen(include "f");` is already
-/// a parse error everywhere, clause or not.
+/// Only two shapes can reach it, which is why this is a match and not a tree walk.
+/// `ExprKind::IncludeValue` has exactly TWO construction sites, both calling
+/// `parser::stmt::simple::try_parse_value_include`: `parse_return`, whose `Return` is not on
+/// the clause allow-list, and `parse_simple_assign`, which builds a plain `StmtKind::Assign`
+/// and only for `AssignmentOperator::Assign`. That branch runs BEFORE
+/// `parse_assignment_value_expr`, so no typed, indexed, property or static-property
+/// assignment can carry one — `include` reaches those through the ordinary expression
+/// parser, which rejects it. `test_error_include_is_only_an_expression_in_an_assignment_rhs`
+/// pins that invariant, and fails here if it ever changes.
 ///
 /// A closure body is deliberately NOT inspected. Its include is DEFERRED: it runs when the
 /// closure is called, not while the clause is evaluated, so
