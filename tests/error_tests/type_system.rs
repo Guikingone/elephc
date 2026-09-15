@@ -1790,17 +1790,14 @@ fn test_retype_inside_try_with_throwing_rhs_stays_the_depth_gated_error() {
     );
 }
 
-/// A NAMED by-reference argument (`f(x: $a)`) aliases `$a` exactly like the positional form.
+/// A named untyped by-reference argument (`f(x: $a)`) promotes `$a` to boxed Mixed storage.
 ///
-/// `Checker::record_reference_alias_root` unwraps `ExprKind::NamedArg` on its way to the local, so
-/// the name is excluded from the kill and the `unset` degrades to the pre-feature typing no-op.
-/// The positional twin is `test_by_ref_call_arg_not_killable`; without the unwrap this shape would
-/// silently keep its eligibility while the callee holds a reference to the slot.
+/// The promoted slot remains safe to unset and rebind after the call, matching PHP. The checker
+/// must still keep it out of the ordinary local-kill path because aliases may retain the cell.
 #[test]
-fn test_named_by_ref_call_arg_not_killable() {
-    expect_error(
+fn test_named_untyped_by_ref_call_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php function f(&$x) { $x = 2; } $a = 1; f(x: $a); unset($a); $a = \"s\"; echo $a;",
-        "cannot reassign $a from int to string",
     );
     let result = check_source_full(
         "<?php function f(&$x) { $x = 2; } $a = 1; f(x: $a); echo $a;",
