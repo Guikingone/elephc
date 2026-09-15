@@ -290,6 +290,20 @@ fn test_error_constructor_promotion_by_reference_requires_variable_arg() {
     );
 }
 
+/// A promoted reference property cannot outlive a managed array-entry argument lease.
+#[test]
+fn test_error_constructor_promoted_reference_rejects_array_element() {
+    for source in [
+        "<?php class Box { public function __construct(public mixed &$value) {} } $items = ['k' => new stdClass()]; $box = new Box($items['k']); $items = []; echo $box->value;",
+        "<?php class Box { public function __construct(public mixed &$value) {} } $items = ['k' => new stdClass()]; $alias =& $items['k']; $box = new Box($alias); unset($alias); $items = []; echo $box->value;",
+    ] {
+        expect_error(
+            source,
+            "cannot retain managed or already-reference-bound storage in a promoted property",
+        );
+    }
+}
+
 /// Verifies the error diagnostic for constructor promotion readonly by reference.
 #[test]
 fn test_error_constructor_promotion_readonly_by_reference() {
@@ -1240,5 +1254,23 @@ fn test_error_dynamic_property_creation_on_a_readonly_class() {
          readonly class ROChild extends ROBase {} \
          $c = new ROChild(); $c->p = 'x';",
         "Cannot create dynamic property ROChild::$p",
+    );
+}
+
+/// A late-bound constructor cannot promise direct writable storage for an element argument.
+#[test]
+fn test_error_new_static_rejects_array_element_reference_argument() {
+    expect_error(
+        "<?php class Factory { public function __construct(mixed &$value) {} public static function make(array &$items): object { return new static($items['k']); } } $items = ['k' => 1]; Factory::make($items);",
+        "new static() cannot bind an array element by reference because the runtime constructor target is late-bound",
+    );
+}
+
+/// A runtime class name has no signature that can safely bind an element reference.
+#[test]
+fn test_error_dynamic_constructor_rejects_array_element_reference_argument() {
+    expect_error(
+        "<?php class DynamicRefCtor { public function __construct(mixed &$value) {} } $class = $argc > 1 ? 'DynamicRefCtor' : 'DynamicRefCtor'; $items = ['k' => 1]; new $class($items['k']);",
+        "Dynamic constructor cannot bind an array element by reference because its runtime signature is unknown",
     );
 }

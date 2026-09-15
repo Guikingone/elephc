@@ -157,6 +157,16 @@ fn array_read_opcodes_have_precise_warning_contracts() {
         Effects::READS_HEAP | Effects::MAY_WARN
     );
     assert_eq!(Op::HashGetSilent.default_effects(), Effects::READS_HEAP);
+    assert!(
+        Op::LoadArrayElemRefCellExisting
+            .default_effects()
+            .contains(Effects::MAY_WARN)
+    );
+    assert!(
+        !Op::LoadArrayElemRefCell
+            .default_effects()
+            .contains(Effects::MAY_WARN)
+    );
 }
 
 /// Dynamic instance calls retain a catchable-error bit until target refinement proves otherwise.

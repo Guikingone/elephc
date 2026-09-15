@@ -9,6 +9,30 @@
 
 use super::*;
 
+/// Direct scalar property references need writeback support distinct from nested array origins.
+#[test]
+fn test_error_by_ref_argument_rejects_direct_property_storage() {
+    for source in [
+        "<?php function setv(mixed &$value): void {} class Box { public mixed $value = 1; } $box = new Box(); setv($box->value);",
+        "<?php function setv(mixed &$value): void {} class Box { public static mixed $value = 1; } setv(Box::$value);",
+    ] {
+        expect_error(source, "must be passed a variable");
+    }
+}
+
+/// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.
+#[test]
+fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {
+    for access in ["$box->items[0]", "$box->items[0][0]"] {
+        expect_error(
+            &format!(
+                "<?php function setv(mixed &$value): void {{}} class Box {{ public mixed $items = [[1]]; }} $box = new Box(); setv({access});"
+            ),
+            "must be passed a variable",
+        );
+    }
+}
+
 /// Builds the non-null PHP array contract without assuming indexed or associative storage.
 fn declared_array_contract() -> PhpType {
     PhpType::Union(vec![
@@ -1192,6 +1216,33 @@ fn test_error_by_ref_parameter_is_not_coerced() {
     );
 }
 
+/// A typed by-reference parameter cannot reinterpret an associative entry's boxed Mixed cell.
+#[test]
+fn test_error_typed_by_ref_parameter_rejects_associative_element_storage() {
+    expect_error(
+        "<?php function increment(int &$value): void {} $a = [\"k\" => 1]; increment($a[\"k\"]);",
+        "cannot bind typed by-reference storage from a mixed or hash-backed value",
+    );
+}
+
+/// A typed by-reference parameter cannot reinterpret a heterogeneous indexed element cell.
+#[test]
+fn test_error_typed_by_ref_parameter_rejects_mixed_indexed_element_storage() {
+    expect_error(
+        "<?php function suffix(string &$value): void {} $a = [1, \"s\"]; suffix($a[1]);",
+        "cannot bind typed by-reference storage from a mixed or hash-backed value",
+    );
+}
+
+/// A typed by-reference parameter cannot alias a local whose frame slot is boxed Mixed.
+#[test]
+fn test_error_typed_by_ref_parameter_rejects_mixed_local_storage() {
+    expect_error(
+        "<?php function increment(int &$value): void {} $value = $argc > 1 ? 1 : \"s\"; increment($value);",
+        "cannot bind typed by-reference storage from a mixed or hash-backed value",
+    );
+}
+
 /// Verifies `declare(strict_types=1)` rejects the `bool`→`int` binding PHP's coercive mode
 /// performs silently, and that the diagnostic names the `TypeError` PHP would throw.
 ///
@@ -2012,18 +2063,14 @@ fn test_by_value_foreach_value_var_retype_still_warns() {
     );
 }
 
-/// Control: a by-ref `foreach` value variable the LOOP itself binds was already excluded before
-/// this fix — it is bound at conditional depth 1, so it never had a depth-0 binding to re-type —
-/// and the permanent alias marking must leave that answer unchanged in both modes.
+/// A fresh by-reference loop binding uses the widened Mixed entry shape, so a later assignment
+/// can change the last referenced element's PHP type. Pre-bound typed references remain covered
+/// by `test_by_ref_foreach_value_var_retype_still_errors` above.
 #[test]
-fn test_loop_bound_by_ref_foreach_value_var_retype_still_errors() {
-    expect_error(
-        "<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"s\"; echo $v;",
-        "cannot reassign $v from int to string",
-    );
-    expect_error_strict(
-        "<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"s\"; echo $v;",
-        "cannot reassign $v from int to string",
+fn test_fresh_loop_bound_by_ref_foreach_value_var_can_change_type() {
+    assert!(
+        check_source("<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"s\"; echo $v;")
+            .is_ok()
     );
 }
 

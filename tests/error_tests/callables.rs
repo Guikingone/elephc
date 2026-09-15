@@ -324,6 +324,51 @@ fn test_error_call_user_func_ref_param_requires_variable() {
     );
 }
 
+/// A descriptor call cannot preserve an array element's writable reference identity yet.
+#[test]
+fn test_error_call_user_func_ref_param_rejects_array_element() {
+    expect_error(
+        "<?php function bump(mixed &$value): void {} $a = [\"k\" => 1]; call_user_func(bump(...), $a[\"k\"]);",
+        "cannot bind an array element by reference through callable descriptor dispatch",
+    );
+}
+
+/// An instance-method first-class callable uses descriptor dispatch and applies the same guard.
+#[test]
+fn test_error_instance_method_fcc_ref_param_rejects_array_element() {
+    expect_error(
+        "<?php class Writer { public function write(mixed &$value): void {} } $writer = new Writer(); $a = [\"k\" => 1]; ($writer->write(...))($a[\"k\"]);",
+        "cannot bind an array element by reference through callable descriptor dispatch",
+    );
+}
+
+/// Branch-selected callable descriptors cannot serialize an array-element reference as a value.
+#[test]
+fn test_error_branch_selected_descriptor_ref_param_rejects_array_element() {
+    expect_error(
+        "<?php class Writer { public function write(mixed &$value): void {} } $left = new Writer(); $right = new Writer(); $a = [\"k\" => 1]; ($argc > 1 ? $left->write(...) : $right->write(...))($a[\"k\"]);",
+        "cannot bind an array element by reference through callable descriptor dispatch",
+    );
+}
+
+/// Array-loaded callable descriptors apply the same by-reference element restriction.
+#[test]
+fn test_error_array_loaded_descriptor_ref_param_rejects_array_element() {
+    expect_error(
+        "<?php class Writer { public function write(mixed &$value): void {} } $writer = new Writer(); $callbacks = [$writer->write(...)]; $a = [\"k\" => 1]; $callbacks[0]($a[\"k\"]);",
+        "cannot bind an array element by reference through callable descriptor dispatch",
+    );
+}
+
+/// A CUFA array literal contains values, so an ArrayAccess item cannot promise a live alias.
+#[test]
+fn test_error_call_user_func_array_ref_param_rejects_array_element_value() {
+    expect_error(
+        "<?php function write(mixed &$value): void {} $a = [\"k\" => 1]; call_user_func_array(write(...), [$a[\"k\"]]);",
+        "cannot bind an array element by reference through callable descriptor dispatch",
+    );
+}
+
 /// Verifies that error call user func string literal ref param requires variable.
 #[test]
 fn test_error_call_user_func_string_literal_ref_param_requires_variable() {
@@ -823,6 +868,71 @@ fn test_transitive_builtin_class_override_accepts_the_generated_collector() {
 fn test_transitive_builtin_interface_contract_accepts_the_generated_collector() {
     expect_no_error(
         "<?php interface AppIterator extends Iterator {} class Counter implements AppIterator { private int $i = 0; public function current(): mixed { return $this->i; } public function key(): mixed { return $this->i; } public function next(): void { $this->i++; } public function rewind(): void { $this->i = 0; } public function valid(): bool { return $this->i < 2; } } eval('return null;'); foreach (new Counter() as $value) { echo $value; }",
+    );
+}
+
+/// CUFA literal elements cannot manufacture the alias required by a mutating builtin.
+#[test]
+fn test_error_cufa_builtin_ref_argument_rejects_array_access_value() {
+    expect_error(
+        "<?php $outer = ['k' => [2, 1]]; call_user_func_array('sort', [$outer['k']]);",
+        "cannot bind an array element by reference through callable descriptor dispatch",
+    );
+}
+
+/// A stored instance FCC with a runtime named spread takes the descriptor path too.
+#[test]
+fn test_error_instance_fcc_runtime_spread_rejects_array_access_ref_argument() {
+    expect_error(
+        "<?php class FccSpreadWriter { public function write(mixed &$value, mixed $tail): void {} } $writer = new FccSpreadWriter(); $callback = $writer->write(...); $values = ['k' => 1]; $tail = ['tail' => 2]; $callback($values['k'], ...$tail);",
+        "cannot bind an array element by reference through callable descriptor dispatch",
+    );
+}
+
+/// Returned callable descriptors cannot manufacture array-element reference markers.
+#[test]
+fn test_error_returned_callable_ref_argument_rejects_array_access_value() {
+    for source in [
+        "<?php function target(&$value): void {} function make(): callable { return target(...); } $callback = make(); $items = ['k' => 1]; $callback($items['k']);",
+        "<?php class ReturnedCallable { public function target(&$value): void {} public function make(): callable { return $this->target(...); } } $factory = new ReturnedCallable(); $callback = $factory->make(); $items = ['k' => 1]; $callback($items['k']);",
+    ] {
+        expect_error(
+            source,
+            "cannot bind an array element by reference through callable descriptor dispatch",
+        );
+    }
+}
+
+/// Closures whose captures require stable cells also invoke through descriptor storage.
+#[test]
+fn test_error_ref_cell_capturing_closure_rejects_array_access_ref_argument() {
+    for source in [
+        "<?php $state = 0; $callback = function (&$value) use (&$state): void {}; $items = ['k' => 1]; $callback($items['k']);",
+        "<?php $state = 0; $alias =& $state; $callback = function (&$value) use ($state): void {}; $items = ['k' => 1]; $callback($items['k']);",
+        "<?php $state = 0; $items = ['k' => 1]; (function (&$value) use (&$state): void {})($items['k']);",
+        "<?php $state = 0; $items = ['k' => 1]; ($callback = function (&$value) use (&$state): void {})($items['k']);",
+    ] {
+        expect_error(
+            source,
+            "cannot bind an array element by reference through callable descriptor dispatch",
+        );
+    }
+}
+
+/// By-reference variadic tails require storage and do not copy array elements into aliases.
+#[test]
+fn test_error_by_ref_variadic_arguments_require_supported_lvalues() {
+    expect_error(
+        "<?php function gather(&...$values): void {} gather(1);",
+        "variadic parameter $values must be passed a variable",
+    );
+    expect_error(
+        "<?php function gather(&...$values): void {} $items = ['k' => 1]; gather($items['k']);",
+        "cannot bind an array element by reference for a by-reference variadic call",
+    );
+    expect_error(
+        "<?php function gather(&...$values): void {} $callback = gather(...); $items = ['k' => 1]; call_user_func_array($callback, [$items['k']]);",
+        "cannot bind an array element by reference through callable descriptor dispatch",
     );
 }
 

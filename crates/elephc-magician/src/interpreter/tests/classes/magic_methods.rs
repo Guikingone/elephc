@@ -164,6 +164,68 @@ return $box->missing;"#,
     );
 }
 
+/// Verifies a same-name write created recursively by `__set` becomes an ordinary public dynamic
+/// property, so a later external update does not dispatch the setter again.
+#[test]
+fn execute_program_updates_existing_dynamic_property_before_magic_set() {
+    let program = parse_fragment(
+        br#"class EvalMagicExistingSetBox {
+    public int $calls = 0;
+    public function __set($name, $value) {
+        $this->calls = $this->calls + 1;
+        $this->{$name} = $value;
+    }
+}
+$box = new EvalMagicExistingSetBox();
+$box->dynamic = "first";
+$box->dynamic = "second";
+return $box->calls . ":" . $box->dynamic;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("1:second".to_string())
+    );
+}
+
+/// Verifies a public dynamic entry created by guarded helper reentry wins over an inaccessible
+/// declared property on later external writes.
+#[test]
+fn execute_program_updates_existing_dynamic_property_named_like_private_slot() {
+    let program = parse_fragment(
+        br#"function eval_store_public_dynamic($object, $name, $value) {
+    $object->{$name} = $value;
+}
+class EvalMagicPrivateDynamicBox {
+    private string $hidden = "private";
+    public int $calls = 0;
+    public function __set($name, $value) {
+        $this->calls = $this->calls + 1;
+        eval_store_public_dynamic($this, $name, $value);
+    }
+    public function privateValue() {
+        return $this->hidden;
+    }
+}
+$box = new EvalMagicPrivateDynamicBox();
+$box->hidden = "first";
+$box->hidden = "second";
+return $box->calls . ":" . $box->privateValue();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("1:private".to_string()));
+}
+
 /// Verifies eval property probes and unsets dispatch through `__isset` and `__unset`.
 #[test]
 fn execute_program_dispatches_eval_magic_isset_empty_and_unset() {

@@ -10,6 +10,56 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// A descriptor spread borrows a by-reference parameter's pointee before pinning the source.
+#[test]
+fn descriptor_unpack_does_not_release_a_borrowed_ref_cell_load() {
+    let source = r#"<?php
+function forward(callable $callback, mixed &$arguments): mixed {
+    return $callback(...$arguments);
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "forward")
+            .unwrap();
+        let loads = function
+            .instructions
+            .iter()
+            .filter(|instruction| instruction.op == Op::LoadRefCell)
+            .collect::<Vec<_>>();
+        assert!(!loads.is_empty(), "{target}: expected a ref-cell source load");
+        for load in loads {
+            let value = load.result.expect("ref-cell load result");
+            assert_eq!(
+                function.value(value).unwrap().ownership,
+                Ownership::Borrowed,
+                "{target}: an expression read must borrow the ref-cell pointee",
+            );
+            assert!(
+                !function
+                    .instructions
+                    .iter()
+                    .any(|instruction| instruction.op == Op::Release && instruction.operands == [value]),
+                "{target}: descriptor unpack must not release the borrowed pointee",
+            );
+        }
+    }
+}
+
 /// A boxed PHP array result cannot take ownership of an unrelated raw object argument.
 #[test]
 fn php_array_results_release_object_argument_temporaries_on_all_targets() {
@@ -75,8 +125,99 @@ exercise_mixed_reference(null);
             panic!("{target}: reference store must receive an acquired string");
         };
         assert_eq!(function.instruction(inst).unwrap().op, Op::Acquire, "{target}");
+        assert!(
+            !function.instructions.iter().any(|inst| {
+                inst.op == Op::Release
+                    && inst.operands.first().is_some_and(|value| {
+                        function
+                            .value(*value)
+                            .and_then(|metadata| match metadata.def {
+                                ValueDef::Instruction { inst, .. } => function.instruction(inst),
+                                _ => None,
+                            })
+                            .is_some_and(|producer| producer.op == Op::LoadRefCell)
+                    })
+            }),
+            "{target}: StoreRefCell owns retirement of the previous pointee"
+        );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         assert!(asm.contains("transfer acquired ref-cell payload into Mixed storage"), "{target}");
+    }
+}
+
+/// Refcounted LoadRefCell call operands receive a lifetime pin across later argument effects.
+#[test]
+fn borrowed_ref_cell_call_operands_are_pinned_on_all_targets() {
+    let source = r#"<?php
+function observe(mixed $first, mixed $second): mixed { return $first; }
+function replace(mixed &$value): mixed { $value = ["new"]; return null; }
+function exercise(mixed &$value): mixed { return observe($value, replace($value)); }
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "exercise")
+            .unwrap();
+        let pinned_load = function.instructions.iter().any(|inst| {
+            inst.op == Op::Acquire
+                && inst.immediate == Some(crate::ir::Immediate::Bool(true))
+                && inst.operands.first().is_some_and(|value| {
+                    function
+                        .value(*value)
+                        .and_then(|metadata| match metadata.def {
+                            ValueDef::Instruction { inst, .. } => function.instruction(inst),
+                            _ => None,
+                        })
+                        .is_some_and(|producer| producer.op == Op::LoadRefCell)
+                })
+        });
+        assert!(pinned_load, "{target}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Contextual callback element types never narrow an untyped by-reference closure parameter.
+#[test]
+fn contextual_by_ref_closure_parameters_remain_mixed_on_all_targets() {
+    let source = r#"<?php
+$values = [1, 2];
+array_walk($values, function (&$value): void { $value = "changed"; });
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let closure = module
+            .functions
+            .iter()
+            .find(|function| function.flags.is_closure)
+            .unwrap();
+        let value = closure.params.first().unwrap();
+        assert!(value.by_ref, "{target}");
+        assert_eq!(value.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
 

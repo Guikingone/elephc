@@ -16936,6 +16936,81 @@ $box->dynamic = 8;');
     assert_eq!(magic.stdout, "dynamic:8");
 }
 
+/// Verifies eval updates an existing public dynamic entry before considering `__set`, for both
+/// AOT objects crossing the bridge and objects declared by eval itself.
+#[test]
+fn test_eval_existing_dynamic_property_update_does_not_repeat_magic_set() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class AotEvalMagicUpdateBox {
+    public int $calls = 0;
+    public function __set($name, $value): void {
+        $this->calls++;
+        $this->{$name} = $value;
+    }
+}
+$aot = new AotEvalMagicUpdateBox();
+eval('$aot->dynamic = "first"; $aot->dynamic = "second";');
+echo $aot->calls, ":", $aot->dynamic, "|";
+$dynamic = eval('class EvalMagicUpdateBox {
+    public int $calls = 0;
+    public function __set($name, $value): void {
+        $this->calls++;
+        $this->{$name} = $value;
+    }
+}
+return new EvalMagicUpdateBox();');
+eval('$dynamic->dynamic = "first"; $dynamic->dynamic = "second";');
+echo $dynamic->calls, ":", $dynamic->dynamic;
+"#,
+    );
+    assert!(out.success, "fixture failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:second|1:second");
+}
+
+/// Verifies eval updates a public dynamic entry created by guarded helper reentry even when an
+/// inaccessible declared property has the same source name.
+#[test]
+fn test_eval_existing_dynamic_property_named_like_private_slot_skips_magic_set() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_store_private_named_dynamic(mixed $object, string $name, mixed $value): void {
+    $object->{$name} = $value;
+}
+class AotEvalPrivateDynamicBox {
+    private string $hidden = "private";
+    public int $calls = 0;
+    public function __set($name, $value): void {
+        $this->calls++;
+        eval_store_private_named_dynamic($this, $name, $value);
+    }
+    public function privateValue(): string {
+        return $this->hidden;
+    }
+}
+$aot = new AotEvalPrivateDynamicBox();
+eval('$aot->hidden = "first"; $aot->hidden = "second";');
+echo $aot->calls, ":", $aot->privateValue(), "|";
+$dynamic = eval('class EvalPrivateDynamicBox {
+    private string $hidden = "private";
+    public int $calls = 0;
+    public function __set($name, $value): void {
+        $this->calls++;
+        eval_store_private_named_dynamic($this, $name, $value);
+    }
+    public function privateValue(): string {
+        return $this->hidden;
+    }
+}
+return new EvalPrivateDynamicBox();');
+eval('$dynamic->hidden = "first"; $dynamic->hidden = "second";');
+echo $dynamic->calls, ":", $dynamic->privateValue();
+"#,
+    );
+    assert!(out.success, "fixture failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:private|1:private");
+}
+
 /// Verifies eval-declared readonly classes cannot extend non-readonly parents.
 #[test]
 fn test_eval_declared_readonly_class_rejects_non_readonly_parent() {
@@ -25282,6 +25357,11 @@ catch (Error $error) { echo ":typed"; }');
 }
 
 /// Verifies eval ReflectionProperty getValue rejects uninitialized generated/AOT typed storage.
+///
+/// The generated property bridge reports the slot as uninitialized, then Magician throws a real
+/// `Error` through eval's normal Throwable channel. Left uncaught, that error reaches the native
+/// terminal handler and uses PHP's stdout fatal format rather than the stderr-only bridge-failure
+/// diagnostic reserved for `EvalStatus::RuntimeFatal`.
 #[test]
 fn test_eval_reflection_property_get_value_rejects_uninitialized_aot_storage() {
     let out = compile_and_run_capture(
@@ -25303,12 +25383,12 @@ echo $typed->getValue($object);
         "program unexpectedly succeeded: stdout={:?}",
         out.stdout
     );
-    assert_eq!(out.stdout, "Ada:");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
+    assert_eq!(
+        out.stdout,
+        "Ada:\nFatal error: Uncaught Error: Typed property \
+EvalAotReflectUninitializedGetTarget::$typed must not be accessed before initialization\n"
     );
+    assert_eq!(out.stderr, "");
 }
 
 /// Verifies eval ReflectionProperty raw APIs bridge generated/AOT instance storage.

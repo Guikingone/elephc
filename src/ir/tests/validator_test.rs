@@ -9,7 +9,7 @@
 //!   not on assumptions from the builder.
 
 use crate::ir::{
-    validate_function, Builder, Function, IrType, Terminator, ValidationError,
+    validate_function, Builder, Function, IrType, Op, Ownership, Terminator, ValidationError,
 };
 use crate::types::PhpType;
 
@@ -145,6 +145,101 @@ fn use_not_dominated_fails() {
             value: Some(hidden),
         });
     }
+    assert!(matches!(
+        validate_function(&function),
+        Err(ValidationError::UseNotDominated { .. })
+    ));
+}
+
+/// An operand in an unreachable continuation block has no executable dominance requirement.
+#[test]
+fn entry_value_in_unreachable_block_is_valid() {
+    let mut function = Function::new("dead_use".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        let dead = builder.create_named_block("dead", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let value = builder.emit_const_i64(1);
+        builder.terminate(Terminator::Return { value: None });
+        builder.position_at_end(dead);
+        let _ = builder.emit_with_effects(
+            Op::EchoValue,
+            vec![value],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::EchoValue.default_effects(),
+            None,
+        );
+        builder.terminate(Terminator::Unreachable);
+    }
+    assert_eq!(validate_function(&function), Ok(()));
+}
+
+/// An unreachable block cannot import a value from an unrelated unreachable block.
+#[test]
+fn sibling_unreachable_value_use_is_invalid() {
+    let mut function = Function::new("dead_siblings".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        let producer = builder.create_named_block("producer", vec![]);
+        let consumer = builder.create_named_block("consumer", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.terminate(Terminator::Return { value: None });
+        builder.position_at_end(producer);
+        let value = builder.emit_const_i64(1);
+        builder.terminate(Terminator::Unreachable);
+        builder.position_at_end(consumer);
+        let _ = builder.emit_with_effects(
+            Op::EchoValue,
+            vec![value],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::EchoValue.default_effects(),
+            None,
+        );
+        builder.terminate(Terminator::Unreachable);
+    }
+    assert!(matches!(
+        validate_function(&function),
+        Err(ValidationError::UseNotDominated { .. })
+    ));
+}
+
+/// Dead code still cannot use a same-block value before its definition.
+#[test]
+fn unreachable_same_block_use_before_definition_is_invalid() {
+    let mut function = Function::new("dead_order".to_string(), IrType::Void, PhpType::Void);
+    let dead;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        dead = builder.create_named_block("dead", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.terminate(Terminator::Return { value: None });
+        builder.position_at_end(dead);
+        let value = builder.emit_const_i64(1);
+        let _ = builder.emit_with_effects(
+            Op::EchoValue,
+            vec![value],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::EchoValue.default_effects(),
+            None,
+        );
+        builder.terminate(Terminator::Unreachable);
+    }
+    function.blocks[dead.as_raw() as usize].instructions.swap(0, 1);
     assert!(matches!(
         validate_function(&function),
         Err(ValidationError::UseNotDominated { .. })

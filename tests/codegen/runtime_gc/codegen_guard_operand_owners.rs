@@ -122,16 +122,17 @@ echo $caught;
 
 /// `clone()`'s reference-property-override refusal is a third emitter reaching the same helper.
 ///
-/// The override entry explicitly aliases `$value`, so every clone reaches the real catchable
-/// reference guard while its freshly cloned receiver is still an unwind-visible owner.
+/// Binding `$value` to the existing override entry promotes that entry into a reference set, so
+/// every clone reaches the real catchable reference guard while its freshly cloned receiver is
+/// still an unwind-visible owner.
 #[test]
 fn test_caught_clone_property_override_error_releases_the_in_flight_receiver() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class CloneGuardPayload { public int $value = 1; }
 function cloneGuardPick(CloneGuardPayload $payload): mixed { return $payload; }
-$value = 2;
-$overrides = ['value' => &$value];
+$overrides = ['value' => 2];
+$value = &$overrides['value'];
 $caught = 0;
 for ($i = 0; $i < 12; $i++) {
     try { $copy = clone(cloneGuardPick(new CloneGuardPayload()), $overrides); }

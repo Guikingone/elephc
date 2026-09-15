@@ -428,6 +428,412 @@ fn dynamic_property_notices(stderr: &str, class_name: &str) -> usize {
     stderr.matches(needle.as_str()).count()
 }
 
+/// Verifies an ordinary class stores and reads a missing property whose name exists only at run
+/// time, and reports the PHP 8.5 creation deprecation exactly once.
+///
+/// This uses the plain assignment path directly. No clone override reserves storage as a side
+/// effect or masks a missing runtime-name reservation.
+#[test]
+fn test_runtime_built_missing_name_round_trips_on_an_ordinary_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RuntimePlain {
+    public string $declared = 'slot';
+}
+function runtimeName(): string { return chr(100) . chr(121) . chr(110); }
+function put(RuntimePlain $object, string $name, mixed $value): void {
+    $object->{$name} = $value;
+}
+function get(RuntimePlain $object, string $name): mixed {
+    return $object->{$name};
+}
+$object = new RuntimePlain();
+$name = runtimeName();
+put($object, $name, 'stored');
+echo get($object, $name), ':', $object->declared;
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "stored:slot");
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "RuntimePlain"),
+        1,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies runtime-name misses call `__set` for typed and Mixed receivers.
+///
+/// The recursion guard is keyed by receiver plus property name. Inside `__set('outer')`, writing
+/// `inner` must invoke a nested `__set('inner')`, while routing either active name through a
+/// helper must suppress only the matching reentry and create that dynamic property.
+#[test]
+fn test_runtime_built_missing_name_dispatches_set_with_pair_specific_reentry() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RuntimeMagic {
+    public function __set(string $name, mixed $value): void {
+        echo "magic:$name=$value;";
+    }
+}
+class RuntimeSelfStore {
+    public function store(string $name, mixed $value): void {
+        $this->{$name} = $value;
+    }
+    public function __set(string $name, mixed $value): void {
+        echo "self:$name;";
+        if ($name === 'outer') {
+            $inner = chr(105) . chr(110) . chr(110) . chr(101) . chr(114);
+            $this->{$inner} = 'nested';
+        }
+        $this->store($name, $value);
+    }
+}
+function runtimeMagicName(): string { return chr(102) . chr(114) . chr(101) . chr(115) . chr(104); }
+function typedPut(RuntimeMagic $object, string $name): void { $object->{$name} = 'typed'; }
+function mixedMagic(): mixed { return new RuntimeMagic(); }
+function mixedPut(mixed $object, string $name): void { $object->{$name} = 'mixed'; }
+$name = runtimeMagicName();
+typedPut(new RuntimeMagic(), $name);
+mixedPut(mixedMagic(), $name);
+$stored = new RuntimeSelfStore();
+$outer = chr(111) . chr(117) . chr(116) . chr(101) . chr(114);
+$inner = chr(105) . chr(110) . chr(110) . chr(101) . chr(114);
+$stored->{$outer} = 'value';
+echo $stored->{$outer}, ':', $stored->{$inner};
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "magic:fresh=typed;magic:fresh=mixed;self:outer;self:inner;value:nested"
+    );
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "RuntimeMagic"),
+        0,
+        "{}",
+        out.stderr
+    );
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "RuntimeSelfStore"),
+        2,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies literal-name writes use the receiver/name guard too: the same name stores directly,
+/// while a different literal name performs a nested `__set` dispatch.
+#[test]
+fn test_direct_name_setter_reentry_is_pair_specific() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class DirectLiteralSet {
+    public int $calls = 0;
+    public function __set(string $name, mixed $value): void {
+        $this->calls++;
+        echo "set:$name;";
+        if ($name === "outer") {
+            $this->inner = "nested";
+            $this->outer = $value;
+            return;
+        }
+        $this->inner = $value;
+    }
+}
+$object = new DirectLiteralSet();
+$object->outer = "first";
+$object->outer = "second";
+echo $object->calls, ":", $object->outer, ":", $object->inner;
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "set:outer;set:inner;2:second:nested");
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "DirectLiteralSet"),
+        2,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies a literal-name `__set` selected by a runtime subclass guard shares the same reentry
+/// suppression and existing-entry probe as a setter selected from the static receiver class.
+#[test]
+fn test_direct_name_subclass_setter_reentry_uses_runtime_guard() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class DirectSetBase {}
+class DirectSetChild extends DirectSetBase {
+    public int $calls = 0;
+    public function __set(string $name, mixed $value): void {
+        $this->calls++;
+        $this->stored = $value;
+    }
+}
+function direct_set_through_base(DirectSetBase $object, mixed $value): void {
+    $object->stored = $value;
+}
+$object = new DirectSetChild();
+direct_set_through_base($object, "first");
+direct_set_through_base($object, "second");
+echo $object->calls, ":", $object->stored;
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "1:second");
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "DirectSetChild"),
+        1,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies a magic-set guard suspended on a Fiber stack is detached from the main context.
+/// Destroying that Fiber unmaps its stack, so the next runtime-name write must not scan the
+/// retired guard node before dispatching its own `__set` call.
+#[test]
+fn test_runtime_set_guard_does_not_retain_a_destroyed_suspended_fiber_stack() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RuntimeFiberGuard {
+    public function store(string $name, mixed $value): void {
+        $this->{$name} = $value;
+    }
+    public function __set(string $name, mixed $value): void {
+        echo "set:$name;";
+        if ($name === 'park') {
+            Fiber::suspend();
+        }
+        $this->store($name, $value);
+    }
+}
+function runtimeFiberParkName(): string { return chr(112) . 'ark'; }
+function runtimeFiberNextName(): string { return chr(110) . 'ext'; }
+$fiber = new Fiber(function(): void {
+    $held = new RuntimeFiberGuard();
+    $name = runtimeFiberParkName();
+    $held->{$name} = 'held';
+});
+$fiber->start();
+unset($fiber);
+$live = new RuntimeFiberGuard();
+$name = runtimeFiberNextName();
+$live->{$name} = 'ok';
+echo $live->{$name};
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "set:park;set:next;ok");
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "RuntimeFiberGuard"),
+        1,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies resuming a setter restores its Fiber-local guard chain, then removes the guard when
+/// the setter returns. Recreating the same receiver/name property must dispatch `__set` again.
+#[test]
+fn test_runtime_set_guard_survives_fiber_resume_and_unlinks_on_return() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RuntimeResumedSetGuard {
+    public function store(string $name, mixed $value): void { $this->{$name} = $value; }
+    public function __set(string $name, mixed $value): void {
+        echo "set:$name;";
+        if ($value === 'first') {
+            Fiber::suspend('paused');
+            echo 'resumed;';
+        }
+        $this->store($name, $value);
+    }
+}
+$object = new RuntimeResumedSetGuard();
+$name = chr(112) . 'ark';
+$fiber = new Fiber(function() use ($object, $name): void {
+    $object->{$name} = 'first';
+});
+echo $fiber->start(), ';';
+$fiber->resume();
+echo $object->{$name}, ';';
+unset($object->{$name});
+$object->{$name} = 'second';
+echo $object->{$name};
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "set:park;paused;resumed;first;set:park;second"
+    );
+}
+
+/// Verifies `Fiber::throw()` restores the suspended guard head and the setter exception boundary
+/// unlinks its node before PHP catches the delivered throwable inside the Fiber.
+#[test]
+fn test_runtime_set_guard_unlinks_when_fiber_throw_escapes_setter() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RuntimeThrownSetGuard {
+    public function store(string $name, mixed $value): void { $this->{$name} = $value; }
+    public function __set(string $name, mixed $value): void {
+        echo "set:$name;";
+        if ($value === 'first') {
+            Fiber::suspend('paused');
+        }
+        $this->store($name, $value);
+    }
+}
+$object = new RuntimeThrownSetGuard();
+$name = chr(112) . 'ark';
+$fiber = new Fiber(function() use ($object, $name): void {
+    try {
+        $object->{$name} = 'first';
+    } catch (Exception $error) {
+        echo 'caught;';
+    }
+});
+echo $fiber->start(), ';';
+$fiber->throw(new Exception('delivered'));
+$object->{$name} = 'second';
+echo $object->{$name};
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "set:park;paused;caught;set:park;second");
+}
+
+/// Verifies native and eval property writes share one receiver/name recursion stack. Different
+/// names nest through `__set`, while same-name writes cross either boundary into raw storage.
+#[test]
+fn test_runtime_set_guard_is_shared_across_aot_and_eval_writes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RuntimeEvalSetGuard {
+    public function __set(string $name, mixed $value): void {
+        echo "set:$name;";
+        if ($name === 'outer') {
+            eval('$inner = "inner"; $this->{$inner} = "nested";');
+        }
+        eval('$this->{$name} = $value;');
+    }
+}
+class RuntimeEvalInitialSetGuard {
+    public function __set(string $name, mixed $value): void {
+        echo "initial:$name;";
+        eval('$this->{$name} = $value;');
+    }
+}
+$first = new RuntimeEvalSetGuard();
+$outer = chr(111) . 'uter';
+$first->{$outer} = 'value';
+echo $first->{$outer}, ':', $first->inner, '|';
+$second = new RuntimeEvalInitialSetGuard();
+$name = chr(101) . 'val';
+$value = 'stored';
+eval('$second->{$name} = $value;');
+echo $second->{$name};
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "set:outer;set:inner;value:nested|initial:eval;stored"
+    );
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "RuntimeEvalSetGuard"),
+        2,
+        "{}",
+        out.stderr
+    );
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "RuntimeEvalInitialSetGuard"),
+        1,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies an active name on one receiver does not suppress `__set` on another receiver.
+#[test]
+fn test_runtime_set_reentry_guard_includes_receiver_identity() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RuntimePairGuard {
+    public string $label;
+    public ?RuntimePairGuard $peer = null;
+    public function __construct(string $label) { $this->label = $label; }
+    public function store(string $name, mixed $value): void { $this->{$name} = $value; }
+    public function __set(string $name, mixed $value): void {
+        echo $this->label, ':', $name, ';';
+        if ($this->peer !== null) {
+            $peer = $this->peer;
+            $this->peer = null;
+            $peer->{$name} = $value;
+        }
+        $this->store($name, $value);
+    }
+}
+$first = new RuntimePairGuard('first');
+$second = new RuntimePairGuard('second');
+$first->peer = $second;
+$name = chr(115) . chr(97) . chr(109) . chr(101);
+$first->{$name} = 'value';
+echo $first->{$name}, ':', $second->{$name};
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "first:same;second:same;value:value");
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "RuntimePairGuard"),
+        2,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies an escaping setter exception unlinks its active receiver/name guard.
+#[test]
+fn test_runtime_set_reentry_guard_is_removed_before_catch_resumes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RuntimeThrowingSet {
+    public int $calls = 0;
+    public function store(string $name, mixed $value): void { $this->{$name} = $value; }
+    public function __set(string $name, mixed $value): void {
+        $this->calls++;
+        echo 'set:', $this->calls, ';';
+        if ($this->calls === 1) {
+            throw new Exception('first');
+        }
+        $this->store($name, $value);
+    }
+}
+$object = new RuntimeThrowingSet();
+$name = chr(118) . chr(97) . chr(108) . chr(117) . chr(101);
+try {
+    $object->{$name} = 'lost';
+} catch (Exception $error) {
+    echo 'caught;';
+}
+$object->{$name} = 'kept';
+echo $object->{$name};
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "set:1;caught;set:2;kept");
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "RuntimeThrowingSet"),
+        1,
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies a DIRECT-name write to a strict ancestor's private name creates a distinct dynamic
 /// property, from the child scope and from global scope, and never touches the ancestor's slot.
 ///
@@ -1282,6 +1688,100 @@ echo $c->readP(), "\n";
     assert_eq!(
         dynamic_property_notices(&out.stderr, "ROMagicChild"),
         0,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies a runtime-name write invokes `__set` on a readonly class, while same-pair reentry
+/// raises the dynamic-property `Error` instead of requiring or creating hash storage.
+#[test]
+fn test_readonly_runtime_name_setter_reentry_refuses_dynamic_storage() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function runtime_property_name(): string { return "x"; }
+readonly class R {
+    public function __set($name, $value): void {
+        echo "set:$name|";
+        try {
+            $this->{$name} = $value;
+        } catch (Error $error) {
+            echo $error->getMessage();
+        }
+    }
+}
+$name = runtime_property_name();
+$object = new R();
+$object->{$name} = 1;
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "set:x|Cannot create dynamic property R::$x");
+    assert_eq!(dynamic_property_notices(&out.stderr, "R"), 0, "{}", out.stderr);
+}
+
+/// Verifies eval can enter a native readonly `__set`, and a same-pair eval write inside that
+/// setter is suppressed before the readonly class rejects dynamic storage with a catchable Error.
+#[test]
+fn test_readonly_runtime_name_setter_reentry_through_eval_refuses_dynamic_storage() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function runtime_eval_property_name(): string { return "x"; }
+readonly class RuntimeEvalReadonlySet {
+    public function __set($name, $value): void {
+        echo "set:$name|";
+        try {
+            eval('$this->{$name} = $value;');
+        } catch (Error $error) {
+            echo $error->getMessage();
+        }
+    }
+}
+$name = runtime_eval_property_name();
+$value = 1;
+$object = new RuntimeEvalReadonlySet();
+eval('$object->{$name} = $value;');
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "set:x|Cannot create dynamic property RuntimeEvalReadonlySet::$x"
+    );
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "RuntimeEvalReadonlySet"),
+        0,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies opaque eval source can create and then update a dynamic property on an ordinary
+/// native object. The source is returned by a runtime call so the compiler cannot pre-scan its
+/// property name or lower the assignment as an AOT dynamic-property write.
+#[test]
+fn test_runtime_built_eval_source_round_trips_a_plain_aot_dynamic_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class OpaqueEvalPlain {
+    public string $declared = 'kept';
+}
+function opaque_eval_source(string $receiver): string {
+    return $receiver . '->{$name} = $value; echo $object->{$name}, "|"; '
+        . '$object->{$name} = "updated"; echo $object->{$name}, "|", $object->declared;';
+}
+$object = new OpaqueEvalPlain();
+$name = 'runtime_name';
+$value = 'created';
+$source = opaque_eval_source('$object');
+eval($source);
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "created|updated|kept");
+    assert_eq!(
+        dynamic_property_notices(&out.stderr, "OpaqueEvalPlain"),
+        1,
         "{}",
         out.stderr
     );
