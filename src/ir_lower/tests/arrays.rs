@@ -523,14 +523,18 @@ echo count($items);
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
         let function = module.functions.iter().find(|f| f.name == "removeComputedArrayOffset").unwrap();
-        let push = function.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner)
-            .expect("computed key needs a scoped root");
         let remove = function.instructions.iter().position(|inst| inst.op == Op::OffsetUnset).unwrap();
-        let pop = function.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner).unwrap();
+        let (push, slot) = function.instructions[..remove].iter().enumerate().rev().find_map(|(index, inst)| {
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return None };
+            (inst.op == Op::PushCallOperandOwner
+                && function.locals[slot.as_raw() as usize].php_type == PhpType::Str)
+                .then_some((index, slot))
+        }).expect("computed key needs a scoped concrete-string root");
+        let pop = function.instructions[remove + 1..].iter().position(|inst| {
+            inst.op == Op::PopCallOperandOwner
+                && inst.immediate == Some(Immediate::LocalSlot(slot))
+        }).map(|index| remove + 1 + index).expect("computed key root must be detached after removal");
         assert!(push < remove && remove < pop, "{name}: guard key across destructor execution");
-        let Some(Immediate::LocalSlot(slot)) = function.instructions[push].immediate else {
-            panic!("{name}: scoped key root must name its owning local");
-        };
         assert_eq!(function.locals[slot.as_raw() as usize].php_type, PhpType::Str,
             "{name}: retiring the key must not widen it to Mixed");
         assert!(function.instructions[pop + 1..].iter().any(|inst| {

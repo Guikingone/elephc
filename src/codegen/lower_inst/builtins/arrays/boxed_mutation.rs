@@ -34,6 +34,14 @@ pub(super) fn prepare_boxed_array_receiver(
 ) -> Result<()> {
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable(name)?;
+    if matches!(receiver, ReceiverPlace::RefCell(_)) {
+        // A ref-cell load borrows the boxed value, while the COW helper consumes one owner when
+        // it splits. Give it a temporary owner so StoreRefCell can retire the place's old owner
+        // after publishing the returned cell. The extra count also forces a split when the place
+        // is the boxed value's only owner, avoiding a same-pointer publish followed by release.
+        ctx.load_value_to_result(array)?;
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+    }
     ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_array_cell_ensure_unique");
     require_valid_array_result(ctx, name);
