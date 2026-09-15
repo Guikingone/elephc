@@ -24,6 +24,13 @@ pub(super) fn lower_static_method_call(
             && !args.is_empty()
         {
             let closure = lower_expr(ctx, &args[0]);
+            if let (Some(new_this), Some(scope)) = (args.get(1), args.get(2)) {
+                if let Some(plan) = plan_scoped_closure_bind(ctx, &args[0], scope) {
+                    return lower_planned_scoped_closure_bind(
+                        ctx, plan, closure, new_this, scope, expr,
+                    );
+                }
+            }
             let new_this = match args.get(1) {
                 Some(arg) => lower_expr(ctx, arg),
                 None => lower_null(ctx, expr),

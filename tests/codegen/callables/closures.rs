@@ -1345,7 +1345,7 @@ echo $bound();
 }
 
 /// Verifies the canonical scope-stealing pattern: a standalone closure bound to
-/// an object reads a private property (visibility is permissive once bound).
+/// an object reads a private property through the explicitly requested scope.
 #[test]
 fn test_top_level_closure_bind_reads_private_property() {
     let out = compile_and_run(
@@ -1359,6 +1359,31 @@ echo $read();
 "#,
     );
     assert_eq!(out, "250");
+}
+
+/// Verifies explicit scope works for both binding spellings without changing
+/// the original closure or a separate binding that keeps global scope.
+#[test]
+fn test_top_level_closure_bind_private_scope_is_isolated() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault {
+    private string $code = "open";
+}
+$peek = function() { return $this->code; };
+$global = Closure::bind($peek, new Vault());
+try {
+    echo $global();
+} catch (Error $error) {
+    echo "denied|";
+}
+$static = Closure::bind($peek, new Vault(), Vault::class);
+$method = $peek->bindTo(new Vault(), Vault::class);
+$literal = Closure::bind(function() { return $this->code; }, new Vault(), Vault::class);
+echo $static(), "|", $method(), "|", $literal();
+"#,
+    );
+    assert_eq!(out, "denied|open|open|open");
 }
 
 /// Verifies a top-level closure that calls a method on `$this` and takes an

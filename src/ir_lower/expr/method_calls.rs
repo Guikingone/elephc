@@ -116,7 +116,9 @@ pub(super) fn lower_method_call(
         ctx.builder.value_php_type(object.value).codegen_repr(),
         PhpType::Callable
     ) {
-        if let Some(result) = lower_closure_bind_method(ctx, &object, method, args, expr) {
+        if let Some(result) =
+            lower_closure_bind_method(ctx, object_expr, &object, method, args, expr)
+        {
             return result;
         }
     }
@@ -189,10 +191,12 @@ pub(super) fn lower_method_call(
 /// Lowers the `Closure` rebinding methods on a closure (`Callable`) receiver:
 /// `$closure->bindTo($newThis [, $scope])` and `$closure->call($newThis, ...$args)`.
 /// Returns `None` for any other method so normal dispatch (and its diagnostics)
-/// still apply. The `$scope` argument is accepted and ignored — visibility is
-/// resolved at compile time in elephc's closed-world model.
+/// still apply. A statically known explicit `$scope` receives its own closure
+/// function specialization, preserving PHP member visibility without changing
+/// the original closure's lexical scope.
 pub(super) fn lower_closure_bind_method(
     ctx: &mut LoweringContext<'_, '_>,
+    closure_expr: &Expr,
     closure: &LoweredValue,
     method: &str,
     args: &[Expr],
@@ -204,6 +208,15 @@ pub(super) fn lower_closure_bind_method(
         "call" => PhpType::Mixed,
         _ => return None,
     };
+    if method == "bindto" {
+        if let (Some(new_this), Some(scope)) = (args.first(), args.get(1)) {
+            if let Some(plan) = plan_scoped_closure_bind(ctx, closure_expr, scope) {
+                return Some(lower_planned_scoped_closure_bind(
+                    ctx, plan, *closure, new_this, scope, expr,
+                ));
+            }
+        }
+    }
     // Binding retains its own receiver and environment. Original temporary inputs still
     // need their own retirement, including a throw while evaluating the new receiver or
     // invocation arguments. The result must outlive both original-input cleanup records.
@@ -232,6 +245,120 @@ pub(super) fn lower_closure_bind_method(
         retire_owned_call_operand(ctx, slot, expr.span);
     }
     Some(take_prepublished_call_result(ctx, result_staging, result, expr.span))
+}
+
+/// A statically resolved closure function cloned for one explicit PHP visibility scope.
+pub(super) struct ScopedClosureBindPlan {
+    name: String,
+    signature: FunctionSig,
+}
+
+/// Plans a scope-specialized binding without emitting EIR or evaluating source expressions.
+///
+/// The generic runtime binder copies a descriptor, so it cannot alter the already compiled
+/// function's lexical member-access scope. When both the closure and scope class are statically
+/// known, clone that EIR function and assign the requested lexical class to the clone. The source
+/// function remains unchanged for unbound calls and bindings using another scope.
+pub(super) fn plan_scoped_closure_bind(
+    ctx: &mut LoweringContext<'_, '_>,
+    closure_expr: &Expr,
+    scope_expr: &Expr,
+) -> Option<ScopedClosureBindPlan> {
+    let binding = static_callable_binding_for_expr(ctx, closure_expr)
+        .or_else(|| ctx.take_pending_static_callable_result())?;
+    let StaticCallableBinding::Closure {
+        name,
+        signature,
+        captures,
+    } = binding
+    else {
+        return None;
+    };
+    let requested_scope = static_callable_class_name(ctx, scope_expr)?;
+    let scope = lookup_folded_name(
+        ctx.classes.keys(),
+        requested_scope.trim_start_matches('\\'),
+    )?;
+    let mut function = ctx.closure_function(&name)?.clone();
+    let capture_params = function
+        .params
+        .get(function.params.len().checked_sub(captures.len())?..)?;
+    let [this_param] = capture_params else {
+        return None;
+    };
+    if this_param.name != "this"
+        || this_param.php_type.codegen_repr() != PhpType::Mixed
+        || this_param.by_ref
+    {
+        return None;
+    }
+    let scoped_name = ctx.next_closure_name();
+    function.name = scoped_name.clone();
+    function.lexical_class = Some(scope);
+    ctx.extend_closures([function]);
+    Some(ScopedClosureBindPlan {
+        name: scoped_name,
+        signature,
+    })
+}
+
+/// Materializes a descriptor whose compiled function uses the planned PHP visibility scope.
+pub(super) fn lower_planned_scoped_closure_bind(
+    ctx: &mut LoweringContext<'_, '_>,
+    plan: ScopedClosureBindPlan,
+    closure: LoweredValue,
+    new_this_expr: &Expr,
+    scope_expr: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let result_staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
+    let (_, closure_owner) = root_owned_call_operand(ctx, closure, expr.span);
+    let new_this = lower_expr(ctx, new_this_expr);
+    let (new_this, receiver_owner) = root_owned_call_operand(ctx, new_this, new_this_expr.span);
+    let scope = lower_expr(ctx, scope_expr);
+    let (_, scope_owner) = root_owned_call_operand(ctx, scope, scope_expr.span);
+
+    let receiver_capture =
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, new_this, Some(expr.span));
+    let boxed_this = if ctx
+        .builder
+        .value_php_type(receiver_capture.value)
+        .codegen_repr()
+        == PhpType::Mixed
+    {
+        receiver_capture
+    } else {
+        ctx.box_value_as_mixed(receiver_capture, PhpType::Mixed, Some(expr.span))
+    };
+    let captures = vec![ClosureCapture {
+        value: boxed_this.value,
+    }];
+    let data = ctx.intern_string(&plan.name);
+    let bound = ctx.emit_value(
+        Op::ClosureNew,
+        vec![boxed_this.value],
+        Some(Immediate::Data(data)),
+        PhpType::Callable,
+        Op::ClosureNew.default_effects(),
+        Some(expr.span),
+    );
+    stage_call_result(ctx, result_staging.as_ref(), bound, expr.span);
+    if let Some(slot) = scope_owner {
+        retire_owned_call_operand(ctx, slot, scope_expr.span);
+    }
+    if let Some(slot) = receiver_owner {
+        retire_owned_call_operand(ctx, slot, new_this_expr.span);
+    }
+    if let Some(slot) = closure_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    let bound = take_prepublished_call_result(ctx, result_staging, bound, expr.span);
+    ctx.set_pending_static_callable_result(StaticCallableBinding::Closure {
+        name: plan.name,
+        signature: plan.signature,
+        captures,
+    });
+    bound
 }
 
 /// Emits the `closure_bind` runtime call that rebinds a closure's captured

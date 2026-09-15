@@ -1565,6 +1565,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.closures.extend(closures);
     }
 
+    /// Returns a closure function accumulated while lowering this body.
+    ///
+    /// Static `Closure::bind` specialization clones the function so an explicit PHP scope can
+    /// change member visibility without mutating the original closure or weakening property
+    /// access for unrelated calls.
+    pub(crate) fn closure_function(&self, name: &str) -> Option<&Function> {
+        self.closures.iter().find(|closure| closure.name == name)
+    }
+
     /// Returns closure functions accumulated in this body once lowering has finished.
     pub(crate) fn into_closures(self) -> Vec<Function> {
         self.closures
