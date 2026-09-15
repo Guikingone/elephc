@@ -660,15 +660,23 @@ fn iterator_state_offset(
 
 /// Where a by-reference foreach can re-read its source container after the loop body moved it.
 ///
-/// `value_offset` is the origin local's own frame slot. `state_offset` is that local's ref-cell
-/// representation word when it has one: `0` means the slot holds the container directly, and
-/// anything else means the slot holds an address whose target is the container. Recording both
-/// is what lets an aliased source (`function f(array &$a) { foreach ($a as &$v) ... }`) be
-/// reloaded at runtime instead of being opted out of relocation handling entirely.
+/// `value_offset` is the origin local's own frame slot. `storage` records the CFG-aware backend
+/// representation at the current instruction, including the runtime flag only when the slot is
+/// genuinely path-dependent. This lets an aliased source (`function f(array &$a) { foreach
+/// ($a as &$v) ... }`) be reloaded instead of being mistaken for a raw pointer because function
+/// entry flags start at zero.
 #[derive(Clone, Copy)]
 struct IterOrigin {
     value_offset: usize,
-    state_offset: Option<usize>,
+    storage: IterOriginStorage,
+}
+
+/// Authoritative representation of the origin slot at the current EIR instruction.
+#[derive(Clone, Copy)]
+enum IterOriginStorage {
+    Raw,
+    RefCell,
+    Dynamic { state_offset: usize },
 }
 
 /// Resolves the origin an `iter_start` instruction names, for use during initialization.
@@ -677,7 +685,7 @@ fn iter_start_origin(ctx: &FunctionContext<'_>, inst: &Instruction) -> Option<It
     let value_offset = ctx.local_offset(slot).ok()?;
     Some(IterOrigin {
         value_offset,
-        state_offset: ctx.ref_cell_state_offset(slot),
+        storage: iter_origin_storage(ctx, slot)?,
     })
 }
 
@@ -700,17 +708,36 @@ fn iter_origin(
     };
     Ok(Some(IterOrigin {
         value_offset,
-        state_offset: ctx.ref_cell_state_offset(slot),
+        storage: iter_origin_storage(ctx, slot).ok_or_else(|| {
+            CodegenIrError::invalid_module(format!(
+                "dynamic iterator origin slot {} has no representation flag",
+                slot.as_raw()
+            ))
+        })?,
     }))
+}
+
+/// Classifies an origin slot from the backend's CFG-aware local representation analysis.
+fn iter_origin_storage(
+    ctx: &FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Option<IterOriginStorage> {
+    if ctx.local_ref_cell_representation_is_definite(slot) {
+        return Some(IterOriginStorage::RefCell);
+    }
+    if ctx.local_ref_cell_representation_is_dynamic(slot) {
+        return ctx
+            .ref_cell_state_offset(slot)
+            .map(|state_offset| IterOriginStorage::Dynamic { state_offset });
+    }
+    Some(IterOriginStorage::Raw)
 }
 
 /// Materializes the container the origin local currently holds into `dest`.
 ///
-/// A slot with no ref-cell representation word holds the container itself. A slot that has one
-/// holds it behind a pointer once the word is non-zero, which covers both the ordinary borrowed
-/// reference and the managed reference cell: in both encodings the value lives at `[slot]`. The
-/// branch is emitted rather than folded because the representation can be dynamic, so the same
-/// slot may be raw on one path into the loop and promoted on another.
+/// A raw slot holds the container itself. A definite reference slot always holds an address whose
+/// target is the value, regardless of its zero-initialized runtime state word. Only a dynamic slot
+/// consults that word because the same slot may be raw on one path and indirect on another.
 fn emit_load_origin_container(
     ctx: &mut FunctionContext<'_>,
     origin: IterOrigin,
@@ -718,8 +745,22 @@ fn emit_load_origin_container(
     scratch: &str,
 ) {
     abi::load_at_offset_scratch(ctx.emitter, dest, origin.value_offset, scratch);
-    let Some(state_offset) = origin.state_offset else {
-        return;
+    let state_offset = match origin.storage {
+        IterOriginStorage::Raw => return,
+        IterOriginStorage::RefCell => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("ldr {dest}, [{dest}]"));  // a definite reference origin stores its value behind the incoming cell pointer
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(                                    // a definite reference origin stores its value behind the incoming cell pointer
+                        &format!("mov {dest}, QWORD PTR [{dest}]")
+                    );
+                }
+            }
+            return;
+        }
+        IterOriginStorage::Dynamic { state_offset } => state_offset,
     };
     let direct = ctx.next_label("iter_origin_direct");
     abi::load_at_offset_scratch(
