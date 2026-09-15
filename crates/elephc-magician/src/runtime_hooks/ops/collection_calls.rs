@@ -149,7 +149,7 @@ macro_rules! impl_collection_call_ops {
         node: &mut [u64; 4],
     ) -> Result<bool, EvalStatus> {
         Ok(unsafe {
-            __rt_magic_set_guard_push(
+            __elephc_eval_magic_set_guard_push(
                 object_identity,
                 property.as_ptr(),
                 property.len() as u64,
@@ -163,7 +163,7 @@ macro_rules! impl_collection_call_ops {
         &mut self,
         node: &mut [u64; 4],
     ) -> Result<(), EvalStatus> {
-        unsafe { __rt_magic_set_guard_pop(node.as_mut_ptr()); }
+        unsafe { __elephc_eval_magic_set_guard_pop(node.as_mut_ptr()); }
         Ok(())
     }
 

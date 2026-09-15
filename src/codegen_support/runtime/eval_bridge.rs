@@ -29,6 +29,7 @@ fn x86_64_mixed_heap_kind_instruction() -> String {
 pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
     emit_eval_value_runtime(emitter);
     emit_object_clone_shallow_eval_export(emitter);
+    emit_magic_set_guard_eval_exports(emitter);
     scope_release::emit(emitter);
 }
 
@@ -63,6 +64,21 @@ fn emit_object_clone_shallow_eval_export(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction("b __rt_object_clone_shallow_boxed"), // tail-call the native clone adapter through the eval C export
         Arch::X86_64 => emitter.instruction("jmp __rt_object_clone_shallow_boxed"), // tail-call the native clone adapter through the eval C export
+    }
+}
+
+/// Exposes the shared native `__set` recursion guard through Magician's C ABI.
+fn emit_magic_set_guard_eval_exports(emitter: &mut Emitter) {
+    let branch = match emitter.target.arch {
+        Arch::AArch64 => "b",
+        Arch::X86_64 => "jmp",
+    };
+    for (wrapper, target) in [
+        ("__elephc_eval_magic_set_guard_push", "__rt_magic_set_guard_push"),
+        ("__elephc_eval_magic_set_guard_pop", "__rt_magic_set_guard_pop"),
+    ] {
+        label_c_global(emitter, wrapper);
+        emitter.instruction(&format!("{branch} {target}"));                     // tail-call the internal guard without changing its assembly ABI
     }
 }
 
@@ -257,6 +273,33 @@ mod tests {
                     expected_eval_export,
                     "{target:?}: wrong eval clone export definition count"
                 );
+            }
+        }
+    }
+
+    /// Magician reaches the native magic-property recursion guard through target-mangled C
+    /// exports, while generated assembly continues to call the internal runtime labels.
+    #[test]
+    fn magic_set_guard_exports_follow_the_c_abi_on_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            for (wrapper, internal) in [
+                ("__elephc_eval_magic_set_guard_push", "__rt_magic_set_guard_push"),
+                ("__elephc_eval_magic_set_guard_pop", "__rt_magic_set_guard_pop"),
+            ] {
+                let export = format!("{}:\n", target.extern_symbol(wrapper));
+                assert_eq!(asm.matches(&export).count(), 1, "{target:?}: missing {wrapper}");
+                let tail_call = match target.arch {
+                    Arch::AArch64 => format!("b {internal}"),
+                    Arch::X86_64 => format!("jmp {internal}"),
+                };
+                assert!(asm.contains(&tail_call), "{target:?}: {wrapper} must tail-call {internal}");
             }
         }
     }
