@@ -83,7 +83,11 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // unknown/raw kinds need no release
 
     emitter.label("__rt_decref_any_string");
-    emitter.instruction("b __rt_heap_free_safe");                               // tail-call to owned string release
+    emitter.instruction("ldr w11, [x0, #-12]");                                 // load the persisted string's current owner count
+    emitter.instruction("subs w11, w11, #1");                                   // release exactly the ownership represented by this value
+    emitter.instruction("str w11, [x0, #-12]");                                 // publish the reduced owner count before deciding whether to reclaim
+    emitter.instruction("b.ne __rt_decref_any_done");                           // another owner, such as a hash key anchor, still keeps the string alive
+    emitter.instruction("b __rt_heap_free");                                    // reclaim this already-validated string after its final owner releases it
 
     emitter.label("__rt_decref_any_array");
     emitter.instruction("b __rt_decref_array");                                 // tail-call to array decref
@@ -162,7 +166,11 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
 
     emitter.label("__rt_decref_any_string");
-    emitter.instruction("jmp __rt_heap_free_safe");                             // tail-call to the persisted-string safe-free helper on x86_64
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the persisted string's current x86_64 owner count
+    emitter.instruction("sub r10d, 1");                                         // release exactly the ownership represented by this value
+    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // publish the reduced owner count before deciding whether to reclaim
+    emitter.instruction("jne __rt_decref_any_done");                            // another owner, such as a hash key anchor, still keeps the string alive
+    emitter.instruction("jmp __rt_heap_free");                                  // reclaim this already-validated string after its final owner releases it
 
     emitter.label("__rt_decref_any_array");
     emitter.instruction("jmp __rt_decref_array");                               // tail-call to the indexed-array decref helper on x86_64
@@ -212,6 +220,32 @@ mod tests {
         assert!(
             assembly.contains("    cmp r10, 6\n    je __rt_decref_any_object\n"),
             "x86_64 dispatcher excludes throwables:\n{assembly}"
+        );
+    }
+
+    /// String dispatch releases one owner and reaches heap reclamation only at refcount zero.
+    #[test]
+    fn test_decref_any_string_dispatch_is_refcount_aware_on_all_supported_architectures() {
+        for platform in [Platform::MacOS, Platform::Linux] {
+            let mut emitter = Emitter::new(Target::new(platform, Arch::AArch64));
+            emit_decref_any(&mut emitter);
+            let assembly = emitter.output();
+            assert!(
+                assembly.contains(
+                    "__rt_decref_any_string:\n    ldr w11, [x0, #-12]\n    subs w11, w11, #1\n    str w11, [x0, #-12]\n    b.ne __rt_decref_any_done\n    b __rt_heap_free\n"
+                ),
+                "ARM64 string release bypasses its refcount on {platform:?}:\n{assembly}"
+            );
+        }
+
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_decref_any(&mut emitter);
+        let assembly = emitter.output();
+        assert!(
+            assembly.contains(
+                "__rt_decref_any_string:\n    mov r10d, DWORD PTR [rax - 12]\n    sub r10d, 1\n    mov DWORD PTR [rax - 12], r10d\n    jne __rt_decref_any_done\n    jmp __rt_heap_free\n"
+            ),
+            "x86_64 string release bypasses its refcount:\n{assembly}"
         );
     }
 }
