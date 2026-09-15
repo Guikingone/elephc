@@ -124,9 +124,7 @@ pub(super) fn lower_hash_reindexing_sort(
     receiver.require_writable(name)?;
     // Same opening as the key-preserving hash sorts: drop the slot's ownership, split a shared
     // table so a copy taken before the call keeps its order, and publish the split pointer.
-    if let Some(slot) = receiver.slot() {
-        ctx.release_mutated_source_local_owner(slot, array)?;
-    }
+    receiver.prepare_consuming_storeback(ctx, array)?;
     ensure_unique_hash_sort_source(ctx, array)?;
     receiver.store_back_value(ctx, array)?;
 
@@ -196,6 +194,8 @@ pub(super) fn lower_indexed_array_sort(
     let elem_ty =
         indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable(name)?;
+    receiver.prepare_consuming_storeback(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     receiver.store_back_value(ctx, array)?;
     match ctx.emitter.target.arch {
@@ -240,6 +240,8 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
     let array = expect_operand(inst, 0)?;
     eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "shuffle")?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable("shuffle")?;
+    receiver.prepare_consuming_storeback(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     receiver.store_back_value(ctx, array)?;
     match ctx.emitter.target.arch {
@@ -272,6 +274,8 @@ pub(super) fn lower_user_sort_static_callback(
     let sort_helper = user_sort_runtime_label(&elem_ty);
     let callback_arg_types = [elem_ty.clone(), elem_ty];
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable(name)?;
+    receiver.prepare_consuming_storeback(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     receiver.store_back_value(ctx, array)?;
     let callback_ty = ctx.value_php_type(callback)?.codegen_repr();

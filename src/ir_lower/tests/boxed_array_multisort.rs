@@ -8,7 +8,8 @@
 //! - Declared array references remain boxed Mixed operands in EIR.
 //! - Every supported target must select two cell COW operations and the boxed tandem sorter.
 
-use crate::ir::{Immediate, RuntimeCallTarget, RuntimeFnId};
+use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+use crate::types::PhpType;
 
 /// Declared property arguments are rewritten to writable locals before backend COW selection.
 #[test]
@@ -26,7 +27,7 @@ sortPropertySlots(new MultisortPropertySlots());
             crate::codegen::platform::Target::parse(name).unwrap(),
         );
         let function = module.functions.iter().find(|function| function.name == "sortPropertySlots").unwrap();
-        let call = function.instructions.iter().find(|inst| matches!(inst.immediate,
+        let (call_index, call) = function.instructions.iter().enumerate().find(|(_, inst)| matches!(inst.immediate,
             Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayMultisort)))
             | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::ArrayMultisort, .. }))
         )).unwrap();
@@ -35,6 +36,19 @@ sortPropertySlots(new MultisortPropertySlots());
             let load = function.instructions.iter().find(|inst| inst.result == Some(*value)).unwrap();
             assert_eq!(load.op, crate::ir::Op::LoadLocal, "{name}: property mutation passes a stabilized local");
             assert!(matches!(load.immediate, Some(Immediate::LocalSlot(_))), "{name}: backend resolves a writable slot");
+        }
+        let property_writes = function.instructions[call_index + 1..]
+            .iter()
+            .filter(|inst| inst.op == Op::PropSet)
+            .collect::<Vec<_>>();
+        assert_eq!(property_writes.len(), 2, "{name}: both rewritten receivers are written back");
+        for write in property_writes {
+            let value = *write.operands.last().expect("property write value");
+            assert_eq!(
+                function.value(value).unwrap().php_type.codegen_repr(),
+                PhpType::Mixed,
+                "{name}: multisort writeback must preserve the declared PHP array cell",
+            );
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));

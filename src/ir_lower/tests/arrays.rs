@@ -740,6 +740,53 @@ echo implode(',', array_keys($items));
     }
 }
 
+/// Static declared-array key sorts write the work cell back, never the boolean call result.
+#[test]
+fn boxed_static_property_key_sort_writes_back_mixed_cell_on_every_target() {
+    use crate::codegen::platform::Target;
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+    use crate::types::PhpType;
+    use std::path::Path;
+
+    let source = r#"<?php
+class BoxedStaticKeySort {
+    public static array $items = ['b' => 2, 'a' => 1];
+}
+ksort(BoxedStaticKeySort::$items);
+echo implode(',', array_keys(BoxedStaticKeySort::$items));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| {
+            function.instructions.iter().any(|inst| matches!(inst.immediate,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Ksort)))
+                | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                    target: RuntimeFnId::Ksort, ..
+                }))))
+        }).expect("main function containing ksort");
+        let call_index = function.instructions.iter().position(|inst| matches!(inst.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Ksort)))
+            | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                target: RuntimeFnId::Ksort, ..
+            }))))
+            .expect("ksort call");
+        let write = function.instructions[call_index + 1..]
+            .iter()
+            .find(|inst| inst.op == Op::StoreStaticProperty)
+            .expect("sorted static property writeback");
+        let value = function.value(write.operands[0]).expect("writeback value");
+        assert_eq!(
+            value.php_type.codegen_repr(),
+            PhpType::Mixed,
+            "{name}: the sorted array cell, not ksort's bool, must be stored",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Declared PHP array children use writable Mixed temporaries and guarded key sorting on every target.
 #[test]
 fn boxed_nested_array_key_sorts_use_guarded_writeback_on_every_target() {

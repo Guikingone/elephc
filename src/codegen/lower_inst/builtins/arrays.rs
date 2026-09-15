@@ -543,9 +543,8 @@ fn lower_hash_link_sort(
     let array = expect_operand(inst, 0)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     if !hash_sort_source_is_attached_mixed_cell(ctx, array)? {
-        if let Some(slot) = receiver.slot() {
-            ctx.release_mutated_source_local_owner(slot, array)?;
-        }
+        receiver.require_writable("hash link sort")?;
+        receiver.prepare_consuming_storeback(ctx, array)?;
         ensure_unique_hash_sort_source(ctx, array)?;
         receiver.store_back_value(ctx, array)?;
     }

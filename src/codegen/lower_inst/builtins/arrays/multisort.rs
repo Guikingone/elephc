@@ -113,7 +113,7 @@ fn prepare_multisort_receivers(
     if boxed {
         prepare_boxed_multisort_receiver(ctx, arr1)?;
     } else {
-        ctx.release_mutated_source_local_owner(slot1, arr1)?;
+        receiver1.prepare_consuming_storeback(ctx, arr1)?;
         ensure_unique_sort_source(ctx, arr1)?;
         receiver1.store_back_value(ctx, arr1)?;
     }
@@ -134,7 +134,7 @@ fn prepare_multisort_receivers(
     if boxed {
         prepare_boxed_multisort_receiver(ctx, arr2)?;
     } else {
-        ctx.release_mutated_source_local_owner(slot2, arr2)?;
+        receiver2.prepare_consuming_storeback(ctx, arr2)?;
         ensure_unique_sort_source(ctx, arr2)?;
         receiver2.store_back_value(ctx, arr2)?;
     }

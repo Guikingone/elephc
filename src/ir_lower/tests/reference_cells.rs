@@ -12,6 +12,92 @@ use crate::codegen::platform::Target;
 use crate::ir::{Effects, Immediate, LocalKind, Op, Ownership};
 use std::path::Path;
 
+/// Repeated and nested associative references reload their writable receiver after publication.
+#[test]
+fn associative_reference_receivers_are_reloaded_in_publication_order_on_every_target() {
+    let source = r#"<?php
+function pair_refs(mixed &$left, mixed &$right): void { $left = 2; $right = 3; }
+function write_ref(mixed &$value): void { $value = 4; }
+$items = ["k" => 1];
+pair_refs($items["k"], $items["k"]);
+$outer = [["k" => 1]];
+write_ref($outer[0]["k"]);
+"#;
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let main = module
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main function");
+        let references = main
+            .instructions
+            .iter()
+            .enumerate()
+            .filter(|(_, instruction)| instruction.op == Op::LoadArrayElemRefCell)
+            .collect::<Vec<_>>();
+        assert!(references.len() >= 4, "{name}: repeated and nested references");
+
+        let receiver_load = |reference: &crate::ir::Instruction| {
+            let receiver = reference.operands[0];
+            let crate::ir::ValueDef::Instruction { inst, .. } = main
+                .value(receiver)
+                .expect("reference receiver value")
+                .def
+            else {
+                panic!("{name}: receiver is not instruction-defined");
+            };
+            main.instruction(inst).expect("receiver instruction")
+        };
+        let first = references[0];
+        let second = references[1];
+        assert_eq!(receiver_load(first.1).op, Op::LoadLocal, "{name}");
+        assert_eq!(receiver_load(second.1).op, Op::LoadLocal, "{name}");
+        let first_receiver = receiver_load(first.1).immediate.clone();
+        assert_eq!(receiver_load(second.1).immediate, first_receiver, "{name}");
+        let second_load_index = main.instructions[..second.0]
+            .iter()
+            .rposition(|instruction| {
+                instruction.op == Op::LoadLocal && instruction.immediate == first_receiver
+            })
+            .expect("second live receiver reload");
+        assert!(
+            second_load_index > first.0,
+            "{name}: the second reference must reload after the first publishes its COW result"
+        );
+
+        let inner = references
+            .iter()
+            .find(|(_, reference)| receiver_load(reference).op == Op::LoadRefCell)
+            .expect("nested inner reference");
+        let outer = references[..references
+            .iter()
+            .position(|candidate| candidate.0 == inner.0)
+            .expect("inner position")]
+            .iter()
+            .rev()
+            .find(|(_, reference)| receiver_load(reference).op == Op::LoadLocal)
+            .expect("nested outer reference");
+        assert!(
+            outer.0 < inner.0,
+            "{name}: the outer cell must be published before the inner receiver is loaded"
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Non-promoting constructors and explicit parent calls use managed defaults on every target.
 #[test]
 fn ordinary_constructor_defaults_use_managed_reference_leases_on_every_target() {

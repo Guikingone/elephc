@@ -330,9 +330,11 @@ pub(super) fn separate_get_for_write_receiver(
     array: ValueId,
     helper: &str,
 ) -> Result<()> {
-    let Some(slot) = source_load_local_slot(ctx, array)? else {
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    let Some(slot) = receiver.slot() else {
         return Ok(());
     };
+    receiver.reload_local_value(ctx, array)?;
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);
@@ -423,6 +425,7 @@ pub(super) fn lower_load_array_elem_ref_cell(
     {
         let receiver = ReceiverPlace::resolve(ctx, array)?;
         receiver.require_writable("runtime-shaped array element reference")?;
+        receiver.reload_local_value(ctx, array)?;
         receiver.prepare_consuming_storeback(ctx, array)?;
         ctx.load_value_to_result(array)?;
         super::iterators::convert_loaded_indexed_source_to_hash(ctx);
@@ -434,6 +437,7 @@ pub(super) fn lower_load_array_elem_ref_cell(
         return lower_hash_elem_ref_cell(ctx, inst, array, index, create_missing);
     }
     if matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        ReceiverPlace::resolve(ctx, array)?.reload_local_value(ctx, array)?;
         return match ctx.emitter.target.arch {
             Arch::AArch64 => lower_load_mixed_array_elem_ref_cell_aarch64(
                 ctx, inst, array, index, create_missing,
@@ -465,6 +469,7 @@ fn lower_hash_elem_ref_cell(
 ) -> Result<()> {
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     receiver.require_writable("hash element reference")?;
+    receiver.reload_local_value(ctx, hash)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             lower_hash_elem_ref_cell_aarch64(ctx, hash, key, &receiver, create_missing)?
