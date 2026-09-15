@@ -562,6 +562,17 @@ fn test_error_mixed_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
     }
 }
 
+/// An untyped reference parameter also uses canonical Mixed storage and cannot relabel aliases.
+#[test]
+fn test_error_untyped_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
+    for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
+        expect_error(
+            &format!("<?php function replaceScalar(&$slot): void {{ $slot = 'changed'; }} $value = 1; $alias =& $value; {call}"),
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
+}
+
 // -- Include/require path expression errors --
 
 /// Verifies that a static closure cannot capture `$this` from the enclosing scope.
