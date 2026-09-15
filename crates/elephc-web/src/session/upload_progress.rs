@@ -1719,6 +1719,75 @@ mod tests {
         assert_eq!(tracker.completed[0].name, b"x.bin".to_vec());
     }
 
+    /// Issue #885, raised in review: the same property through the REAL `advance()`, driven
+    /// by many small frames on a body whose progress key is never sent.
+    ///
+    /// `the_delimiter_search_resumes_instead_of_restarting` asserts the decision in
+    /// isolation; this one proves the decision is the one `advance()` actually takes in the
+    /// window a client controls. The trigger field never arrives, so `key` stays `None`,
+    /// `ready_to_write()` stays false, and every frame still runs the full advance — which
+    /// is precisely the shape that used to be `O(frames x tail)`.
+    ///
+    /// The work each frame does is the body length minus the cursor it resumes from, so
+    /// summing that over the run is the total scanning work. Linear means "the body, plus a
+    /// FIXED overlap per frame"; the restart shape is the sum of the tails, which for these
+    /// numbers is two orders of magnitude larger. Both bounds are asserted, so the test
+    /// fails whether the cursor stops advancing or merely lags.
+    #[test]
+    fn many_small_frames_before_the_trigger_stay_linear_in_total_bytes() {
+        let mut tracker = incremental_tracker();
+        let delim_len = tracker.delim.len();
+        // One file part, no `PHP_SESSION_UPLOAD_PROGRESS` field anywhere: the key is never
+        // known, so nothing short-circuits the per-frame advance.
+        let mut body =
+            b"--BOUND\r\nContent-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\r\n\r\n"
+                .to_vec();
+        let part_start = body.len();
+        tracker.advance(&body);
+
+        const FRAMES: usize = 400;
+        const FRAME_BYTES: usize = 16;
+        let mut searched = 0usize;
+        let mut previous_scanned = tracker.scanned;
+        for _ in 0..FRAMES {
+            // The same two inputs `advance_completed_parts` computes for itself, so the
+            // width measured here is the width the search really covers.
+            let open_part_start = tracker.last_delim.map_or(0, |d| d + delim_len);
+            let resume = Tracker::resume_index(open_part_start, tracker.scanned, delim_len);
+            body.extend_from_slice(&[b'Z'; FRAME_BYTES]);
+            searched += body.len().saturating_sub(resume);
+            tracker.advance(&body);
+
+            assert!(
+                tracker.scanned >= previous_scanned,
+                "the scan cursor must never go backwards"
+            );
+            assert!(
+                tracker.scanned + delim_len >= body.len(),
+                "the cursor must track the body end, or the next frame re-searches the tail: \
+                 scanned {} for a {}-byte body",
+                tracker.scanned,
+                body.len()
+            );
+            previous_scanned = tracker.scanned;
+        }
+
+        assert!(tracker.key.is_none(), "the trigger field never arrived");
+        assert!(!tracker.ready_to_write(), "and so no write is authorized");
+
+        let body_bytes = body.len() - part_start;
+        let linear_bound = body.len() + FRAMES * (FRAME_BYTES + delim_len);
+        let restart_shape = FRAMES * body_bytes / 2;
+        assert!(
+            searched <= linear_bound,
+            "scanned {searched} bytes for {body_bytes} bytes of body; linear bound {linear_bound}"
+        );
+        assert!(
+            linear_bound < restart_shape,
+            "the bound must actually separate the two shapes ({linear_bound} vs {restart_shape})"
+        );
+    }
+
     /// Issue #885: the header block of the in-flight part is parsed once, and an unbounded
     /// header is abandoned rather than re-scanned on every frame.
     #[test]
