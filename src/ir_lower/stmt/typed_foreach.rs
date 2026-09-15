@@ -126,9 +126,14 @@ pub(super) fn lower_foreach(
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
-    let prepared_source = value_by_ref
-        .then(|| prepare_addressable_by_ref_foreach_source(ctx, array))
-        .flatten();
+    // A direct instance property has a dedicated fetch-for-write operation that separates and
+    // republishes its container before iteration. Reifying it as a synthetic alias here bypasses
+    // that operation and loses the property's copy-on-write boundary. Static properties and
+    // nested elements still need an origin local so iterator relocation can follow replacements.
+    let prepared_source = (value_by_ref
+        && !matches!(array.kind, ExprKind::PropertyAccess { .. }))
+    .then(|| prepare_addressable_by_ref_foreach_source(ctx, array))
+    .flatten();
     let array = prepared_source.as_ref().unwrap_or(array);
     // Promote a by-reference indexed source BEFORE it is loaded, so the loop iterates the hash
     // the rest of the program will see in that local.

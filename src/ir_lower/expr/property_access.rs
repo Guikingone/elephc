@@ -228,6 +228,10 @@ fn prepare_addressable_ref_array_receiver_impl(
         {
             let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
             lower_ref_assign_property(ctx, &alias, source, source.span);
+            // This alias exists only to make the property's storage addressable for a nested
+            // reference. Detach an exact PHP array zval before the child promotion can update it
+            // in place, while stores through the ref-bound local still publish into the property.
+            crate::ir_lower::stmt::load_array_local_for_write(ctx, &alias, source.span);
             if let Some(aliases) = scoped_aliases.as_deref_mut() {
                 if publish_scoped_ref_receiver_alias(ctx, &alias, source.span) {
                     aliases.push(alias.clone());
@@ -238,6 +242,10 @@ fn prepare_addressable_ref_array_receiver_impl(
         ExprKind::StaticPropertyAccess { .. } => {
             let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
             lower_ref_assign_static_property(ctx, &alias, source, source.span);
+            // Static array values are boxed. Clone the zval through the synthetic ref-bound
+            // alias so an earlier by-value copy keeps its own cell while nested writes publish
+            // the detached cell back into the process-lifetime static slot.
+            crate::ir_lower::stmt::load_array_local_for_write(ctx, &alias, source.span);
             if let Some(aliases) = scoped_aliases.as_deref_mut() {
                 if publish_scoped_ref_receiver_alias(ctx, &alias, source.span) {
                     aliases.push(alias.clone());
