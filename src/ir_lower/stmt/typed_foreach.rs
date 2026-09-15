@@ -485,7 +485,19 @@ pub(crate) fn promote_by_ref_foreach_source(
                 key,
                 value: Box::new(PhpType::Mixed),
             };
+            // HashToMixed consumes its input owner at the COW boundary. A synthetic
+            // reference alias loads the static/property/parent payload borrowed, so give
+            // the conversion its own owner before it can retire the source generation.
             let hash = ctx.load_local(name, Some(array.span));
+            let hash = if ctx.is_ref_bound_local(name) {
+                crate::ir_lower::ownership::acquire_if_refcounted(
+                    ctx,
+                    hash,
+                    Some(array.span),
+                )
+            } else {
+                hash
+            };
             let mixed = ctx.emit_value(
                 Op::HashToMixed,
                 vec![hash.value],
@@ -505,7 +517,19 @@ pub(crate) fn promote_by_ref_foreach_source(
         key: Box::new(PhpType::Int),
         value: Box::new(PhpType::Mixed),
     };
+    // ArrayToHash consumes its input owner. Retain only a synthetic reference alias: an
+    // ordinary local deliberately transfers its old owner into the conversion, while the
+    // alias must leave the property or parent element's owner intact until store-back.
     let array_value = ctx.load_local(name, Some(array.span));
+    let array_value = if ctx.is_ref_bound_local(name) {
+        crate::ir_lower::ownership::acquire_if_refcounted(
+            ctx,
+            array_value,
+            Some(array.span),
+        )
+    } else {
+        array_value
+    };
     let hash = ctx.emit_value(
         Op::ArrayToHash,
         vec![array_value.value],
