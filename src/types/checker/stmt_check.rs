@@ -225,11 +225,6 @@ impl Checker {
     {
         let mut boxed_ref_aliased = self.boxed_ref_aliased_locals.clone();
         self.conditional_boxed_ref_invalidations.push(HashSet::new());
-        // The group may execute zero or multiple times. Do not lend an inherited affirmative
-        // storage proof to a path whose binding a prior arm or iteration may have replaced.
-        // A managed alias established inside the current path is recorded again and remains
-        // usable for the rest of that path.
-        self.boxed_ref_aliased_locals.clear();
         self.local_conditional_depth += 1;
         let result = f(self, env);
         self.local_conditional_depth -= 1;

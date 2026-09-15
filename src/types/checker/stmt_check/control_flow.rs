@@ -357,6 +357,10 @@ impl Checker {
                 value_by_ref,
                 body,
             } => {
+                // A later iteration can observe a reference rebinding performed by an earlier
+                // one. Require the body to establish any affirmative managed-cell provenance it
+                // consumes within the loop itself.
+                self.boxed_ref_aliased_locals.clear();
                 // `foreach ($arr as &$v)` takes a reference into each element, so BOTH names it
                 // touches are reference-aliased for the rest of the body and neither binding can
                 // be killed or re-bound — releasing or abandoning that storage would strand the
@@ -555,11 +559,28 @@ impl Checker {
                 }
                 self.break_continue_depth += 1;
                 for (_, body) in cases {
-                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
+                    let invalidated = self
+                        .conditional_boxed_ref_invalidations
+                        .last()
+                        .cloned()
+                        .unwrap_or_default();
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs
+                        .iter()
+                        .filter(|name| !invalidated.contains(*name))
+                        .cloned()
+                        .collect();
                     errors.extend(self.check_body(body, env));
                 }
                 if let Some(body) = default {
-                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
+                    let invalidated = self
+                        .conditional_boxed_ref_invalidations
+                        .last()
+                        .cloned()
+                        .unwrap_or_default();
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs
+                        .into_iter()
+                        .filter(|name| !invalidated.contains(name))
+                        .collect();
                     errors.extend(self.check_body(body, env));
                 }
                 self.break_continue_depth -= 1;
@@ -745,6 +766,7 @@ impl Checker {
                 }
             }
             StmtKind::DoWhile { body, condition } => {
+                self.boxed_ref_aliased_locals.clear();
                 stabilize_loop_storage(self, stmt.span, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
@@ -757,6 +779,7 @@ impl Checker {
                 }
             }
             StmtKind::While { condition, body } => {
+                self.boxed_ref_aliased_locals.clear();
                 stabilize_loop_storage(self, stmt.span, body, None, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 // The condition is re-evaluated before every iteration, so a guard on it
@@ -798,6 +821,7 @@ impl Checker {
                 if let Some(s) = init {
                     self.check_stmt(s, env)?;
                 }
+                self.boxed_ref_aliased_locals.clear();
                 stabilize_loop_storage(self, stmt.span, body, update.as_deref(), env);
                 if let Some(c) = condition {
                     self.infer_type_with_assignment_effects(c, env)?;
@@ -882,7 +906,15 @@ impl Checker {
                     }
                 }
                 if let Some(body) = finally_body {
-                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
+                    let invalidated = self
+                        .conditional_boxed_ref_invalidations
+                        .last()
+                        .cloned()
+                        .unwrap_or_default();
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs
+                        .into_iter()
+                        .filter(|name| !invalidated.contains(name))
+                        .collect();
                     self.finally_break_continue_bases
                         .push(self.break_continue_depth);
                     errors.extend(self.check_body(body, env));

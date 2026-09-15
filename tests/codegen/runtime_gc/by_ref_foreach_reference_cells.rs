@@ -1253,9 +1253,16 @@ $copy =& $alias;
 replace_copied_alias($copy);
 echo $values["k"], "|", $alias, "|", $copy, "\n";
 unset($values, $alias, $copy);
+$conditionalValues = ["k" => new CopiedManagedAliasValue()];
+$conditionalAlias =& $conditionalValues["k"];
+if ($argc >= 0) {
+    replace_copied_alias($conditionalAlias);
+}
+echo $conditionalValues["k"], "\n";
+unset($conditionalValues, $conditionalAlias);
 "#,
     );
-    assert_clean(out, "changed|changed|changed\n");
+    assert_clean(out, "changed|changed|changed\nchanged\n");
 }
 
 /// An early borrowed ref-cell argument stays alive while a later argument replaces its alias.

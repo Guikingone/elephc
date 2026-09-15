@@ -588,6 +588,7 @@ fn test_error_conditional_managed_alias_does_not_relabel_scalar_reference_cell()
     for source in [
         "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $scalar = 1; $alias =& $scalar; if ($argc > 1) { $items = ['k' => new stdClass()]; $alias =& $items['k']; } replaceScalar($alias);",
         "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; if ($argc > 1) { $scalar = 1; $alias =& $scalar; } replaceScalar($alias);",
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; for ($i = 0; $i < 2; $i++) { replaceScalar($alias); $scalar = 1; $alias =& $scalar; }",
     ] {
         expect_error(
             source,
