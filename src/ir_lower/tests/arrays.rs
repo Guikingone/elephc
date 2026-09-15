@@ -846,6 +846,64 @@ reverseDeclaredNestedTarget($items);
     }
 }
 
+/// Shared Mixed children are promoted into their published cell before key sorting on every target.
+#[test]
+fn shared_mixed_child_key_sorts_skip_unpublishable_second_cow_on_every_target() {
+    use crate::codegen::platform::Target;
+    use crate::ir::{Immediate, RuntimeCallTarget, RuntimeFnId, ValueDef};
+    use std::path::Path;
+
+    let source = r#"<?php
+$grid = [["b" => 2, "a" => 1], "sentinel"];
+$gridCopy = $grid;
+ksort($grid[0]);
+ksort($grid[9]);
+$matrix = ["left" => [3, 1, 2], "right" => [9, 8, 7]];
+krsort($matrix["left"]);
+$matrixCopy = $matrix;
+krsort($matrix["right"]);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let main = module
+            .functions
+            .iter()
+            .find(|function| function.flags.is_main)
+            .expect("main function");
+        let mut shared_promotions = 0;
+        for call in &main.instructions {
+            if !matches!(
+                call.immediate,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::Ksort | RuntimeFnId::Krsort,
+                )))
+            ) {
+                continue;
+            }
+            let receiver = main.value(call.operands[0]).expect("key-sort receiver");
+            let ValueDef::Instruction { inst: producer, .. } = receiver.def else {
+                continue;
+            };
+            let promotion = main
+                .instruction(producer)
+                .expect("key-sort receiver producer");
+            if matches!(
+                promotion.immediate,
+                Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::MixedCellPromoteToHash(_)
+                ))
+            ) {
+                shared_promotions += 1;
+            }
+        }
+        assert!(shared_promotions >= 3, "{name}: expected shared and missing child promotions");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Boxed user sorts use a private working array and an exception finalizer on every target.
 #[test]
 fn boxed_usort_publishes_private_arrays_on_every_target() {

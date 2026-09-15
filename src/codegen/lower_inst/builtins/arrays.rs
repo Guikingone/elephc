@@ -532,9 +532,10 @@ fn lower_array_slice_preserve_keys(
 /// Ordinary receivers are split with `__rt_hash_ensure_unique` first, so an aliased copy taken
 /// before the call keeps the original iteration order, and the possibly relocated pointer is
 /// written back to the source local before the sorter runs. A hash returned by
-/// `MixedCellPromoteAttachedToHash(_)` is already unique and published into its parent-owned Mixed
-/// cell; splitting it again would create an opaque clone that cannot be republished. The helpers
-/// only rewrite the table's `prev`/`next`/`head`/`tail` links, so no key or value changes ownership.
+/// `MixedCellPromoteToHash(_)` and `MixedCellPromoteAttachedToHash(_)` both return a hash that the
+/// promotion helper has already made unique and installed into its owning Mixed cell. Splitting it
+/// again would create an opaque clone that cannot be republished. The helpers only rewrite the
+/// table's `prev`/`next`/`head`/`tail` links, so no key or value changes ownership.
 fn lower_hash_link_sort(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -542,7 +543,7 @@ fn lower_hash_link_sort(
 ) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
-    if !hash_sort_source_is_attached_mixed_cell(ctx, array)? {
+    if !hash_sort_source_is_published_mixed_cell(ctx, array)? {
         receiver.require_writable("hash link sort")?;
         receiver.prepare_consuming_storeback(ctx, array)?;
         ensure_unique_hash_sort_source(ctx, array)?;
@@ -564,8 +565,8 @@ fn lower_hash_link_sort(
     store_if_result(ctx, inst)
 }
 
-/// Reports whether `value` is the hash already made unique and republished by a Mixed-cell helper.
-fn hash_sort_source_is_attached_mixed_cell(
+/// Reports whether `value` is the hash already made unique and installed by a Mixed-cell helper.
+fn hash_sort_source_is_published_mixed_cell(
     ctx: &FunctionContext<'_>,
     value: ValueId,
 ) -> Result<bool> {
@@ -585,7 +586,8 @@ fn hash_sort_source_is_attached_mixed_cell(
         (
             Op::RuntimeCall,
             Some(Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
+                crate::ir::RuntimeCallTarget::MixedCellPromoteToHash(_)
+                    | crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
             ))
         )
     ))
