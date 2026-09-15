@@ -847,30 +847,54 @@ echo invokeManagedLease(['k' => new ManagedLeaseCleanupBomb()]);
             .expect("the string result has an unwind record");
         let result_detach = last_slot_instruction(&caller, Op::PopCallOperandOwner, result_slot)
             .expect("the string result record is detached on success");
-        let (release_index, cell_slot) = caller
+        let cell_slot = caller
             .instructions
             .iter()
-            .enumerate()
-            .find_map(|(index, inst)| {
+            .find_map(|inst| {
                 let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
                     return None;
                 };
-                (index > call_index && inst.op == Op::ReleaseLocalRefCell)
-                    .then_some((index, slot))
+                (inst.op == Op::ReleaseLocalRefCell).then_some(slot)
             })
-            .expect("the managed argument lease is retired after the call");
+            .expect("the managed argument lease is retired");
         let cell_publish = slot_instruction(&caller, Op::PushCallOperandOwner, cell_slot)
             .expect("the managed argument lease has an unwind record");
         let cell_detach = last_slot_instruction(&caller, Op::PopCallOperandOwner, cell_slot)
             .expect("the managed argument record is detached on success");
+        let cleanup_block = caller
+            .blocks
+            .iter()
+            .find(|block| {
+                block.instructions.iter().any(|instruction| {
+                    caller.instruction(*instruction).is_some_and(|inst| {
+                        inst.op == Op::ReleaseLocalRefCell
+                            && inst.immediate == Some(Immediate::LocalSlot(cell_slot))
+                    })
+                })
+            })
+            .expect("the managed argument cleanup block exists");
+        let cleanup_ops = cleanup_block
+            .instructions
+            .iter()
+            .filter_map(|instruction| caller.instruction(*instruction))
+            .filter_map(|inst| {
+                (inst.immediate == Some(Immediate::LocalSlot(cell_slot))).then_some(inst.op)
+            })
+            .collect::<Vec<_>>();
         assert!(
             result_publish < cell_publish
                 && cell_publish < call_index
-                && call_index < cell_detach
-                && cell_detach < release_index
-                && release_index < result_detach,
-            "{name}: result [{result_publish}, {result_detach}] encloses managed lease \
-             [{cell_publish}, {cell_detach}, {release_index}]",
+                && call_index < cell_detach,
+            "{name}: the result and managed argument records are published before the call",
+        );
+        assert_eq!(
+            cleanup_ops,
+            [Op::PopCallOperandOwner, Op::ReleaseLocalRefCell],
+            "{name}: the cleanup block detaches the managed argument before release",
+        );
+        assert!(
+            cell_detach < result_detach,
+            "{name}: the result record encloses the managed argument record",
         );
         assert_owner_records_are_lifo(&caller, name);
         crate::codegen::generate_user_asm_from_ir(&module, false, false)

@@ -3863,13 +3863,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Some(Immediate::LocalSlot(slot)) => Some(self.builder.local_php_type(*slot)),
             _ => None,
         };
-        if instruction_has_opaque_user_code_boundary(
+        // A collection safe point can re-enter PHP only through a destructor. Keep escaped
+        // callable facts when the closed AOT class set has no destructor, so scalar container
+        // cleanup does not erase a closure's explicit-scope specialization. Eval can add a
+        // destructor at run time, so any preceding eval keeps the conservative boundary.
+        let gc_can_invoke_user_code = op != Op::GcCollect
+            || self.has_eval_barrier()
+            || self.eval_executed()
+            || self
+                .classes
+                .values()
+                .any(|class| class.methods.contains_key("__destruct"));
+        if gc_can_invoke_user_code
+            && instruction_has_opaque_user_code_boundary(
             op,
             immediate,
             effects,
             &operand_types,
             local_type.as_ref(),
-        ) {
+        )
+        {
             self.invalidate_escaped_callable_locals();
         }
         if let Some(callback_index) = runtime_callback_operand_index(op, immediate) {
