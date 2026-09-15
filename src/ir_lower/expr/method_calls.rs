@@ -218,11 +218,24 @@ pub(super) fn lower_closure_bind_method(
             }
         }
     }
+    // An escaped closure, such as a global replaced by a destructor or an error handler, is
+    // stored in a boxed Mixed cell once its compile-time callable identity is invalidated. The
+    // runtime binder consumes the raw callable descriptor, not the address of that Mixed box.
+    // Extract an owning descriptor view at the same boundary used for declared callable
+    // parameters before publishing the bind operands for unwind cleanup.
+    let closure = if matches!(
+        ctx.builder.value_php_type(closure.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        unbox_callable_param_storage(ctx, *closure, Some(closure_expr.span))
+    } else {
+        *closure
+    };
     // Binding retains its own receiver and environment. Original temporary inputs still
     // need their own retirement, including a throw while evaluating the new receiver or
     // invocation arguments. The result must outlive both original-input cleanup records.
     let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
-    let (closure, closure_owner) = root_owned_call_operand(ctx, *closure, expr.span);
+    let (closure, closure_owner) = root_owned_call_operand(ctx, closure, expr.span);
     let new_this = match args.first() {
         Some(arg) => lower_expr(ctx, arg),
         None => lower_null(ctx, expr),

@@ -223,7 +223,7 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
 
 /// Extracts a statically checked callable whose merge storage became a Mixed cell.
 /// The backend retains the descriptor, so the extracted EIR value must own that lease.
-fn unbox_callable_param_storage(
+pub(super) fn unbox_callable_param_storage(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Option<crate::span::Span>,
