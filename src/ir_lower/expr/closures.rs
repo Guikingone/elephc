@@ -195,16 +195,12 @@ pub(super) fn lower_closure_with_context(
             // that `Closure::bind` overwrites; `Mixed` so members dispatch at
             // runtime against the bound object's class.
             (lower_null(ctx, expr), PhpType::Mixed)
-        } else if capture == "this"
-            && bound_this_context.is_some()
-            && ctx.local_type("this").codegen_repr() != PhpType::Mixed
-        {
-            // `Closure::bind` specialization inside a method. The receiver the compiled body
-            // will actually run against is the bind's argument, so the enclosing `$this` is
-            // boxed to the same `Mixed` representation a top-level closure's receiver uses.
-            // Capturing it at the enclosing class instead would compile `$this->prop` against
-            // that class's property slots, which the bound class need not share, and would also
-            // leave the descriptor advertising an object capture the bind then has to rebind.
+        } else if capture == "this" && ctx.local_type("this").codegen_repr() != PhpType::Mixed {
+            // Every method-defined closure can later reach `Closure::bind`, including after its
+            // descriptor escapes through a handler or another runtime owner. Box `$this` to the
+            // same `Mixed` representation a top-level closure uses so member access dispatches
+            // against the receiver's runtime class. Signature inference still uses the enclosing
+            // receiver type below, preserving the closure's source-level result contract.
             // An enclosing `$this` that is ALREADY `Mixed` (a bound closure nested in another)
             // falls through to the ordinary capture below: boxing it would emit nothing and the
             // descriptor would then consume a reference the no-op box never took.
@@ -286,6 +282,17 @@ pub(super) fn lower_closure_with_context(
             false,
         ));
     }
+    let signature_capture_params = capture_params
+        .iter()
+        .map(|(name, php_type, by_ref)| {
+            let signature_type = if name == "this" && ctx.local_slots.contains_key("this") {
+                ctx.local_type("this")
+            } else {
+                php_type.clone()
+            };
+            (name.clone(), signature_type, *by_ref)
+        })
+        .collect::<Vec<_>>();
     let name = ctx.next_closure_name();
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
@@ -300,6 +307,7 @@ pub(super) fn lower_closure_with_context(
             return_type,
             body,
             &capture_params,
+            &signature_capture_params,
             self_ref_callable_capture,
             by_ref_return,
             loop_storage_scope,
@@ -314,6 +322,7 @@ pub(super) fn lower_closure_with_context(
             return_type,
             body,
             &capture_params,
+            &signature_capture_params,
             contextual_arg_types,
             bound_this_context,
             self_ref_callable_capture,

@@ -1388,6 +1388,7 @@ pub(crate) fn lower_closure_function(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    signature_captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
     loop_storage_scope: String,
@@ -1398,7 +1399,7 @@ pub(crate) fn lower_closure_function(
         variadic_by_ref,
         return_type,
         body,
-        captures,
+        signature_captures,
         parent.classes,
         parent.builtin_call_types,
     );
@@ -1432,6 +1433,7 @@ pub(crate) fn lower_closure_function_with_context(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    signature_captures: &[(String, PhpType, bool)],
     contextual_arg_types: &[PhpType],
     contextual_return_type: Option<&PhpType>,
     self_ref_callable_capture: Option<&str>,
@@ -1444,7 +1446,7 @@ pub(crate) fn lower_closure_function_with_context(
         variadic_by_ref,
         return_type,
         body,
-        captures,
+        signature_captures,
         parent.classes,
         parent.builtin_call_types,
     );
