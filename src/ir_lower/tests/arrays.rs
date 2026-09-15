@@ -1191,3 +1191,59 @@ echo $a, "|", $b[0];
          would mean the marked local was canonicalized as if it were a convertible array: {text}"
     );
 }
+
+/// Cross-layout array unions retire owned literal operands after the borrowing runtime call.
+#[test]
+fn cross_layout_array_unions_release_owned_sources_on_every_target() {
+    use crate::ir::{Op, Ownership};
+
+    let source = r#"<?php
+$promoted = [1, 2];
+foreach ($promoted as &$value) {
+}
+unset($value);
+$hashLeft = $promoted + [9, 9, 3];
+$arrayLeft = [7, 8, 9] + $promoted;
+echo count($hashLeft), count($arrayLeft);
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let main = module
+            .functions
+            .iter()
+            .find(|function| function.flags.is_main)
+            .expect("main function");
+        for op in [Op::HashArrayUnion, Op::ArrayHashUnion] {
+            let (index, union) = main
+                .instructions
+                .iter()
+                .enumerate()
+                .find(|(_, instruction)| instruction.op == op)
+                .unwrap_or_else(|| panic!("{target}: missing {op:?}"));
+            let result = union.result.expect("union result");
+            assert_eq!(main.value(result).unwrap().ownership, Ownership::Owned, "{target}: {op:?}");
+            let temporary = match op {
+                Op::HashArrayUnion => union.operands[1],
+                Op::ArrayHashUnion => union.operands[0],
+                _ => unreachable!(),
+            };
+            assert_eq!(main.value(temporary).unwrap().ownership, Ownership::Owned, "{target}: {op:?}");
+            let release = &main.instructions[index + 1];
+            assert_eq!(release.op, Op::Release, "{target}: {op:?}");
+            assert_eq!(release.operands, [temporary], "{target}: {op:?}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
