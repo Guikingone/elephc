@@ -119,7 +119,12 @@ pub(super) fn lower_builtin_call_args(
             lower_getenv_args(ctx, sig, args)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted => {
-            lower_args_with_signature_trimming_trailing_defaults(ctx, sig, args)
+            let writeback_sig = pcntl_writeback_signature(&canonical, sig);
+            lower_args_with_signature_trimming_trailing_defaults(
+                ctx,
+                writeback_sig.as_ref().or(sig),
+                args,
+            )
         }
         crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback
             if !crate::types::call_args::has_named_args(args)
@@ -240,7 +245,42 @@ fn prepare_pcntl_output_local(
     parameter_index: usize,
     value: &Expr,
 ) -> Option<(String, PhpType)> {
-    let ty = match (canonical, parameter_index) {
+    let ty = pcntl_output_type(canonical, parameter_index)?;
+    let ExprKind::Variable(name) = &value.kind else {
+        return None;
+    };
+    if ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
+        ctx.set_local_type(name, PhpType::Mixed);
+    }
+    Some((name.clone(), ty))
+}
+
+/// Gives PCNTL write-only outputs their concrete post-call storage type during lowering.
+///
+/// The PHP contract accepts any pre-call value for these `Mixed` by-reference parameters. Generic
+/// reference argument lowering would therefore promote an ordinary output local to a managed Mixed
+/// cell, even though the PCNTL backend replaces the value directly and already handles raw,
+/// dynamically promoted, and definite ref-cell slots. Refining only the lowering copy prevents the
+/// needless promotion while the checker-visible contract remains unchanged.
+fn pcntl_writeback_signature(
+    canonical: &str,
+    sig: Option<&FunctionSig>,
+) -> Option<FunctionSig> {
+    let mut sig = sig?.clone();
+    let mut changed = false;
+    for (index, (_, ty)) in sig.params.iter_mut().enumerate() {
+        let Some(output_ty) = pcntl_output_type(canonical, index) else {
+            continue;
+        };
+        *ty = output_ty;
+        changed = true;
+    }
+    changed.then_some(sig)
+}
+
+/// Returns the concrete value a PCNTL write-only parameter publishes after its call.
+fn pcntl_output_type(canonical: &str, parameter_index: usize) -> Option<PhpType> {
+    Some(match (canonical, parameter_index) {
         ("pcntl_wait", 0) | ("pcntl_waitpid", 1) => PhpType::Int,
         ("pcntl_wait", 2) | ("pcntl_waitpid", 3) => PhpType::AssocArray {
             key: Box::new(PhpType::Str),
@@ -260,14 +300,7 @@ fn prepare_pcntl_output_local(
             value: Box::new(PhpType::Mixed),
         },
         _ => return None,
-    };
-    let ExprKind::Variable(name) = &value.kind else {
-        return None;
-    };
-    if ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
-        ctx.set_local_type(name, PhpType::Mixed);
-    }
-    Some((name.clone(), ty))
+    })
 }
 
 /// Promotes the OpenSSL encrypt tag target to string-capable storage before lowering its load.
