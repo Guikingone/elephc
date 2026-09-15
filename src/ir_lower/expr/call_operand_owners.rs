@@ -276,12 +276,16 @@ pub(super) struct CallArgumentIntermediate {
 }
 
 /// Retires source-evaluation leases after the enclosing call's ordinary cleanup.
+///
+/// A managed ref-cell record stays linked while its owner slot is cleared and released. The
+/// release can run a payload destructor and throw. In that case the unwinder consumes the now
+/// empty current record before continuing to the older leases and prepublished call result. On
+/// the normal path, the explicit pop follows the release instead.
 pub(super) fn retire_call_argument_intermediates(
     ctx: &mut LoweringContext<'_, '_>,
     roots: &[CallArgumentIntermediate],
 ) {
     for root in roots.iter().rev() {
-        unregister_owned_call_operand(ctx, root.slot, root.span);
         if let Some(payload_type) = &root.ref_cell_payload {
             ctx.builder.emit_with_effects(
                 Op::ReleaseLocalRefCell,
@@ -293,7 +297,9 @@ pub(super) fn retire_call_argument_intermediates(
                 Op::ReleaseLocalRefCell.default_effects(),
                 Some(root.span),
             );
+            unregister_owned_call_operand(ctx, root.slot, root.span);
         } else {
+            unregister_owned_call_operand(ctx, root.slot, root.span);
             ctx.emit_void(
                 Op::ReleaseLocalSlot,
                 Vec::new(),
