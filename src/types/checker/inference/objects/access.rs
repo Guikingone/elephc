@@ -251,6 +251,11 @@ impl Checker {
             if let Some((_, (_, ty))) = class_info.visible_property(property) {
                 return Ok(ty.clone());
             }
+            if super::super::super::scope_dynamic_storage::magic_set_reentry_property_is_readable(
+                self, class_name, property,
+            ) {
+                return Ok(PhpType::Mixed);
+            }
             if let Some(sig) = class_info.methods.get("__get") {
                 return Ok(sig.return_type.clone());
             }

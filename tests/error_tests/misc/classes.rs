@@ -63,6 +63,46 @@ fn test_error_undefined_property() {
     );
 }
 
+/// A literal write through `$this` in `__set` can materialize that exact dynamic property when
+/// the active accessor invocation has the same name, so a later read must type-check.
+#[test]
+fn test_magic_set_same_pair_reentry_property_is_readable() {
+    expect_no_error(
+        r#"<?php
+class Box {
+    public function __set(string $name, mixed $value): void {
+        if ($name === "stored") {
+            $this->stored = $value;
+        }
+    }
+}
+$box = new Box();
+$box->stored = 1;
+echo $box->stored;
+"#,
+    );
+}
+
+/// Recording one same-pair `__set` store must not make unrelated missing names readable.
+#[test]
+fn test_magic_set_same_pair_reentry_does_not_open_other_properties() {
+    expect_error(
+        r#"<?php
+class Box {
+    public function __set(string $name, mixed $value): void {
+        if ($name === "stored") {
+            $this->stored = $value;
+        }
+    }
+}
+$box = new Box();
+$box->stored = 1;
+echo $box->missing;
+"#,
+        "Undefined property: Box::missing",
+    );
+}
+
 /// Verifies the error diagnostic for undefined method.
 #[test]
 fn test_error_undefined_method() {

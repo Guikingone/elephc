@@ -37,6 +37,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::Checker;
@@ -57,6 +58,9 @@ struct ScopeDynamicMutationSite {
     magic_method: String,
     /// The lexical scope the site was written in, used to resolve a static property name.
     scope: Option<String>,
+    /// This static-name write occurs through `$this` inside `__set`, so invocation with the same
+    /// name bypasses the accessor and materializes the property in dynamic storage.
+    same_pair_set_reentry: bool,
 }
 
 /// The mutation sites in this program that can create a dynamic property.
@@ -115,6 +119,7 @@ pub(in crate::types::checker) fn record_scope_dynamic_mutation(
         class_name,
         Some(property.to_string()),
         magic_method,
+        false,
     );
 }
 
@@ -124,12 +129,14 @@ fn record_site(
     class_name: &str,
     property: Option<String>,
     magic_method: &str,
+    same_pair_set_reentry: bool,
 ) {
     let site = ScopeDynamicMutationSite {
         class_name: class_name.trim_start_matches('\\').to_string(),
         property,
         magic_method: magic_method.to_string(),
         scope: checker.current_class.clone(),
+        same_pair_set_reentry,
     };
     checker.scope_dynamic_mutation_targets.sites.insert(site);
 }
@@ -148,7 +155,7 @@ pub(in crate::types::checker) fn record_scope_dynamic_runtime_name_mutation(
         return;
     }
     let normalized = normalized.to_string();
-    record_site(checker, &normalized, None, "__set");
+    record_site(checker, &normalized, None, "__set", false);
 }
 
 /// Records one RUNTIME-name mutation site for ANY receiver shape the checker admits.
@@ -246,8 +253,75 @@ pub(in crate::types::checker) fn record_scope_dynamic_mixed_receiver_mutation(
             &class_name,
             Some(property.to_string()),
             "__set",
+            false,
         );
     }
+}
+
+/// Records a literal `$this->name = value` in `__set` as a possible same-pair reentry store.
+///
+/// PHP suppresses recursive dispatch only when the receiver and property name match the active
+/// `__set` invocation. Such a write creates a dynamic property even though the class declares
+/// `__set`. Restricting this record to `$this`, the current class and one literal name keeps the
+/// later read exemption from admitting unrelated missing properties.
+pub(in crate::types::checker) fn record_magic_set_same_pair_reentry(
+    checker: &mut Checker,
+    object: &Expr,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    if !matches!(object.kind, ExprKind::This)
+        || checker.current_method.as_deref() != Some("__set")
+        || !checker
+            .current_class
+            .as_deref()
+            .is_some_and(|scope| scope == class_name)
+    {
+        return false;
+    }
+    if crate::types::resolve_property_name(
+        &checker.classes,
+        class_name,
+        property,
+        checker.current_class.as_deref(),
+    ) != crate::types::PropertyNameResolution::Dynamic
+    {
+        return false;
+    }
+    record_site(
+        checker,
+        class_name,
+        Some(property.to_string()),
+        "__set",
+        true,
+    );
+    true
+}
+
+/// Returns whether an exact property name can be materialized by same-pair `__set` reentry.
+///
+/// Body checking records the site before the final top-level pass reads it. The class storage
+/// flag is installed just after all checking completes, so the exact recorded site is also the
+/// pre-reservation proof that the class will receive that storage. The name match remains
+/// mandatory in either state and prevents one reentry store from opening every missing name.
+pub(in crate::types::checker) fn magic_set_reentry_property_is_readable(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    let storage_installed = checker
+        .classes
+        .get(class_name)
+        .is_some_and(|info| info.scope_dynamic_property_storage);
+
+    checker.scope_dynamic_mutation_targets.sites.iter().any(|site| {
+        site.same_pair_set_reentry
+            && site.property.as_deref() == Some(property)
+            && (site.class_name == class_name
+                || checker.is_subclass_of(class_name, &site.class_name))
+            && (storage_installed || site_needs_storage_on_class(checker, site, class_name))
+    })
 }
 
 /// Reserves the per-instance property hash on every class a recorded mutation can reach.
@@ -305,8 +379,21 @@ fn site_needs_storage_on_class(
     let Some(class_info) = checker.classes.get(class_name) else {
         return false;
     };
-    if site.property.is_some() && class_info.methods.contains_key(site.magic_method.as_str()) {
+    if site.property.is_some()
+        && !site.same_pair_set_reentry
+        && class_info.methods.contains_key(site.magic_method.as_str())
+    {
         return false;
+    }
+    if site.same_pair_set_reentry {
+        return site.property.as_deref().is_some_and(|property| {
+            crate::types::resolve_property_name(
+                &checker.classes,
+                class_name,
+                property,
+                site.scope.as_deref(),
+            ) == crate::types::PropertyNameResolution::Dynamic
+        });
     }
     match &site.property {
         Some(property) => crate::types::property_name_shadows_ancestor_private_slot(

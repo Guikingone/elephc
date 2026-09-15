@@ -306,15 +306,31 @@ fn check_object_property_write(
         // and nothing for the reservation to store. `record_scope_dynamic_mutation` skips such a
         // class too, so the two agree, but the refusal has to be skipped here explicitly or a
         // readonly class with `__set` would be rejected for a creation php never performs.
-        if !class_declares_method(checker, class_name, "__set") {
+        let same_pair_reentry = scope_dynamic_storage::record_magic_set_same_pair_reentry(
+            checker, object, class_name, property,
+        );
+        if same_pair_reentry || !class_declares_method(checker, class_name, "__set") {
             refuse_dynamic_property_on_readonly_class(checker, class_name, property, span)?;
         }
-        scope_dynamic_storage::record_scope_dynamic_mutation(checker, class_name, property, "__set");
+        if !same_pair_reentry {
+            scope_dynamic_storage::record_scope_dynamic_mutation(
+                checker, class_name, property, "__set",
+            );
+        }
         return Ok(());
     }
     if let Some(class_info) = checker.classes.get(class_name) {
         if class_info.visible_property(property).is_none() {
             if class_info.methods.contains_key("__set") {
+                let same_pair_reentry =
+                    scope_dynamic_storage::record_magic_set_same_pair_reentry(
+                    checker, object, class_name, property,
+                );
+                if same_pair_reentry {
+                    refuse_dynamic_property_on_readonly_class(
+                        checker, class_name, property, span,
+                    )?;
+                }
                 return Ok(());
             }
             if class_info.allow_dynamic_properties {
