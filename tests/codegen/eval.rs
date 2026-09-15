@@ -25240,6 +25240,47 @@ echo $object->reveal();
     assert_eq!(out.stdout, "N:t:p:L:s:h:T:P:S:H:7,13");
 }
 
+/// Verifies eval distinguishes an AOT untyped removed slot from typed-uninitialized storage.
+///
+/// The unused native helper gives the untyped slot marker-capable storage; the actual removal,
+/// probe, warning-producing read, and recreation all happen through the eval bridge.
+#[test]
+fn test_eval_unset_aot_untyped_property_warns_null_and_reassigns() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotUntypedUnsetTarget { public $value = "start"; public int $typed = 1; }
+function reserveEvalAotUntypedUnsetStorage(EvalAotUntypedUnsetTarget $target): void {
+    unset($target->value);
+}
+$object = new EvalAotUntypedUnsetTarget();
+echo eval('unset($object->value);
+echo isset($object->value) ? "present:" : "absent:";
+var_dump($object->value);
+$object->value = "again";
+echo isset($object->value) ? "present:" : "absent:";
+echo $object->value;
+unset($object->typed);
+try { echo $object->typed; }
+catch (Error $error) { echo ":typed"; }');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "absent:NULL\npresent:again:typed");
+    assert_eq!(
+        out.stderr
+            .matches("Undefined property: EvalAotUntypedUnsetTarget::$value")
+            .count(),
+        1,
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies eval ReflectionProperty getValue rejects uninitialized generated/AOT typed storage.
 #[test]
 fn test_eval_reflection_property_get_value_rejects_uninitialized_aot_storage() {

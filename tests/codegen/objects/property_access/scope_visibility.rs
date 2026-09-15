@@ -1353,6 +1353,51 @@ var_dump(isset($kid->p));
     assert_eq!(dynamic_property_notices(&out.stderr, "ProtKid"), 0, "{}", out.stderr);
 }
 
+/// Verifies an untyped fixed slot keeps PHP's removed state across direct, polymorphic, and Mixed
+/// receiver paths. A value read warns and answers null, a probe answers false without reading the
+/// released payload, and a later assignment makes the slot present again.
+#[test]
+fn test_untyped_fixed_slot_unset_state_is_safe_across_receiver_shapes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class UnsetBase {
+    public $direct = 'direct';
+}
+class UnsetKid extends UnsetBase {
+    public $poly = 'poly';
+    public $boxed = 'boxed';
+}
+function dropPoly(UnsetBase $o, string $name): void { unset($o->$name); }
+function boxedKid(): mixed { return new UnsetKid(); }
+
+$direct = new UnsetBase();
+unset($direct->direct);
+var_dump(isset($direct->direct), $direct->direct);
+$direct->direct = 'again';
+echo $direct->direct, "\n";
+
+$poly = new UnsetKid();
+dropPoly($poly, 'poly');
+var_dump(isset($poly->poly), $poly->poly);
+$poly->poly = 'again-poly';
+echo $poly->poly, "\n";
+
+$boxed = boxedKid();
+$name = 'boxed';
+unset($boxed->$name);
+var_dump(isset($boxed->boxed), $boxed->boxed);
+$boxed->boxed = 'again-boxed';
+echo $boxed->boxed, "\n";
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nNULL\nagain\nbool(false)\nNULL\nagain-poly\nbool(false)\nNULL\nagain-boxed\n"
+    );
+    assert_eq!(out.stderr.matches("Warning: Undefined property:").count(), 3);
+}
+
 /// Verifies a boxed `Mixed` receiver round-trips an undeclared name through the runtime class's
 /// own hash, for a RUNTIME name and for a LITERAL name alike.
 ///

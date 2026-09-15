@@ -29,6 +29,17 @@ pub(in crate::interpreter) fn eval_native_property_get_authorized(
             context, values,
         );
     }
+    let initialized = eval_with_native_bridge_scope(declaring_class, context, || {
+        values.property_is_initialized(object, property)
+    })?;
+    if !initialized && context.native_property_type(declaring_class, property).is_some() {
+        return eval_throw_uninitialized_property_error(
+            declaring_class,
+            property,
+            context,
+            values,
+        );
+    }
     eval_with_native_bridge_scope(declaring_class, context, || {
         values.property_get(object, property)
     })

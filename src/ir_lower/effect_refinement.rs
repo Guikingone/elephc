@@ -325,9 +325,16 @@ fn property_effects_for_value(
             }
             continue;
         }
-        if let Some((index, (name, _))) = class.visible_property(property) {
+        if let Some((index, (name, property_ty))) = class.visible_property(property) {
             if class.property_slot_is_declared(index, name) {
                 effects |= Effects::MAY_THROW;
+            } else if !class.property_slot_is_reference(index, name)
+                && property_ty.codegen_repr() == PhpType::Mixed
+            {
+                // A reachable `unset()` widens an untyped fixed slot to boxed Mixed and stamps
+                // its high word with the removed-state marker. A later value read reports
+                // `Undefined property`, so effect refinement must not erase MAY_WARN from it.
+                effects |= Effects::MAY_WARN;
             }
             continue;
         }

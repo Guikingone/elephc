@@ -635,27 +635,116 @@ var_dump($s->v);
     );
 }
 
-/// Verifies `unset()` of an UNTYPED declared property is refused with a diagnostic that
-/// names that shape, instead of silently leaving a stale value behind.
+/// Verifies an untyped fixed slot carries observable removed state across rendering and cloning.
 ///
-/// PHP genuinely removes such a property: a later read warns `Undefined property` and
-/// answers `null`. elephc gives each declared property a fixed, monomorphically typed slot
-/// (here `Int`), which has no encoding for "removed, and reading as null" — see
-/// `docs/php/classes.md`. A loud compile error beats a wrong value.
+/// A normal read warns and answers null, reassignment clears the marker, and the untouched
+/// property proves renderers skip only the removed slot.
 #[test]
-fn test_unset_untyped_declared_property_is_rejected() {
-    let error = compile_source_expect_backend_error(
+fn test_unset_untyped_declared_property_warns_null_and_can_be_reassigned() {
+    let out = compile_and_run_capture(
         r#"<?php
-class M { public $foo = 1; }
+class M { public $foo = 1; public $keep = 2; }
 $m = new M();
 unset($m->foo);
-echo "ok";
+var_dump(isset($m->foo));
+print_r($m);
+var_dump($m->foo);
+$copy = clone $m;
+var_dump(isset($copy->foo));
+$copy->foo = "again";
+var_dump(isset($copy->foo), $copy->foo);
 "#,
     );
-    assert!(
-        error.contains("An UNTYPED declared property"),
-        "the diagnostic must name the untyped-property shape, got: {}",
-        error
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nM Object\n(\n    [keep] => 2\n)\nNULL\n\
+         bool(false)\nbool(true)\nstring(5) \"again\"\n"
+    );
+    assert_eq!(out.stderr.matches("Undefined property: M::$foo").count(), 1);
+}
+
+/// Verifies a missing untyped boxed slot can converge into a nullable scalar result safely.
+///
+/// This catches stale tag registers when the absent branch materializes null while the present
+/// branch would otherwise materialize a payload and a separate scalar tag.
+#[test]
+fn test_unset_untyped_nullable_slot_materializes_tagged_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Pair { public $value = null; }
+$pair = new Pair();
+$pair->value = 7;
+$name = "value";
+unset($pair->{$name});
+var_dump(isset($pair->{$name}));
+var_dump($pair->{$name});
+$pair->{$name} = null;
+var_dump(isset($pair->{$name}), $pair->{$name});
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nNULL\nbool(false)\nNULL\n"
+    );
+    assert_eq!(
+        out.stderr.matches("Undefined property: Pair::$value").count(),
+        1
+    );
+}
+
+/// Verifies fixed-slot removal is visible before the displaced value's destructor runs.
+///
+/// The destructor reads the absent property, recreates it, or recursively removes it. The outer
+/// unset must not release the old owner twice or overwrite a value installed during reentry.
+#[test]
+fn test_unset_untyped_fixed_slot_commits_before_reentrant_destructor() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReentrantFixedOwner { public $value = null; }
+class ReentrantFixedValue {
+    public static ReentrantFixedOwner $owner;
+    public static int $mode = 0;
+    public function __destruct() {
+        $owner = self::$owner;
+        echo isset($owner->value) ? "present:" : "absent:";
+        if (self::$mode === 1) {
+            var_dump($owner->value);
+        } elseif (self::$mode === 2) {
+            $owner->value = 17;
+        } else {
+            unset($owner->value);
+            echo isset($owner->value) ? "present" : "absent";
+        }
+    }
+}
+$owner = new ReentrantFixedOwner();
+ReentrantFixedValue::$owner = $owner;
+ReentrantFixedValue::$mode = 1;
+$owner->value = new ReentrantFixedValue();
+echo "r:";
+unset($owner->value);
+echo "|w:";
+ReentrantFixedValue::$mode = 2;
+$owner->value = new ReentrantFixedValue();
+unset($owner->value);
+echo $owner->value, "|u:";
+ReentrantFixedValue::$mode = 3;
+$owner->value = new ReentrantFixedValue();
+unset($owner->value);
+echo "|";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "r:absent:NULL\n|w:absent:17|u:absent:absent|"
+    );
+    assert_eq!(
+        out.stderr
+            .matches("Undefined property: ReentrantFixedOwner::$value")
+            .count(),
+        1,
+        "{}",
+        out.stderr
     );
 }
 
@@ -678,6 +767,24 @@ unset($r->p);
     assert!(
         error.contains("unset() of by-reference property R::$p"),
         "the diagnostic must name the by-reference property, got: {}",
+        error
+    );
+}
+
+/// Verifies `unset()` never stamps the removed marker into packed native field storage.
+#[test]
+fn test_unset_packed_property_is_rejected() {
+    let error = compile_source_expect_backend_error(
+        r#"<?php
+packed class Cell { public int $value; }
+buffer<Cell> $cells = buffer_new<Cell>(1);
+unset($cells[0]->value);
+"#,
+    );
+    assert!(
+        error.contains("unset() of packed class field Cell::$value")
+            || error.contains("unset target shape"),
+        "the diagnostic must preserve the packed-field refusal, got: {}",
         error
     );
 }

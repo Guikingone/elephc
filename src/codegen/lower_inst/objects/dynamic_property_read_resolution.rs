@@ -414,11 +414,18 @@ fn emit_runtime_name_plan_read(
         // This runtime class declares the name, so php reads its own slot. The static class made
         // the name invisible; the subclass that redeclared it did not.
         PropertyRuntimeAction::Slot(slot) => {
-            if slot.is_declared {
-                emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
-            }
+            let read_done = emit_property_read_state_guard(
+                ctx,
+                slot,
+                base_reg,
+                mode,
+                PropertyReadMissingResult::Boxed,
+            )?;
             emit_property_load(ctx, slot, base_reg)?;
             box_mixed_property_candidate_result(ctx, &slot.php_type);
+            if let Some(read_done) = read_done {
+                ctx.emitter.label(&read_done);
+            }
             Ok(())
         }
         PropertyRuntimeAction::DynamicHash {

@@ -1,9 +1,10 @@
 //! Purpose:
-//! Gives every property a PHP 8.5 `clone($object, $withProperties)` override can reach the
-//! runtime-shaped storage PHP's untyped-property semantics require.
+//! Gives untyped properties reached by runtime-shaped mutation the boxed storage their PHP
+//! semantics require, currently clone overrides and property `unset()`.
 //!
 //! Called from:
 //! - `crate::builtins::callables::clone`'s check hook, which records the destination classes.
+//! - The compiler-resident `unset` checker, which records reachable fixed property slots.
 //! - `Checker::infer_closure_call_type`, for a runtime string or boxed callable whose callee may
 //!   be `clone` and whose destination is therefore unknowable.
 //! - `crate::types::checker::check_types_with_options`, which applies the widening once every
@@ -18,6 +19,9 @@
 //!   assignment, but it is SYNTHESIZED after checking, so nothing ever widened the slot for it:
 //!   an inferred `int` slot silently coerced `"hello"` to `int(0)`, and an inferred `null` slot
 //!   failed the whole build with `prop_set assigning PHP type Mixed to U::$u with PHP type Void`.
+//!   Property `unset()` has the same representation requirement: a later read returns null and a
+//!   later assignment can store any value, while the fixed slot also needs an explicit absent
+//!   marker for `isset()` and object-property enumeration.
 //! - The widening is selected from DESTINATION classes only, never from every class in the
 //!   program. The `clone` check hook knows the first argument's inferred type, so
 //!   `clone($item, [...])` selects the slots of `Item` and its subclasses and leaves every
@@ -57,6 +61,43 @@ pub struct CloneOverrideDestinations {
     pub any_class: bool,
     /// Statically known destination class names, before subclass expansion.
     pub classes: BTreeSet<String>,
+}
+
+/// Untyped fixed property slots that a reachable `unset()` can remove.
+///
+/// The property name is absent for a runtime name, and the class name is absent for a boxed
+/// receiver. Keeping both dimensions lets the final widening touch only slots the operation can
+/// actually reach while still covering runtime subclasses.
+#[derive(Debug, Default, Clone)]
+pub struct PropertyUnsetDestinations {
+    sites: BTreeSet<(Option<String>, Option<String>)>,
+}
+
+/// Records the fixed slots one property `unset()` may reach.
+pub(in crate::types::checker) fn record_property_unset_destination(
+    checker: &mut Checker,
+    object_ty: &PhpType,
+    property: Option<&str>,
+) {
+    let property = property.map(str::to_string);
+    match object_ty.codegen_repr() {
+        PhpType::Object(class_name) if !class_name.is_empty() => {
+            checker
+                .property_unset_destinations
+                .sites
+                .insert((Some(class_name), property));
+        }
+        // The backend represents every union through the Mixed runtime-class ladder, whose
+        // candidate table currently covers every user class. Match that reachability here so an
+        // unrelated untyped candidate cannot retain a refined shape and reject the whole ladder.
+        PhpType::Union(_) | PhpType::Mixed => {
+            checker
+                .property_unset_destinations
+                .sites
+                .insert((None, property));
+        }
+        _ => {}
+    }
 }
 
 impl CloneOverrideDestinations {
@@ -169,6 +210,78 @@ pub(super) fn widen_clone_override_property_storage(checker: &mut Checker) {
     let views = layout_views(checker);
     for (owner, slot) in widened_slots(&views, &sel) {
         for target in slot_inheritors(&views, &owner, slot) {
+            if let Some(info) = checker.classes.get_mut(&target) {
+                info.properties[slot].1 = PhpType::Mixed;
+            }
+        }
+    }
+}
+
+/// Widens every untyped fixed slot a reachable `unset()` can remove to boxed `Mixed` storage.
+///
+/// A slot removed by PHP subsequently reads as `null`, may be assigned any PHP value, and is not
+/// reported by `isset()`. The boxed shape plus the slot's otherwise-unused high word can represent
+/// all three states without changing unrelated refined properties.
+pub(super) fn widen_property_unset_storage(checker: &mut Checker) {
+    let destinations = std::mem::take(&mut checker.property_unset_destinations);
+    if destinations.sites.is_empty() {
+        return;
+    }
+    let views = layout_views(checker);
+    let mut selected_slots = BTreeSet::new();
+    for (class, property) in destinations.sites {
+        let classes = match class {
+            Some(class_name) => destination_classes(
+                checker,
+                &CloneOverrideDestinations {
+                    any_class: false,
+                    classes: BTreeSet::from([class_name]),
+                },
+            ),
+            None => destination_classes(
+                checker,
+                &CloneOverrideDestinations {
+                    any_class: true,
+                    classes: BTreeSet::new(),
+                },
+            ),
+        };
+        for class_name in classes {
+            let Some(info) = checker.classes.get(&class_name) else {
+                continue;
+            };
+            let Some(view) = views.get(&class_name) else {
+                continue;
+            };
+            if view.owns_layout {
+                continue;
+            }
+            for (slot, (slot_name, _)) in info.properties.iter().enumerate() {
+                if property.as_ref().is_some_and(|name| name != slot_name)
+                    || info.visible_property_index(slot_name) != Some(slot)
+                    || info.property_slot_is_reference(slot, slot_name)
+                    || !view.widenable.get(slot).copied().unwrap_or(false)
+                {
+                    continue;
+                }
+                let owner = slot_declaring_class(&views, &class_name, slot);
+                if views.get(&owner).is_some_and(|owner| owner.owns_layout) {
+                    continue;
+                }
+                selected_slots.insert((owner, slot));
+            }
+        }
+    }
+    for (owner, slot) in selected_slots {
+        for target in slot_inheritors(&views, &owner, slot) {
+            let may_mark_removed = checker.classes.get(&target).is_some_and(|info| {
+                info.properties.get(slot).is_some_and(|(name, _)| {
+                    !info.property_slot_is_reference(slot, name)
+                })
+            });
+            if !may_mark_removed {
+                continue;
+            }
             if let Some(info) = checker.classes.get_mut(&target) {
                 info.properties[slot].1 = PhpType::Mixed;
             }

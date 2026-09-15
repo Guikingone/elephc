@@ -36,11 +36,18 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get(ctx: &mut FunctionContext<'
         let slot = resolve_physical_property_slot(ctx, object, class, property, inst)?;
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         ctx.load_value_to_reg(object, base_reg)?;
-        if slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
-        }
+        let read_done = emit_property_read_state_guard(
+            ctx,
+            &slot,
+            base_reg,
+            property_fetch_mode(inst),
+            PropertyReadMissingResult::Instruction(inst),
+        )?;
         emit_property_load(ctx, &slot, base_reg)?;
         materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+        if let Some(read_done) = read_done {
+            ctx.emitter.label(&read_done);
+        }
         return store_if_result(ctx, inst);
     }
     let property = property_name_immediate(ctx, inst)?.to_string();
@@ -137,11 +144,18 @@ pub(super) fn lower_prop_get_nonnull(
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
-    if slot.is_declared {
-        emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
-    }
+    let read_done = emit_property_read_state_guard(
+        ctx,
+        &slot,
+        base_reg,
+        property_fetch_mode(inst),
+        PropertyReadMissingResult::Instruction(inst),
+    )?;
     emit_property_load(ctx, &slot, base_reg)?;
     materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    if let Some(read_done) = read_done {
+        ctx.emitter.label(&read_done);
+    }
     store_if_result(ctx, inst)
 }
 
@@ -444,7 +458,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
         return lower_nullable_prop_initialized(ctx, inst, object, &class_name, &property);
     }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
-    if !slot.is_declared {
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         return store_if_result(ctx, inst);
     }
@@ -474,7 +488,7 @@ fn lower_nullable_prop_initialized(
     property: &str,
 ) -> Result<()> {
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
-    if !slot.is_declared {
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         return store_if_result(ctx, inst);
     }
@@ -707,11 +721,18 @@ pub(super) fn emit_dynamic_plan_read(
         PropertyRuntimeAction::Slot(slot) => {
             let base_reg = abi::symbol_scratch_reg(ctx.emitter);
             ctx.load_value_to_reg(object, base_reg)?;
-            if slot.is_declared {
-                emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
-            }
+            let read_done = emit_property_read_state_guard(
+                ctx,
+                slot,
+                base_reg,
+                property_fetch_mode(inst),
+                PropertyReadMissingResult::Instruction(inst),
+            )?;
             emit_property_load(ctx, slot, base_reg)?;
             materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+            if let Some(read_done) = read_done {
+                ctx.emitter.label(&read_done);
+            }
             store_if_result(ctx, inst)
         }
         PropertyRuntimeAction::DynamicHash {

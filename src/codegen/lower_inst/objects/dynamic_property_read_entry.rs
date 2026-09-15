@@ -31,11 +31,18 @@ pub(in crate::codegen::lower_inst) fn lower_nullsafe_prop_get(
     let done_label = ctx.next_label("nullsafe_prop_done");
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
-    if slot.is_declared {
-        emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
-    }
+    let read_done = emit_property_read_state_guard(
+        ctx,
+        &slot,
+        base_reg,
+        property_fetch_mode(inst),
+        PropertyReadMissingResult::Instruction(inst),
+    )?;
     emit_property_load(ctx, &slot, base_reg)?;
     materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    if let Some(read_done) = read_done {
+        ctx.emitter.label(&read_done);
+    }
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
     emit_boxed_null(ctx);
@@ -209,11 +216,18 @@ pub(super) fn lower_const_dynamic_prop_get(
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
-    if slot.is_declared {
-        emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
-    }
+    let read_done = emit_property_read_state_guard(
+        ctx,
+        &slot,
+        base_reg,
+        property_fetch_mode(inst),
+        PropertyReadMissingResult::Instruction(inst),
+    )?;
     emit_property_load(ctx, &slot, base_reg)?;
     materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    if let Some(read_done) = read_done {
+        ctx.emitter.label(&read_done);
+    }
     store_if_result(ctx, inst)
 }
 
@@ -324,11 +338,18 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
             }
             MixedPropertyReadKind::Slot => {}
         }
-        if slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
-        }
+        let read_done = emit_property_read_state_guard(
+            ctx,
+            slot,
+            base_reg,
+            property_fetch_mode(inst),
+            PropertyReadMissingResult::Instruction(inst),
+        )?;
         emit_property_load(ctx, slot, base_reg)?;
         materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+        if let Some(read_done) = read_done {
+            ctx.emitter.label(&read_done);
+        }
         abi::emit_release_temporary_stack(ctx.emitter, 32);
         abi::emit_jump(ctx.emitter, &done_label);
     }

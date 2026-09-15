@@ -263,6 +263,11 @@ pub(crate) struct Checker {
     /// `mixed`, so a slot an override can reach must carry runtime-shaped storage rather than the
     /// narrow type its default happened to infer.
     pub clone_override_destinations: clone_override_storage::CloneOverrideDestinations,
+    /// Fixed untyped property slots that a reachable `unset()` may remove.
+    ///
+    /// Applied after body checking so the physical slot and every inherited view use boxed
+    /// `Mixed` storage, which can safely represent the post-unset null value.
+    pub property_unset_destinations: clone_override_storage::PropertyUnsetDestinations,
     /// Classes a reachable MUTATION in this program addresses under a strict ancestor's private
     /// property name.
     ///
@@ -821,6 +826,7 @@ pub fn check_types_with_options(
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);
     clone_override_storage::widen_clone_override_property_storage(&mut checker);
+    clone_override_storage::widen_property_unset_storage(&mut checker);
     scope_dynamic_storage::reserve_scope_dynamic_property_storage(&mut checker);
     validate_magic_method_contracts(&checker)?;
 

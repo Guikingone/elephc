@@ -1,5 +1,5 @@
 //! Purpose:
-//! Restores native typed instance properties to their uninitialized state from eval.
+//! Removes native fixed instance properties from eval.
 //!
 //! Called from:
 //! - The eval property helper emitter and Magician's authorized property-unset path.
@@ -11,7 +11,7 @@
 
 use super::*;
 
-/// Emits the native typed-property unset entry point for every supported target.
+/// Emits the native fixed-property unset entry point for every supported target.
 pub(super) fn emit_property_unset_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -19,7 +19,11 @@ pub(super) fn emit_property_unset_helper(
     slots: &[EvalPropertySlot],
 ) {
     super::unset_boundary::emit(module, emitter);
-    let slots = slots.iter().filter(|slot| slot.is_declared).cloned().collect::<Vec<_>>();
+    let slots = slots
+        .iter()
+        .filter(|slot| slot.is_declared || slot_supports_untyped_unset_marker(slot))
+        .cloned()
+        .collect::<Vec<_>>();
     let fail = "__elephc_eval_value_typed_property_unset_miss";
     let done = "__elephc_eval_value_typed_property_unset_done";
     emitter.blank();

@@ -126,9 +126,28 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     | ExprKind::NullsafePropertyAccess { object, property } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        crate::types::checker::clone_override_storage::record_property_unset_destination(
+            checker,
+            &object_ty,
+            Some(property),
+        );
         if unset_object_property_probe_is_valid(checker, &object_ty, property, arg)? {
             return Ok(());
         }
+    }
+    if let ExprKind::DynamicPropertyAccess { object, property }
+    | ExprKind::NullsafeDynamicPropertyAccess { object, property } = &arg.kind
+    {
+        let object_ty = checker.infer_null_probe_operand(object, env)?;
+        let property_name = match &property.kind {
+            ExprKind::StringLiteral(name) => Some(name.as_str()),
+            _ => None,
+        };
+        crate::types::checker::clone_override_storage::record_property_unset_destination(
+            checker,
+            &object_ty,
+            property_name,
+        );
     }
     checker.infer_null_probe_operand(arg, env).map(|_| ())
 }

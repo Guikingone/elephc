@@ -349,7 +349,7 @@ fn unset_unsupported_slot_reason(slot: &PropertySlot) -> Option<&'static str> {
     if slot.is_reference {
         return Some("by-reference property");
     }
-    if !slot.is_declared {
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
         return Some("untyped property slot");
     }
     None

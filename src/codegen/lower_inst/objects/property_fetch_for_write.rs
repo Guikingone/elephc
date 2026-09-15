@@ -35,6 +35,19 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    // An unset-capable untyped slot can hold the removed marker instead of a container.
+    // `PropGetForWrite` promises a borrowed mutable container and has no result shape for
+    // PHP's warning-plus-null absent answer, so accepting the slot would feed the marker to a
+    // COW helper as a boxed value. Refuse this uncommon compound operation until lowering can
+    // recreate the property before publishing a borrow.
+    if slot_supports_untyped_unset_marker(&slot) {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for unset-capable untyped property {}::${}",
+            inst.op.name(),
+            slot.class_name,
+            slot.property
+        )));
+    }
     let Some(split) = property_container_split(&slot) else {
         return Err(CodegenIrError::unsupported(format!(
             "{} for property {}::${} with PHP type {:?}",

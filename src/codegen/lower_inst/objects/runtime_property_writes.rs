@@ -938,8 +938,8 @@ pub(super) fn emit_runtime_stdclass_set_for_stacked_name(
 /// uninitialized-typed-property marker — exactly the state a typed property without
 /// a default starts in. `isset()` then answers false, `print_r`/`var_export` skip the
 /// property, and a later read raises the "must not be accessed before initialization"
-/// diagnostic. Any refcounted payload the slot owned is released first, so the write
-/// cannot leak a string/array/object.
+/// diagnostic. The slot is marked removed before any refcounted payload is released, so a
+/// reentrant destructor observes the completed removal and may safely recreate the property.
 ///
 /// A property that lives in the receiver's DYNAMIC-property hash instead of a fixed
 /// slot — every `stdClass` property, and an undeclared name on an
@@ -951,9 +951,9 @@ pub(super) fn emit_runtime_stdclass_set_for_stacked_name(
 /// property slot holds an object-owned ref-cell pointer that the destructor still has
 /// to free and that a later write would write THROUGH — reviving the alias PHP's
 /// `unset()` just broke — so neither zeroing nor keeping the cell reproduces PHP.
-/// A packed field and an undeclared slot have no removable storage at all. Skipping
-/// them quietly left `isset()` answering `true` after an `unset()`, so they now name
-/// themselves instead.
+/// A packed field and a refined untyped slot that type checking did not widen have no removable
+/// storage. Skipping them quietly leaves `isset()` answering `true` after an `unset()`, so they
+/// name themselves instead.
 pub(in crate::codegen::lower_inst) fn lower_prop_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     if let Some(Immediate::PropertyRef { class, property }) = inst.immediate {
@@ -962,8 +962,10 @@ pub(in crate::codegen::lower_inst) fn lower_prop_unset(ctx: &mut FunctionContext
         ctx.load_value_to_reg(object, base_reg)?;
         // Match direct allocation's object-owned reference cells before exposing the object.
         if !initialize_owned_property_reference(ctx, &slot, base_reg) {
-            if !slot.is_declared {
-                return Err(CodegenIrError::invalid_module("uninitialized marker on an untyped property"));
+            if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
+                return Err(CodegenIrError::invalid_module(
+                    "uninitialized marker on an unsupported untyped property slot",
+                ));
             }
             emit_property_uninitialized_marker(ctx, &slot, base_reg);
         }
@@ -1016,8 +1018,7 @@ pub(super) fn lower_named_prop_unset(
     }
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
-    release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
-    emit_property_uninitialized_marker(ctx, &slot, base_reg);
+    detach_and_release_unset_property_value(ctx, &slot, base_reg);
     Ok(())
 }
 
@@ -1044,8 +1045,7 @@ pub(super) fn emit_dynamic_plan_unset(
             }
             let base_reg = abi::symbol_scratch_reg(ctx.emitter);
             ctx.load_value_to_reg(object, base_reg)?;
-            release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
-            emit_property_uninitialized_marker(ctx, slot, base_reg);
+            detach_and_release_unset_property_value(ctx, slot, base_reg);
             Ok(())
         }
         PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
@@ -1362,8 +1362,7 @@ fn emit_mixed_runtime_name_unset_arm(
             }
             let base_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
             abi::emit_load_temporary_stack_slot(ctx.emitter, &base_reg, 16);
-            release_previous_property_value(ctx, &base_reg, &slot.php_type, slot.offset, None);
-            emit_property_uninitialized_marker(ctx, slot, &base_reg);
+            detach_and_release_unset_property_value(ctx, slot, &base_reg);
             abi::emit_release_temporary_stack(ctx.emitter, 32);
             abi::emit_jump(ctx.emitter, done_label);
         }
@@ -1390,6 +1389,44 @@ fn emit_mixed_runtime_name_unset_arm(
         }
     }
     Ok(())
+}
+
+/// Detaches one fixed property value before releasing its former owner.
+///
+/// Destruction can execute arbitrary PHP, including reads, recursive `unset()`, and assignment
+/// to this same property. Publishing the removed marker first makes all three operations observe
+/// the committed state. No receiver storage is touched after the release callback, so a
+/// reentrant assignment remains installed and a thrown destructor cannot expose stale storage.
+fn detach_and_release_unset_property_value(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    base_reg: &str,
+) {
+    let prop_ty = slot.php_type.codegen_repr();
+    let releases_value =
+        matches!(prop_ty, PhpType::Str | PhpType::Callable) || prop_ty.is_refcounted();
+    if !releases_value {
+        emit_property_uninitialized_marker(ctx, slot, base_reg);
+        return;
+    }
+
+    abi::emit_push_reg(ctx.emitter, base_reg);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        base_reg,
+        slot.offset,
+    );
+    emit_property_uninitialized_marker(ctx, slot, base_reg);
+    match prop_ty {
+        PhpType::Str => abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe"),
+        PhpType::Callable => callable_descriptor::emit_release_current_descriptor(ctx.emitter),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+        }
+        ty => abi::emit_decref_if_refcounted(ctx.emitter, &ty),
+    }
+    abi::emit_pop_reg(ctx.emitter, base_reg);
 }
 
 /// One arm of a boxed `Mixed` receiver's runtime-name `unset()`.

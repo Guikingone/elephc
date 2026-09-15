@@ -362,14 +362,15 @@ pub(super) fn class_declares_hook_accessor(
 /// Returns true when reading `property` on `object` can hit PHP's
 /// "must not be accessed before initialization" fatal.
 ///
-/// A property is uninitialized only while it is DECLARED WITH A TYPE and has no default:
+/// A property is uninitialized while it is DECLARED WITH A TYPE and has no default:
 /// `public ?P $p;` and `public string $s;` both start uninitialized, and PHP fatals on a plain
 /// read of either. A default makes the slot live before the constructor body runs, and an
 /// untyped property is plain null, so neither can ever be in that state — which is what keeps
 /// this gate off the overwhelmingly common shapes.
 ///
-/// The one case it misses is `unset($this->s)`, which returns an already-initialized typed
-/// property to the uninitialized state in PHP.
+/// A reachable `unset()` also widens an untyped fixed slot to boxed `Mixed` storage. Its high
+/// word carries the same marker, but a later value read warns and answers null instead of raising
+/// the typed-property error.
 pub(super) fn property_can_be_uninitialized(
     ctx: &LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
@@ -402,7 +403,7 @@ pub(super) fn property_can_be_uninitialized(
     let Some(info) = ctx.classes.get(class_name) else {
         return false;
     };
-    let Some(index) = info.properties.iter().position(|(name, _)| name == property) else {
+    let Some((index, (_, property_ty))) = info.visible_property(property) else {
         return false;
     };
     // Whether the slot was DECLARED with a type — asked of the schema, not inferred from the
@@ -418,6 +419,8 @@ pub(super) fn property_can_be_uninitialized(
     // ordinary read then raises where PHP's `??` answers the default. The runtime probe
     // settles both cases, so the gate asks only whether the property is TYPED.
     info.property_slot_is_declared(index, property)
+        || (!info.property_slot_is_reference(index, property)
+            && property_ty.codegen_repr() == PhpType::Mixed)
 }
 
 /// Reads `property` the way `isset()` does: yields null instead of raising when the slot is

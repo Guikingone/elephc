@@ -247,7 +247,7 @@ pub(super) fn unset_property_access_has_direct_lowering(
         Some(
             UnsetPropertyAction::Magic
                 | UnsetPropertyAction::Noop
-                | UnsetPropertyAction::ClearTyped
+                | UnsetPropertyAction::ClearSlot
                 | UnsetPropertyAction::RemoveDynamic
         )
     )
@@ -277,7 +277,7 @@ pub(super) fn lower_unset_property_access(
         // Both storage shapes share `Op::PropUnset`: the backend already resolves the
         // receiver's property storage, so it picks the fixed-slot marker or the
         // dynamic-hash removal from the same instruction.
-        Some(UnsetPropertyAction::ClearTyped | UnsetPropertyAction::RemoveDynamic) => {
+        Some(UnsetPropertyAction::ClearSlot | UnsetPropertyAction::RemoveDynamic) => {
             let object = lower_expr(ctx, object);
             lower_guarded_magic_property_unset(ctx, object, property, expr, |ctx, object| {
                 let data = ctx.intern_string(property);
@@ -447,9 +447,10 @@ pub(super) enum UnsetPropertyAction {
     Fallback,
     Magic,
     Noop,
-    /// The property has a DECLARED type, so PHP's `unset()` leaves it uninitialized —
-    /// a state elephc's fixed property slots represent exactly.
-    ClearTyped,
+    /// The property has a fixed value slot, so PHP's `unset()` leaves an observable removed state.
+    /// Typed slots use the uninitialized-property error state. Untyped slots selected during type
+    /// checking use boxed `Mixed` storage and answer a later read with PHP null plus a warning.
+    ClearSlot,
     /// The property lives in the receiver's dynamic-property hash (`stdClass`, or an
     /// undeclared name on an `#[AllowDynamicProperties]` class), where PHP's `unset()`
     /// really is a key removal.
@@ -492,17 +493,11 @@ pub(super) fn property_unset_action(
         return Some(dynamic_property_unset_action(ctx, &class_name));
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
-        // PHP does NOT consult `__unset` for a property it can see: it removes the
-        // property itself. A DECLARED (typed) property becomes uninitialized, which
-        // elephc's fixed slots can represent exactly.
-        if class_info.visible_property_is_declared(property) {
-            return Some(UnsetPropertyAction::ClearTyped);
-        }
-        // An UNTYPED fixed slot has no "removed" state and no null-capable storage:
-        // PHP's later read must warn and answer `null`, which a slot the checker typed
-        // `Int`/`Str`/... cannot represent. Keep the explicit unsupported diagnostic
-        // rather than leaving a stale value or a garbage payload behind.
-        return Some(UnsetPropertyAction::Fallback);
+        // PHP does NOT consult `__unset` for a property it can see: it removes the property
+        // itself. Type checking widens an untyped slot this operation can reach to boxed `Mixed`,
+        // while typed slots already own an uninitialized marker, so both can now preserve the
+        // removed state in their fixed storage.
+        return Some(UnsetPropertyAction::ClearSlot);
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__unset")).is_some() {
         Some(UnsetPropertyAction::Magic)

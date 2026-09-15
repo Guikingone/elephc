@@ -48,7 +48,13 @@ struct EvalPropertySlot {
     offset: usize,
     ty: PhpType,
     is_declared: bool,
+    is_reference: bool,
     is_hidden_shadow: bool,
+}
+
+/// Returns whether the fixed slot can carry the untyped-property removed marker.
+fn slot_supports_untyped_unset_marker(slot: &EvalPropertySlot) -> bool {
+    !slot.is_declared && !slot.is_reference && slot.ty.codegen_repr() == PhpType::Mixed
 }
 
 /// Emits eval property helpers when any lowered function owns an eval context.
@@ -149,6 +155,7 @@ fn collect_class_property_slots(
             offset: 8 + index * 16,
             ty: super::eval_argument_helpers::bridge_storage_type(ty),
             is_declared: class_info.property_slot_is_declared(index, property),
+            is_reference: class_info.property_slot_is_reference(index, property),
             is_hidden_shadow,
         });
     }
@@ -322,7 +329,7 @@ fn emit_property_get_aarch64(
     emit_aarch64_property_dispatch(module, emitter, data, slots, "get", fail_label);
     emit_dynamic_property_get_fallback(emitter, null_label);
     emitter.instruction(&format!("b {}", done_label));                          // return after stdClass fallback get or null result
-    emit_aarch64_get_slot_bodies(module, emitter, slots, done_label);
+    emit_aarch64_get_slot_bodies(module, emitter, data, slots, done_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // report an inaccessible declared property read to Rust
     emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after access failure
@@ -364,7 +371,7 @@ fn emit_property_get_x86_64(
     emit_x86_64_property_dispatch(module, emitter, data, slots, "get", fail_label);
     emit_dynamic_property_get_fallback(emitter, null_label);
     emitter.instruction(&format!("jmp {}", done_label));                        // return after stdClass fallback get or null result
-    emit_x86_64_get_slot_bodies(module, emitter, slots, done_label);
+    emit_x86_64_get_slot_bodies(module, emitter, data, slots, done_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report an inaccessible declared property read to Rust
     emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after access failure
@@ -735,12 +742,13 @@ fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
 fn emit_aarch64_get_slot_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalPropertySlot],
     done_label: &str,
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
-        emit_aarch64_uninitialized_property_get_guard(emitter, slot, done_label);
+        emit_aarch64_uninitialized_property_get_guard(module, emitter, data, slot, done_label);
         emit_aarch64_box_property_slot(emitter, slot);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the declared property value
     }
@@ -750,12 +758,13 @@ fn emit_aarch64_get_slot_bodies(
 fn emit_x86_64_get_slot_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalPropertySlot],
     done_label: &str,
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
-        emit_x86_64_uninitialized_property_get_guard(emitter, slot, done_label);
+        emit_x86_64_uninitialized_property_get_guard(module, emitter, data, slot, done_label);
         emit_x86_64_box_property_slot(emitter, slot);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the declared property value
     }
@@ -825,8 +834,8 @@ fn emit_x86_64_set_slot_bodies(
 
 /// Emits an ARM64 boolean for one declared property's initialized state.
 fn emit_aarch64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalPropertySlot) {
-    if !slot.is_declared {
-        emitter.instruction("mov x0, #1");                                      // non-typed declared properties are always initialized
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
+        emitter.instruction("mov x0, #1");                                      // marker-free untyped properties are always initialized
         return;
     }
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the unboxed object pointer
@@ -838,8 +847,8 @@ fn emit_aarch64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalProp
 
 /// Emits an x86_64 boolean for one declared property's initialized state.
 fn emit_x86_64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalPropertySlot) {
-    if !slot.is_declared {
-        emitter.instruction("mov rax, 1");                                      // non-typed declared properties are always initialized
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
+        emitter.instruction("mov rax, 1");                                      // marker-free untyped properties are always initialized
         return;
     }
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
@@ -852,13 +861,15 @@ fn emit_x86_64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalPrope
     emitter.instruction("movzx rax, al");                                       // widen the initialization flag into the return register
 }
 
-/// Emits an ARM64 typed-property guard before boxing an eval bridge property read.
+/// Emits an ARM64 removed-state guard before boxing an eval bridge property read.
 fn emit_aarch64_uninitialized_property_get_guard(
+    module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalPropertySlot,
     done_label: &str,
 ) {
-    if !slot.is_declared {
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
         return;
     }
     let initialized_label = format!(
@@ -870,18 +881,24 @@ fn emit_aarch64_uninitialized_property_get_guard(
     abi::emit_load_int_immediate(emitter, "x12", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x11, x12");                                        // compare the property marker against the uninitialized sentinel
     emitter.instruction(&format!("b.ne {}", initialized_label));                // continue boxing once the instance property is initialized
-    emitter.instruction("mov x0, xzr");                                         // report uninitialized property reads as bridge failures
-    emitter.instruction(&format!("b {}", done_label));                          // return the failure to Rust without boxing storage
+    if slot.is_declared {
+        emitter.instruction("mov x0, xzr");                                     // report typed-uninitialized reads as bridge failures
+    } else {
+        emit_eval_untyped_removed_read(module, emitter, data, slot);
+    }
+    emitter.instruction(&format!("b {}", done_label));                          // return the typed failure or untyped boxed null
     emitter.label(&initialized_label);
 }
 
-/// Emits an x86_64 typed-property guard before boxing an eval bridge property read.
+/// Emits an x86_64 removed-state guard before boxing an eval bridge property read.
 fn emit_x86_64_uninitialized_property_get_guard(
+    module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalPropertySlot,
     done_label: &str,
 ) {
-    if !slot.is_declared {
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
         return;
     }
     let initialized_label = format!(
@@ -895,9 +912,41 @@ fn emit_x86_64_uninitialized_property_get_guard(
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rax, r11");                                        // compare the property marker against the uninitialized sentinel
     emitter.instruction(&format!("jne {}", initialized_label));                 // continue boxing once the instance property is initialized
-    emitter.instruction("xor eax, eax");                                        // report uninitialized property reads as bridge failures
-    emitter.instruction(&format!("jmp {}", done_label));                        // return the failure to Rust without boxing storage
+    if slot.is_declared {
+        emitter.instruction("xor eax, eax");                                    // report typed-uninitialized reads as bridge failures
+    } else {
+        emit_eval_untyped_removed_read(module, emitter, data, slot);
+    }
+    emitter.instruction(&format!("jmp {}", done_label));                        // return the typed failure or untyped boxed null
     emitter.label(&initialized_label);
+}
+
+/// Emits PHP's warning and returns an owned boxed null for one removed untyped slot.
+fn emit_eval_untyped_removed_read(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalPropertySlot,
+) {
+    let message = format!(
+        "Warning: Undefined property: {}::${}\n",
+        slot.class_name.trim_start_matches('\\'),
+        slot.property
+    );
+    let (label, len) = data.add_string(message.as_bytes());
+    match module.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x1", &label);
+            abi::emit_load_int_immediate(emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "rdi", &label);
+            abi::emit_load_int_immediate(emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_diag_warning");
+    let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
+    abi::emit_call_label(emitter, &null_symbol);
 }
 
 /// Boxes a property value loaded from an ARM64 object slot into a Mixed cell.
