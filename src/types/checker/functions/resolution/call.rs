@@ -476,6 +476,19 @@ impl Checker {
                     ty.clone()
                 };
                 if supplied_reference {
+                    let param_name = decl
+                        .params
+                        .get(arg_idx)
+                        .map(String::as_str)
+                        .unwrap_or("arg");
+                    self.require_boxed_by_ref_storage(
+                        &storage_ty,
+                        &ty,
+                        arg,
+                        caller_env,
+                        can_widen_by_ref_local,
+                        &format!("Function '{}' parameter ${}", name, param_name),
+                    )?;
                     self.record_boxed_reference_output(arg, &storage_ty, &ty, span);
                 }
                 param_types.push((decl.params[arg_idx].clone(), storage_ty));

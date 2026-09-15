@@ -742,8 +742,9 @@ impl Checker {
                     let runtime_descriptor_projection = actual_ty.codegen_repr() == PhpType::Mixed
                         && descriptor_projected
                         && !supplied_reference;
-                    if sig.declared_params.get(param_idx).copied().unwrap_or(false)
-                        && supplied_reference
+                    if supplied_reference
+                        && (sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                            || expected_ty.codegen_repr() == PhpType::Mixed)
                     {
                         self.require_boxed_by_ref_storage(
                             expected_ty,

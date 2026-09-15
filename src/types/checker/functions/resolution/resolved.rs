@@ -190,12 +190,13 @@ impl Checker {
                         && self
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
-                    if effective_sig
-                        .declared_params
-                        .get(param_idx)
-                        .copied()
-                        .unwrap_or(false)
-                        && supplied_reference
+                    if supplied_reference
+                        && (effective_sig
+                            .declared_params
+                            .get(param_idx)
+                            .copied()
+                            .unwrap_or(false)
+                            || expected_ty.codegen_repr() == PhpType::Mixed)
                     {
                         self.require_boxed_by_ref_storage(
                             expected_ty,
