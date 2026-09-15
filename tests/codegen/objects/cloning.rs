@@ -2050,24 +2050,26 @@ exerciseCloneReference();
                 "{target}: clone reference lowering is missing {expected}"
             );
         }
-        let target_needles = if target == "linux-x86_64" {
-            [
-                "lea r10, [r11 + 8]",
-                "or QWORD PTR [r10], r11",
-                "cmp r9, 7",
-                "test r8, r11",
+        let target_needles: &[&str] = if target == "linux-x86_64" {
+            &[
+                "mov QWORD PTR [r10 + 16], 11",
+                "cmp r9, 11",
                 "mov r10d, DWORD PTR [rcx - 12]",
+                "cmp r10d, 1",
+                "ja ",
+                "clone_reference_override_reject",
             ]
         } else {
-            [
-                "add x10, x9, #8",
-                "orr x12, x12, x11",
-                "cmp x5, #7",
-                "tst x4, x9",
+            &[
+                "str x10, [x9, #16]",
+                "cmp x5, #11",
                 "ldr w10, [x3, #-12]",
+                "cmp w10, #1",
+                "b.hi ",
+                "clone_reference_override_reject",
             ]
         };
-        for expected in target_needles {
+        for &expected in target_needles {
             assert!(
                 assembly.contains(expected),
                 "{target}: clone reference lowering is missing {expected}"

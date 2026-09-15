@@ -120,19 +120,21 @@ echo $caught;
     assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
 }
 
-/// `clone()`'s property-override refusal is a third emitter reaching the same helper.
+/// `clone()`'s reference-property-override refusal is a third emitter reaching the same helper.
 ///
-/// The fixture uses only the override guard the current lowering already raises; it adds no
-/// clone semantics of its own.
+/// The override entry explicitly aliases `$value`, so every clone reaches the real catchable
+/// reference guard while its freshly cloned receiver is still an unwind-visible owner.
 #[test]
 fn test_caught_clone_property_override_error_releases_the_in_flight_receiver() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class CloneGuardPayload { public int $value = 1; }
 function cloneGuardPick(CloneGuardPayload $payload): mixed { return $payload; }
+$value = 2;
+$overrides = ['value' => &$value];
 $caught = 0;
 for ($i = 0; $i < 12; $i++) {
-    try { $copy = clone(cloneGuardPick(new CloneGuardPayload()), ['value' => 2]); }
+    try { $copy = clone(cloneGuardPick(new CloneGuardPayload()), $overrides); }
     catch (Error $error) { $caught++; unset($error); }
 }
 echo $caught;
