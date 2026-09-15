@@ -288,6 +288,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             hashes::lower_throw_named_parameter_overwrite(ctx, &inst)
         }
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
+        Op::HashAppend => hashes::lower_hash_append(ctx, &inst),
         Op::OffsetUnset => offset_unset::lower_offset_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),

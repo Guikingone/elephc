@@ -39,6 +39,8 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
     let value = lower_expr(ctx, value);
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {
         Op::ArrayPush
+    } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Hash) {
+        Op::HashAppend
     } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed) {
         Op::MixedArrayAppend
     } else {
