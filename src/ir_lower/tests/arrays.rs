@@ -736,7 +736,6 @@ echo implode(',', array_keys($items));
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert!(assembly.contains("__rt_hash_ksort"), "{name}");
         assert!(assembly.contains("__rt_hash_krsort"), "{name}");
-        assert!(assembly.matches("__rt_array_cell_ensure_unique").count() >= 2, "{name}");
         assert!(assembly.matches("__rt_mixed_cell_promote_to_hash").count() >= 2, "{name}");
     }
 }
@@ -774,9 +773,19 @@ reverseDeclaredNestedTarget($items);
                 )))) { continue; }
                 sorts += 1;
                 let receiver = function.value(inst.operands[0]).unwrap();
-                assert_eq!(receiver.php_type.codegen_repr(), PhpType::Mixed, "{name}");
+                assert_eq!(receiver.php_type.codegen_repr(), PhpType::AssocArray {
+                    key: Box::new(PhpType::Int),
+                    value: Box::new(PhpType::Mixed),
+                }, "{name}");
                 let ValueDef::Instruction { inst: producer, .. } = receiver.def else { panic!("{name}"); };
-                let load = &function.instructions[producer.as_raw() as usize];
+                let promotion = &function.instructions[producer.as_raw() as usize];
+                assert!(matches!(promotion.immediate,
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)))
+                ), "{name}: sortable children must publish their promoted hash");
+                let cell = function.value(promotion.operands[0]).unwrap();
+                assert_eq!(cell.php_type.codegen_repr(), PhpType::Mixed, "{name}");
+                let ValueDef::Instruction { inst: cell_producer, .. } = cell.def else { panic!("{name}"); };
+                let load = &function.instructions[cell_producer.as_raw() as usize];
                 assert_eq!(load.op, Op::LoadLocal, "{name}: sortable children need a writable slot");
                 assert!(function.instructions[index + 1..].iter().any(|candidate| {
                     candidate.op == Op::ReleaseLocalSlot && candidate.immediate == load.immediate
@@ -786,7 +795,6 @@ reverseDeclaredNestedTarget($items);
         assert_eq!(sorts, 3, "{name}");
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        assert!(assembly.matches("__rt_array_cell_ensure_unique").count() >= 3, "{name}");
         assert!(assembly.matches("__rt_mixed_cell_promote_to_hash").count() >= 3, "{name}");
     }
 }

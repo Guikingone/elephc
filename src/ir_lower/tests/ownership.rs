@@ -212,7 +212,10 @@ array_walk($values, function (&$value): void { $value = "changed"; });
         let closure = module
             .functions
             .iter()
-            .find(|function| function.flags.is_closure)
+            .find(|function| {
+                function.flags.is_closure
+                    && function.params.first().is_some_and(|parameter| parameter.by_ref)
+            })
             .unwrap();
         let value = closure.params.first().unwrap();
         assert!(value.by_ref, "{target}");
