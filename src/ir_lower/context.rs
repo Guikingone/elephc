@@ -3486,7 +3486,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let php_type = self.builder.value_php_type(value);
         let php_type = php_type.codegen_repr();
         let op = self.builder.value_defining_op(value);
-        (matches!(php_type, PhpType::Mixed | PhpType::Union(_))
+        // Callable is lifetime-tracked outside PhpType::is_refcounted(), but indexed/hash
+        // reads retain its runtime descriptor just like other owned heap payloads. Classify
+        // that result as owning so a retaining local store drops the read's temporary owner.
+        (matches!(php_type, PhpType::Mixed | PhpType::Union(_) | PhpType::Callable)
             || (php_type.is_refcounted() && php_type != PhpType::Str))
             && matches!(
                 op,
