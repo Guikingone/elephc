@@ -2052,7 +2052,8 @@ exerciseCloneReference();
         }
         let target_needles: &[&str] = if target == "linux-x86_64" {
             &[
-                "mov QWORD PTR [r10 + 16], 11",
+                "mov rcx, QWORD PTR [r10 + 24]",
+                "mov r9, QWORD PTR [r10 + 40]",
                 "cmp r9, 11",
                 "mov r10d, DWORD PTR [rcx - 12]",
                 "cmp r10d, 1",
@@ -2061,7 +2062,8 @@ exerciseCloneReference();
             ]
         } else {
             &[
-                "str x10, [x9, #16]",
+                "ldr x3, [x6, #24]",
+                "ldr x5, [x6, #40]",
                 "cmp x5, #11",
                 "ldr w10, [x3, #-12]",
                 "cmp w10, #1",
