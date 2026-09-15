@@ -129,8 +129,8 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     ctx.load_value_to_reg(source, result_reg)?;
     if matches!(source_kind, IteratorSourceKind::DynamicMixed) {
         initialize_dynamic_mixed_iterator(ctx, offset, by_ref, owner)?;
-        if let Some(origin) = iter_start_origin(ctx, inst) {
-            emit_snapshot_origin_container(ctx, offset, origin);
+        if iter_start_origin(ctx, inst).is_some() {
+            emit_snapshot_origin_container(ctx, offset);
         }
         return Ok(());
     }
@@ -155,8 +155,8 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     if matches!(source_kind, IteratorSourceKind::DynamicIterable) {
         initialize_dynamic_iterable_iterator(ctx, offset, by_ref, source, owner)?;
-        if let Some(origin) = iter_start_origin(ctx, inst) {
-            emit_snapshot_origin_container(ctx, offset, origin);
+        if iter_start_origin(ctx, inst).is_some() {
+            emit_snapshot_origin_container(ctx, offset);
         }
         return Ok(());
     }
@@ -203,8 +203,8 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
         _ => {}
     }
     store_iterator_cursor(ctx, offset, initial_cursor);
-    if let Some(origin) = iter_start_origin(ctx, inst) {
-        emit_snapshot_origin_container(ctx, offset, origin);
+    if iter_start_origin(ctx, inst).is_some() {
+        emit_snapshot_origin_container(ctx, offset);
     }
     if !by_ref && matches!(source_kind, IteratorSourceKind::Indexed { .. }) {
         snapshot_indexed_array_length(ctx, offset);
@@ -734,22 +734,22 @@ fn emit_load_origin_container(
     ctx.emitter.label(&direct);
 }
 
-/// Anchors the relocation check on what the origin local holds at loop entry.
+/// Anchors relocation checks on the normalized iterator source at loop entry.
 ///
-/// `store_iterator_cursor` snapshots the iterator's own source word, which is the UNBOXED
-/// container. For an aliased or `Mixed` origin that is not what `IterNext` reads back, so the
-/// first probe would see a mismatch with no key yielded yet. Re-anchoring here keeps the very
-/// first iteration on the fast path.
-fn emit_snapshot_origin_container(
-    ctx: &mut FunctionContext<'_>,
-    offset: usize,
-    origin: IterOrigin,
-) {
+/// Dynamic and aliased origins may hold an outer Mixed box while the iterator source word holds
+/// the unboxed container. The reload path normalizes that outer box before comparing pointers, so
+/// the snapshot must use the same representation.
+fn emit_snapshot_origin_container(ctx: &mut FunctionContext<'_>, offset: usize) {
     let (dest, scratch) = match ctx.emitter.target.arch {
         Arch::AArch64 => ("x9", "x11"),
         Arch::X86_64 => ("r11", "r10"),
     };
-    emit_load_origin_container(ctx, origin, dest, scratch);
+    abi::load_at_offset_scratch(
+        ctx.emitter,
+        dest,
+        offset - ITER_SOURCE_OFFSET_DELTA,
+        scratch,
+    );
     abi::store_at_offset_scratch(
         ctx.emitter,
         dest,
@@ -758,14 +758,13 @@ fn emit_snapshot_origin_container(
     );
 }
 
-/// Republishes a relocated by-reference source into the iterator and re-derives its cursor.
+/// Republishes a relocated by-reference source into the iterator.
 ///
-/// The pointer compare avoids republishing an unchanged source. Cursor identity is validated
-/// separately afterwards, because delete followed by insertion can reuse a physical slot without
-/// replacing the table. Everything below is reached only when the container the loop body
-/// published is not the one the cursor was built against: growth reallocated the table, or a
-/// copy-on-write split replaced it. The stale pointer is never dereferenced after the compare
-/// fails.
+/// The origin is normalized to the same unboxed representation as the iterator source BEFORE the
+/// pointer compare. A stable outer Mixed box can contain a replaced array or hash after copy-on-write
+/// or growth, so comparing the box itself would miss relocation and leave a freed table published.
+/// Cursor identity is validated exactly once afterwards, because delete followed by insertion can
+/// reuse a physical slot without replacing the table.
 ///
 /// The replacement is then CLASSIFIED rather than assumed. One `Mixed` box is unwrapped, because
 /// an aliased `Mixed` local holds the container one level deeper than the iterator's source word.
@@ -782,45 +781,23 @@ fn emit_reload_live_iter_source(
     let stable = ctx.next_label("iter_source_stable");
     let classified = ctx.next_label("iter_source_classified");
     let indexed = ctx.next_label("iter_source_indexed");
-    let hash = ctx.next_label("iter_source_hash");
+    let normalized = ctx.next_label("iter_source_normalized");
     let (dest, scratch) = match ctx.emitter.target.arch {
         Arch::AArch64 => ("x9", "x11"),
         Arch::X86_64 => ("r11", "r10"),
     };
     emit_load_origin_container(ctx, origin, dest, scratch);
-    abi::load_at_offset_scratch(
-        ctx.emitter,
-        scratch,
-        offset - ITER_TABLE_SNAPSHOT_OFFSET_DELTA,
-        abi::int_result_reg(ctx.emitter),
-    );
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x9, x11");                             // is the live container still the one this cursor was built against?
-            ctx.emitter.instruction(&format!("b.eq {}", stable));               // the pointer compare is the hot path for every ordinary iteration
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp r11, r10");                            // is the live container still the one this cursor was built against?
-            ctx.emitter.instruction(&format!("je {}", stable));                 // the pointer compare is the hot path for every ordinary iteration
-        }
-    }
-    abi::store_at_offset_scratch(
-        ctx.emitter,
-        dest,
-        offset - ITER_TABLE_SNAPSHOT_OFFSET_DELTA,
-        scratch,
-    );
     abi::store_at_offset_scratch(ctx.emitter, dest, offset - ITER_SOURCE_OFFSET_DELTA, scratch);
     abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), dest);
     abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #5");                              // heap kind 5 identifies a boxed Mixed value
-            ctx.emitter.instruction(&format!("b.ne {}", classified));           // an unboxed container is already the right pointer
+            ctx.emitter.instruction(&format!("b.ne {}", normalized));           // an unboxed container is already the right pointer
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 5");                              // heap kind 5 identifies a boxed Mixed value
-            ctx.emitter.instruction(&format!("jne {}", classified));            // an unboxed container is already the right pointer
+            ctx.emitter.instruction(&format!("jne {}", normalized));            // an unboxed container is already the right pointer
         }
     }
     abi::load_at_offset_scratch(ctx.emitter, dest, offset - ITER_SOURCE_OFFSET_DELTA, scratch);
@@ -833,19 +810,43 @@ fn emit_reload_live_iter_source(
         }
     }
     abi::store_at_offset_scratch(ctx.emitter, dest, offset - ITER_SOURCE_OFFSET_DELTA, scratch);
+    ctx.emitter.label(&normalized);
+    abi::load_at_offset_scratch(ctx.emitter, dest, offset - ITER_SOURCE_OFFSET_DELTA, scratch);
+    abi::load_at_offset_scratch(
+        ctx.emitter,
+        scratch,
+        offset - ITER_TABLE_SNAPSHOT_OFFSET_DELTA,
+        abi::int_result_reg(ctx.emitter),
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x9, x11");                             // is the normalized live container still the cursor's source?
+            ctx.emitter.instruction(&format!("b.eq {}", stable));               // unchanged sources need no republish or classification
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp r11, r10");                            // is the normalized live container still the cursor's source?
+            ctx.emitter.instruction(&format!("je {}", stable));                 // unchanged sources need no republish or classification
+        }
+    }
+    abi::store_at_offset_scratch(
+        ctx.emitter,
+        dest,
+        offset - ITER_TABLE_SNAPSHOT_OFFSET_DELTA,
+        scratch,
+    );
     abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), dest);
     abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
     ctx.emitter.label(&classified);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 identifies associative table storage
-            ctx.emitter.instruction(&format!("b.eq {}", hash));                 // a rehashed table needs its cursor rebuilt from a key
+            ctx.emitter.instruction(&format!("b.eq {}", stable));               // the separate anchor validator rebuilds associative cursors once
             ctx.emitter.instruction("cmp x0, #2");                              // heap kind 2 identifies indexed-array storage
             ctx.emitter.instruction(&format!("b.eq {}", indexed));              // a positional cursor survives indexed reallocation
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 identifies associative table storage
-            ctx.emitter.instruction(&format!("je {}", hash));                   // a rehashed table needs its cursor rebuilt from a key
+            ctx.emitter.instruction(&format!("je {}", stable));                 // the separate anchor validator rebuilds associative cursors once
             ctx.emitter.instruction("cmp rax, 2");                              // heap kind 2 identifies indexed-array storage
             ctx.emitter.instruction(&format!("je {}", indexed));                // a positional cursor survives indexed reallocation
         }
@@ -862,36 +863,6 @@ fn emit_reload_live_iter_source(
 
     ctx.emitter.label(&indexed);
     abi::emit_jump(ctx.emitter, &stable);
-
-    ctx.emitter.label(&hash);
-    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x0, {}", stable));            // nothing was yielded yet, so a fresh walk from the head is correct
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                           // has this iterator yielded an entry to anchor on yet?
-            ctx.emitter.instruction(&format!("jz {}", stable));                 // nothing was yielded yet, so a fresh walk from the head is correct
-        }
-    }
-    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::load_at_offset(ctx.emitter, "x1", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA);
-            abi::load_at_offset(ctx.emitter, "x2", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
-            abi::load_at_offset(ctx.emitter, "x3", offset - ITER_FALLBACK_KEY_LO_OFFSET_DELTA);
-            abi::load_at_offset(ctx.emitter, "x4", offset - ITER_FALLBACK_KEY_HI_OFFSET_DELTA);
-        }
-        Arch::X86_64 => {
-            abi::load_at_offset(ctx.emitter, "rsi", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA);
-            abi::load_at_offset(ctx.emitter, "rdx", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
-            abi::load_at_offset(ctx.emitter, "rcx", offset - ITER_FALLBACK_KEY_LO_OFFSET_DELTA);
-            abi::load_at_offset(ctx.emitter, "r8", offset - ITER_FALLBACK_KEY_HI_OFFSET_DELTA);
-            abi::emit_reg_move(ctx.emitter, "rdi", "rax");
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_resync");
-    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
     ctx.emitter.label(&stable);
 }
 

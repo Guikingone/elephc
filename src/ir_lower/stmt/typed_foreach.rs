@@ -323,7 +323,7 @@ pub(super) fn lower_foreach(
     }
 }
 
-/// Promotes a by-reference `foreach` over a simple indexed local to hash storage.
+/// Prepares a simple array local as a relocatable by-reference `foreach` source.
 ///
 /// `foreach ($arr as &$v)` makes every visited entry part of a PHP reference set, and elephc
 /// records that membership in the entry's own persistent reference word. Only a hash entry has
@@ -342,8 +342,10 @@ pub(super) fn lower_foreach(
 /// representation, mirroring the checker: earlier operations still see indexed storage, while
 /// later reads safely dispatch on the promoted heap kind.
 ///
-/// Only a SIMPLE variable source is promoted, which is the same condition the checker applies.
-/// Element and property sources keep the existing fetch-for-write path.
+/// Only an indexed source needs physical promotion. An associative source is already a hash, but
+/// it still has to return its local slot as the iterator origin: growth can replace that table just
+/// as it can replace the promoted table. Element and property sources keep the existing
+/// fetch-for-write path and therefore do not name a local origin.
 ///
 /// Returns the promoted local slot so `IterStart` can record it as the iterator origin. Growth
 /// and copy-on-write inside the loop body republish the replacement table into that slot, and
@@ -360,7 +362,11 @@ fn promote_by_ref_foreach_source(
         return None;
     };
     let slot = *ctx.local_slots.get(name.as_str())?;
-    let PhpType::Array(_) = ctx.local_type(name).codegen_repr() else {
+    let source_ty = ctx.local_type(name).codegen_repr();
+    if matches!(source_ty, PhpType::AssocArray { .. }) {
+        return Some(slot);
+    }
+    let PhpType::Array(_) = source_ty else {
         return None;
     };
     let storage_ty = PhpType::Array(Box::new(PhpType::Mixed));
