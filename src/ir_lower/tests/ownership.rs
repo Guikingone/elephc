@@ -363,7 +363,7 @@ fn property_stores_retire_temporary_object_sources_on_all_targets() {
             inst.op == Op::Release && inst.operands == [direct_source]
         }), "{target}: PropSet must retire the retained object's original owner");
 
-        let (dynamic_index, original_source) = function
+        let (dynamic_index, stored_source, original_source) = function
             .instructions
             .iter()
             .enumerate()
@@ -371,17 +371,29 @@ fn property_stores_retire_temporary_object_sources_on_all_targets() {
                 if inst.op != Op::DynamicPropSet {
                     return None;
                 }
-                let boxed = *inst.operands.last()?;
-                let ValueDef::Instruction { inst: producer, .. } = function.value(boxed)?.def else {
-                    return None;
+                let stored = *inst.operands.last()?;
+                let original = match function.value(stored)?.def {
+                    ValueDef::Instruction { inst: producer, .. } => {
+                        let producer = function.instruction(producer)?;
+                        if producer.op == Op::MixedBox {
+                            *producer.operands.first()?
+                        } else {
+                            stored
+                        }
+                    }
+                    _ => stored,
                 };
-                let producer = function.instruction(producer)?;
-                (producer.op == Op::MixedBox).then_some((index, *producer.operands.first()?))
+                Some((index, stored, original))
             })
-            .expect("runtime-name property store with boxed source");
-        assert!(function.instructions[..dynamic_index].iter().any(|inst| {
+            .expect("runtime-name property store");
+        let release_range = if stored_source == original_source {
+            &function.instructions[dynamic_index + 1..]
+        } else {
+            &function.instructions[..dynamic_index]
+        };
+        assert!(release_range.iter().any(|inst| {
             inst.op == Op::Release && inst.operands == [original_source]
-        }), "{target}: boxing for DynamicPropSet must retire the concrete object's original owner");
+        }), "{target}: DynamicPropSet must retire the concrete object's original owner");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
