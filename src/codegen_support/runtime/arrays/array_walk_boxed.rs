@@ -34,7 +34,8 @@ const ARGUMENTS: usize = 56;
 const CALLBACK_RESULT: usize = 64;
 const BORROW_HEAD: usize = 72;
 const INVOCATION_SCOPE: usize = 80;
-const ARGUMENT_OWNER_OFFSET: usize = CALLBACK_RESULT - ARGUMENTS;
+const ARGUMENT_OWNER_OFFSET: usize = 0;
+const CALLBACK_RESULT_OFFSET: usize = CALLBACK_RESULT - ARGUMENTS;
 
 const VISIT_FRAME: usize = 144;
 const VISIT_CALLBACK: usize = 8;
@@ -91,7 +92,7 @@ fn emit_entry(emitter: &mut Emitter) {
     abi::emit_frame_slot_address(
         emitter,
         abi::int_arg_reg_name(emitter.target, 3),
-        CALLBACK_RESULT,
+        ARGUMENTS,
     );
     abi::load_at_offset(
         emitter,
@@ -386,7 +387,12 @@ fn store_argument_element(emitter: &mut Emitter, cell: &str, index: usize, lengt
 fn store_callback_result(emitter: &mut Emitter) {
     let owners = scratch_reg(emitter);
     abi::load_at_offset(emitter, owners, VISIT_ARGUMENT_OWNER);
-    store_indirect(emitter, owners, abi::int_result_reg(emitter));
+    store_indirect_at(
+        emitter,
+        owners,
+        CALLBACK_RESULT_OFFSET,
+        abi::int_result_reg(emitter),
+    );
 }
 
 /// Clears and consumes the rooted callback result so a destructor throw can resume cleanup.
@@ -394,10 +400,10 @@ fn release_callback_result(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let owners = scratch_reg(emitter);
     abi::load_at_offset(emitter, owners, VISIT_ARGUMENT_OWNER);
-    load_indirect(emitter, result, owners);
+    load_indirect_at(emitter, result, owners, CALLBACK_RESULT_OFFSET);
     let zero = abi::tertiary_scratch_reg(emitter);
     abi::emit_load_int_immediate(emitter, zero, 0);
-    store_indirect(emitter, owners, zero);
+    store_indirect_at(emitter, owners, CALLBACK_RESULT_OFFSET, zero);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
 }
 
@@ -628,20 +634,29 @@ mod tests {
                 assert!(!asm.contains("sub x10, x10, #4"), "{name}: {asm}");
             }
             let owner_pair = if target.arch == Arch::X86_64 {
-                "lea rcx, [rbp - 64]"
+                "lea rcx, [rbp - 56]"
             } else {
-                "sub x3, x29, #64"
+                "sub x3, x29, #56"
             };
             assert!(asm.contains(owner_pair), "{name}: {asm}");
             let argument_load = if target.arch == Arch::X86_64 {
-                "mov rsi, QWORD PTR [rsi + 8]"
+                "mov rsi, QWORD PTR [rsi + 0]"
             } else {
-                "ldr x1, [x1, #8]"
+                "ldr x1, [x1, #0]"
             };
             let invoke_path = asm.split_once("__rt_array_walk_boxed_visit_invoke:").unwrap().1;
             let loaded = invoke_path.find(argument_load).expect("load the argument owner, not the result slot");
             let invoked = invoke_path.find("__rt_callable_invoke_owned_args").unwrap();
             assert!(loaded < invoked, "{name}: {asm}");
+            let result_store = if target.arch == Arch::X86_64 {
+                "mov QWORD PTR [r10 + 8], rax"
+            } else {
+                "str x0, [x9, #8]"
+            };
+            assert!(
+                invoke_path[invoked..].contains(result_store),
+                "{name}: callback results must not overwrite the argument owner or borrow head\n{asm}"
+            );
             let registered = invoke_path[..invoked].rfind("_rt_unmanaged_ref_borrow_top").unwrap();
             let restored = invoke_path[invoked..].find("_rt_unmanaged_ref_borrow_top").unwrap();
             assert!(registered < invoked && restored > 0, "{name}: {asm}");
