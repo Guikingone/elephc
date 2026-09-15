@@ -500,6 +500,7 @@ impl Checker {
     {
         let saved_local_binding_scope = self.enter_local_binding_scope(param_names);
         let saved_ref_params = self.active_ref_params.clone();
+        let saved_external_ref_bindings = self.active_external_ref_bindings.clone();
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
         let saved_foreach_keys = self.foreach_key_locals.clone();
@@ -509,6 +510,7 @@ impl Checker {
         let saved_null_probe_scope_is_top_level = self.null_probe_scope_is_top_level;
 
         self.active_ref_params = ref_param_names.into_iter().collect();
+        self.active_external_ref_bindings = self.active_ref_params.clone();
         self.active_globals.clear();
         self.active_statics.clear();
         self.foreach_key_locals.clear();
@@ -536,6 +538,7 @@ impl Checker {
         let result = f(self);
 
         self.active_ref_params = saved_ref_params;
+        self.active_external_ref_bindings = saved_external_ref_bindings;
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
         self.foreach_key_locals = saved_foreach_keys;

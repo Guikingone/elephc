@@ -181,6 +181,12 @@ pub(crate) struct Checker {
     pub top_level_env: TypeEnv,
     /// Names that are by-ref parameters in the current function/closure scope.
     pub active_ref_params: HashSet<String>,
+    /// Incoming by-reference parameters and captures whose storage is owned outside this frame.
+    ///
+    /// `active_ref_params` additionally accumulates local `=&` targets while checking the body,
+    /// so it cannot distinguish external storage from a frame-owned alias. This stable subset is
+    /// the authority for operations such as `unset()` that may detach only frame-owned bindings.
+    pub active_external_ref_bindings: HashSet<String>,
     /// Names introduced via `global` declarations in the current local scope.
     pub active_globals: HashSet<String>,
     /// Names ANY function-like body in the program declares `global`, collected once before the
@@ -532,7 +538,7 @@ impl Checker {
         !self.body_contains_eval
             && self.local_conditional_depth == 0
             && self.ref_aliased_locals.contains(name)
-            && !self.active_ref_params.contains(name)
+            && !self.active_external_ref_bindings.contains(name)
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
             && !self.typed_local_names.contains(name)

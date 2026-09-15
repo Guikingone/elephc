@@ -88,6 +88,7 @@ impl Checker {
             required_libraries: Vec::new(),
             top_level_env: HashMap::new(),
             active_ref_params: HashSet::new(),
+            active_external_ref_bindings: HashSet::new(),
             active_globals: HashSet::new(),
             // Filled by `check_types_impl` from the whole program before the first walk; an empty
             // set here just means "no `global` declaration is known", which is the safe default
