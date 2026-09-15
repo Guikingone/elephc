@@ -777,12 +777,13 @@ impl<'a> FunctionContext<'a> {
 
     /// Loads the value pointed to by a local ref-cell pointer slot.
     fn load_ref_cell_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
-        let ty = self.local_php_type(slot)?;
-        reject_multiword_ref_cell_local(&ty, "load")?;
+        let storage_ty = self.local_php_type(slot)?;
+        let payload_ty = self.ref_cell_payload_type(slot)?;
+        reject_multiword_ref_cell_local(&payload_ty, "load")?;
         let offset = self.local_offset(slot)?;
         let pointer_reg = abi::symbol_scratch_reg(self.emitter);
         abi::load_at_offset(self.emitter, pointer_reg, offset);
-        match ty.codegen_repr() {
+        match payload_ty.codegen_repr() {
             PhpType::Str => {
                 let (ptr_reg, len_reg) = abi::string_result_regs(self.emitter);
                 abi::emit_load_from_address(self.emitter, ptr_reg, pointer_reg, 0);
@@ -804,7 +805,12 @@ impl<'a> FunctionContext<'a> {
                 abi::emit_load_from_address(self.emitter, abi::int_result_reg(self.emitter), pointer_reg, 0);
             }
         }
-        Ok(ty)
+        super::lower_inst::coerce_loaded_local_to_result_type(
+            self,
+            &payload_ty,
+            &storage_ty,
+        )?;
+        Ok(storage_ty)
     }
 
     /// Stores the current result register(s) into the SSA value's home.
@@ -1114,43 +1120,31 @@ impl<'a> FunctionContext<'a> {
 
     /// Stores an SSA value through a local ref-cell pointer slot.
     fn store_value_to_ref_cell_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
-        let source_ty = self.load_value_to_result(value)?;
-        let target_ty = self.local_php_type(slot)?;
-        reject_multiword_ref_cell_local(&target_ty, "store")?;
-        if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
-            if self.value_can_own_mixed_box_source(value)? {
-                emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
-            } else {
-                emit_box_current_value_as_mixed(self.emitter, &source_ty);
-            }
+        let payload_ty = self.ref_cell_payload_type(slot)?;
+        super::lower_inst::local_stores::store_value_to_ref_cell_as(
+            self,
+            slot,
+            value,
+            &payload_ty,
+        )
+    }
+
+    /// Returns the payload shape of a cell pointer stored in this local slot.
+    ///
+    /// A detach-capable by-reference parameter can widen its raw frame storage after a
+    /// conditional `unset()`, while the caller's still-attached cell keeps the ABI shape from
+    /// the function signature. Other promoted locals use their final frame storage shape for
+    /// both representations.
+    fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
+        if let Some(param) = self
+            .function
+            .params
+            .get(slot.as_raw() as usize)
+            .filter(|param| param.by_ref)
+        {
+            return Ok(param.php_type.clone());
         }
-        coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
-        let offset = self.local_offset(slot)?;
-        let pointer_reg = abi::symbol_scratch_reg(self.emitter);
-        abi::load_at_offset(self.emitter, pointer_reg, offset);
-        match target_ty.codegen_repr() {
-            PhpType::Str => {
-                let (ptr_reg, len_reg) = abi::string_result_regs(self.emitter);
-                abi::emit_store_to_address(self.emitter, ptr_reg, pointer_reg, 0);
-                abi::emit_store_to_address(self.emitter, len_reg, pointer_reg, 8);
-            }
-            PhpType::Float => {
-                abi::emit_store_to_address(self.emitter, abi::float_result_reg(self.emitter), pointer_reg, 0);
-            }
-            PhpType::TaggedScalar => {
-                abi::emit_store_to_address(self.emitter, abi::int_result_reg(self.emitter), pointer_reg, 0);
-                abi::emit_store_to_address(
-                    self.emitter,
-                    crate::codegen::sentinels::tagged_scalar_tag_reg(self.emitter),
-                    pointer_reg,
-                    8,
-                );
-            }
-            _ => {
-                abi::emit_store_to_address(self.emitter, abi::int_result_reg(self.emitter), pointer_reg, 0);
-            }
-        }
-        Ok(())
+        self.local_php_type(slot)
     }
 
     /// Stores the current result register(s) through a local ref-cell pointer slot.

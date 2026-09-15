@@ -605,7 +605,7 @@ pub(super) fn clear_local_slot_storage(
 }
 
 /// Stores an SSA value through a local ref-cell pointer using the supplied alias type.
-pub(super) fn store_value_to_ref_cell_as(
+pub(in crate::codegen) fn store_value_to_ref_cell_as(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     value: ValueId,

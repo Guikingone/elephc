@@ -1449,10 +1449,10 @@ fn test_branch_created_binding_not_killable() {
     expect_error("<?php if ($argc > 1) { $a = 1; } unset($a); $a = \"x\"; echo $a;", "cannot reassign");
 }
 
-/// Reference-aliased locals are never killable.
+/// Unset detaches an ordinary local from aliases that retain the old cell.
 #[test]
-fn test_ref_aliased_local_not_killable() {
-    expect_error("<?php $a = 1; $r =& $a; unset($a); $a = \"x\";", "cannot reassign");
+fn test_ref_aliased_local_can_detach_and_rebind() {
+    expect_no_error("<?php $a = 1; $r =& $a; unset($a); $a = \"x\";");
 }
 
 /// Static locals are never killable.
@@ -1534,10 +1534,12 @@ fn test_a_function_local_sharing_a_global_name_stays_killable() {
     );
 }
 
-/// By-ref closure captures are never killable.
+/// Unset detaches a local name while a by-ref closure capture retains the old cell.
 #[test]
-fn test_by_ref_capture_not_killable() {
-    expect_error("<?php $a = 1; $f = function() use (&$a) { return $a; }; unset($a); $a = \"x\";", "cannot reassign");
+fn test_by_ref_capture_allows_local_detach_and_rebind() {
+    expect_no_error(
+        "<?php $a = 1; $f = function() use (&$a) { return $a; }; unset($a); $a = \"x\";",
+    );
 }
 
 /// A local passed to an untyped by-ref parameter is promoted to rebindable boxed Mixed storage.
@@ -1838,14 +1840,10 @@ fn test_typed_param_retype_warns_and_is_strict_locals_error() {
     );
 }
 
-/// A BY-REFERENCE typed parameter is still never killable: the caller's storage is reachable
-/// through it, so abandoning the binding would strand the alias.
+/// Unset detaches a typed by-reference parameter name before a fresh local rebind.
 #[test]
-fn test_typed_by_ref_param_not_killable() {
-    expect_error(
-        "<?php function f(int &$a) { unset($a); $a = \"x\"; } $n = 1; f($n);",
-        "cannot reassign",
-    );
+fn test_typed_by_ref_param_can_detach_and_rebind() {
+    expect_no_error("<?php function f(int &$a) { unset($a); $a = \"x\"; } $n = 1; f($n);");
 }
 
 /// Class properties never reach the local retype paths: pin the declared-property error.
@@ -1929,19 +1927,11 @@ fn test_by_value_foreach_iterable_stays_killable() {
     );
 }
 
-/// The by-ref foreach VALUE variable is reference-aliased too, so a name already bound at
-/// depth 0 before the loop cannot be killed by a later `unset`.
-///
-/// `foreach ($arr as &$v)` binds `$v` to each element's storage; lowering ref-binds `$v`'s slot
-/// (`mark_ref_bound_local`) and then refuses to abandon it, so a kill the checker approved would
-/// leave the checker believing the binding ended while the slot still aliases `$arr`'s element.
-/// The pre-loop binding is what makes the conditional-depth rule miss this: `$v` is at depth 0
-/// from the assignment ABOVE the loop, not from the loop.
+/// Unset after a by-reference foreach detaches the iteration variable from the final element.
 #[test]
-fn test_by_ref_foreach_value_var_not_killable() {
-    expect_error(
+fn test_by_ref_foreach_value_var_can_detach_and_rebind() {
+    expect_no_error(
         "<?php $v = 0; $arr = [1, 2, 3]; foreach ($arr as &$v) { } unset($v); $v = \"s\"; echo $v;",
-        "cannot reassign $v from int to string",
     );
 }
 
