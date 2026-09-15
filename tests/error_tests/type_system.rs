@@ -1546,10 +1546,10 @@ fn test_untyped_by_ref_call_arg_uses_rebindable_boxed_storage() {
     expect_no_error("<?php function f(&$x) { $x = 2; } $a = 1; f($a); unset($a); $a = \"s\";");
 }
 
-/// An untyped by-ref parameter uses boxed Mixed storage, so `unset` followed by a rebind can
-/// replace the referenced payload with a value of another PHP type.
+/// Unsetting an untyped by-ref parameter detaches its local name, so a later assignment may use
+/// fresh local storage without changing the caller's cell.
 #[test]
-fn test_untyped_by_ref_param_unset_and_rebind_uses_boxed_storage() {
+fn test_untyped_by_ref_param_unset_and_rebind_detaches_local() {
     expect_no_error("<?php function f(&$x) { unset($x); echo $x; } $a = 1; f($a);");
     expect_no_error(
         "<?php function f(&$x) { unset($x); $x = \"s\"; } $a = 1; f($a);",

@@ -417,7 +417,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
         abi::emit_enable_heap_debug_flag(ctx.emitter);
     }
     zero_initialize_main_cleanup_locals(ctx);
-    zero_initialize_ref_cell_state_slots(ctx);
+    initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -479,12 +479,12 @@ pub(super) fn emit_function_prologue_with_label(
             emit_box_current_value_as_mixed(ctx.emitter, &param.php_type.codegen_repr());
             abi::emit_store(ctx.emitter, &PhpType::Mixed, offset);
         }
-        if ctx.owns_parameter_slot(slot) && !converted_to_owned_mixed {
+        if !param.by_ref && ctx.owns_parameter_slot(slot) && !converted_to_owned_mixed {
             retain_owned_parameter_local(ctx.emitter, offset, &local_ty);
         }
     }
     zero_initialize_function_cleanup_locals(ctx);
-    zero_initialize_ref_cell_state_slots(ctx);
+    initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -807,7 +807,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
-    zero_initialize_ref_cell_state_slots(ctx);
+    initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -1001,18 +1001,31 @@ fn zero_initialize_ref_cell_owner_locals(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Zero-initializes runtime flags for slots that may later store ref-cell pointers.
-fn zero_initialize_ref_cell_state_slots(ctx: &mut FunctionContext<'_>) {
-    let mut offsets = ctx
+/// Initializes runtime flags for slots whose raw/ref-cell representation can change.
+fn initialize_ref_cell_state_slots(ctx: &mut FunctionContext<'_>) {
+    let mut slots = ctx
         .function
         .locals
         .iter()
-        .filter_map(|local| ctx.ref_cell_state_offset(local.id))
+        .filter_map(|local| {
+            ctx.ref_cell_state_offset(local.id)
+                .map(|offset| (local.id, offset))
+        })
         .collect::<Vec<_>>();
-    offsets.sort_unstable();
-    offsets.dedup();
-    for offset in offsets {
-        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    slots.sort_by_key(|(_, offset)| *offset);
+    slots.dedup_by_key(|(_, offset)| *offset);
+    for (slot, offset) in slots {
+        let incoming_ref = ctx
+            .function
+            .params
+            .get(slot.as_raw() as usize)
+            .is_some_and(|param| param.by_ref);
+        if incoming_ref {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        } else {
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
     }
 }
 

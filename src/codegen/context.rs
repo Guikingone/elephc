@@ -649,7 +649,10 @@ impl<'a> FunctionContext<'a> {
 
     /// Classifies the slot as raw, definitely ref-cell, or path-dependent at this instruction.
     fn local_slot_representation(&self, slot: LocalSlotId) -> LocalSlotRepresentation {
-        if self.is_by_ref_param_slot(slot) || self.current_inst_promoted_ref_cells.contains(&slot) {
+        if self.current_inst_promoted_ref_cells.contains(&slot)
+            || (self.is_by_ref_param_slot(slot)
+                && !self.local_analysis.has_dynamic_ref_cell_state(slot))
+        {
             return LocalSlotRepresentation::RefCell;
         }
         let may_observe_ref_cell = self.current_inst.is_some_and(|inst| {

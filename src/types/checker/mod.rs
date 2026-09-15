@@ -181,11 +181,11 @@ pub(crate) struct Checker {
     pub top_level_env: TypeEnv,
     /// Names that are by-ref parameters in the current function/closure scope.
     pub active_ref_params: HashSet<String>,
-    /// Incoming by-reference parameters and captures whose storage is owned outside this frame.
+    /// Active incoming by-reference parameters and captures whose storage is owned outside this frame.
     ///
     /// `active_ref_params` additionally accumulates local `=&` targets while checking the body,
-    /// so it cannot distinguish external storage from a frame-owned alias. This stable subset is
-    /// the authority for operations such as `unset()` that may detach only frame-owned bindings.
+    /// so it cannot distinguish external storage from a frame-owned alias. This subset follows
+    /// the incoming binding until `unset()` detaches the local name from the external cell.
     pub active_external_ref_bindings: HashSet<String>,
     /// Names introduced via `global` declarations in the current local scope.
     pub active_globals: HashSet<String>,
@@ -532,13 +532,14 @@ impl Checker {
             && !self.typed_local_names.contains(name)
     }
 
-    /// Authorizes storage detachment only outside conditional flow and name-addressed storage.
-    /// The original binding may have been created in a loop; only this unset must be unconditional.
+    /// Authorizes reference-binding detachment outside conditional flow and name-addressed storage.
+    /// The reference may be frame-owned or incoming from a caller/capture. `unset()` detaches the
+    /// local name in both cases, while the external cell and its value remain owned by that scope.
     pub(crate) fn local_reference_is_detachable(&self, name: &str) -> bool {
         !self.body_contains_eval
             && self.local_conditional_depth == 0
-            && self.ref_aliased_locals.contains(name)
-            && !self.active_external_ref_bindings.contains(name)
+            && (self.ref_aliased_locals.contains(name)
+                || self.active_external_ref_bindings.contains(name))
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
             && !self.typed_local_names.contains(name)

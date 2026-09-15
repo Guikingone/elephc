@@ -2805,6 +2805,70 @@ fn test_typed_param_unset_then_rebind_leaves_a_clean_heap() {
     );
 }
 
+/// Unsetting an incoming reference detaches only the callee's name before a fresh local rebind.
+#[test]
+fn test_unset_detaches_incoming_reference_parameters_and_captures() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rebind_untyped(&$value): string {
+    unset($value);
+    $value = "local";
+    return $value;
+}
+function rebind_typed(string &$value): int {
+    unset($value);
+    $value = 7;
+    return $value;
+}
+$untyped = "caller" . $argc;
+$typed = "typed" . $argc;
+$captured = "outer" . $argc;
+$callback = function () use (&$captured): string {
+    unset($captured);
+    $captured = "inner";
+    return $captured;
+};
+echo rebind_untyped($untyped), "|", $untyped, "|";
+echo rebind_typed($typed), "|", $typed, "|";
+echo $callback(), "|", $captured;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "local|caller1|7|typed1|inner|outer1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A conditional unset selects raw local storage only on the path that detached the caller cell.
+#[test]
+fn test_conditional_unset_of_incoming_reference_uses_runtime_binding_state() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe_rebind(string &$value, bool $detach): void {
+    if ($detach) {
+        unset($value);
+    }
+    $value = "local";
+}
+$detached = "detached" . $argc;
+$attached = "attached" . $argc;
+maybe_rebind($detached, true);
+maybe_rebind($attached, false);
+echo $detached, "|", $attached;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "detached1|local");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// A typed parameter of a METHOD takes the same path — `method_pass` seeds its own binding
 /// scope, so the parameter exclusion had to be lifted there too.
 #[test]

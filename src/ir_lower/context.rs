@@ -2520,7 +2520,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span.identifies_a_node()
                 && self.ref_detach_sites.get(&span).is_some_and(|names| names.contains(name))
         }) && self.local_kinds.get(name) == Some(&LocalKind::PhpLocal)
-            && self.ref_cell_owner_locals.contains_key(name)
             && !self.local_uses_global_storage(name)
             && !self.extern_globals.contains_key(name)
             && !self.eval_barrier_active

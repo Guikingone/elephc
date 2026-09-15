@@ -378,6 +378,8 @@ impl Checker {
                                     self.local_ref_detach_sites.entry(arg.span).or_default()
                                         .insert(var.clone());
                                     self.active_ref_params.remove(var);
+                                    self.active_external_ref_bindings.remove(var);
+                                    self.ref_aliased_locals.remove(var);
                                 } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {
                                     if names.remove(var.as_str()) {
                                         self.retired_ref_detach_sites.insert((arg.span, var.clone()));

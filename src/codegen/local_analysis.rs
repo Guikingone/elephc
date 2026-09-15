@@ -38,14 +38,16 @@ impl LocalSlotAnalysis {
         let mut stored_slots = HashSet::new();
         let mut ever_ref_cell_slots = initially_ref_cell_slots.clone();
         for inst in &function.instructions {
-            // `ZeroLocalSlot` counts as a store because it carries the same OWNERSHIP claim.
+            // `StoreRefCell` can become a raw owning store after a path-local `unset()` changes
+            // a dynamic slot's representation. `ZeroLocalSlot` also counts as a store because it
+            // carries the same OWNERSHIP claim.
             // It is emitted only by the abandon of a local binding, which releases the slot's
             // occupant immediately before it — so the frame must own that occupant, exactly as
             // it must for a slot an ordinary `StoreLocal` overwrites. Reading it as a non-store
             // dropped the prologue retain on a by-value parameter the abandon then released
             // (`function f($a, int $n) { unset($a); … }` over-released the CALLER's box, and the
             // returned string came back as heap-debug poison bytes).
-            if matches!(inst.op, Op::StoreLocal | Op::ZeroLocalSlot) {
+            if matches!(inst.op, Op::StoreLocal | Op::StoreRefCell | Op::ZeroLocalSlot) {
                 if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
                     stored_slots.insert(slot);
                 }
@@ -333,7 +335,7 @@ fn terminator_successors(terminator: &Terminator) -> Vec<BlockId> {
     }
 }
 
-/// Returns by-value parameter slots that must own incoming or subsequently stored values.
+/// Returns parameter slots that can own incoming or subsequently stored raw values.
 fn owned_parameter_slots(
     function: &Function,
     stored_slots: &HashSet<LocalSlotId>,
@@ -347,13 +349,20 @@ fn owned_parameter_slots(
         .params
         .iter()
         .enumerate()
-        .filter(|(_, param)| !param.by_ref)
         .filter_map(|(index, param)| {
             let slot = LocalSlotId::from_raw(index as u32);
             let local = function.locals.get(index)?;
             let local_ty = local.php_type.codegen_repr();
             if !local_type_needs_cleanup(&local_ty) {
                 return None;
+            }
+            if param.by_ref {
+                // An incoming cell is borrowed. Once `unset()` detaches it, however, a later
+                // store can make this same frame slot own a raw value on only some CFG paths.
+                // The representation flag guards cleanup on paths that still hold the cell.
+                return (stored_slots.contains(&slot)
+                    && by_ref_parameter_can_detach(function, slot))
+                    .then_some(slot);
             }
             let prologue_boxes_owned_mixed = local_ty == PhpType::Mixed
                 && param.php_type.codegen_repr() != PhpType::Mixed;
@@ -396,10 +405,19 @@ fn dynamic_ref_cell_slots(
             function
                 .params
                 .get(local.id.as_raw() as usize)
-                .is_none_or(|param| !param.by_ref)
+                .is_none_or(|param| {
+                    !param.by_ref || by_ref_parameter_can_detach(function, local.id)
+                })
         })
         .map(|local| local.id)
         .collect()
+}
+
+/// Returns whether `unset()` can change an incoming reference slot into raw local storage.
+fn by_ref_parameter_can_detach(function: &Function, slot: LocalSlotId) -> bool {
+    function.instructions.iter().any(|inst| {
+        inst.op == Op::UnsetLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
+    })
 }
 
 #[cfg(test)]
