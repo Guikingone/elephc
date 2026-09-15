@@ -19,7 +19,7 @@ pub(super) fn has_scoped_cleanup(
     value: ValueId,
     current: Option<InstId>,
 ) -> bool {
-    let slots = function.instructions.iter().enumerate()
+    let stores = function.instructions.iter().enumerate()
         .filter_map(|(index, inst)| {
             if inst.op != Op::StoreLocal || inst.operands != [value]
                 || current == Some(InstId::from_raw(index as u32))
@@ -27,23 +27,28 @@ pub(super) fn has_scoped_cleanup(
                 return None;
             }
             match inst.immediate {
-                Some(Immediate::LocalSlot(slot)) => Some(slot),
+                Some(Immediate::LocalSlot(slot)) => Some((index, slot)),
                 _ => None,
             }
         })
-        .collect::<HashSet<_>>();
-    if slots.is_empty() {
+        .collect::<Vec<_>>();
+    if stores.is_empty() {
         return false;
     }
+    let slots = stores.iter().map(|(_, slot)| *slot).collect::<HashSet<_>>();
     let published = function.instructions.iter()
         .filter_map(|inst| {
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return None; };
             (inst.op == Op::PushCallOperandOwner && slots.contains(&slot)).then_some(slot)
         })
         .collect::<HashSet<_>>();
-    function.instructions.iter().any(|inst| {
-        inst.op == Op::ReleaseLocalSlot && matches!(inst.immediate,
-            Some(Immediate::LocalSlot(slot)) if published.contains(&slot))
+    function.instructions.iter().enumerate().any(|(release_index, inst)| {
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return false; };
+        inst.op == Op::ReleaseLocalSlot
+            && published.contains(&slot)
+            && stores.iter().any(|(store_index, store_slot)| {
+                *store_slot == slot && *store_index < release_index
+            })
     })
 }
 
@@ -79,5 +84,82 @@ mod tests {
             assert!(!has_scoped_cleanup(&function, value, Some(store)), "the root store may adopt its source");
             assert_eq!(has_scoped_cleanup(&function, value, Some(consumer)), retire == Op::ReleaseLocalSlot);
         }
+    }
+
+    /// A loop's stale-slot cleanup runs before publishing the current call result and therefore
+    /// cannot own that new SSA value. The following `UnsetLocal` transfers the staged result back
+    /// to the expression, so a later container store must be allowed to adopt it without retaining
+    /// an extra reference.
+    #[test]
+    fn prepublished_loop_result_ignores_cleanup_before_its_store() {
+        let mut function = Function::new("loop_call_result".into(), IrType::Void, PhpType::Void);
+        let (value, consumer) = {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let ty = PhpType::Object("Item".into());
+            let ir_ty = IrType::from_php(&ty);
+            let slot = builder.add_local(
+                Some("staged_result".into()),
+                ir_ty,
+                ty.clone(),
+                LocalKind::OwnedTemp,
+            );
+            builder.emit(
+                Op::PushCallOperandOwner,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let value = builder
+                .emit(Op::ObjectNew, Vec::new(), None, ir_ty, ty, Ownership::Owned)
+                .unwrap();
+            builder.emit(
+                Op::ReleaseLocalSlot,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.emit(
+                Op::StoreLocal,
+                vec![value],
+                Some(Immediate::LocalSlot(slot)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.emit(
+                Op::PopCallOperandOwner,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.emit(
+                Op::UnsetLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let consumer = InstId::from_raw(builder.function().instructions.len() as u32);
+            builder.emit(
+                Op::HashSet,
+                vec![value],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            (value, consumer)
+        };
+        assert!(!has_scoped_cleanup(&function, value, Some(consumer)));
     }
 }
