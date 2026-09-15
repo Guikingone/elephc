@@ -30,7 +30,7 @@ use crate::codegen_support::platform::Arch;
 ///   key pointer at +8, key_hi at +16, value_tag at +40, value pointer at +24)
 /// - Integer keys are inline payloads (key_hi == -1) and carry no heap ownership
 /// - Heap-backed values (tags 1/4/5/6/7) are released through `__rt_decref_any`
-/// - Tag 11 entries own a managed reference cell (heap kind 7) and release the same way,
+/// - Tag 11 entries own a managed reference cell and release the same way,
 ///   so the cell outlives the table whenever an escaped alias still holds a count
 /// - `_gc_release_suppressed` is set to 1 before the scan and restored after freeing the struct
 /// - Child exceptions are accumulated until every key, value, and the container have been released

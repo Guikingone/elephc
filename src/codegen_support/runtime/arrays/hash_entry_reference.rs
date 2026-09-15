@@ -8,7 +8,7 @@
 //!
 //! Key details:
 //! - A hash entry that joins a PHP reference set stores runtime value tag 11 with `value_lo`
-//!   pointing at a managed reference cell (heap kind 7) whose single payload word owns exactly
+//!   pointing at a managed reference cell (`REFERENCE_CELL_HEAP_KIND`) whose single payload word owns exactly
 //!   one boxed Mixed value. `value_hi` is cleared; no interior table address ever escapes.
 //! - `__rt_hash_entry_deref` is the borrowed value view of that layout and never allocates.
 //! - `__rt_hash_iter_resync` re-derives an insertion-order cursor after the table was
@@ -62,7 +62,7 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.instruction("mov x29, sp");                                 // establish the promotion frame
             emitter.instruction("str x0, [sp, #16]");                           // save the mutable entry value address across the allocation
             emitter.instruction(&format!("mov x0, #{REFERENCE_CELL_PAYLOAD_TAG}")); // payload descriptor 7 = boxed Mixed
-            emitter.instruction("bl __rt_reference_cell_new");                  // allocate the managed reference cell, heap kind 7
+            emitter.instruction("bl __rt_reference_cell_new");                  // allocate the managed reference cell
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the mutable entry value address
             emitter.instruction("ldr x10, [x9]");                               // take the owned boxed Mixed pointer out of value_lo
             emitter.instruction("str x10, [x0]");                               // move that ownership into the cell payload word
@@ -85,7 +85,7 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.instruction("sub rsp, 16");                                 // reserve one aligned spill slot for the entry value address
             emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // save the mutable entry value address across the allocation
             emitter.instruction(&format!("mov rdi, {REFERENCE_CELL_PAYLOAD_TAG}")); // payload descriptor 7 = boxed Mixed
-            emitter.instruction("call __rt_reference_cell_new");                // allocate the managed reference cell, heap kind 7
+            emitter.instruction("call __rt_reference_cell_new");                // allocate the managed reference cell
             emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the mutable entry value address
             emitter.instruction("mov r11, QWORD PTR [r10]");                    // take the owned boxed Mixed pointer out of value_lo
             emitter.instruction("mov QWORD PTR [rax], r11");                    // move that ownership into the cell payload word

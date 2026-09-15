@@ -10,6 +10,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 
 use super::gc_collect_cycles_x86_64::emit_gc_collect_cycles_linux_x86_64;
 
@@ -116,7 +117,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // strings/raw blocks contribute no outgoing cycle edges
     emitter.instruction("cmp x15, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.ls __rt_gc_collect_cycles_count_known");             // accept the existing container kind range
-    emitter.instruction("cmp x15, #7");                                         // also trace independently owned reference cells
+    emitter.instruction(&format!("cmp x15, #{REFERENCE_CELL_HEAP_KIND}"));      // also trace independently owned reference cells
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_reference");         // count the cell's typed payload edge
     emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // ignore non-graph heap kinds
     emitter.label("__rt_gc_collect_cycles_count_known");
@@ -306,7 +307,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_gc_collect_cycles_root_next");               // strings/raw blocks are outside the cycle collector set
     emitter.instruction("cmp x14, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.ls __rt_gc_collect_cycles_root_known");              // accept existing container candidates
-    emitter.instruction("cmp x14, #7");                                         // owned reference cells can have external local aliases
+    emitter.instruction(&format!("cmp x14, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells can have external local aliases
     emitter.instruction("b.eq __rt_gc_collect_cycles_root_refcounted");         // compare cell owners against incoming object edges
     emitter.instruction("b __rt_gc_collect_cycles_root_next");                  // skip non-graph heap kinds
     emitter.label("__rt_gc_collect_cycles_root_known");
@@ -369,7 +370,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_gc_collect_cycles_free_next");               // strings/raw blocks are outside the cycle collector set
     emitter.instruction("cmp x14, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.ls __rt_gc_collect_cycles_free_known");              // accept existing container candidates
-    emitter.instruction("cmp x14, #7");                                         // owned reference cells are swept independently
+    emitter.instruction(&format!("cmp x14, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells are swept independently
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_refcounted");         // apply reachability to the cell node
     emitter.instruction("b __rt_gc_collect_cycles_free_next");                  // skip non-graph heap kinds
     emitter.label("__rt_gc_collect_cycles_free_known");
@@ -403,7 +404,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_hash");               // deep-free unreachable hashes
     emitter.instruction("cmp x14, #5");                                         // is this a boxed mixed cell?
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_mixed");              // deep-free unreachable mixed cells
-    emitter.instruction("cmp x14, #7");                                         // distinguish cell nodes from ordinary object storage
+    emitter.instruction(&format!("cmp x14, #{REFERENCE_CELL_HEAP_KIND}"));      // distinguish cell nodes from ordinary object storage
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_reference");          // retire an unreachable cell with its typed payload
     emitter.instruction("bl __rt_object_free_deep");                            // deep-free unreachable objects
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header

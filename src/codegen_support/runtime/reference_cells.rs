@@ -6,13 +6,13 @@
 //!
 //! Key details:
 //! - The two payload words stay compatible with borrowed reference addresses.
-//! - Heap kind 7 identifies an owned cell; bits 8 through 14 describe its payload.
+//! - `REFERENCE_CELL_HEAP_KIND` identifies an owned cell; bits 8 through 14 describe its payload.
 //! - Singleton cells separate on clone, while cells with live aliases remain shared.
 //! - Exact active boxed-walk borrows are recognized separately from ordinary owner-zero cells.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::sentinels::{
-    emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
+    emit_throwable_creation_line_unknown, x86_64_heap_kind_word, REFERENCE_CELL_HEAP_KIND,
 };
 use crate::types::PhpType;
 
@@ -61,12 +61,16 @@ fn emit_new(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("lsl {scratch}, {scratch}, #8"));      // encode the stored value type above the cell kind
-            emitter.instruction(&format!("orr {scratch}, {scratch}, #7"));      // identify an independently owned reference cell
+            emitter.instruction(&format!("orr {scratch}, {scratch}, #{REFERENCE_CELL_HEAP_KIND}")); // identify an independently owned reference cell
             emitter.instruction(&format!("str {scratch}, [x0, #-8]"));          // publish the cell shape in the uniform header
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("shl {scratch}, 8"));                  // encode the stored value type above the cell kind
-            abi::emit_load_int_immediate(emitter, "r11", crate::codegen_support::sentinels::x86_64_heap_kind_word(7) as i64);
+            abi::emit_load_int_immediate(
+                emitter,
+                "r11",
+                x86_64_heap_kind_word(REFERENCE_CELL_HEAP_KIND) as i64,
+            );
             emitter.instruction(&format!("or {scratch}, r11"));                 // preserve the managed-heap marker with the typed cell kind
             emitter.instruction(&format!("mov QWORD PTR [rax - 8], {scratch}")); // publish the cell shape in the uniform header
         }
@@ -223,7 +227,7 @@ fn emit_owner_lookup(emitter: &mut Emitter) {
             emitter.instruction("cmp x0, x10");                                 // reject pointers outside the allocated heap window
             emitter.instruction("b.hs __rt_reference_cell_owner_none");         // never inspect foreign or frame storage as a heap header
             emitter.instruction("ldrb w11, [x0, #-8]");                         // cheaply reject ordinary values and raw fallback cells
-            emitter.instruction("cmp w11, #7");                                 // only managed reference cells can transfer this owner
+            emitter.instruction(&format!("cmp w11, #{REFERENCE_CELL_HEAP_KIND}")); // only managed reference cells can transfer this owner
             emitter.instruction("b.ne __rt_reference_cell_owner_none");         // borrowed cells do not participate in managed cell cleanup
             emitter.instruction("ldr w11, [x0, #-12]");                         // reject previously retired cell allocations
             emitter.instruction("cbz w11, __rt_reference_cell_owner_none");     // freed storage cannot transfer an owner
@@ -247,7 +251,7 @@ fn emit_owner_lookup(emitter: &mut Emitter) {
             emitter.instruction("add r9, r8");                                  // bound the scan by the current managed heap extent
             emitter.instruction("cmp rax, r9");                                 // reject pointers outside the allocated heap window
             emitter.instruction("jae __rt_reference_cell_owner_none");          // never inspect foreign or frame storage as a heap header
-            emitter.instruction("cmp BYTE PTR [rax - 8], 7");                   // cheaply reject ordinary values and raw fallback cells
+            emitter.instruction(&format!("cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}")); // cheaply reject ordinary values and raw fallback cells
             emitter.instruction("jne __rt_reference_cell_owner_none");          // borrowed cells do not participate in managed cell cleanup
             emitter.instruction("cmp DWORD PTR [rax - 12], 0");                 // reject previously retired cell allocations
             emitter.instruction("je __rt_reference_cell_owner_none");           // freed storage cannot transfer an owner

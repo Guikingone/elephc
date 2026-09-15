@@ -10,7 +10,9 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::codegen_support::sentinels::{
+    emit_branch_if_null_container, REFERENCE_CELL_HEAP_KIND,
+};
 
 /// Emits the `__rt_gc_mark_reachable` runtime helper.
 ///
@@ -59,7 +61,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_gc_mark_reachable_done");                    // strings/raw values are not traversed by cycle collection
     emitter.instruction("cmp x12, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.ls __rt_gc_mark_reachable_known");                   // accept existing graph containers
-    emitter.instruction("cmp x12, #7");                                         // include independently owned reference cells
+    emitter.instruction(&format!("cmp x12, #{REFERENCE_CELL_HEAP_KIND}"));      // include independently owned reference cells
     emitter.instruction("b.ne __rt_gc_mark_reachable_done");                    // other heap shapes have no traced children
     emitter.label("__rt_gc_mark_reachable_known");
 
@@ -94,7 +96,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_mark_reachable_hash");                    // traverse hash children
     emitter.instruction("cmp x12, #5");                                         // is this a boxed mixed cell?
     emitter.instruction("b.eq __rt_gc_mark_reachable_mixed");                   // traverse the boxed mixed child if it is heap-backed
-    emitter.instruction("cmp x12, #7");                                         // cell nodes store a typed low-word child
+    emitter.instruction(&format!("cmp x12, #{REFERENCE_CELL_HEAP_KIND}"));      // cell nodes store a typed low-word child
     emitter.instruction("b.eq __rt_gc_mark_reachable_reference");               // trace the reference payload without object metadata
     emitter.instruction("b __rt_gc_mark_reachable_object");                     // remaining refcounted kind 4 is an object
     emitter.label("__rt_gc_mark_reachable_reference");
@@ -315,7 +317,7 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_gc_mark_reachable_done");                      // strings and raw buffers do not participate in cycle traversal
     emitter.instruction("cmp rcx, 5");                                          // is this within the array/hash/object/mixed range?
     emitter.instruction("jbe __rt_gc_mark_reachable_known");                    // accept existing graph containers
-    emitter.instruction("cmp rcx, 7");                                          // include independently owned reference cells
+    emitter.instruction(&format!("cmp rcx, {REFERENCE_CELL_HEAP_KIND}"));       // include independently owned reference cells
     emitter.instruction("jne __rt_gc_mark_reachable_done");                     // other heap shapes have no traced children
     emitter.label("__rt_gc_mark_reachable_known");
 
@@ -339,7 +341,7 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_gc_mark_reachable_hash");                      // yes — traverse hash entry children
     emitter.instruction("cmp rcx, 5");                                          // is this a boxed mixed cell?
     emitter.instruction("je __rt_gc_mark_reachable_mixed");                     // yes — traverse the boxed child pointer if it is heap-backed
-    emitter.instruction("cmp rcx, 7");                                          // cell nodes store a typed low-word child
+    emitter.instruction(&format!("cmp rcx, {REFERENCE_CELL_HEAP_KIND}"));       // cell nodes store a typed low-word child
     emitter.instruction("je __rt_gc_mark_reachable_reference");                 // trace the reference payload without object metadata
     emitter.instruction("jmp __rt_gc_mark_reachable_object");                   // the remaining refcounted heap kind is an object instance
     emitter.label("__rt_gc_mark_reachable_reference");

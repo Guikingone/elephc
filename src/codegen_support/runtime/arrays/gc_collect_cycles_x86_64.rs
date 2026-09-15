@@ -9,6 +9,7 @@
 //! - GC helpers must honor cycle-collection suppression, mark bits, and parent/child references without double-releasing values.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 
 /// Emits the `__rt_gc_collect_cycles` and `__rt_gc_collect_cycles_done` runtime helpers for Linux x86_64.
 ///
@@ -97,7 +98,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_gc_collect_cycles_root_next");                 // strings and raw buffers never participate in cycle collection
     emitter.instruction("cmp rcx, 5");                                          // is this candidate within the array/hash/object/mixed range?
     emitter.instruction("jbe __rt_gc_collect_cycles_root_known");               // accept existing container candidates
-    emitter.instruction("cmp rcx, 7");                                          // owned reference cells can have external local aliases
+    emitter.instruction(&format!("cmp rcx, {REFERENCE_CELL_HEAP_KIND}"));       // owned reference cells can have external local aliases
     emitter.instruction("je __rt_gc_collect_cycles_root_candidate_ready");      // compare cell owners against incoming object edges
     emitter.instruction("jmp __rt_gc_collect_cycles_root_next");                // skip non-graph heap kinds
     emitter.label("__rt_gc_collect_cycles_root_known");
@@ -135,7 +136,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_gc_collect_cycles_count_next");                // strings and raw buffers contribute no outgoing cycle edges
     emitter.instruction("cmp r10, 5");                                          // is this source within the array/hash/object/mixed range?
     emitter.instruction("jbe __rt_gc_collect_cycles_count_known");              // accept the existing container kind range
-    emitter.instruction("cmp r10, 7");                                          // also trace independently owned reference cells
+    emitter.instruction(&format!("cmp r10, {REFERENCE_CELL_HEAP_KIND}"));       // also trace independently owned reference cells
     emitter.instruction("je __rt_gc_collect_cycles_count_reference");           // count the cell's typed payload edge
     emitter.instruction("jmp __rt_gc_collect_cycles_count_next");               // ignore non-graph heap kinds
     emitter.label("__rt_gc_collect_cycles_count_known");
@@ -337,7 +338,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_gc_collect_cycles_free_next");                 // strings and raw buffers are outside the cycle collector set
     emitter.instruction("cmp rcx, 5");                                          // is this block within the array/hash/object/mixed range?
     emitter.instruction("jbe __rt_gc_collect_cycles_free_known");               // accept existing container candidates
-    emitter.instruction("cmp rcx, 7");                                          // owned reference cells are swept independently
+    emitter.instruction(&format!("cmp rcx, {REFERENCE_CELL_HEAP_KIND}"));       // owned reference cells are swept independently
     emitter.instruction("je __rt_gc_collect_cycles_free_candidate_ready");      // apply reachability to the cell node
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // skip non-graph heap kinds
     emitter.label("__rt_gc_collect_cycles_free_known");
@@ -362,7 +363,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_gc_collect_cycles_free_hash");                 // yes — deep-free the unreachable hash and its owned entries
     emitter.instruction("cmp rcx, 5");                                          // is this unreachable node a boxed mixed cell?
     emitter.instruction("je __rt_gc_collect_cycles_free_mixed");                // yes — deep-free the unreachable mixed box and its boxed child
-    emitter.instruction("cmp rcx, 7");                                          // distinguish cell nodes from ordinary object storage
+    emitter.instruction(&format!("cmp rcx, {REFERENCE_CELL_HEAP_KIND}"));       // distinguish cell nodes from ordinary object storage
     emitter.instruction("je __rt_gc_collect_cycles_free_reference");            // retire an unreachable cell with its typed payload
     emitter.instruction("call __rt_object_free_deep");                          // deep-free the remaining unreachable object node and its properties
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the object node

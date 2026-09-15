@@ -1129,7 +1129,7 @@ fn bind_indexed_current_value_ref(
 /// Binds a local slot to the current associative-array entry's managed reference cell.
 ///
 /// The entry is promoted into a PHP reference set first, so what the local receives is a real
-/// managed allocation (heap kind 7) rather than an interior pointer into the table. That is what
+/// managed reference-cell allocation rather than an interior pointer into the table. That is what
 /// lets the alias survive growth, a copy-on-write split and even destruction of the source array,
 /// and what makes closure capture and returning the reference retain something real. Promotion is
 /// idempotent, so a repeated by-reference foreach reuses the existing cell instead of restamping

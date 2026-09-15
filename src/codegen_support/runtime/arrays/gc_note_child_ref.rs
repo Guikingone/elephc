@@ -10,6 +10,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 
 /// Emits `__rt_gc_note_child_ref`, which records one heap-to-heap incoming edge for
 /// cycle-aware GC. Skips null pointers, out-of-range pointers, freed blocks, and
@@ -53,7 +54,7 @@ pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
     emitter.instruction("and x13, x12, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_note_child_ref_done");                    // strings/raw buffers do not participate in cycle accounting
-    emitter.instruction("cmp x13, #7");                                         // owned reference cells participate in incoming-edge accounting
+    emitter.instruction(&format!("cmp x13, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells participate in incoming-edge accounting
     emitter.instruction("b.eq __rt_gc_note_child_ref_record");                  // count the cell owner rather than shortcutting its payload
     emitter.instruction("cmp x13, #5");                                         // include boxed Mixed nodes as well as arrays, hashes, and objects
     emitter.instruction("b.hi __rt_gc_note_child_ref_done");                    // ignore unknown/raw heap kinds

@@ -23,7 +23,7 @@ use crate::codegen::{CodegenIrError, Result};
 /// The record's cleanup discipline follows the SLOT, not its PHP type. A reference-cell owner
 /// slot carries its cell's PAYLOAD type, so a cell whose payload is a callable would otherwise
 /// select the descriptor release and hand a cell address to `__rt_callable_descriptor_release`.
-/// Every owned cell is heap kind 7, which the generic `__rt_decref_any` dispatcher already
+/// Every owned cell uses `REFERENCE_CELL_HEAP_KIND`, which the generic `__rt_decref_any` dispatcher already
 /// routes to `__rt_reference_cell_release`, so a cell slot always uses the generic entry.
 pub(super) fn lower_push_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = super::expect_local_slot(inst)?;

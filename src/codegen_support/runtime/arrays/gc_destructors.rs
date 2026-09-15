@@ -10,6 +10,7 @@
 //! - Finished destructors use kind bit 17; temporary collector pins use kind bit 18.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 
 /// Emits destructor snapshots, reachable-node unpinning, and snapshot disposal for every target.
 pub fn emit_gc_destructors(emitter: &mut Emitter) {
@@ -52,7 +53,7 @@ fn emit_scan_aarch64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction(&format!("b.lo {next}"));                               // raw allocations and strings are not cycle candidates
     emitter.instruction("cmp x13, #5");                                         // candidates end at boxed Mixed storage
     emitter.instruction(&format!("b.ls {loop_label}_known"));                   // preserve the existing container candidate range
-    emitter.instruction("cmp x13, #7");                                         // owned reference cells need pins during user destructors
+    emitter.instruction(&format!("cmp x13, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells need pins during user destructors
     emitter.instruction(&format!("b.eq {ready}"));                              // protect cell storage while callbacks inspect aliases
     emitter.instruction(&format!("b {next}"));                                  // ignore other heap kinds
     emitter.label(&format!("{loop_label}_known"));
@@ -230,7 +231,7 @@ fn emit_scan_x86_64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction(&format!("jb {next}"));                                 // raw storage and strings are not cycle candidates
     emitter.instruction("cmp ecx, 5");                                          // graph candidates end at boxed Mixed cells
     emitter.instruction(&format!("jbe {loop_label}_known"));                    // preserve the existing container candidate range
-    emitter.instruction("cmp ecx, 7");                                          // owned reference cells need pins during user destructors
+    emitter.instruction(&format!("cmp ecx, {REFERENCE_CELL_HEAP_KIND}"));       // owned reference cells need pins during user destructors
     emitter.instruction(&format!("je {ready}"));                                // protect cell storage while callbacks inspect aliases
     emitter.instruction(&format!("jmp {next}"));                                // ignore other heap kinds
     emitter.label(&format!("{loop_label}_known"));

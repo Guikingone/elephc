@@ -15,9 +15,8 @@
 //! - `left_len + right_len` is checked for unsigned wrap before the reservation, so a wrapped
 //!   total can never size a destination smaller than the bytes the copy loops write.
 
-use crate::codegen_support::runtime::strings::concat_scratch::{
-    CONCAT_BUF_CAPACITY, CONCAT_TEMP_HEAP_KIND,
-};
+use crate::codegen_support::runtime::strings::concat_scratch::CONCAT_BUF_CAPACITY;
+use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_concat` runtime helper for concatenating two byte-strings.

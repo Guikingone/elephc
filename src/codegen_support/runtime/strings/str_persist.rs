@@ -11,7 +11,7 @@
 //!   it is taken over in place (retagged as an owned string) instead of being duplicated, so a
 //!   `$s .= ...` accumulation loop does not leave one oversized block behind per append.
 
-use crate::codegen_support::runtime::strings::concat_scratch::CONCAT_TEMP_HEAP_KIND;
+use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 

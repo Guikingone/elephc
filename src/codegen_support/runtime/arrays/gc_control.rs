@@ -12,6 +12,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 use crate::ir::GcControlOp;
 
 /// Emits target-aware GC enable, disable, query, and automatic-collection wrappers.
@@ -301,7 +302,7 @@ fn emit_gc_roots_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ls __rt_gc_status_roots_count");                     // count this refcounted indexed array
     emitter.instruction("b __rt_gc_status_roots_next");                         // ignore unknown value types
     emitter.label("__rt_gc_status_roots_kind_high");
-    emitter.instruction("cmp x14, #7");                                         // owned reference cells also participate in cycle collection
+    emitter.instruction(&format!("cmp x14, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells also participate in cycle collection
     emitter.instruction("b.eq __rt_gc_status_roots_count");                     // include this live cell candidate
     emitter.instruction("cmp x14, #5");                                         // kind 5 is the last collector-managed shape
     emitter.instruction("b.hi __rt_gc_status_roots_next");                      // ignore other heap kinds
@@ -344,7 +345,7 @@ fn emit_gc_roots_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jbe __rt_gc_status_roots_count");                      // count this refcounted indexed array
     emitter.instruction("jmp __rt_gc_status_roots_next");                       // ignore unknown value types
     emitter.label("__rt_gc_status_roots_kind_high");
-    emitter.instruction("cmp rcx, 7");                                          // owned reference cells also participate in cycle collection
+    emitter.instruction(&format!("cmp rcx, {REFERENCE_CELL_HEAP_KIND}"));       // owned reference cells also participate in cycle collection
     emitter.instruction("je __rt_gc_status_roots_count");                       // include this live cell candidate
     emitter.instruction("cmp rcx, 5");                                          // kind 5 is the last collector-managed shape
     emitter.instruction("ja __rt_gc_status_roots_next");                        // ignore other heap kinds
