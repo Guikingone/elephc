@@ -808,3 +808,71 @@ echo callWithFreshResult('a', 'b')->tag;
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
 }
+
+/// A managed reference argument detaches its record before its release can rethrow.
+///
+/// The local reference-cell helper clears and retires the cell inside its own bounded cleanup
+/// boundary. If its record remains linked during that release, a destructor throw can stop the
+/// outer unwind before it reaches older argument records and the prepublished string result.
+#[test]
+fn managed_ref_argument_detaches_before_release_inside_result_staging_on_every_target() {
+    let source = r#"<?php
+class ManagedLeaseCleanupBomb {
+    public function __destruct() { throw new Exception('cleanup'); }
+}
+function detachManagedLeaseParent(array &$items): mixed {
+    $items = [];
+    return null;
+}
+function invokeManagedLease(array $items): string {
+    $callback = function (mixed &$value, mixed $unused): string {
+        return str_repeat('r', 6);
+    };
+    return $callback($items['k'], detachManagedLeaseParent($items));
+}
+echo invokeManagedLease(['k' => new ManagedLeaseCleanupBomb()]);
+"#;
+    for name in TARGETS {
+        let (module, caller) = lower_function(source, name, "invokeManagedLease");
+        let (call_index, call) = caller
+            .instructions
+            .iter()
+            .enumerate()
+            .find(|(_, inst)| inst.op == Op::ClosureCall)
+            .expect("the direct closure call is lowered");
+        let result = call.result.expect("the closure call produces a string");
+        let result_slot = staged_result_slot(&caller, result);
+        let result_publish = slot_instruction(&caller, Op::PushCallOperandOwner, result_slot)
+            .expect("the string result has an unwind record");
+        let result_detach = last_slot_instruction(&caller, Op::PopCallOperandOwner, result_slot)
+            .expect("the string result record is detached on success");
+        let (release_index, cell_slot) = caller
+            .instructions
+            .iter()
+            .enumerate()
+            .find_map(|(index, inst)| {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                    return None;
+                };
+                (index > call_index && inst.op == Op::ReleaseLocalRefCell)
+                    .then_some((index, slot))
+            })
+            .expect("the managed argument lease is retired after the call");
+        let cell_publish = slot_instruction(&caller, Op::PushCallOperandOwner, cell_slot)
+            .expect("the managed argument lease has an unwind record");
+        let cell_detach = last_slot_instruction(&caller, Op::PopCallOperandOwner, cell_slot)
+            .expect("the managed argument record is detached on success");
+        assert!(
+            result_publish < cell_publish
+                && cell_publish < call_index
+                && call_index < cell_detach
+                && cell_detach < release_index
+                && release_index < result_detach,
+            "{name}: result [{result_publish}, {result_detach}] encloses managed lease \
+             [{cell_publish}, {cell_detach}, {release_index}]",
+        );
+        assert_owner_records_are_lifo(&caller, name);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
