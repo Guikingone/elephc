@@ -210,25 +210,29 @@ pub(super) fn lower_closure_with_context(
                 PhpType::Mixed,
             )
         } else {
+            let widens_by_ref_capture = by_ref
+                && self_ref_callable_capture != Some(capture.as_str())
+                && (body_contains_eval || body_writes_local(body, capture));
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
-            } else if by_ref && body_contains_eval {
-                ctx.set_local_type(capture, PhpType::Mixed);
-                Some(PhpType::Mixed)
-            } else if by_ref && body_writes_local(body, capture) {
+            } else if widens_by_ref_capture {
                 // A PHP reference has no type: whatever the closure stores through it is what
                 // the caller reads back. The cell used to carry the type the variable happened
                 // to hold at CAPTURE time, so a write of any other type was reinterpreted
-                // through it — `$b = 5; (function () use (&$b) { $b = null; })();` left `$b`
+                // through it: `$b = 5; (function () use (&$b) { $b = null; })();` left `$b`
                 // as 9223372036854775806, the raw null sentinel read as an int, and a string
-                // capture came back as garbage bytes. The `eval` arm above is the same rule for
-                // the case where the written type cannot be seen at all.
-                ctx.set_local_type(capture, PhpType::Mixed);
+                // capture came back as garbage bytes. `eval` follows the same rule because the
+                // written type cannot be seen at all.
                 Some(PhpType::Mixed)
             } else {
                 None
             };
-            if by_ref && !ctx.is_ref_bound_local(capture) {
+            if widens_by_ref_capture {
+                // Convert the existing payload before changing the slot contract. Merely
+                // widening metadata first leaves a raw array, object, or string in storage that
+                // `PromoteLocalRefCell` then interprets as a boxed Mixed pointer.
+                ctx.promote_local_mixed_ref_cell(capture, Some(expr.span));
+            } else if by_ref && !ctx.is_ref_bound_local(capture) {
                 // Keep a local cell owner independent of the descriptor's capture lease.
                 ctx.promote_local_ref_cell(capture, Some(expr.span));
             }
