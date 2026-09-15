@@ -11,6 +11,13 @@
 //!   when no declared slot matches.
 
 use super::*;
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
+
+const MAGIC_SET_GUARD_FRAME_BYTES: usize = TRY_HANDLER_SLOT_SIZE + 64;
+const MAGIC_SET_GUARD_NODE_OFFSET: usize = 0;
+const MAGIC_SET_GUARD_HANDLER_OFFSET: usize = 48;
 
 /// Lowers a declared object property write for statically known object receivers.
 pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -50,7 +57,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
         PropertyAccessKind::DirectWrite,
         inst,
     )? {
-        return lower_planned_dynamic_prop_set(ctx, object, value, &property, &plan, inst);
+        return lower_planned_dynamic_prop_set(ctx, object, None, value, &property, &plan, inst);
     }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
@@ -71,7 +78,14 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_set(
     let property_value = expect_operand(inst, 1)?;
     let value = expect_operand(inst, 2)?;
     if let Some(property) = const_string_operand(ctx, property_value)? {
-        return lower_const_dynamic_prop_set(ctx, object, value, property, inst);
+        return lower_const_dynamic_prop_set(
+            ctx,
+            object,
+            property_value,
+            value,
+            property,
+            inst,
+        );
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_runtime_stdclass_prop_set(ctx, object, property_value, value, inst);
@@ -95,6 +109,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_set(
 pub(super) fn lower_const_dynamic_prop_set(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
+    property_value: ValueId,
     value: ValueId,
     property: &str,
     inst: &Instruction,
@@ -115,7 +130,15 @@ pub(super) fn lower_const_dynamic_prop_set(
         PropertyAccessKind::DirectWrite,
         inst,
     )? {
-        return lower_planned_dynamic_prop_set(ctx, object, value, property, &plan, inst);
+        return lower_planned_dynamic_prop_set(
+            ctx,
+            object,
+            Some(property_value),
+            value,
+            property,
+            &plan,
+            inst,
+        );
     }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
@@ -166,6 +189,7 @@ pub(super) fn lower_runtime_object_prop_set(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
+    let write_kind = PropertyAccessKind::RuntimeWrite;
     // EVERY candidate name gets an arm, and every arm dispatches by RUNTIME class. Emitting the
     // static class's answer directly wrote the wrong storage under polymorphism in both
     // directions: a subclass can redeclare a strict ancestor's private name as its own property,
@@ -199,6 +223,7 @@ pub(super) fn lower_runtime_object_prop_set(
             value,
             &miss_label,
             &done_label,
+            write_kind,
             inst,
         )?;
     }
@@ -211,7 +236,7 @@ pub(super) fn lower_runtime_object_prop_set(
         ctx,
         class_name,
         "",
-        PropertyAccessKind::RuntimeHashMiss,
+        write_kind,
         inst,
     )? {
         // The receiver is still stacked at offset 16 here, so the ladder probes it there and each
@@ -235,6 +260,18 @@ pub(super) fn lower_runtime_object_prop_set(
                         0,
                     )?;
                     lower_runtime_allow_dynamic_prop_set(ctx, value, *hash_offset, 16, 0, 32)
+                }
+                PropertyRuntimeAction::MagicDeferred => {
+                    lower_runtime_magic_set(
+                        ctx,
+                        object,
+                        property_value,
+                        value,
+                        &arm.class_name,
+                        dynamic_property_hash_offset_for_class(ctx, &arm.class_name, "")?,
+                        16,
+                        32,
+                    )
                 }
                 // A class in this subtree with no hash cannot hold the name at all. php would
                 // store, so the build fails rather than dropping the write in silence.
@@ -376,13 +413,14 @@ fn emit_runtime_name_stacked_write_arm(
     value: ValueId,
     miss_label: &str,
     done_label: &str,
+    write_kind: PropertyAccessKind,
     inst: &Instruction,
 ) -> Result<()> {
     let plan = resolve_property_runtime_plan(
         ctx,
         class_name,
         property,
-        PropertyAccessKind::RuntimeWrite,
+        write_kind,
         inst,
     )?;
     emit_property_runtime_dispatch(
@@ -434,11 +472,23 @@ fn emit_runtime_name_stacked_write_arm(
             }
             // php answers an accessor on this class, which a runtime name cannot reach yet. The
             // arm must not store into any slot, so it stores nothing at all.
-            PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet => {
-                abi::emit_release_temporary_stack(ctx.emitter, 32);
+            PropertyRuntimeAction::MagicDeferred => {
+                lower_runtime_magic_set(
+                    ctx,
+                    expect_operand(inst, 0)?,
+                    expect_operand(inst, 1)?,
+                    value,
+                    &arm.class_name,
+                    dynamic_property_hash_offset_for_class(ctx, &arm.class_name, "")?,
+                    16,
+                    32,
+                )?;
                 abi::emit_jump(ctx.emitter, done_label);
                 Ok(())
             }
+            PropertyRuntimeAction::MagicGet => Err(CodegenIrError::invalid_module(
+                "runtime property write resolved to a magic getter",
+            )),
             PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
                 "property dispatch handed a refusal arm to its action emitter",
             )),
@@ -632,6 +682,377 @@ pub(super) fn emit_branch_if_stacked_object_class_matches(
     }
 }
 
+/// One runtime class whose missing property names are handled by `__set`.
+struct RuntimeMagicSetArm {
+    class_id: u64,
+    class_name: String,
+    hash_offset: Option<usize>,
+    target: super::super::MethodCallTarget,
+}
+
+/// Collects class-id arms for runtime-name writes through a Mixed or union receiver.
+fn runtime_magic_set_arms(ctx: &FunctionContext<'_>) -> Result<Vec<RuntimeMagicSetArm>> {
+    let mut arms = Vec::new();
+    for (class_name, class_info) in &ctx.module.class_infos {
+        if !class_info.methods.contains_key(&php_symbol_key("__set")) {
+            continue;
+        }
+        let hash_offset = dynamic_property_hash_offset_for_class(ctx, class_name, "")?;
+        arms.push(RuntimeMagicSetArm {
+            class_id: class_info.class_id,
+            class_name: class_name.clone(),
+            hash_offset,
+            target: resolve_method_call_target(ctx, class_name, "__set", 3)?,
+        });
+    }
+    arms.sort_by_key(|arm| arm.class_id);
+    Ok(arms)
+}
+
+/// Resolves and calls one runtime class's magic setter from a staged property-write frame.
+fn lower_runtime_magic_set(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    value: ValueId,
+    class_name: &str,
+    hash_offset: Option<usize>,
+    receiver_stack_offset: usize,
+    staged_stack_bytes: usize,
+) -> Result<()> {
+    let target = resolve_method_call_target(ctx, class_name, "__set", 3)?;
+    emit_runtime_magic_set_call(
+        ctx,
+        object,
+        property_value,
+        value,
+        class_name,
+        hash_offset,
+        &target,
+        receiver_stack_offset,
+        staged_stack_bytes,
+    )
+}
+
+/// Stages a literal property name and invokes the shared receiver/name guarded magic setter.
+pub(super) fn lower_direct_magic_set(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    value: ValueId,
+    class_name: &str,
+    hash_offset: Option<usize>,
+) -> Result<()> {
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    lower_runtime_magic_set(
+        ctx,
+        object,
+        property_value,
+        value,
+        class_name,
+        hash_offset,
+        16,
+        32,
+    )
+}
+
+/// Invokes `__set` unless this receiver/name pair is already active.
+///
+/// PHP's recursion guard is dynamic and pair-specific. A different name written by the same
+/// setter invokes `__set` again, while the same name written through any helper stores directly
+/// in the receiver's dynamic hash. A local exception boundary guarantees that the stack-owned
+/// guard node is unlinked before an escaping Throwable resumes the surrounding PHP handler.
+#[allow(clippy::too_many_arguments)]
+fn emit_runtime_magic_set_call(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    value: ValueId,
+    class_name: &str,
+    hash_offset: Option<usize>,
+    target: &super::super::MethodCallTarget,
+    receiver_stack_offset: usize,
+    staged_stack_bytes: usize,
+) -> Result<()> {
+    let existing_label = ctx.next_label("runtime_magic_set_existing");
+    let recursive_label = ctx.next_label("runtime_magic_set_recursive");
+    let caught_label = ctx.next_label("runtime_magic_set_caught");
+    let done_label = ctx.next_label("runtime_magic_set_done");
+
+    if let Some(hash_offset) = hash_offset {
+        emit_branch_if_stacked_runtime_hash_contains(
+            ctx,
+            hash_offset,
+            receiver_stack_offset,
+            0,
+            &existing_label,
+        );
+    }
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);
+    let guarded_receiver_offset = receiver_stack_offset + MAGIC_SET_GUARD_FRAME_BYTES;
+    let guarded_name_offset = MAGIC_SET_GUARD_FRAME_BYTES;
+    emit_magic_set_guard_push(
+        ctx,
+        guarded_receiver_offset,
+        guarded_name_offset,
+        MAGIC_SET_GUARD_NODE_OFFSET,
+    );
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &recursive_label);
+
+    emit_magic_set_exception_handler(ctx, &caught_label);
+    emit_runtime_magic_set_method_call(
+        ctx,
+        object,
+        property_value,
+        value,
+        class_name,
+        target,
+        guarded_receiver_offset,
+    )?;
+    emit_magic_set_exception_handler_pop(ctx);
+    emit_magic_set_guard_pop(ctx, MAGIC_SET_GUARD_NODE_OFFSET);
+    abi::emit_release_temporary_stack(
+        ctx.emitter,
+        MAGIC_SET_GUARD_FRAME_BYTES + staged_stack_bytes,
+    );
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&caught_label);
+    emit_magic_set_exception_handler_pop(ctx);
+    emit_magic_set_guard_pop(ctx, MAGIC_SET_GUARD_NODE_OFFSET);
+    abi::emit_release_temporary_stack(
+        ctx.emitter,
+        MAGIC_SET_GUARD_FRAME_BYTES + staged_stack_bytes,
+    );
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+
+    ctx.emitter.label(&recursive_label);
+    abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);
+    if let Some(hash_offset) = hash_offset {
+        emit_dynamic_property_creation_deprecation(
+            ctx,
+            class_name,
+            hash_offset,
+            receiver_stack_offset,
+            0,
+        )?;
+        lower_runtime_allow_dynamic_prop_set(
+            ctx,
+            value,
+            hash_offset,
+            receiver_stack_offset,
+            0,
+            staged_stack_bytes,
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_readonly_runtime_dynamic_property_error(ctx, class_name, 0, staged_stack_bytes);
+    }
+
+    ctx.emitter.label(&existing_label);
+    if let Some(hash_offset) = hash_offset {
+        lower_runtime_allow_dynamic_prop_set(
+            ctx,
+            value,
+            hash_offset,
+            receiver_stack_offset,
+            0,
+            staged_stack_bytes,
+        )?;
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Throws the readonly dynamic-property error with the active runtime name appended.
+fn emit_readonly_runtime_dynamic_property_error(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    name_stack_offset: usize,
+    staged_stack_bytes: usize,
+) {
+    let prefix = format!(
+        "Cannot create dynamic property {}::$",
+        class_name.trim_start_matches('\\')
+    );
+    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x3", name_stack_offset);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x4", name_stack_offset + 8);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", &prefix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", name_stack_offset);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", name_stack_offset + 8);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+    abi::emit_release_temporary_stack(ctx.emitter, staged_stack_bytes);
+    super::super::exceptions::emit_error_from_string_result(ctx);
+}
+
+/// Materializes the receiver, runtime property name, and value for one selected `__set` call.
+#[allow(clippy::too_many_arguments)]
+fn emit_runtime_magic_set_method_call(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    value: ValueId,
+    class_name: &str,
+    target: &super::super::MethodCallTarget,
+    receiver_stack_offset: usize,
+) -> Result<()> {
+    let receiver_reg = abi::nested_call_reg(ctx.emitter).to_string();
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &receiver_reg, receiver_stack_offset);
+
+    let receiver_ty = PhpType::Object(class_name.to_string());
+    let mut param_types = Vec::with_capacity(target.params.len() + 1);
+    param_types.push(receiver_ty.clone());
+    param_types.extend(target.params.iter().map(PhpType::codegen_repr));
+    let mut ref_params = Vec::with_capacity(target.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(target.ref_params.iter().copied());
+    let operands = [object, property_value, value];
+    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+        ctx,
+        &receiver_reg,
+        &receiver_ty,
+        &operands,
+        &param_types,
+        &ref_params,
+        RefArgCellLifetime::CallOnly,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    emit_resolved_method_call(ctx, target)?;
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
+    emit_ref_arg_writebacks(ctx, &call_args)
+}
+
+/// Branches when the selected class's dynamic hash already contains the runtime key.
+fn emit_branch_if_stacked_runtime_hash_contains(
+    ctx: &mut FunctionContext<'_>,
+    hash_offset: usize,
+    receiver_offset: usize,
+    name_offset: usize,
+    found_label: &str,
+) {
+    let target = ctx.emitter.target;
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, receiver_offset);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        object_reg,
+        hash_offset,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 1),
+        name_offset,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 2),
+        name_offset + 8,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, found_label);
+}
+
+/// Adds the caller-owned stack node unless the active chain already contains this pair.
+fn emit_magic_set_guard_push(
+    ctx: &mut FunctionContext<'_>,
+    receiver_offset: usize,
+    name_offset: usize,
+    node_offset: usize,
+) {
+    let target = ctx.emitter.target;
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        receiver_offset,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 1),
+        name_offset,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 2),
+        name_offset + 8,
+    );
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 3),
+        node_offset,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_magic_set_guard_push");
+}
+
+/// Removes the exact stack node this invocation published.
+fn emit_magic_set_guard_pop(ctx: &mut FunctionContext<'_>, node_offset: usize) {
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        node_offset,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_magic_set_guard_pop");
+}
+
+/// Installs a local handler so an escaping `__set` cannot strand a stack guard node.
+fn emit_magic_set_exception_handler(ctx: &mut FunctionContext<'_>, caught_label: &str) {
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+    for (symbol, offset) in [
+        ("_exc_handler_top", MAGIC_SET_GUARD_HANDLER_OFFSET),
+        ("_exc_call_frame_top", MAGIC_SET_GUARD_HANDLER_OFFSET + 8),
+        (
+            "_rt_diag_suppression",
+            MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_DIAG_DEPTH_OFFSET,
+        ),
+    ] {
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, symbol, 0);
+        abi::emit_store_to_sp(ctx.emitter, scratch, offset);
+    }
+    abi::emit_temporary_stack_address(ctx.emitter, scratch, MAGIC_SET_GUARD_HANDLER_OFFSET);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_JMP_BUF_OFFSET,
+    );
+    ctx.emitter.bl_c("setjmp");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, caught_label);
+}
+
+/// Restores the handler and diagnostic state saved by the local `__set` boundary.
+fn emit_magic_set_exception_handler_pop(ctx: &mut FunctionContext<'_>) {
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+    for (symbol, offset) in [
+        ("_exc_handler_top", MAGIC_SET_GUARD_HANDLER_OFFSET),
+        (
+            "_rt_diag_suppression",
+            MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_DIAG_DEPTH_OFFSET,
+        ),
+    ] {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, scratch, offset);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, symbol, 0);
+    }
+}
+
 /// Lowers a runtime-name write when the receiver is a boxed Mixed object.
 pub(super) fn lower_runtime_mixed_prop_set(
     ctx: &mut FunctionContext<'_>,
@@ -641,7 +1062,8 @@ pub(super) fn lower_runtime_mixed_prop_set(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
-    let candidates = declared_mixed_property_set_candidates(ctx, value, inst)?;
+    let write_kind = PropertyAccessKind::RuntimeWrite;
+    let candidates = declared_mixed_property_set_candidates(ctx, value, write_kind, inst)?;
     let done_label = ctx.next_label("mixed_dyn_prop_set_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_set_miss");
     let stdclass_label = ctx.next_label("mixed_dyn_prop_set_stdclass");
@@ -667,6 +1089,16 @@ pub(super) fn lower_runtime_mixed_prop_set(
             ))
         })
         .collect::<Vec<_>>();
+    let magic_arms = runtime_magic_set_arms(ctx)?;
+    let magic_labels = magic_arms
+        .iter()
+        .map(|arm| {
+            ctx.next_label(&format!(
+                "mixed_dyn_prop_set_magic_{}",
+                label_fragment(&arm.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -684,11 +1116,30 @@ pub(super) fn lower_runtime_mixed_prop_set(
             label,
         );
     }
+    for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
+        emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
+    }
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
+        ctx.emitter.label(label);
+        emit_runtime_magic_set_call(
+            ctx,
+            object,
+            property_value,
+            value,
+            &arm.class_name,
+            arm.hash_offset,
+            &arm.target,
+            16,
+            32,
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
 
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
         ctx.emitter.label(label);
@@ -754,11 +1205,11 @@ pub(super) fn lower_runtime_mixed_prop_set(
     Ok(())
 }
 
-
 /// Collects Mixed receiver declared-property candidates that can accept this value.
 pub(super) fn declared_mixed_property_set_candidates(
     ctx: &FunctionContext<'_>,
     value: ValueId,
+    write_kind: PropertyAccessKind,
     inst: &Instruction,
 ) -> Result<Vec<MixedPropertyWriteCandidate>> {
     let value_ty = ctx.value_php_type(value)?;
@@ -776,7 +1227,7 @@ pub(super) fn declared_mixed_property_set_candidates(
                 property,
                 value,
                 &value_ty,
-                PropertyAccessKind::RuntimeWrite,
+                write_kind,
                 inst,
             )?
             else {

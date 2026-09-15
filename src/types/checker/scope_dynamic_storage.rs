@@ -1,6 +1,6 @@
 //! Purpose:
-//! Reserves the per-instance property hash a class needs when a reachable MUTATION addresses a
-//! strict ancestor's private property name from outside the class that declared it.
+//! Reserves the per-instance property hash a class needs when a reachable mutation can create a
+//! dynamic property, either through a runtime name or through a strict ancestor's private name.
 //!
 //! Called from:
 //! - `crate::types::checker::stmt_check::assignments::properties`, for `$o->p = v` and every
@@ -17,6 +17,9 @@
 //!   carries that slot under its plain name, so without a hash the backend's by-name ladder falls
 //!   through to `resolve_property_slot_for_class` and writes the ANCESTOR'S storage. Reserving
 //!   the hash is what gives the distinct dynamic property somewhere to live.
+//! - A runtime-name write can miss every declared property, so its static receiver class and all
+//!   reachable subclasses need storage. Classes with `__set` need it too because PHP suppresses
+//!   only an active receiver/name pair and stores same-pair reentry in the dynamic hash.
 //! - The reservation is PROGRAM-USAGE gated, exactly like
 //!   [`super::clone_override_storage`]'s clone destinations. A class no reachable mutation
 //!   addresses that way pays nothing: the trailing pointer per instance, and the clone/free/GC
@@ -40,11 +43,10 @@ use super::Checker;
 
 /// One recorded mutation site, kept whole so the subclass expansion can re-ask php's question.
 ///
-/// The class alone is not enough. Expansion has to decide, PER runtime subclass, whether php
-/// would really create a dynamic property there, and that answer depends on the NAME, on the
-/// SCOPE the site was written in, and on which accessor the operation consults. A subclass that
-/// redeclares the name as a property of its own, or that declares the accessor, stores nothing in
-/// a hash and must not be charged one.
+/// The class alone is not enough. Expansion has to decide, per runtime subclass, whether php
+/// would really create a dynamic property there. For a static name that depends on the name and
+/// lexical scope. For a runtime name, every class can receive an undeclared name, including a
+/// class with `__set` when the same receiver/name pair reenters that accessor.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ScopeDynamicMutationSite {
     /// The receiver class the site names, before expansion.
@@ -53,11 +55,11 @@ struct ScopeDynamicMutationSite {
     property: Option<String>,
     /// The accessor php consults FIRST: `__set` for a write, `__unset` for an `unset()`.
     magic_method: String,
-    /// The lexical scope the site was written in, which is what makes the name dynamic at all.
+    /// The lexical scope the site was written in, used to resolve a static property name.
     scope: Option<String>,
 }
 
-/// The mutation sites in this program that can address a strict ancestor's private name.
+/// The mutation sites in this program that can create a dynamic property.
 #[derive(Debug, Default, Clone)]
 pub struct ScopeDynamicMutationTargets {
     sites: BTreeSet<ScopeDynamicMutationSite>,
@@ -134,33 +136,15 @@ fn record_site(
 
 /// Records one RUNTIME-name mutation site (`$o->{$name} = v`) on a statically known class.
 ///
-/// The name is not known here, so the question is whether the class's layout carries ANY name
-/// this scope resolves to a dynamic property. If it does, the write can land on one of them, and
-/// the ladder's miss arm needs somewhere to put it. This is the same test
-/// `class_runtime_name_read_can_miss` applies on the read side.
+/// The name is not known here, so it can miss every declared property and create a dynamic one.
+/// Recording the static class lets expansion reserve the same reachable runtime-class subtree the
+/// backend dispatches over. A class with `__set` still needs the hash for same-pair reentry.
 pub(in crate::types::checker) fn record_scope_dynamic_runtime_name_mutation(
     checker: &mut Checker,
     class_name: &str,
 ) {
     let normalized = class_name.trim_start_matches('\\');
-    let Some(class_info) = checker.classes.get(normalized) else {
-        return;
-    };
-    if class_info.methods.contains_key("__set") {
-        return;
-    }
-    let carries_scope_dynamic_name = class_info
-        .properties
-        .iter()
-        .any(|(name, _)| {
-            crate::types::property_name_shadows_ancestor_private_slot(
-                &checker.classes,
-                normalized,
-                name,
-                checker.current_class.as_deref(),
-            )
-        });
-    if !carries_scope_dynamic_name {
+    if !checker.classes.contains_key(normalized) {
         return;
     }
     let normalized = normalized.to_string();
@@ -206,9 +190,9 @@ pub(in crate::types::checker) fn record_scope_dynamic_runtime_name_receiver_muta
                 }
             }
         }
-        // A boxed `Mixed` names no class, so the sound record is every class whose layout carries
-        // a name this scope resolves dynamically. That set is already narrow: a class with no
-        // strict ancestor's private slot in its layout contributes nothing.
+        // A boxed `Mixed` names no class, so the sound record is every class the runtime-class
+        // ladder can select. Program-usage gating still keeps this cost absent from programs with
+        // no runtime-name write through a Mixed receiver.
         PhpType::Mixed => record_scope_dynamic_runtime_name_mixed_receiver_mutation(checker),
         _ => {}
     }
@@ -216,29 +200,17 @@ pub(in crate::types::checker) fn record_scope_dynamic_runtime_name_receiver_muta
 
 /// Records every class a boxed `Mixed` runtime-name mutation can land on.
 ///
-/// A class whose layout carries no name this scope resolves dynamically is skipped outright, so
-/// this is never a blanket reservation over the program: it is exactly the classes whose OWN
-/// layout makes the shape possible, and expansion then filters their subclasses the same way.
+/// The receiver names no static class, and an unknown property name can miss every declared slot,
+/// so every runtime class is a possible dynamic-property destination. An accessor does not remove
+/// that need because its active receiver/name pair can reenter and create the property.
 fn record_scope_dynamic_runtime_name_mixed_receiver_mutation(checker: &mut Checker) {
-    let scope = checker.current_class.clone();
     let targets = checker
         .classes
-        .iter()
-        .filter(|(class_name, class_info)| {
-            !class_info.methods.contains_key("__set")
-                && class_info.properties.iter().any(|(property, _)| {
-                    crate::types::property_name_shadows_ancestor_private_slot(
-                        &checker.classes,
-                        class_name,
-                        property,
-                        scope.as_deref(),
-                    )
-                })
-        })
-        .map(|(class_name, _)| class_name.clone())
+        .keys()
+        .cloned()
         .collect::<Vec<_>>();
     for class_name in targets {
-        record_site(checker, &class_name, None, "__set");
+        record_scope_dynamic_runtime_name_mutation(checker, &class_name);
     }
 }
 
@@ -269,7 +241,12 @@ pub(in crate::types::checker) fn record_scope_dynamic_mixed_receiver_mutation(
         .map(|(class_name, _)| class_name.clone())
         .collect::<Vec<_>>();
     for class_name in targets {
-        record_site(checker, &class_name, Some(property.to_string()), "__set");
+        record_site(
+            checker,
+            &class_name,
+            Some(property.to_string()),
+            "__set",
+        );
     }
 }
 
@@ -279,10 +256,16 @@ pub(in crate::types::checker) fn record_scope_dynamic_mixed_receiver_mutation(
 /// its final parent links for the subclass expansion.
 pub(in crate::types::checker) fn reserve_scope_dynamic_property_storage(checker: &mut Checker) {
     let targets = std::mem::take(&mut checker.scope_dynamic_mutation_targets);
-    if targets.is_empty() {
+    if targets.is_empty() && !checker.program_contains_eval {
         return;
     }
-    for class_name in target_classes(checker, &targets) {
+    let mut classes = target_classes(checker, &targets)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if checker.program_contains_eval {
+        classes.extend(checker.classes.keys().cloned());
+    }
+    for class_name in classes {
         reserve_property_hash_storage(checker, &class_name);
     }
 }
@@ -290,12 +273,9 @@ pub(in crate::types::checker) fn reserve_scope_dynamic_property_storage(checker:
 /// Expands the recorded sites into the exact set of classes to reserve storage on.
 ///
 /// A receiver typed `Child` can hold any subclass of `Child` at run time, so every subclass is
-/// CONSIDERED. It is not automatically charged: expansion re-asks php's own question on each
-/// candidate, because a subclass can answer the very same name differently. A subclass that
-/// declares the accessor the operation consults hands the name to it and stores nothing, and a
-/// subclass that redeclares the name as a property of its own writes that slot instead of a hash.
-/// Both keep their instances free of the trailing pointer and of the clone and GC traversal that
-/// comes with it, which is the difference between this and a blanket reservation.
+/// considered. A static-name site re-asks php's scope question on each candidate because a
+/// subclass can redeclare the name. A runtime-name site reserves every candidate because the name
+/// can miss every declared slot, and same-pair `__set` reentry creates dynamic storage.
 fn target_classes(checker: &Checker, targets: &ScopeDynamicMutationTargets) -> Vec<String> {
     let mut names = BTreeSet::new();
     for site in &targets.sites {
@@ -314,11 +294,9 @@ fn target_classes(checker: &Checker, targets: &ScopeDynamicMutationTargets) -> V
 
 /// Returns whether php would really create a dynamic property for this SITE on this CLASS.
 ///
-/// The three answers that need no hash are all checked here, in php's own order: the accessor
-/// first, because php consults it before deciding anything else; then the name, because a class
-/// that resolves it to a slot of its own writes that slot. A runtime-name site has no single
-/// name, so it asks whether the class carries ANY name this scope resolves dynamically, which is
-/// the same question its backend ladder's miss arm asks.
+/// For a STATIC name, an accessor handles the operation before a hash is needed. A runtime-name
+/// site has no single name and can always miss the declared-name ladder, while a same-pair
+/// accessor reentry writes to the hash, so it needs storage on every eligible class.
 fn site_needs_storage_on_class(
     checker: &Checker,
     site: &ScopeDynamicMutationSite,
@@ -327,7 +305,7 @@ fn site_needs_storage_on_class(
     let Some(class_info) = checker.classes.get(class_name) else {
         return false;
     };
-    if class_info.methods.contains_key(site.magic_method.as_str()) {
+    if site.property.is_some() && class_info.methods.contains_key(site.magic_method.as_str()) {
         return false;
     }
     match &site.property {
@@ -337,14 +315,7 @@ fn site_needs_storage_on_class(
             property,
             site.scope.as_deref(),
         ),
-        None => class_info.properties.iter().any(|(property, _)| {
-            crate::types::property_name_shadows_ancestor_private_slot(
-                &checker.classes,
-                class_name,
-                property,
-                site.scope.as_deref(),
-            )
-        }),
+        None => true,
     }
 }
 

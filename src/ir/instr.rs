@@ -729,6 +729,11 @@ pub enum Op {
     StoreStaticLocal,
     InitStaticLocal,
     LoadStaticProperty,
+    /// Returns the address of a native static-property storage slot.
+    ///
+    /// The pointer is borrowed from process-lifetime symbol storage and lets a synthetic local
+    /// reference publish container replacements back to the static property.
+    LoadStaticPropertyRefCell,
     StoreStaticProperty,
     StaticPropInitialized,
     LoadReflectionStaticProperty,
@@ -963,11 +968,14 @@ pub enum Op {
     /// and must be. A receiver whose class is only known at run time raises a catchable `Error`
     /// when the matched class stores an incompatible payload, so the effects below admit a throw.
     LoadPropRefCellChecked,
-    /// Promotes an indexed-array element to a reference cell and returns the cell
-    /// pointer. Used to alias a local to `$a[idx]` (`$b =& $a[0]`). The returned pointer
-    /// addresses the element's inline storage within the array; the local aliases it
-    /// non-owning (the array owns the storage). Operands: array, index. No immediate.
+    /// Returns the cell for PHP element address-of. Indexed storage exposes its borrowed inline
+    /// slot; associative or boxed storage creates or reuses a managed tag-11 cell, inserting a
+    /// missing key as null before returning it. Operands: array, index. No immediate.
     LoadArrayElemRefCell,
+    /// Fetches an existing element cell for a nested by-reference `foreach` source. Unlike a
+    /// PHP address-of operation, a missing key warns and returns no cell without inserting null.
+    /// Operands: array, index. No immediate.
+    LoadArrayElemRefCellExisting,
     /// Binds a local slot to a ref-cell pointer. A LocalSlot immediate borrows the cell;
     /// a LocalSlotPair gives the target and an owned cell slot, retaining the cell for scope cleanup.
     BindRefCellPtr,
@@ -1164,9 +1172,14 @@ impl Op {
             ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
-            LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
-            StoreLocal | UnsetLocal | ZeroLocalSlot | StoreRefCell | ListUnpack | FinallyEnter
-            | FinallyExit => E::WRITES_LOCAL,
+            LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
+            LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
+            StoreLocal | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
+                E::WRITES_LOCAL
+            }
+            // A refcounted cell publishes replacement storage and can run the previous payload's
+            // destructor immediately, so the store has the full user-code effect boundary.
+            StoreRefCell => E::all(),
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
@@ -1189,6 +1202,9 @@ impl Op {
             | ClassAttrArgs
             | ClassGetAttributes
             | CatchCurrent => E::READS_GLOBAL,
+            // Address selection can raise a catchable typed-uninitialized error or a
+            // late-static visibility fatal before exposing the writable symbol slot.
+            LoadStaticPropertyRefCell => E::READS_GLOBAL | E::MAY_THROW | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             StoreGlobal
             | StoreStaticLocal
@@ -1269,8 +1285,27 @@ impl Op {
             DynamicPropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
-            LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
-            BindRefCellPtr | AdoptRefCellPtr => E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
+            // Nested by-reference source preparation can unbox a Mixed child, split or promote
+            // its container, box hash entries, release the replaced owner, write the replacement
+            // through the parent box, and promote the selected entry to a managed reference cell.
+            LoadArrayElemRefCell => {
+                E::READS_HEAP
+                    | E::WRITES_HEAP
+                    | E::ALLOC_HEAP
+                    | E::REFCOUNT_OP
+                    | E::MAY_FATAL
+            }
+            LoadArrayElemRefCellExisting => {
+                E::READS_HEAP
+                    | E::WRITES_HEAP
+                    | E::ALLOC_HEAP
+                    | E::REFCOUNT_OP
+                    | E::MAY_WARN
+                    | E::MAY_FATAL
+            }
+            BindRefCellPtr | AdoptRefCellPtr => {
+                E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+            }
             // Replacing a pending return can retire a payload with an arbitrary destructor.
             AcquireRefCell => E::all(),
             // `DynamicPropUnset` carries exactly `PropUnset`'s contract: the same storage is
@@ -1476,6 +1511,7 @@ impl Op {
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
             LoadStaticProperty => "load_static_property",
+            LoadStaticPropertyRefCell => "load_static_property_ref_cell",
             StoreStaticProperty => "store_static_property",
             StaticPropInitialized => "static_prop_initialized",
             LoadReflectionStaticProperty => "load_reflection_static_property",
@@ -1627,6 +1663,7 @@ impl Op {
             LoadPropRefCell => "load_prop_ref_cell",
             LoadPropRefCellChecked => "load_prop_ref_cell_checked",
             LoadArrayElemRefCell => "load_array_elem_ref_cell",
+            LoadArrayElemRefCellExisting => "load_array_elem_ref_cell_existing",
             BindRefCellPtr => "bind_ref_cell_ptr",
             AdoptRefCellPtr => "adopt_ref_cell_ptr",
             AcquireRefCell => "acquire_ref_cell",

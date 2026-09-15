@@ -125,6 +125,7 @@ pub(super) fn lower_static_method_call(
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     );
+    ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &operands);
     let call = finish_reference_return_call(
         ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
     );

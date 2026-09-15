@@ -16,7 +16,7 @@ pub(super) fn emit_object_allocation(
     property_count: usize,
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: &[usize],
-    owned_reference_property_offsets: &[(usize, PhpType)],
+    owned_reference_property_offsets: &[(usize, PhpType, bool)],
 ) -> Result<()> {
     let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
     let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
@@ -63,8 +63,14 @@ pub(super) fn emit_object_allocation(
             abi::emit_store_to_address(ctx.emitter, marker_reg, object_reg, *offset);
         }
     }
-    for (offset, php_type) in owned_reference_property_offsets {
-        emit_owned_reference_property_cell(ctx, object_reg, *offset, php_type);
+    for (offset, php_type, starts_uninitialized) in owned_reference_property_offsets {
+        emit_owned_reference_property_cell(
+            ctx,
+            object_reg,
+            *offset,
+            php_type,
+            *starts_uninitialized,
+        );
     }
     if allow_dynamic_properties {
         emit_dynamic_property_hash_init(ctx, object_reg, dynamic_properties_offset);
@@ -81,6 +87,7 @@ pub(super) fn emit_owned_reference_property_cell(
     object_reg: &str,
     offset: usize,
     php_type: &PhpType,
+    starts_uninitialized: bool,
 ) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     let cell_reg = if object_reg == abi::secondary_scratch_reg(ctx.emitter) {
@@ -92,7 +99,17 @@ pub(super) fn emit_owned_reference_property_cell(
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0),
         crate::codegen_support::runtime::reference_cells::payload_tag(php_type));
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
-    abi::emit_store_zero_to_address(ctx.emitter, result_reg, 0);                // zero the cell value word
+    if starts_uninitialized {
+        let marker_reg = abi::tertiary_scratch_reg(ctx.emitter);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            marker_reg,
+            UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+        );
+        abi::emit_store_to_address(ctx.emitter, marker_reg, result_reg, 0);     // mark the owned reference payload as typed-uninitialized
+    } else {
+        abi::emit_store_zero_to_address(ctx.emitter, result_reg, 0);            // zero the cell value word
+    }
     abi::emit_store_zero_to_address(ctx.emitter, result_reg, 8);               // zero the cell tag/length word
     abi::emit_reg_move(ctx.emitter, cell_reg, result_reg);                      // preserve the cell pointer across the object restore
     abi::emit_pop_reg(ctx.emitter, object_reg);
@@ -132,12 +149,15 @@ pub(super) fn emit_clone_declared_property_slots(
     dest_reg: &str,
     property_count: usize,
     retained_offsets: &[usize],
-    owned_references: &[(usize, PhpType)],
+    owned_references: &[(usize, PhpType, bool)],
 ) {
     for index in 0..property_count {
         let offset = 8 + index * 16;
         emit_copy_property_slot(ctx, source_reg, dest_reg, offset);
-        if owned_references.iter().any(|(owned_offset, _)| *owned_offset == offset) {
+        if owned_references
+            .iter()
+            .any(|(owned_offset, _, _)| *owned_offset == offset)
+        {
             let result = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, source_reg);
             abi::emit_push_reg(ctx.emitter, dest_reg);

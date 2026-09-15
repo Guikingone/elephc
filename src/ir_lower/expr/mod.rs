@@ -193,10 +193,13 @@ pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
 pub(crate) use instanceof_coercions::coerce_to_int_at_span;
 pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use property_access::{
-    lower_ref_assign_array_elem, lower_ref_assign_call, lower_ref_assign_property,
+    lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
+    lower_ref_assign_property, lower_ref_assign_static_property,
+    prepare_scoped_addressable_ref_array_receiver,
 };
 pub(crate) use property_fetch_for_write::{
-    lower_by_ref_foreach_property_source, lower_nested_assignment_property_source,
+    by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
+    lower_nested_assignment_property_source,
 };
 pub(crate) use string_concat::string_op_uses_scratch_storage;
 pub(super) use assoc_array_literals::{

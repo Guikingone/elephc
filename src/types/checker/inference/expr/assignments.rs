@@ -152,16 +152,14 @@ impl Checker {
             ));
         }
 
-        // A runtime name on a class whose layout carries a strict ancestor's private slot can
-        // resolve to THAT name, which php stores as a distinct dynamic property. The backend's
-        // by-name ladder already drops such a name so it cannot reach the ancestor's slot, but
-        // without reserved hash storage its miss arm had nowhere to put the value and the write
-        // vanished with no diagnostic anywhere. All three receiver shapes admitted above are
-        // recorded, because each has its own runtime-class ladder in the backend. See
-        // `crate::types::checker::scope_dynamic_storage`.
+        // A runtime name can miss every declared property, or resolve a strict ancestor's private
+        // name to a distinct dynamic property. The backend dispatches both answers per runtime
+        // class, so every admitted receiver shape records the reachable class subtree for hash
+        // reservation. See `crate::types::checker::scope_dynamic_storage`.
         let receiver_ty = obj_ty.clone();
         crate::types::checker::scope_dynamic_storage::record_scope_dynamic_runtime_name_receiver_mutation(
-            self, &receiver_ty,
+            self,
+            &receiver_ty,
         );
 
         self.infer_type(value, env)?;

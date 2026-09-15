@@ -300,6 +300,9 @@ pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, 
         ExprKind::PropertyAccess { .. } => {
             crate::ir_lower::expr::lower_ref_assign_property(ctx, target, source, span);
         }
+        ExprKind::StaticPropertyAccess { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_static_property(ctx, target, source, span);
+        }
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::StaticMethodCall { .. }

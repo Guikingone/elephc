@@ -31,6 +31,19 @@ pub(super) fn lower_arg_with_signature(
     index: usize,
     arg: &Expr,
 ) -> crate::ir::ValueId {
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(
+            &arg.kind,
+            ExprKind::ArrayAccess { array, .. }
+                if !matches!(&array.kind, ExprKind::Variable(_))
+        )
+    {
+        if let Some((alias, aliases)) = prepare_scoped_addressable_ref_array_receiver(ctx, arg) {
+            let value = lower_arg_with_signature(ctx, sig, index, &alias);
+            retire_scoped_ref_receiver_aliases(ctx, &aliases);
+            return value;
+        }
+    }
     if let Some(value) = lower_by_ref_array_element_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
@@ -380,10 +393,37 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
     let ExprKind::Variable(array_name) = &array.kind else {
         return None;
     };
-    let PhpType::Array(elem_ty) = ctx.local_type(array_name).codegen_repr() else {
+    let local_ty = ctx.local_type(array_name).codegen_repr();
+    let (_, param_ty) = sig.params.get(index)?;
+    if let PhpType::AssocArray { .. } = local_ty {
+        let hash_value = ctx.load_local(array_name, Some(array.span));
+        let element_index = lower_expr(ctx, element_index);
+        let cell = ctx.emit_value(
+            Op::LoadArrayElemRefCell,
+            vec![hash_value.value, element_index.value],
+            None,
+            PhpType::Pointer(None),
+            Op::LoadArrayElemRefCell.default_effects(),
+            Some(arg.span),
+        );
+        return Some(lease_managed_call_argument_ref_cell(ctx, cell, arg.span).value);
+    }
+    let PhpType::Array(elem_ty) = local_ty else {
         return None;
     };
-    let (_, param_ty) = sig.params.get(index)?;
+    if elem_ty.codegen_repr() == PhpType::Mixed {
+        let array_value = ctx.load_local(array_name, Some(array.span));
+        let element_index = lower_expr(ctx, element_index);
+        let cell = ctx.emit_value(
+            Op::LoadArrayElemRefCell,
+            vec![array_value.value, element_index.value],
+            None,
+            PhpType::Pointer(None),
+            Op::LoadArrayElemRefCell.default_effects(),
+            Some(arg.span),
+        );
+        return Some(lease_managed_call_argument_ref_cell(ctx, cell, arg.span).value);
+    }
     if param_ty.codegen_repr() == PhpType::Mixed && elem_ty.codegen_repr() != PhpType::Mixed {
         // The callee replaces a Mixed pointer through this element's actual slot, not a
         // detached temporary. Widen the outer array's slots before exposing that address.

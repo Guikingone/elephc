@@ -534,15 +534,42 @@ pub(super) fn lower_hash_array_union(ctx: &mut FunctionContext<'_>, inst: &Instr
     let result_value_ty = require_hash_union_result(&inst.result_php_type.codegen_repr(), inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            let hash_right = ctx.next_label("hash_array_union_hash_right");
+            let done = ctx.next_label("hash_array_union_runtime_done");
+            ctx.load_value_to_reg(right, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // detect a runtime-promoted right array
+            ctx.emitter.instruction(&format!("b.eq {hash_right}"));             // two hash operands use the associative helper
             ctx.load_value_to_reg(left, "x0")?;
-            ctx.load_value_to_reg(right, "x1")?;
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_array_union");
+            ctx.emitter.instruction(&format!("b {done}"));                      // join with the fresh hash result in x0
+            ctx.emitter.label(&hash_right);
+            ctx.load_value_to_reg(left, "x0")?;
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_union");
+            ctx.emitter.label(&done);
         }
         Arch::X86_64 => {
+            let hash_right = ctx.next_label("hash_array_union_hash_right");
+            let done = ctx.next_label("hash_array_union_runtime_done");
+            ctx.load_value_to_reg(right, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // detect a runtime-promoted right array
+            ctx.emitter.instruction(&format!("je {hash_right}"));               // two hash operands use the associative helper
             ctx.load_value_to_reg(left, "rdi")?;
-            ctx.load_value_to_reg(right, "rsi")?;
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_array_union");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the fresh hash result in rax
+            ctx.emitter.label(&hash_right);
+            ctx.load_value_to_reg(left, "rdi")?;
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_union");
+            ctx.emitter.label(&done);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_hash_array_union");
     convert_hash_union_result_to_mixed_if_needed(ctx, &result_value_ty);
     store_if_result(ctx, inst)
 }
@@ -672,7 +699,7 @@ fn lower_hash_get_x86_64(
 }
 
 /// Lowers an associative-array write for AArch64 targets.
-fn lower_hash_set_aarch64(
+pub(super) fn lower_hash_set_aarch64(
     ctx: &mut FunctionContext<'_>,
     hash: ValueId,
     key: ValueId,
@@ -729,7 +756,7 @@ fn lower_hash_append_aarch64(
 }
 
 /// Lowers an associative-array write for x86_64 targets.
-fn lower_hash_set_x86_64(
+pub(super) fn lower_hash_set_x86_64(
     ctx: &mut FunctionContext<'_>,
     hash: ValueId,
     key: ValueId,
@@ -982,7 +1009,7 @@ pub(super) fn materialize_hash_key_x86_64_with(
 }
 
 /// Emits PHP's undefined-key warning for a normalized associative key on AArch64.
-fn emit_undefined_hash_key_warning_aarch64(
+pub(super) fn emit_undefined_hash_key_warning_aarch64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
 ) -> Result<()> {
@@ -1001,7 +1028,7 @@ fn emit_undefined_hash_key_warning_aarch64(
 }
 
 /// Emits PHP's undefined-key warning for a normalized associative key on x86_64.
-fn emit_undefined_hash_key_warning_x86_64(
+pub(super) fn emit_undefined_hash_key_warning_x86_64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
 ) -> Result<()> {
@@ -1523,6 +1550,9 @@ pub(super) fn emit_hash_get_success_aarch64(
     result_ty: &PhpType,
     for_write: bool,
 ) -> Result<()> {
+    if !matches!(value_ty, PhpType::Mixed) {
+        emit_hash_get_concrete_reference_payload_aarch64(ctx);
+    }
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov x0, x1");                              // move the borrowed hash scalar payload into the standard integer result
@@ -1561,6 +1591,9 @@ pub(super) fn emit_hash_get_success_x86_64(
     result_ty: &PhpType,
     for_write: bool,
 ) -> Result<()> {
+    if !matches!(value_ty, PhpType::Mixed) {
+        emit_hash_get_concrete_reference_payload_x86_64(ctx);
+    }
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash scalar payload into the standard integer result
@@ -1593,6 +1626,31 @@ pub(super) fn emit_hash_get_success_x86_64(
         }
     }
     Ok(())
+}
+
+/// Unboxes an AArch64 reference entry before a statically concrete hash read.
+///
+/// Persistent reference entries can still be read through an earlier concrete SSA value.
+/// `__rt_hash_get` exposes a reference cell as tag 7 plus its box pointer, so concrete consumers
+/// must recover the payload registers first.
+fn emit_hash_get_concrete_reference_payload_aarch64(ctx: &mut FunctionContext<'_>) {
+    let concrete = ctx.next_label("hash_get_concrete_payload");
+    ctx.emitter.instruction("cmp x3, #7");                                      // detect a boxed payload returned through a reference entry
+    ctx.emitter.instruction(&format!("b.ne {}", concrete));                     // ordinary typed entries already use the concrete payload ABI
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the boxed Mixed pointer to the unbox helper
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.label(&concrete);
+}
+
+/// Unboxes an x86_64 reference entry before a statically concrete hash read.
+fn emit_hash_get_concrete_reference_payload_x86_64(ctx: &mut FunctionContext<'_>) {
+    let concrete = ctx.next_label("hash_get_concrete_payload");
+    ctx.emitter.instruction("cmp rcx, 7");                                      // detect a boxed payload returned through a reference entry
+    ctx.emitter.instruction(&format!("jne {}", concrete));                      // ordinary typed entries already use the concrete payload ABI
+    ctx.emitter.instruction("mov rax, rdi");                                    // pass the boxed Mixed pointer to the unbox helper
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("mov rsi, rdx");                                    // restore hash-get's high payload register for the common result path
+    ctx.emitter.label(&concrete);
 }
 
 /// Materializes a successful AArch64 Mixed hash lookup as a boxed Mixed result.

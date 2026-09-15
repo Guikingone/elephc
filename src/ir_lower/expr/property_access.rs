@@ -58,6 +58,34 @@ pub(crate) fn lower_ref_assign_property(
     }
 }
 
+/// Binds a local alias directly to a native static property's process-lifetime storage slot.
+///
+/// The static symbol owns its payload, so the alias itself is borrowed. Container replacements
+/// written through the alias are immediately visible through `C::$property`, and the same alias
+/// gives `IterStart` a local origin that can reload the replacement after hash growth.
+pub(crate) fn lower_ref_assign_static_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::StaticPropertyAccess { receiver, property } = &source.kind else {
+        return;
+    };
+    let name = format!("{}::{}", receiver_name(receiver), property);
+    let data = ctx.intern_string(&name);
+    let value_type = static_property_result_type(ctx, receiver, property, source);
+    let cell_ptr = ctx.emit_value(
+        Op::LoadStaticPropertyRefCell,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Pointer(None),
+        Op::LoadStaticPropertyRefCell.default_effects(),
+        Some(span),
+    );
+    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
 /// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a
 /// by-reference-returning callee.
 ///
@@ -122,11 +150,12 @@ pub(crate) fn lower_ref_assign_call(
     ctx.release_ref_cell_owner(&staged, Some(span));
 }
 
-/// Lowers `$target =& $arr[idx]`: promotes the indexed-array element's inline storage to a
-/// reference cell and binds `$target` to it non-owning. The returned cell pointer addresses
-/// the element within the array payload, so writes through `$target` propagate to `$arr[idx]`
-/// and vice versa. The array must remain live while the alias is in use (the local does not
-/// own the storage). Operands: the lowered array value and the lowered index value.
+/// Lowers `$target =& $arr[idx]` using the ownership represented by the container.
+///
+/// The addressable receiver is first represented by a local alias and normalized to hash storage.
+/// Its entry then owns a managed tag-11 cell, so the new local can outlive replacement or
+/// destruction of the parent. This also gives copy-on-write and growth a writable place where
+/// they can publish a replacement reached through a static property or nested element.
 pub(crate) fn lower_ref_assign_array_elem(
     ctx: &mut LoweringContext<'_, '_>,
     target: &str,
@@ -136,15 +165,22 @@ pub(crate) fn lower_ref_assign_array_elem(
     let ExprKind::ArrayAccess { array, index } = &source.kind else {
         return;
     };
+    let prepared_array = prepare_addressable_ref_array_receiver(ctx, array);
+    let array = prepared_array.as_ref().unwrap_or(array);
+    crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, array, true);
     let array_value = lower_expr(ctx, array);
+    let container_type = ctx.builder.value_php_type(array_value.value).codegen_repr();
     let mut index_value = lower_expr(ctx, index);
-    index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
-    // Use the array's declared element type (the inline storage shape), not the
-    // null-capable `TaggedScalar` result type that `array_access_result_type` widens
-    // Int elements to. The ref-cell aliases the raw element slot, so loads and stores
-    // through the alias must match the element's storage width, not the read result.
-    let value_type = match ctx.builder.value_php_type(array_value.value).codegen_repr() {
-        PhpType::Array(elem_ty) => normalize_value_php_type(*elem_ty),
+    let value_type = match container_type {
+        PhpType::Array(elem_ty) => {
+            if elem_ty.codegen_repr() == PhpType::Mixed {
+                PhpType::Mixed
+            } else {
+                index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+                normalize_value_php_type(*elem_ty)
+            }
+        }
+        PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
         _ => array_access_result_type(ctx, array_value.value, Op::ArrayGet, source),
     };
     let cell_ptr = ctx.emit_value(
@@ -155,11 +191,116 @@ pub(crate) fn lower_ref_assign_array_elem(
         Op::LoadArrayElemRefCell.default_effects(),
         Some(span),
     );
-    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
-    // The address lies inside the array payload, so `__rt_reference_cell_owner` answers zero
-    // for it and no exit path can transfer an owner. Record that here so a by-reference return
-    // of this alias is refused instead of handing the caller a soon-to-be-freed interior.
-    ctx.mark_borrowed_element_ref_local(target);
+    ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
+/// Reifies a static property, stable declared property, or nested element as a local receiver.
+///
+/// Element reference lowering can only republish COW or growth through `ReceiverPlace` when its
+/// receiver comes from a local or ref-cell slot. Each synthetic alias names the original storage,
+/// and recursively normalizing element parents to hash storage gives every level a managed cell.
+pub(crate) fn prepare_addressable_ref_array_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+) -> Option<Expr> {
+    prepare_addressable_ref_array_receiver_impl(ctx, source, None)
+}
+
+/// Prepares a nested ref-argument receiver and records its managed expression aliases.
+pub(crate) fn prepare_scoped_addressable_ref_array_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+) -> Option<(Expr, Vec<String>)> {
+    let mut aliases = Vec::new();
+    let receiver = prepare_addressable_ref_array_receiver_impl(ctx, source, Some(&mut aliases))?;
+    Some((receiver, aliases))
+}
+
+fn prepare_addressable_ref_array_receiver_impl(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+    mut scoped_aliases: Option<&mut Vec<String>>,
+) -> Option<Expr> {
+    match &source.kind {
+        ExprKind::Variable(_) => Some(source.clone()),
+        ExprKind::PropertyAccess { object, property }
+            if by_ref_foreach_property_source_is_addressable(ctx, object, property) =>
+        {
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            lower_ref_assign_property(ctx, &alias, source, source.span);
+            if let Some(aliases) = scoped_aliases.as_deref_mut() {
+                if publish_scoped_ref_receiver_alias(ctx, &alias, source.span) {
+                    aliases.push(alias.clone());
+                }
+            }
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        ExprKind::StaticPropertyAccess { .. } => {
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            lower_ref_assign_static_property(ctx, &alias, source, source.span);
+            if let Some(aliases) = scoped_aliases.as_deref_mut() {
+                if publish_scoped_ref_receiver_alias(ctx, &alias, source.span) {
+                    aliases.push(alias.clone());
+                }
+            }
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            let parent = prepare_addressable_ref_array_receiver_impl(
+                ctx,
+                array,
+                scoped_aliases.as_deref_mut(),
+            )?;
+            let element = Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(parent),
+                    index: index.clone(),
+                },
+                source.span,
+            );
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            lower_ref_assign_array_elem(ctx, &alias, &element, source.span);
+            if let Some(aliases) = scoped_aliases.as_deref_mut() {
+                if publish_scoped_ref_receiver_alias(ctx, &alias, source.span) {
+                    aliases.push(alias.clone());
+                }
+            }
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        _ => None,
+    }
+}
+
+/// Binds a synthetic foreach source alias to an element after its receiver was promoted to hash.
+///
+/// Unlike an ordinary indexed `=&` binding, a promoted hash entry owns a managed reference cell.
+/// Retaining that cell gives the synthetic origin a stable writeback address across table growth,
+/// source replacement, and destruction of the enclosing container.
+pub(crate) fn lower_owned_ref_assign_array_elem(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::ArrayAccess { array, index } = &source.kind else {
+        return;
+    };
+    let array_value = lower_expr(ctx, array);
+    let index_value = lower_expr(ctx, index);
+    let value_type = match ctx.builder.value_php_type(array_value.value).codegen_repr() {
+        PhpType::Array(elem_ty) => normalize_value_php_type(*elem_ty),
+        PhpType::AssocArray { value, .. } => normalize_value_php_type(*value),
+        _ => PhpType::Mixed,
+    };
+    let cell_ptr = ctx.emit_value(
+        Op::LoadArrayElemRefCellExisting,
+        vec![array_value.value, index_value.value],
+        None,
+        value_type.clone(),
+        Op::LoadArrayElemRefCellExisting.default_effects(),
+        Some(span),
+    );
+    ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
 /// Lowers a named property read once the receiver is already evaluated.

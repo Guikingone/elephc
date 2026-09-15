@@ -226,6 +226,9 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell(
     ctx.load_value_to_reg(object, base_reg)?;
     let int_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset); // load the reference-cell pointer from the property slot (no deref)
+    if slot.is_declared {
+        emit_uninitialized_owned_ref_property_guard(ctx, &slot, int_reg);
+    }
     store_ref_cell_pointer_result(ctx, inst)
 }
 
@@ -436,6 +439,13 @@ pub(super) fn lower_mixed_load_prop_ref_cell(
             continue;
         }
         abi::emit_load_from_address(ctx.emitter, int_reg, int_reg, candidate.candidate.slot.offset); // load the reference-cell pointer from the matched class's property slot
+        if candidate.candidate.slot.is_declared {
+            emit_uninitialized_owned_ref_property_guard(
+                ctx,
+                &candidate.candidate.slot,
+                int_reg,
+            );
+        }
         abi::emit_jump(ctx.emitter, &done_label);
     }
 

@@ -603,6 +603,10 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
 
 /// Returns whether a local load borrows the same physical storage without a coercion.
 ///
+/// Indexed arrays and associative hashes are both one-word container pointers. A flow-local
+/// `ArrayToHash` conversion can therefore keep the established frame slot while later loads use
+/// the associative logical type; cleanup remains safe because array decref dispatches by heap kind.
+///
 /// Codegen consumes this predicate too, so its no-coercion path and EIR release
 /// pruning cannot classify an ordinary borrowed local view differently.
 pub(crate) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> bool {
@@ -616,6 +620,8 @@ pub(crate) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &Ph
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
         ) | (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::Array(_), PhpType::AssocArray { .. })
+            | (PhpType::AssocArray { .. }, PhpType::Array(_))
     )
 }
 

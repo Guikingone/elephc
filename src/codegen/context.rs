@@ -35,6 +35,7 @@ use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
 mod operand_owners;
+mod ref_cell_state;
 
 /// Runtime representation known for one local slot at the current EIR instruction.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -507,7 +508,7 @@ impl<'a> FunctionContext<'a> {
 
     /// Records at runtime that a path has changed this local slot to ref-cell representation.
     pub(super) fn mark_promoted_ref_cell(&mut self, slot: LocalSlotId) {
-        self.release_hash_entry_ref_binding(slot);
+        self.release_counted_ref_binding(slot);
         self.current_inst_promoted_ref_cells.insert(slot);
         if let Some(offset) = self.ref_cell_state_offset(slot) {
             abi::emit_load_int_immediate(self.emitter, abi::int_result_reg(self.emitter), 1);
@@ -517,7 +518,7 @@ impl<'a> FunctionContext<'a> {
 
     /// Records at runtime that `unset()` restored this local slot to raw representation.
     pub(super) fn unmark_promoted_ref_cell(&mut self, slot: LocalSlotId) {
-        self.release_hash_entry_ref_binding(slot);
+        self.release_counted_ref_binding(slot);
         self.current_inst_promoted_ref_cells.remove(&slot);
         if let Some(offset) = self.ref_cell_state_offset(slot) {
             abi::emit_store_zero_to_local_slot(self.emitter, offset);
@@ -529,41 +530,24 @@ impl<'a> FunctionContext<'a> {
         self.current_inst_promoted_ref_cells.insert(slot);
     }
 
-    /// Drops this local's counted alias on a hash entry's managed reference cell.
-    pub(super) fn release_hash_entry_ref_binding(&mut self, slot: LocalSlotId) {
+    /// Drops this local's counted ownership of a managed reference cell.
+    pub(super) fn release_counted_ref_binding(&mut self, slot: LocalSlotId) {
         let Some(state_offset) = self.ref_cell_state_offset(slot) else {
             return;
         };
-        let done = self.next_label("hash_entry_ref_release_done");
-        match self.emitter.target.arch {
-            Arch::AArch64 => {
-                abi::load_at_offset(self.emitter, "x9", state_offset);
-                self.emitter.instruction("cmp x9, #1");                         // distinguish a managed cell address from raw and ordinary ref-cell states
-                self.emitter.instruction(&format!("b.ls {done}"));              // zero and the ordinary-ref sentinel own no counted cell alias
-                abi::emit_store_zero_to_local_slot(self.emitter, state_offset);
-                abi::emit_reg_move(self.emitter, "x0", "x9");
-                abi::emit_call_label(self.emitter, "__rt_decref_any");
-                self.emitter.label(&done);
-                abi::emit_store_zero_to_local_slot(self.emitter, state_offset);
-            }
-            Arch::X86_64 => {
-                abi::load_at_offset(self.emitter, "r10", state_offset);
-                self.emitter.instruction("cmp r10, 1");                         // distinguish a managed cell address from raw and ordinary ref-cell states
-                self.emitter.instruction(&format!("jbe {done}"));               // zero and the ordinary-ref sentinel own no counted cell alias
-                abi::emit_store_zero_to_local_slot(self.emitter, state_offset);
-                abi::emit_reg_move(self.emitter, "rax", "r10");
-                abi::emit_call_label(self.emitter, "__rt_decref_any");
-                self.emitter.label(&done);
-                abi::emit_store_zero_to_local_slot(self.emitter, state_offset);
-            }
-        }
+        let done = self.next_label("counted_ref_release_done");
+        ref_cell_state::emit_release_counted_ref_binding(
+            self.emitter,
+            state_offset,
+            &done,
+        );
     }
 
     /// Installs a hash entry's managed reference cell as this local's explicit ref provenance.
     ///
     /// The cell address is stored into the slot's runtime state word and retained, so the alias
     /// keeps the cell alive independently of the table it came from. The matching release runs in
-    /// [`Self::release_hash_entry_ref_binding`]. The state-word encoding is unchanged: `0` is raw,
+    /// [`Self::release_counted_ref_binding`]. The state-word encoding is unchanged: `0` is raw,
     /// `1` is an ordinary borrowed reference, and anything greater is an explicit provenance
     /// address, which is now always a managed reference cell rather than an interior table word.
     pub(super) fn bind_hash_entry_ref_state(
@@ -603,7 +587,7 @@ impl<'a> FunctionContext<'a> {
             self.record_promoted_ref_cell(target);
             return Ok(());
         }
-        self.release_hash_entry_ref_binding(target);
+        self.release_counted_ref_binding(target);
         let target_offset = self.ref_cell_state_offset(target).ok_or_else(|| {
             CodegenIrError::invalid_module(format!(
                 "reference alias target slot {} has no runtime state word",

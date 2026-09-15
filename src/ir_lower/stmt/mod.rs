@@ -88,6 +88,7 @@ pub(crate) use instance_property_writes::{
     emit_receiver_instanceof, magic_accessor_subclasses,
 };
 pub(super) use typed_foreach::coerce_typed_assign_value;
+pub(crate) use typed_foreach::promote_by_ref_foreach_source;
 pub(super) use instance_property_writes::contextualize_property_array_value;
 pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;
 pub(super) use array_write_core::{
@@ -229,7 +230,12 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             try_body,
             catches,
             finally_body,
-        } => lower_try(ctx, try_body, catches, finally_body.as_deref(), stmt.span),
+        } => {
+            let callable_snapshot = ctx.static_callable_locals_snapshot();
+            let callable_epochs = ctx.static_callable_local_epochs_snapshot();
+            lower_try(ctx, try_body, catches, finally_body.as_deref(), stmt.span);
+            ctx.restore_unchanged_static_closure_locals(callable_snapshot, &callable_epochs);
+        }
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
         StmtKind::ExprStmt(expr) => {

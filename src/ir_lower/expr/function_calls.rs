@@ -179,6 +179,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             effects_lookup::user_call_effects(canonical),
             Some(expr.span),
         );
+        ctx.invalidate_callable_user_function(canonical, sig.as_ref(), &operands);
         // Plain user calls release owned argument temporaries the same way method and
         // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
         // that returns its own array argument typed `iterable`) from being freed.

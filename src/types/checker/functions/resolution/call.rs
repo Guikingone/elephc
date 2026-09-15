@@ -464,7 +464,15 @@ impl Checker {
                     arg_idx += 1;
                     continue;
                 }
-                param_types.push((decl.params[arg_idx].clone(), ty));
+                // An untyped by-reference parameter is semantically mixed. Its frame must use
+                // that canonical cell shape across every call site instead of specializing to
+                // the current payload and later misreading a managed associative entry.
+                let storage_ty = if supplied_reference {
+                    PhpType::Mixed
+                } else {
+                    ty
+                };
+                param_types.push((decl.params[arg_idx].clone(), storage_ty));
                 arg_idx += 1;
             } else {
                 // A by-REFERENCE variadic (`&...$xs`) binds every collected argument by

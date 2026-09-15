@@ -50,9 +50,47 @@ pub(super) fn lower_new_object(
         );
     }
     let sig = constructor_signature(ctx, class_name).cloned();
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());
-    emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span)
+    let result_staging = prepublish_user_call_result(
+        ctx,
+        sig.as_ref(),
+        &ReturnArgAlias::None,
+        &php_type,
+        expr.span,
+    );
+    begin_call_argument_evaluation(ctx);
+    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    let roots = root_user_call_operands(
+        ctx,
+        &mut operands,
+        sig.as_ref(),
+        &ReturnArgAlias::None,
+        &php_type,
+        expr.span,
+    );
+    ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &operands);
+    let data = ctx.intern_class_name(class_name.as_str());
+    let object = ctx.emit_value(
+        Op::ObjectNew,
+        operands.clone(),
+        Some(Immediate::Data(data)),
+        php_type,
+        Op::ObjectNew.default_effects(),
+        Some(expr.span),
+    );
+    stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
+    release_owned_call_arg_temporaries_with_roots(
+        ctx,
+        &operands,
+        None,
+        &ReturnArgAlias::None,
+        sig.as_ref(),
+        &roots,
+        expr.span,
+    );
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    take_prepublished_call_result(ctx, result_staging, object, expr.span)
 }
 
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.

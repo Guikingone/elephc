@@ -141,6 +141,32 @@ macro_rules! impl_collection_call_ops {
         }
     }
 
+    /// Shares eval magic-set recursion state with native property-write lowering.
+    fn native_magic_set_guard_push(
+        &mut self,
+        object_identity: u64,
+        property: &str,
+        node: &mut [u64; 4],
+    ) -> Result<bool, EvalStatus> {
+        Ok(unsafe {
+            __rt_magic_set_guard_push(
+                object_identity,
+                property.as_ptr(),
+                property.len() as u64,
+                node.as_mut_ptr(),
+            ) != 0
+        })
+    }
+
+    /// Unlinks the eval-owned node before its Rust stack storage leaves scope.
+    fn native_magic_set_guard_pop(
+        &mut self,
+        node: &mut [u64; 4],
+    ) -> Result<(), EvalStatus> {
+        unsafe { __rt_magic_set_guard_pop(node.as_mut_ptr()); }
+        Ok(())
+    }
+
     /// Uninitializes a native typed slot without assigning a coerced PHP null value.
     fn unset_native_typed_property(
         &mut self,

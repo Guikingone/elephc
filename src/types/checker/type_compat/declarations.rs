@@ -203,6 +203,17 @@ impl Checker {
         env: &TypeEnv,
         context: &str,
     ) -> Result<(), CompileError> {
+        if expected_ty != &PhpType::Mixed
+            && self.by_ref_argument_uses_mixed_or_hash_storage(actual_ty, arg, env)?
+        {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} cannot bind typed by-reference storage from a mixed or hash-backed value; declare the parameter as mixed or pass a concrete indexed array element",
+                    context
+                ),
+            ));
+        }
         // The call lowering boxes PHP array locals before exposing their ref-cell address.
         // This changes storage, not the declared values accepted by the reference parameter.
         if expected_ty.is_php_array()
@@ -232,6 +243,26 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    /// Identifies reference arguments whose writable cell stores a canonical boxed Mixed value.
+    fn by_ref_argument_uses_mixed_or_hash_storage(
+        &mut self,
+        actual_ty: &PhpType,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        if actual_ty.codegen_repr() == PhpType::Mixed {
+            return Ok(true);
+        }
+        let ExprKind::ArrayAccess { array, .. } = &arg.kind else {
+            return Ok(false);
+        };
+        Ok(match self.infer_type(array, env)?.codegen_repr() {
+            PhpType::AssocArray { .. } | PhpType::Mixed => true,
+            PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+            _ => false,
+        })
     }
 
     /// Validates that a default value expression is compatible with the declared type it is
@@ -311,8 +342,9 @@ impl Checker {
     }
 
     /// Builds the initial parameter type list for a function declaration, resolving type hints,
-    /// validating defaults, and inferring types for untyped parameters. Adds a variadic parameter
-    /// array type, using the declared element type for typed variadics.
+    /// validating defaults, and inferring types for untyped parameters. Untyped by-reference
+    /// parameters keep canonical Mixed storage. Adds a variadic parameter array type, using the
+    /// declared element type for typed variadics.
     pub(crate) fn initial_function_param_types(
         &mut self,
         name: &str,
@@ -333,6 +365,8 @@ impl Checker {
                     &format!("Function '{}' parameter ${}", name, param_name),
                 )?;
                 param_types.push((param_name.clone(), declared_ty));
+            } else if decl.ref_params.get(idx).copied().unwrap_or(false) {
+                param_types.push((param_name.clone(), PhpType::Mixed));
             } else if let Some(default_expr) = decl.defaults.get(idx).and_then(|d| d.as_ref()) {
                 param_types.push((param_name.clone(), infer_expr_type_syntactic(default_expr)));
             } else {

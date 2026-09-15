@@ -76,6 +76,42 @@ pub(super) fn lower_load_static_property(
     Ok(())
 }
 
+/// Lowers an addressable native static-property slot for a synthetic reference local.
+///
+/// By-reference foreach uses the returned process-lifetime address as its relocation origin.
+/// Stores through the alias therefore replace the static property's container pointer directly,
+/// including copy-on-write and hash-growth replacements.
+pub(super) fn lower_load_static_property_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if eval_dynamic_static_property_target(ctx, inst)?.is_some() {
+        return Err(CodegenIrError::unsupported(
+            "reference binding to an eval-defined static property",
+        ));
+    }
+    let slot = resolve_static_property_slot(ctx, inst, true)?;
+    ensure_static_property_type_supported(&slot.php_type, inst)?;
+    if slot.late_bound && ctx.module.required_runtime_features.eval_bridge {
+        return Err(CodegenIrError::unsupported(
+            "reference binding to an eval-overridable late static property",
+        ));
+    }
+    if slot.late_bound && !slot.branches.is_empty() {
+        let class_id_reg = class_id_work_reg(ctx.emitter);
+        if emit_called_class_id_to_reg(ctx, class_id_reg)? {
+            emit_dynamic_static_property_ref_cell_result(ctx, &slot, class_id_reg)?;
+            return store_if_result(ctx, inst);
+        }
+    }
+    if slot.is_declared {
+        emit_uninitialized_static_property_guard(ctx, &slot);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, result_reg, &slot.symbol);
+    store_if_result(ctx, inst)
+}
+
 /// Returns an eval dynamic static-property target when no AOT class owns the receiver.
 fn eval_dynamic_static_property_target(
     ctx: &FunctionContext<'_>,
@@ -435,6 +471,42 @@ fn emit_dynamic_load_static_property_result(
         }
         let branch_slot = branch_static_property_slot(ctx, slot, branch);
         emit_direct_load_static_property_result(ctx, &branch_slot);
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits the address of the late-bound native static-property slot selected at runtime.
+fn emit_dynamic_static_property_ref_cell_result(
+    ctx: &mut FunctionContext<'_>,
+    slot: &StaticPropertySlot,
+    class_id_reg: &str,
+) -> Result<()> {
+    let done = ctx.next_label("static_prop_ref_cell_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let mut labels = Vec::new();
+    for branch in &slot.branches {
+        let label = ctx.next_label("static_prop_ref_cell_branch");
+        emit_branch_if_class_id_matches(ctx, class_id_reg, branch.class_id, &label);
+        labels.push((label, branch));
+    }
+    if slot.is_declared {
+        emit_uninitialized_static_property_guard(ctx, slot);
+    }
+    abi::emit_symbol_address(ctx.emitter, result_reg, &slot.symbol);
+    abi::emit_jump(ctx.emitter, &done);
+    for (label, branch) in labels {
+        ctx.emitter.label(&label);
+        if branch.private_inaccessible {
+            emit_private_static_property_access_fatal(ctx);
+            continue;
+        }
+        let branch_slot = branch_static_property_slot(ctx, slot, branch);
+        if branch_slot.is_declared {
+            emit_uninitialized_static_property_guard(ctx, &branch_slot);
+        }
+        abi::emit_symbol_address(ctx.emitter, result_reg, &branch_slot.symbol);
         abi::emit_jump(ctx.emitter, &done);
     }
     ctx.emitter.label(&done);

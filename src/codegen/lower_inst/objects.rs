@@ -36,14 +36,13 @@ use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 use super::super::context::FunctionContext;
 use super::{
     builtins, callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes,
-    expect_data,
+    emit_call_arg_temp_cleanups, emit_resolved_method_call, expect_data,
     coerce_loaded_value_to_tagged_scalar, emit_instance_method_descriptor_entry_wrapper,
     emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
-    property_values, store_if_result,
-    store_method_call_result,
+    property_values, store_if_result, store_method_call_result, RefArgCellLifetime,
 };
 use crate::codegen::fibers;
 use crate::codegen::literal_defaults::{
@@ -123,7 +122,7 @@ struct DynamicNewCandidate {
     property_count: usize,
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: Vec<usize>,
-    owned_reference_property_offsets: Vec<(usize, PhpType)>,
+    owned_reference_property_offsets: Vec<(usize, PhpType, bool)>,
     property_defaults: Vec<PropertyDefault>,
     constructor_impl: Option<ConstructorCallTarget>,
 }

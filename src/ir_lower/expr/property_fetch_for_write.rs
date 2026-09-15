@@ -28,6 +28,39 @@ pub(crate) fn lower_by_ref_foreach_property_source(
     lower_property_write_source(ctx, object, property, expr, false)
 }
 
+/// Returns whether a by-reference foreach may bind a synthetic origin to this property slot.
+///
+/// The origin must name the same fixed backing storage that an ordinary fetch-for-write would
+/// mutate. Hooked, magic, inaccessible, dynamic, nullable, and temporary receiver shapes must
+/// keep the value-fetch fallback so lowering does not bypass user code or retain an interior slot
+/// after its receiver dies.
+pub(crate) fn by_ref_foreach_property_source_is_addressable(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    let Some((class_name, nullable)) = instance_callable_object_class_and_nullability(ctx, object)
+    else {
+        return false;
+    };
+    if nullable
+        || !matches!(
+            crate::types::resolve_property_name(
+                ctx.classes,
+                class_name.trim_start_matches('\\'),
+                property,
+                ctx.current_class.as_deref(),
+            ),
+            crate::types::PropertyNameResolution::Visible
+                | crate::types::PropertyNameResolution::ScopePrivate { .. }
+        )
+    {
+        return false;
+    }
+    property_is_splittable_container_slot(ctx, &class_name, property, false)
+        && receiver_is_stable_backing_storage(ctx, object)
+}
+
 /// Separates and republishes a fixed Mixed property before mutating its nested array payload.
 pub(crate) fn lower_nested_assignment_property_source(
     ctx: &mut LoweringContext<'_, '_>,

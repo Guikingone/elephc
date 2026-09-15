@@ -76,6 +76,7 @@ pub(super) fn lower_static_callable_call(
                 effects_lookup::user_call_effects(&function_name),
                 Some(expr.span),
             );
+            ctx.invalidate_callable_user_function(&function_name, sig.as_ref(), &operands);
             let call = finish_reference_return_call(
                 ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
             );
@@ -167,36 +168,48 @@ pub(super) fn lower_static_callable_call(
             name,
             signature,
             captures,
+            return_alias,
         } => {
             // A capture without a stable cell already refused this binding above, so the direct
             // call below can be lowered without abandoning any emitted instruction.
             let reference_staging = begin_reference_return_call(ctx, Some(&signature), expr.span);
+            let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
+            let result_staging = prepublish_user_call_result(
+                ctx,
+                Some(&signature),
+                &return_alias,
+                &php_type,
+                expr.span,
+            );
             begin_call_argument_evaluation(ctx);
             let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
-            let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
             let roots = root_user_call_operands(
-                ctx, &mut arg_values, Some(&signature), &ReturnArgAlias::Unknown, &php_type, expr.span,
+                ctx, &mut arg_values, Some(&signature), &return_alias, &php_type, expr.span,
             );
             let mut operands = arg_values.clone();
             append_closure_capture_operands(&mut operands, &captures);
             let data = ctx.intern_function_name(&name);
             let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&name),
                 Some(expr.span),
             );
+            ctx.invalidate_callable_capture_locals(&captures);
+            ctx.invalidate_callable_ref_argument_locals(Some(&signature), &operands);
             let call = finish_reference_return_call(
                 ctx, call, Some(&signature), reference_staging.as_ref(), expr.span,
             );
+            stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
             release_owned_call_arg_temporaries_with_roots(
-                ctx, &arg_values, Some(call.value), &ReturnArgAlias::Unknown,
+                ctx, &arg_values, Some(call.value), &return_alias,
                 Some(&signature), &roots, expr.span,
             );
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+            let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
             Some(finish_reference_return_value(ctx, call, reference_staging, expr.span))
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
@@ -490,6 +503,7 @@ pub(super) fn build_bound_closure_binding(
         name,
         signature,
         captures,
+        return_alias,
     }) = ctx.take_pending_static_callable_result()
     else {
         return None;
@@ -529,6 +543,7 @@ pub(super) fn build_bound_closure_binding(
         };
     let mut bound_captures = vec![ClosureCapture {
         value: boxed_this.value,
+        by_ref_local: None,
     }];
     bound_captures.extend(captures.into_iter().skip(1));
     let bound_operands = bound_captures
@@ -560,6 +575,7 @@ pub(super) fn build_bound_closure_binding(
         name,
         signature,
         captures: bound_captures,
+        return_alias,
     };
     Some((bound, bound_descriptor))
 }

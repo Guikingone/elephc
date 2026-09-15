@@ -362,6 +362,13 @@ impl Checker {
         arg_ty: &PhpType,
         param_has_declared_type: bool,
     ) {
+        let param_is_ref = self
+            .classes
+            .get(instantiated_class)
+            .and_then(|class_info| class_info.methods.get("__construct"))
+            .and_then(|sig| sig.ref_params.get(param_index))
+            .copied()
+            .unwrap_or(false);
         let Some((prop_name, declaring_class)) =
             self.classes.get(instantiated_class).and_then(|class_info| {
                 class_info
@@ -395,7 +402,11 @@ impl Checker {
             if !property_has_declared_type {
                 if let Some(slot) = class_info.visible_property_index(&prop_name) {
                     if let Some(prop) = class_info.properties.get_mut(slot) {
-                        prop.1 = arg_ty.clone();
+                        prop.1 = if param_is_ref {
+                            PhpType::Mixed
+                        } else {
+                            arg_ty.clone()
+                        };
                     }
                 }
             }
@@ -408,7 +419,11 @@ impl Checker {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
                     if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
                         if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                            *param_ty = arg_ty.clone();
+                            *param_ty = if param_is_ref {
+                                PhpType::Mixed
+                            } else {
+                                arg_ty.clone()
+                            };
                         }
                     }
                 }

@@ -76,6 +76,7 @@ pub(super) fn lower_mixed_prop_set(
 pub(super) fn lower_planned_dynamic_prop_set(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
+    property_value: Option<ValueId>,
     value: ValueId,
     property: &str,
     plan: &PropertyRuntimePlan,
@@ -87,7 +88,17 @@ pub(super) fn lower_planned_dynamic_prop_set(
         plan,
         "prop_set_dynamic",
         DispatchStackCleanup::NONE,
-        |ctx, arm| emit_dynamic_plan_write(ctx, object, value, property, arm, inst),
+        |ctx, arm| {
+            emit_dynamic_plan_write(
+                ctx,
+                object,
+                property_value,
+                value,
+                property,
+                arm,
+                inst,
+            )
+        },
     )
 }
 
@@ -95,6 +106,7 @@ pub(super) fn lower_planned_dynamic_prop_set(
 fn emit_dynamic_plan_write(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
+    property_value: Option<ValueId>,
     value: ValueId,
     property: &str,
     arm: &PropertyRuntimeArm,
@@ -130,11 +142,26 @@ fn emit_dynamic_plan_write(
         PropertyRuntimeAction::DynamicMissing { .. } => {
             Err(dynamic_write_without_storage(&arm.class_name, property))
         }
-        // A DIRECT name never reaches this arm: `crate::ir_lower::stmt::instance_property_writes`
-        // peels a runtime class declaring `__set` off with an `instanceof` guard and calls the
-        // accessor there. Storing nothing here is what php does once the accessor answered.
-        // `MagicGet` is a read-only answer and cannot be built for a write.
-        PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet => Ok(()),
+        PropertyRuntimeAction::MagicDeferred => {
+            let property_value = property_value.ok_or_else(|| {
+                CodegenIrError::invalid_module(
+                    "guarded direct magic property write missing its string operand",
+                )
+            })?;
+            let hash_offset =
+                dynamic_property_hash_offset_for_class(ctx, &arm.class_name, property)?;
+            lower_direct_magic_set(
+                ctx,
+                object,
+                property_value,
+                value,
+                &arm.class_name,
+                hash_offset,
+            )
+        }
+        PropertyRuntimeAction::MagicGet => Err(CodegenIrError::invalid_module(
+            "property write resolved to a magic getter",
+        )),
         PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
             "property dispatch handed a refusal arm to its action emitter",
         )),
@@ -237,10 +264,10 @@ pub(super) fn lower_allow_dynamic_prop_set(
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("mov {}, rax", boxed_reg));        // preserve the boxed dynamic-property value across receiver restore
             abi::emit_pop_reg(ctx.emitter, object_reg);
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // load the dynamic-property hash pointer from the receiver
                 "mov rdi, QWORD PTR [{} + {}]",
                 object_reg, hash_offset
-            ));                                                                 // load the dynamic-property hash pointer from the receiver
+            ));
             abi::emit_push_reg(ctx.emitter, object_reg);
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);

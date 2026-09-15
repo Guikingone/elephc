@@ -48,7 +48,7 @@ pub fn emit_hash_entry_reference(emitter: &mut Emitter) {
 /// repeated by-reference foreach from restamping a live reference entry.
 ///
 /// Input: argument 0 = address of `entry.value_lo` (the by-reference foreach value address).
-/// Output: integer result register = managed reference cell pointer, borrowed by the caller.
+/// Output: integer result register = managed reference-cell pointer.
 fn emit_make_reference(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_entry_make_reference ---");
@@ -324,7 +324,7 @@ mod tests {
         emitter.output()
     }
 
-    /// Pins that every supported target defines all four hash-entry reference symbols.
+    /// Pins that every supported target defines all managed entry-reference symbols.
     #[test]
     fn hash_entry_reference_defines_every_symbol_on_every_target() {
         for name in SUPPORTED_TARGETS {

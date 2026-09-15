@@ -27,6 +27,108 @@ pub(super) fn begin_call_argument_evaluation(ctx: &mut LoweringContext<'_, '_>) 
     );
 }
 
+/// Publishes a managed synthetic receiver alias while one call argument is evaluated.
+///
+/// Nested property and element receivers are normalized through local reference aliases. Those
+/// aliases are expression temporaries, not frame-lifetime PHP variables, so their cell owners
+/// must join the call's unwind ledger and retire as soon as the final element cell is leased.
+pub(super) fn publish_scoped_ref_receiver_alias(
+    ctx: &mut LoweringContext<'_, '_>,
+    alias: &str,
+    span: Span,
+) -> bool {
+    let Some(slot) = ctx.ref_cell_owner_slot(alias) else {
+        return false;
+    };
+    if !ctx
+        .call_argument_evaluation_scopes
+        .last()
+        .is_some_and(|scope| scope.expression_depth == ctx.expression_depth)
+    {
+        return false;
+    }
+    register_owned_call_operand(ctx, slot, span);
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument evaluation scope")
+        .owners
+        .push(crate::ir_lower::context::CallArgumentEvaluationOwner {
+            value: None,
+            borrow: None,
+            temp_name: alias.to_string(),
+            slot,
+            span,
+            ref_cell_payload: Some(PhpType::Mixed),
+            scoped_receiver_alias: true,
+        });
+    true
+}
+
+/// Retires nested receiver aliases after the final managed element cell has been leased.
+///
+/// The final lease remains the top unwind record while releasing aliases, since those releases
+/// can run destructors and throw. Once every alias slot is cleared, the non-throwing record edits
+/// temporarily detach that lease, discard the now-empty alias records in LIFO order, and publish
+/// the final lease again before later argument evaluation begins.
+pub(super) fn retire_scoped_ref_receiver_aliases(
+    ctx: &mut LoweringContext<'_, '_>,
+    aliases: &[String],
+) {
+    if aliases.is_empty() {
+        return;
+    }
+    let Some(scope) = ctx.call_argument_evaluation_scopes.last() else {
+        return;
+    };
+    if scope.expression_depth != ctx.expression_depth {
+        return;
+    }
+    let Some(final_alias) = aliases.last() else {
+        return;
+    };
+    let Some(final_owner) = scope
+        .owners
+        .iter()
+        .rev()
+        .find(|owner| owner.scoped_receiver_alias && owner.temp_name == *final_alias)
+        .cloned()
+    else {
+        return;
+    };
+    let intermediate_aliases = &aliases[..aliases.len() - 1];
+    let alias_owners: Vec<_> = intermediate_aliases
+        .iter()
+        .filter_map(|alias| {
+            scope
+                .owners
+                .iter()
+                .rev()
+                .find(|owner| owner.scoped_receiver_alias && owner.temp_name == *alias)
+                .cloned()
+        })
+        .collect();
+    if alias_owners.len() != intermediate_aliases.len() {
+        return;
+    }
+
+    for owner in alias_owners.iter().rev() {
+        ctx.release_ref_cell_owner(&owner.temp_name, Some(owner.span));
+    }
+    unregister_owned_call_operand(ctx, final_owner.slot, final_owner.span);
+    for owner in alias_owners.iter().rev() {
+        unregister_owned_call_operand(ctx, owner.slot, owner.span);
+    }
+    register_owned_call_operand(ctx, final_owner.slot, final_owner.span);
+
+    let alias_slots: std::collections::HashSet<_> =
+        alias_owners.iter().map(|owner| owner.slot).collect();
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument evaluation scope")
+        .owners
+        .retain(|owner| !alias_slots.contains(&owner.slot));
+}
+
 /// Transfers an owned by-value argument into an unwind-visible slot before later evaluation.
 ///
 /// The exposed `Borrow` preserves the producer chain specialized consumers inspect without
@@ -37,15 +139,18 @@ pub(super) fn root_evaluated_call_argument(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
+    let php_type = ctx.builder.value_php_type(value.value);
+    let borrowed_ref_cell_value = ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell)
+        && Ownership::php_type_needs_lifetime_tracking(&php_type);
     if !ctx
         .call_argument_evaluation_scopes
         .last()
         .is_some_and(|scope| scope.expression_depth == ctx.expression_depth)
-        || !ctx.value_needs_release_after_use(value)
+        || (!ctx.value_needs_release_after_use(value) && !borrowed_ref_cell_value)
     {
         return value;
     }
-    let ty = ctx.builder.value_php_type(value.value);
+    let ty = php_type;
     if matches!(ty.codegen_repr(), PhpType::Buffer(_)) {
         return value;
     }
@@ -55,7 +160,9 @@ pub(super) fn root_evaluated_call_argument(
     ctx.store_local(&temp_name, rooted, ty, Some(span));
     let slot = ctx.local_slots[&temp_name];
     register_owned_call_operand(ctx, slot, span);
-    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    if !borrowed_ref_cell_value {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
     let borrowed_ty = ctx.builder.value_php_type(rooted.value);
     let borrowed = ctx
         .builder
@@ -75,11 +182,13 @@ pub(super) fn root_evaluated_call_argument(
         .expect("call argument evaluation scope")
         .owners
         .push(crate::ir_lower::context::CallArgumentEvaluationOwner {
-            value: rooted.value,
-            borrow: borrowed,
+            value: Some(rooted.value),
+            borrow: Some(borrowed),
             temp_name,
             slot,
             span,
+            ref_cell_payload: None,
+            scoped_receiver_alias: false,
         });
     LoweredValue {
         value: borrowed,
@@ -107,7 +216,7 @@ pub(super) fn value_is_call_argument_evaluation_pin(
 pub(super) fn finish_call_argument_evaluation(
     ctx: &mut LoweringContext<'_, '_>,
     operands: &mut [crate::ir::ValueId],
-) -> Vec<(crate::ir::LocalSlotId, Span)> {
+) -> Vec<CallArgumentIntermediate> {
     let scope = ctx
         .call_argument_evaluation_scopes
         .pop()
@@ -116,35 +225,144 @@ pub(super) fn finish_call_argument_evaluation(
     let mut intermediates = Vec::new();
     for owner in scope.owners.into_iter().rev() {
         unregister_owned_call_operand(ctx, owner.slot, owner.span);
+        if let Some(payload_type) = owner.ref_cell_payload {
+            // Keep the Borrow marker on the call operand. It tells codegen that the
+            // surrounding EIR ledger, rather than the ABI materializer, retires this
+            // already-acquired managed cell after the call.
+            intermediates.push(CallArgumentIntermediate {
+                slot: owner.slot,
+                span: owner.span,
+                ref_cell_payload: Some(payload_type),
+            });
+            continue;
+        }
+        let owner_value = owner
+            .value
+            .expect("ordinary call owner has a rooted value");
+        let owner_borrow = owner
+            .borrow
+            .expect("ordinary call owner has a borrowed value");
         let mut retained_by_call = false;
         for operand in operands.iter_mut() {
-            if *operand == owner.borrow {
-                *operand = owner.value;
+            if *operand == owner_borrow {
+                *operand = owner_value;
                 retained_by_call = true;
-            } else if *operand == owner.value {
+            } else if *operand == owner_value {
                 retained_by_call = true;
             }
         }
         if retained_by_call {
             ctx.clear_owned_hidden_temp(&owner.temp_name, Some(owner.span));
         } else {
-            intermediates.push((owner.slot, owner.span));
+            intermediates.push(CallArgumentIntermediate {
+                slot: owner.slot,
+                span: owner.span,
+                ref_cell_payload: None,
+            });
         }
     }
     intermediates.reverse();
-    for (slot, span) in &intermediates {
-        register_owned_call_operand(ctx, *slot, *span);
+    for intermediate in &intermediates {
+        register_owned_call_operand(ctx, intermediate.slot, intermediate.span);
     }
     intermediates
+}
+
+/// Owner retained while argument evaluation and the enclosing call are in flight.
+pub(super) struct CallArgumentIntermediate {
+    slot: crate::ir::LocalSlotId,
+    span: Span,
+    ref_cell_payload: Option<PhpType>,
 }
 
 /// Retires source-evaluation leases after the enclosing call's ordinary cleanup.
 pub(super) fn retire_call_argument_intermediates(
     ctx: &mut LoweringContext<'_, '_>,
-    roots: &[(crate::ir::LocalSlotId, Span)],
+    roots: &[CallArgumentIntermediate],
 ) {
-    for (slot, span) in roots.iter().rev() {
-        retire_owned_call_operand(ctx, *slot, *span);
+    for root in roots.iter().rev() {
+        unregister_owned_call_operand(ctx, root.slot, root.span);
+        if let Some(payload_type) = &root.ref_cell_payload {
+            ctx.builder.emit_with_effects(
+                Op::ReleaseLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlot(root.slot)),
+                crate::ir::IrType::Void,
+                payload_type.clone(),
+                Ownership::NonHeap,
+                Op::ReleaseLocalRefCell.default_effects(),
+                Some(root.span),
+            );
+        } else {
+            ctx.emit_void(
+                Op::ReleaseLocalSlot,
+                Vec::new(),
+                Some(Immediate::LocalSlot(root.slot)),
+                Op::ReleaseLocalSlot.default_effects(),
+                Some(root.span),
+            );
+        }
+    }
+}
+
+/// Retains a managed element cell before a later argument can replace its parent container.
+///
+/// Calls that use the argument-evaluation ledger retire the lease immediately after their call
+/// and ordinary writebacks. Legacy call surfaces receive the bare `AcquireRefCell` result, which
+/// lets their shared ABI materializer identify and retire the already-published lease. Acquiring
+/// here is essential because later argument evaluation can replace the parent container before
+/// backend call materialization begins.
+pub(super) fn lease_managed_call_argument_ref_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    cell_ptr: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let has_evaluation_scope = ctx
+        .call_argument_evaluation_scopes
+        .last()
+        .is_some_and(|scope| scope.expression_depth == ctx.expression_depth);
+    let (temp_name, owner) = ctx.predeclare_returned_ref_cell_staging();
+    register_owned_call_operand(ctx, owner, span);
+    let captured = ctx.emit_value(
+        Op::AcquireRefCell,
+        vec![cell_ptr.value],
+        Some(Immediate::LocalSlot(owner)),
+        PhpType::Pointer(None),
+        Op::AcquireRefCell.default_effects(),
+        Some(span),
+    );
+    if !has_evaluation_scope {
+        return captured;
+    }
+    let borrowed = ctx
+        .builder
+        .emit_with_effects(
+            Op::Borrow,
+            vec![captured.value],
+            None,
+            captured.ir_type,
+            PhpType::Pointer(None),
+            Ownership::Borrowed,
+            Op::Borrow.default_effects(),
+            Some(span),
+        )
+        .expect("managed call argument borrow produces a value");
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument evaluation scope")
+        .owners
+        .push(crate::ir_lower::context::CallArgumentEvaluationOwner {
+            value: Some(captured.value),
+            borrow: Some(borrowed),
+            temp_name,
+            slot: owner,
+            span,
+            ref_cell_payload: Some(PhpType::Mixed),
+            scoped_receiver_alias: false,
+        });
+    LoweredValue {
+        value: borrowed,
+        ir_type: captured.ir_type,
     }
 }
 

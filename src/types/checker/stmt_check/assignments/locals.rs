@@ -15,7 +15,7 @@ use crate::parser::ast::{
     is_compound_assignment_self_read, CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr,
 };
 use crate::span::Span;
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
@@ -270,16 +270,30 @@ pub(super) fn check_ref_assign(
         ExprKind::ArrayAccess { array, index } => {
             let array_ty = checker.infer_type(array, env)?;
             let index_ty = checker.infer_type(index, env)?;
-            if !matches!(array_ty, PhpType::Array(_)) {
+            let normalized_index_ty = normalized_array_key_type(index, index_ty);
+            let valid_php_key = matches!(
+                normalized_index_ty,
+                PhpType::Int | PhpType::Str | PhpType::Mixed
+            );
+            let supported_key = match array_ty.codegen_repr() {
+                PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
+                    valid_php_key
+                }
+                PhpType::Array(_) => normalized_index_ty == PhpType::Int,
+                PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) => {
+                    valid_php_key
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Reference assignment to an array element requires an array",
+                    ));
+                }
+            };
+            if !supported_key {
                 return Err(CompileError::new(
                     span,
-                    "Reference assignment to an array element requires an indexed array",
-                ));
-            }
-            if !matches!(index_ty, PhpType::Int) {
-                return Err(CompileError::new(
-                    span,
-                    "Reference assignment to an array element requires an integer index",
+                    "Reference assignment to an array element requires an integer or string array key",
                 ));
             }
             let target_ty = checker.infer_type(source, env)?;
@@ -409,7 +423,8 @@ pub(super) fn update_callable_assignment_metadata(
                         (
                             capture.clone(),
                             env.get(capture).cloned().unwrap_or(PhpType::Mixed),
-                            capture_refs.iter().any(|ref_capture| ref_capture == capture),
+                            capture_refs.iter().any(|ref_capture| ref_capture == capture)
+                                || checker.ref_aliased_locals.contains(capture),
                         )
                     })
                     .collect();

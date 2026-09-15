@@ -33,9 +33,17 @@ pub(super) struct CallArgMaterialization {
     pub(super) overflow_bytes: usize,
     pub(super) ref_writebacks: Vec<RefArgWriteback>,
     pub(super) ref_temp_cells: Vec<RefArgTempCell>,
+    pub(super) preleased_ref_cells: Vec<PreleasedRefArgCell>,
     pub(super) cleanup_slots: Vec<CallArgTempCleanup>,
     pub(super) cleanup_bytes: usize,
     pub(super) borrowed_stack_arg_bytes: usize,
+}
+
+/// A managed element cell acquired during EIR argument evaluation without an EIR call ledger.
+/// The shared ABI cleanup retires its published frame owner after call writeback completes.
+pub(super) struct PreleasedRefArgCell {
+    pub(super) owner_slot: LocalSlotId,
+    pub(super) cell_ty: PhpType,
 }
 
 /// Caller-owned coercion with an adjacent unwind record, retired on return or throw.
@@ -78,6 +86,9 @@ pub(super) struct RefArgTempCell {
     /// PARAMETER's type, so the cell must be that type and not the argument's.
     pub(super) cell_ty: PhpType,
     pub(super) cell_offset: usize,
+    /// An element-reference operand already is a managed cell. The caller retains that cell
+    /// instead of allocating a second cell, preserving identity with the hash entry.
+    pub(super) retain_existing: bool,
 }
 
 /// A caller-side scalar local boxed into a temporary Mixed by-reference cell.

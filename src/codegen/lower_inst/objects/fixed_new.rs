@@ -203,7 +203,7 @@ fn materialize_existing_promoted_reference_address(
             super::super::materialize_local_ref_arg_address(ctx, value)?;
             Ok(true)
         }
-        Op::ArrayElemAddr => {
+        Op::ArrayElemAddr | Op::LoadArrayElemRefCell => {
             ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
             Ok(true)
         }

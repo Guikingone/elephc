@@ -148,6 +148,7 @@ impl Checker {
                         .get(seen_idx)
                         .copied()
                         .unwrap_or(false)
+                    && !stored_sig.ref_params.get(seen_idx).copied().unwrap_or(false)
                     && stored_sig.params[seen_idx].1 == PhpType::Int
                     && *actual_ty != PhpType::Int
                 {
@@ -231,6 +232,21 @@ impl Checker {
                     }
                 }
             }
+            let undeclared_ref_param = seen_idx < regular_param_count
+                && stored_sig.ref_params.get(seen_idx).copied().unwrap_or(false)
+                && !stored_sig
+                    .declared_params
+                    .get(seen_idx)
+                    .copied()
+                    .unwrap_or(false);
+            if undeclared_ref_param {
+                if param_types[seen_idx].1 != PhpType::Mixed {
+                    param_types[seen_idx].1 = PhpType::Mixed;
+                    changed = true;
+                }
+                seen_idx += 1;
+                continue;
+            }
             // A DECLARED `array` hint is generic: it resolves to `Array(Mixed)` and is then
             // specialized to the first call site's concrete element type. That narrowing has to be
             // joined over ALL call sites, or a later `Array(Mixed)` argument is passed to a body
@@ -301,12 +317,14 @@ impl Checker {
             seen_idx += 1;
         }
 
-        if function_variadic_tail_needs_iterable(
+        if !variadic_param_is_by_ref(stored_sig)
+            && function_variadic_tail_needs_iterable(
             args,
             stored_sig,
             regular_param_count,
             caller_env,
-        ) {
+        )
+        {
             if let Some(variadic_name) = stored_sig.variadic.as_deref() {
                 if let Some(variadic_index) = param_types
                     .iter()

@@ -152,15 +152,18 @@ pub(super) fn lower_static_callable_value_call(
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
             let php_type = call_return_type(ctx, &function_name, &operands);
+            let sig = ctx.functions.get(&function_name).cloned();
             let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&function_name),
                 Some(expr.span),
-            ))
+            );
+            ctx.invalidate_callable_user_function(&function_name, sig.as_ref(), &operands);
+            Some(call)
         }
         StaticCallableBinding::ExternFunction(function_name) => {
             let php_type = call_return_type(ctx, &function_name, &operands);
@@ -194,35 +197,43 @@ pub(super) fn lower_static_callable_value_call(
             name,
             signature,
             captures,
+            return_alias: _,
         } => {
-            let mut operands = operands;
-            append_closure_capture_operands(&mut operands, &captures);
+            let arguments = operands;
+            let mut call_operands = arguments.clone();
+            append_closure_capture_operands(&mut call_operands, &captures);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
             let data = ctx.intern_function_name(&name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                call_operands,
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&name),
                 Some(expr.span),
-            ))
+            );
+            ctx.invalidate_callable_capture_locals(&captures);
+            ctx.invalidate_callable_ref_argument_locals(Some(&signature), &arguments);
+            Some(call)
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
-            let sig = static_method_implementation_signature(ctx, &receiver, &method);
+            let sig = static_method_implementation_signature(ctx, &receiver, &method).cloned();
             let result_type = sig
+                .as_ref()
                 .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
                 .unwrap_or_else(|| fallback_expr_type(expr));
             let name = format!("{}::{}", receiver_name(&receiver), method);
             let data = ctx.intern_string(&name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::StaticMethodCall,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 result_type,
                 Op::StaticMethodCall.default_effects(),
                 Some(expr.span),
-            ))
+            );
+            ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &operands);
+            Some(call)
         }
         StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
             lower_static_method_descriptor_value_call(ctx, &receiver, &method, operands, expr)

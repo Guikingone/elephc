@@ -268,13 +268,12 @@ pub(crate) struct Checker {
     /// Applied after body checking so the physical slot and every inherited view use boxed
     /// `Mixed` storage, which can safely represent the post-unset null value.
     pub property_unset_destinations: clone_override_storage::PropertyUnsetDestinations,
-    /// Classes a reachable MUTATION in this program addresses under a strict ancestor's private
-    /// property name.
+    /// Classes where a reachable mutation in this program can create a dynamic property.
     ///
     /// Recorded by the property-write and `unset` checks, and applied to `classes` after checking
-    /// by `scope_dynamic_storage::reserve_scope_dynamic_property_storage`: php creates a DISTINCT
-    /// dynamic property for such a name, so the class needs per-instance hash storage or the
-    /// backend's by-name ladder falls back onto the ancestor's physical slot.
+    /// by `scope_dynamic_storage::reserve_scope_dynamic_property_storage`: a runtime name can miss
+    /// every declared slot, while a strict ancestor's private name becomes a distinct dynamic
+    /// property outside its declaring scope. Both need per-instance hash storage.
     pub scope_dynamic_mutation_targets: scope_dynamic_storage::ScopeDynamicMutationTargets,
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
@@ -373,6 +372,9 @@ pub(crate) struct Checker {
     /// yet") and therefore cannot answer this question: an `unset` above the body's only `eval`
     /// sees no barrier at all. Per-body, like every other field in [`SavedLocalBindingScope`].
     pub body_contains_eval: bool,
+    /// Whether any checked body contains eval. Runtime fragments can write missing names on AOT
+    /// objects even when no equivalent property mutation is visible in the source AST.
+    pub program_contains_eval: bool,
     /// Names of the CURRENT body's locals that the syntactic pre-scan marked as whole-frame boxed
     /// `Mixed` storage, because they are assigned incompatible types across a branch.
     ///

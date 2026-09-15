@@ -118,6 +118,13 @@ unsafe extern "C" {
         scope_ptr: *const u8,
         scope_len: u64,
     ) -> u64;
+    pub(super) fn __rt_magic_set_guard_push(
+        object_identity: u64,
+        name_ptr: *const u8,
+        name_len: u64,
+        node: *mut u64,
+    ) -> u64;
+    pub(super) fn __rt_magic_set_guard_pop(node: *mut u64);
     /// Clears a native typed slot and returns any escaping exception through the owned output box.
     #[link_name = "__elephc_eval_value_typed_property_unset_v2"]
     pub(super) fn __elephc_eval_value_typed_property_unset(

@@ -16,10 +16,11 @@
 //!   Compiler-internal types with no PHP spelling stay a hard error.
 
 use crate::errors::CompileError;
-use std::collections::HashMap;
+use crate::names::{php_symbol_key, property_hook_get_method};
+use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{
-    BinOp, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
+    BinOp, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, Visibility,
 };
 use crate::types::{PhpType, TypeEnv};
 
@@ -88,6 +89,160 @@ fn stabilize_loop_storage(
         recorded.insert(name.clone(), storage_type.clone());
         env.insert(name, storage_type);
     }
+}
+
+/// Gives a by-reference foreach root its persistent hash representation.
+///
+/// PHP's `array` property declaration constrains the container, not its element types. Once a
+/// by-reference loop can replace an element with a different runtime type, every later property
+/// read must select boxed Mixed hash operations rather than the initializer's old concrete
+/// layout. Nested sources promote their root too, then traverse boxed Mixed entries dynamically.
+/// Applying the storage change to property metadata also converts initializers and assignments,
+/// so no `Array`-typed access can observe hash-backed storage.
+fn promoted_by_ref_foreach_root_type(ty: &PhpType) -> Option<PhpType> {
+    let ty = ty.codegen_repr();
+    match ty {
+        PhpType::Array(_) => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Mixed),
+        }),
+        PhpType::AssocArray { key, .. } => Some(PhpType::AssocArray {
+            key,
+            value: Box::new(PhpType::Mixed),
+        }),
+        _ => None,
+    }
+}
+
+fn widen_by_ref_foreach_source_storage(
+    checker: &mut Checker,
+    source: &Expr,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let mut root = source;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    if let ExprKind::Variable(name) = &root.kind {
+        if let Some(widened) = env
+            .get(name)
+            .and_then(promoted_by_ref_foreach_root_type)
+        {
+            env.insert(name.clone(), widened);
+        }
+        return Ok(());
+    }
+    if let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind {
+        let access_class = checker.resolve_static_property_receiver(receiver, root)?;
+        let Some(declaring_class) = checker
+            .classes
+            .get(&access_class)
+            .and_then(|info| info.static_property_declaring_classes.get(property).cloned())
+        else {
+            return Ok(());
+        };
+        let mut reachable_declarations = HashSet::from([declaring_class]);
+        if matches!(receiver, StaticReceiver::Static) {
+            for (class_name, info) in &checker.classes {
+                if class_name != &access_class
+                    && !checker.is_subclass_of(class_name, &access_class)
+                {
+                    continue;
+                }
+                let Some(selected_declaration) =
+                    info.static_property_declaring_classes.get(property)
+                else {
+                    continue;
+                };
+                let visibility = info
+                    .static_property_visibilities
+                    .get(property)
+                    .unwrap_or(&Visibility::Public);
+                // The backend's late-static dispatch raises before loading a private
+                // redeclaration owned by a descendant, so that inaccessible storage must keep
+                // its independently declared representation.
+                if matches!(visibility, Visibility::Private)
+                    && selected_declaration != &access_class
+                {
+                    continue;
+                }
+                reachable_declarations.insert(selected_declaration.clone());
+            }
+        }
+        for info in checker.classes.values_mut() {
+            if !info
+                .static_property_declaring_classes
+                .get(property)
+                .is_some_and(|declaring| reachable_declarations.contains(declaring))
+            {
+                continue;
+            }
+            let Some((_, property_ty)) = info
+                .static_properties
+                .iter_mut()
+                .find(|(name, _)| name == property)
+            else {
+                continue;
+            };
+            if let Some(widened) = promoted_by_ref_foreach_root_type(property_ty) {
+                *property_ty = widened;
+            }
+        }
+        return Ok(());
+    }
+    let ExprKind::PropertyAccess { object, property } = &root.kind else {
+        return Ok(());
+    };
+    let object_ty = checker.infer_type(object, env)?;
+    let Some(access_class) = crate::types::checker::single_object_class_name(&object_ty) else {
+        return Ok(());
+    };
+    let access_class = access_class.trim_start_matches('\\').to_string();
+    let property_is_addressable = checker.classes.get(&access_class).is_some_and(|info| {
+        !info
+            .methods
+            .contains_key(&php_symbol_key(&property_hook_get_method(property)))
+            && matches!(
+                crate::types::resolve_property_name(
+                    &checker.classes,
+                    &access_class,
+                    property,
+                    checker.current_class.as_deref(),
+                ),
+                crate::types::PropertyNameResolution::Visible
+                    | crate::types::PropertyNameResolution::ScopePrivate { .. }
+            )
+    });
+    if !property_is_addressable {
+        return Ok(());
+    }
+    checker
+        .reference_property_promotions
+        .insert((access_class.clone(), property.clone()));
+    let Some(declaring_class) = checker
+        .classes
+        .get(&access_class)
+        .and_then(|info| info.property_declaring_classes.get(property).cloned())
+    else {
+        return Ok(());
+    };
+    for info in checker.classes.values_mut() {
+        if !info
+            .property_declaring_classes
+            .get(property)
+            .is_some_and(|declaring| declaring == &declaring_class)
+        {
+            continue;
+        }
+        let Some(slot) = info.visible_property_index(property) else {
+            continue;
+        };
+        let widened = promoted_by_ref_foreach_root_type(&info.properties[slot].1);
+        if let Some(widened) = widened {
+            info.properties[slot].1 = widened;
+        }
+    }
+    Ok(())
 }
 
 /// Restores a narrowed variable in the environment to its previously saved type after a guarded
@@ -226,7 +381,11 @@ impl Checker {
                     self.record_reference_alias_root(array);
                     self.ref_aliased_locals.insert(value_var.clone());
                 }
+                let value_was_bound = env.contains_key(value_var);
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
+                if *value_by_ref {
+                    widen_by_ref_foreach_source_storage(self, array, env)?;
+                }
                 if let PhpType::Array(elem_ty) = &arr_ty {
                     // A genuinely packed array has int keys; an UNKNOWN-element array (an
                     // `array`-hinted param/property, elements known only to phpdoc) may be
@@ -237,29 +396,35 @@ impl Checker {
                     } else {
                         PhpType::Int
                     };
-                    // An indexed foreach-by-reference over a SIMPLE local promotes the payload
-                    // to runtime hash storage with boxed Mixed entries, because only a hash ENTRY
-                    // carries the persistent per-entry reference marker a live alias needs. Keep
-                    // the source's static representation runtime-polymorphic (`Array(Mixed)`),
-                    // rather than claiming it is always an `AssocArray`: statements before this
-                    // loop still operate on the original indexed payload, while statements after
-                    // it must accept the promoted hash. The bound reference retains the original
-                    // element type so the strict checker still rejects incompatible write-through
-                    // assignments.
+                    // An indexed foreach-by-reference over a simple local promotes the payload
+                    // to hash storage with boxed Mixed entries. Flow typing below the conversion
+                    // selects associative operations; earlier expressions were already checked
+                    // against the original indexed representation.
                     let promotes_to_hash =
                         *value_by_ref && matches!(&array.kind, ExprKind::Variable(_));
                     if let Some(k) = key_var {
                         env.insert(k.clone(), key_ty.clone());
                         self.clear_foreach_callable_metadata(k);
                     }
-                    let value_ty = *elem_ty.clone();
+                    // A fresh by-reference binding is null when an empty source never enters the
+                    // body, and later writes through the live reference may change its PHP type.
+                    // Preserve an existing binding's stricter write-through contract, but give a
+                    // fresh binding the Mixed shape used by the runtime reference slot.
+                    let value_ty = if *value_by_ref && !value_was_bound {
+                        PhpType::Mixed
+                    } else {
+                        *elem_ty.clone()
+                    };
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
                     if promotes_to_hash {
                         if let ExprKind::Variable(source_name) = &array.kind {
                             env.insert(
                                 source_name.clone(),
-                                PhpType::Array(Box::new(PhpType::Mixed)),
+                                PhpType::AssocArray {
+                                    key: Box::new(PhpType::Int),
+                                    value: Box::new(PhpType::Mixed),
+                                },
                             );
                         }
                     }
@@ -273,7 +438,11 @@ impl Checker {
                     // reinterpret boxed-cell pointers as the old concrete payload type. The
                     // reference local itself retains the entry's declared type, matching the
                     // checker's normal strict write-through rules.
-                    let value_ty = *value.clone();
+                    let value_ty = if *value_by_ref && !value_was_bound {
+                        PhpType::Mixed
+                    } else {
+                        *value.clone()
+                    };
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
                     if *value_by_ref {

@@ -1206,7 +1206,7 @@ pub(crate) fn check_call_user_func_array(
             &arg_array_ty,
         )?;
         if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
-            let ret_ty = checker.check_known_callable_call(
+            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,
                 elems,
                 span,
@@ -1243,7 +1243,7 @@ pub(crate) fn check_call_user_func_array(
                 &arg_array_ty,
             )?;
             if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
-                let ret_ty = checker.check_known_callable_call(
+                let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                     &sig,
                     elems,
                     span,
@@ -1268,6 +1268,15 @@ pub(crate) fn check_call_user_func_array(
         }
         if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
             if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+                if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name) {
+                    checker.check_known_callable_call_allowing_by_ref_spread(
+                        &sig,
+                        elems,
+                        span,
+                        env,
+                        "call_user_func_array() callback",
+                    )?;
+                }
                 if let Some(ret_ty) =
                     checker.check_builtin(&builtin_name, elems, span, env)?
                 {
@@ -1315,7 +1324,7 @@ pub(crate) fn check_call_user_func_array(
                 )?;
             }
             if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
-                let ret_ty = checker.check_known_callable_call(
+                let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                     &sig,
                     elems,
                     span,
@@ -1396,7 +1405,7 @@ pub(crate) fn check_call_user_func_array(
     if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
         validate_call_user_func_array_dynamic_arg_array(checker, &sig, &args[1], span, env)?;
         if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
-            let ret_ty = checker.check_known_callable_call(
+            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,
                 elems,
                 span,

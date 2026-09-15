@@ -175,6 +175,41 @@ pub(in crate::interpreter) fn eval_property_set_result(
             if !is_static
                 && validate_eval_member_access(&declaring_class, write_visibility, context).is_err()
             {
+                if eval_object_public_property_exists(object, property_name, values)? {
+                    return eval_write_public_dynamic_property(
+                        object,
+                        identity,
+                        &class_name,
+                        property_name,
+                        value,
+                        context,
+                        values,
+                    );
+                }
+                let has_magic_set = values
+                    .reflection_method_flags(&class_name, "__set")?
+                    .is_some();
+                if eval_native_magic_property_set(
+                    object,
+                    &class_name,
+                    property_name,
+                    value,
+                    context,
+                    values,
+                )? {
+                    return Ok(());
+                }
+                if has_magic_set {
+                    return eval_create_public_dynamic_property(
+                        object,
+                        identity,
+                        &class_name,
+                        property_name,
+                        value,
+                        context,
+                        values,
+                    );
+                }
                 return eval_throw_property_access_error(
                     &declaring_class,
                     property_name,
@@ -197,6 +232,51 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 );
             }
         }
+        if eval_object_public_property_exists(object, property_name, values)? {
+            return eval_write_public_dynamic_property(
+                object,
+                identity,
+                &class_name,
+                property_name,
+                value,
+                context,
+                values,
+            );
+        }
+        if eval_native_magic_property_set(
+            object,
+            &class_name,
+            property_name,
+            value,
+            context,
+            values,
+        )? {
+            return Ok(());
+        }
+        if values
+            .reflection_class_flags(&class_name)?
+            .is_some_and(|flags| flags & EVAL_REFLECTION_CLASS_FLAG_READONLY != 0)
+        {
+            return eval_throw_dynamic_property_creation_error(
+                &class_name,
+                property_name,
+                context,
+                values,
+            );
+        }
+        if !eval_object_public_property_exists(object, property_name, values)?
+            && !eval_class_allows_dynamic_properties(&class_name, context)
+        {
+            eval_dispatch_php_error(
+                &format!(
+                    "Creation of dynamic property {}::${property_name} is deprecated",
+                    class_name.trim_start_matches('\\')
+                ),
+                E_DEPRECATED,
+                context,
+                values,
+            )?;
+        }
         return values.property_set(object, property_name, value);
     };
     let object_class_name = class.name().to_string();
@@ -211,6 +291,20 @@ pub(in crate::interpreter) fn eval_property_set_result(
     {
         declared_property_found = true;
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
+            if eval_object_public_property_exists(object, property_name, values)? {
+                return eval_write_public_dynamic_property(
+                    object,
+                    identity,
+                    &object_class_name,
+                    property_name,
+                    value,
+                    context,
+                    values,
+                );
+            }
+            let has_magic_set = context
+                .class_method(&object_class_name, "__set")
+                .is_some();
             if eval_magic_property_set(
                 object,
                 &object_class_name,
@@ -220,6 +314,17 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 values,
             )? {
                 return Ok(());
+            }
+            if has_magic_set {
+                return eval_create_public_dynamic_property(
+                    object,
+                    identity,
+                    &object_class_name,
+                    property_name,
+                    value,
+                    context,
+                    values,
+                );
             }
             return eval_throw_property_access_error(
                 &declaring_class,
@@ -304,6 +409,20 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 if validate_eval_member_access(&declaring_class, write_visibility, context)
                     .is_err()
                 {
+                    if eval_object_public_property_exists(object, property_name, values)? {
+                        return eval_write_public_dynamic_property(
+                            object,
+                            identity,
+                            &object_class_name,
+                            property_name,
+                            value,
+                            context,
+                            values,
+                        );
+                    }
+                    let has_magic_set = context
+                        .class_method(&object_class_name, "__set")
+                        .is_some();
                     if eval_magic_property_set(
                         object,
                         &object_class_name,
@@ -313,6 +432,17 @@ pub(in crate::interpreter) fn eval_property_set_result(
                         values,
                     )? {
                         return Ok(());
+                    }
+                    if has_magic_set {
+                        return eval_create_public_dynamic_property(
+                            object,
+                            identity,
+                            &object_class_name,
+                            property_name,
+                            value,
+                            context,
+                            values,
+                        );
                     }
                     return eval_throw_property_access_error(
                         &declaring_class,
@@ -336,7 +466,10 @@ pub(in crate::interpreter) fn eval_property_set_result(
             }
         }
     }
+    let existing_public_dynamic = !declared_property_found
+        && eval_object_public_property_exists(object, property_name, values)?;
     if !declared_property_found
+        && !existing_public_dynamic
         && eval_magic_property_set(
             object,
             &object_class_name,
@@ -357,7 +490,7 @@ pub(in crate::interpreter) fn eval_property_set_result(
         );
     }
     if !declared_property_found
-        && !eval_object_public_property_exists(object, property_name, values)?
+        && !existing_public_dynamic
         && !eval_class_allows_dynamic_properties(&object_class_name, context)
     {
         eval_dispatch_php_error(
@@ -428,6 +561,70 @@ fn eval_class_allows_dynamic_properties(class_name: &str, context: &ElephcEvalCo
         current = parent.to_string();
     }
     false
+}
+
+/// Writes a public dynamic entry without resolving an inaccessible declared slot of the same name.
+fn eval_write_public_dynamic_property(
+    object: RuntimeCellHandle,
+    identity: u64,
+    class_name: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    eval_with_native_property_storage_scope(class_name, property_name, context, values, |values| {
+        values.property_set(object, property_name, value)
+    })?;
+    context.mark_dynamic_property_initialized(identity, property_name);
+    Ok(())
+}
+
+/// Creates the public dynamic entry used by a same-name write suppressed inside `__set`.
+fn eval_create_public_dynamic_property(
+    object: RuntimeCellHandle,
+    identity: u64,
+    class_name: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let class_is_readonly = if let Some(class) = context.class(class_name) {
+        class.is_readonly_class()
+    } else {
+        values
+            .reflection_class_flags(class_name)?
+            .is_some_and(|flags| flags & EVAL_REFLECTION_CLASS_FLAG_READONLY != 0)
+    };
+    if class_is_readonly {
+        return eval_throw_dynamic_property_creation_error(
+            class_name,
+            property_name,
+            context,
+            values,
+        );
+    }
+    if !eval_class_allows_dynamic_properties(class_name, context) {
+        eval_dispatch_php_error(
+            &format!(
+                "Creation of dynamic property {}::${property_name} is deprecated",
+                class_name.trim_start_matches('\\')
+            ),
+            E_DEPRECATED,
+            context,
+            values,
+        )?;
+    }
+    eval_write_public_dynamic_property(
+        object,
+        identity,
+        class_name,
+        property_name,
+        value,
+        context,
+        values,
+    )
 }
 
 /// Enforces readonly one-shot initialization for properties owned by generated classes.
@@ -829,24 +1026,36 @@ pub(super) fn eval_magic_property_set(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    let identity = values.object_identity(object)?;
     let Some((declaring_class, method)) = context.class_method(object_class_name, "__set") else {
         return Ok(false);
     };
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let property = values.string(property_name)?;
-    let result = eval_dynamic_method_with_values(
-        &declaring_class,
-        object_class_name,
-        &method,
-        object,
-        positional_args(vec![property, value]),
-        context,
-        values,
-    )?;
-    values.release(result)?;
-    Ok(true)
+    let mut native_node = std::pin::pin!([0_u64; 4]);
+    if !values.native_magic_set_guard_push(
+        identity,
+        property_name,
+        native_node.as_mut().get_mut(),
+    )? {
+        return Ok(false);
+    }
+    let result = (|| {
+        let property = values.string(property_name)?;
+        let result = eval_dynamic_method_with_values(
+            &declaring_class,
+            object_class_name,
+            &method,
+            object,
+            positional_args(vec![property, value]),
+            context,
+            values,
+        )?;
+        values.release(result)
+    })();
+    let popped = values.native_magic_set_guard_pop(native_node.as_mut().get_mut());
+    result.and(popped).map(|()| true)
 }
 
 /// Dispatches an undefined or inaccessible eval property probe through `__isset()`.

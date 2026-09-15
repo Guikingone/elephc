@@ -197,8 +197,10 @@ fn finish_if_type_join(
     let saved_types = ctx.local_types_snapshot();
     for arm in &arms {
         ctx.restore_local_types(arm.types.clone());
+        let hash_conversions = arm_hash_conversions(arm, &joined);
         let conversions = arm_conversions(arm, &joined);
         ctx.builder.position_at_end(arm.tail);
+        widen_arm_containers_to_hash(ctx, &hash_conversions, span);
         widen_indexed_arrays_to_mixed(ctx, &conversions, span);
         ctx.builder.terminate(Terminator::Br {
             target: merge,
@@ -207,7 +209,11 @@ fn finish_if_type_join(
     }
     ctx.restore_local_types(saved_types);
     for (name, ty) in joined {
-        ctx.set_local_type(&name, ty);
+        if matches!(ty.codegen_repr(), PhpType::AssocArray { .. }) {
+            ctx.set_retyped_container_local_type(&name, ty);
+        } else {
+            ctx.set_local_type(&name, ty);
+        }
     }
     ctx.restore_static_callable_locals(joined_callables);
 }
@@ -256,6 +262,29 @@ fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv 
             continue;
         }
 
+        if arm_types
+            .iter()
+            .all(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }))
+            && arm_types
+                .iter()
+                .any(|ty| matches!(ty, PhpType::AssocArray { .. }))
+        {
+            if !arms
+                .iter()
+                .all(|arm| local_slot_is_convertible(ctx, &name, &arm.initialized))
+            {
+                continue;
+            }
+            joined.insert(
+                name,
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Int),
+                    value: Box::new(PhpType::Mixed),
+                },
+            );
+            continue;
+        }
+
         for arm_type in arm_types {
             let PhpType::Array(_) = arm_type else {
                 continue 'names;
@@ -277,6 +306,9 @@ fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<String> {
     let mut names = joined
         .keys()
         .filter(|name| {
+            if !matches!(joined.get(name.as_str()).map(PhpType::codegen_repr), Some(PhpType::Array(_))) {
+                return false;
+            }
             matches!(
                 arm.types.get(name.as_str()).map(PhpType::codegen_repr),
                 Some(PhpType::Array(element)) if element.codegen_repr() != PhpType::Mixed
@@ -286,6 +318,56 @@ fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<String> {
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+/// Returns array-like locals whose arm edge must adopt the joined associative representation.
+fn arm_hash_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<String> {
+    let mut names = joined
+        .iter()
+        .filter(|(name, joined_ty)| {
+            matches!(joined_ty.codegen_repr(), PhpType::AssocArray { .. })
+                && arm
+                    .types
+                    .get(name.as_str())
+                    .is_some_and(|arm_ty| arm_ty.codegen_repr() != joined_ty.codegen_repr())
+        })
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+/// Converts one arm's array-like locals to boxed-value hash storage before the merge.
+fn widen_arm_containers_to_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    names: &[String],
+    span: Span,
+) {
+    let target = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: Box::new(PhpType::Mixed),
+    };
+    for name in names {
+        let source = ctx.load_local(name, Some(span));
+        let op = match ctx.local_type(name).codegen_repr() {
+            PhpType::Array(_) => Op::ArrayToHash,
+            PhpType::AssocArray { .. } => Op::HashToMixed,
+            _ => continue,
+        };
+        let converted = ctx.emit_value(
+            op,
+            vec![source.value],
+            None,
+            target.clone(),
+            op.default_effects(),
+            Some(span),
+        );
+        if op == Op::ArrayToHash {
+            ctx.store_retyped_container_local(name, converted, target.clone(), Some(span));
+        } else {
+            ctx.store_mutated_local(name, converted, target.clone(), Some(span));
+        }
+    }
 }
 
 /// Returns whether one arm can safely convert the named local's array storage in place.
@@ -389,7 +471,7 @@ pub(super) fn apply_loop_storage_contracts(
                     Op::ArrayToHash.default_effects(),
                     span,
                 );
-                ctx.store_mutated_local(&name, converted, target_ty, span);
+                ctx.store_retyped_container_local(&name, converted, target_ty, span);
             }
             (PhpType::Array(_), PhpType::Array(target_element))
                 if target_element.codegen_repr() == PhpType::Mixed =>

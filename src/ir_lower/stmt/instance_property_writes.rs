@@ -424,7 +424,7 @@ pub(super) fn magic_set_receiver_has_method(
     class_info.methods.contains_key(&php_symbol_key("__set"))
 }
 
-/// Lowers an undeclared property write to a normal `__set` instance-method call.
+/// Lowers an undeclared property write through the guarded dynamic-property operation.
 pub(super) fn lower_magic_property_set(
     ctx: &mut LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
@@ -441,18 +441,23 @@ pub(super) fn lower_magic_property_set(
         Op::ConstStr.default_effects(),
         Some(span),
     );
-    let method_data = ctx.intern_string("__set");
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(
+        ctx,
+        &[object, property_name.value, value.value],
+        span,
+    );
     ctx.emit_void(
-        Op::MethodCall,
+        Op::DynamicPropSet,
         vec![object, property_name.value, value.value],
-        Some(Immediate::Data(method_data)),
-        Op::MethodCall.default_effects(),
+        None,
+        Op::DynamicPropSet.default_effects(),
         Some(span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     release_magic_set_value_after_call(ctx, value, span);
 }
 
-/// Releases an owning RHS temporary after the `__set` call has consumed it.
+/// Releases an owning RHS temporary after a magic or hooked setter has retained it.
 pub(super) fn release_magic_set_value_after_call(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,

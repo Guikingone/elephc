@@ -16,8 +16,8 @@ use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{
-    validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType, LocalKind, Module,
-    Op, TraitMethodInfo,
+    validate_module, ExternDecl, ExternParamDecl, Function, Immediate, Instruction, IrType,
+    LocalKind, Module, Op, TraitMethodInfo,
 };
 use crate::ir_lower::{builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
@@ -58,6 +58,9 @@ use spl_lowering::*;
 
 pub(super) use eval_aot::all_lowered_functions;
 pub(super) use runtime_features::include_lowered_runtime_features;
+pub(super) use function_declarations::{
+    close_function_global_names_over_calls, collect_function_global_names,
+};
 pub(super) use spl_discovery::{
     class_data_name, dynamic_object_new_metadata_names, php_method_key, string_data_name,
 };

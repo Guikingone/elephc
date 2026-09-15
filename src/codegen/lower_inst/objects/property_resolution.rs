@@ -23,7 +23,7 @@ pub(super) fn initialize_owned_property_reference(
     let owns_cell = slot.is_reference && ctx.module.class_infos.get(&slot.class_name)
         .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
     if owns_cell {
-        emit_owned_reference_property_cell(ctx, base_reg, slot.offset, &slot.php_type);
+        emit_owned_reference_property_cell(ctx, base_reg, slot.offset, &slot.php_type, false);
     }
     owns_cell
 }
@@ -199,8 +199,8 @@ pub(super) enum PropertyRuntimePlan {
 ///
 /// The direct/runtime split is what decides the accessor arm. php consults `__get`, `__set`,
 /// `__isset` or `__unset` for a name it does not resolve to a visible slot, and a DIRECT name is
-/// answered upstream in `crate::ir_lower` by a real call; a RUNTIME name cannot reach the
-/// accessor in this phase and keeps php's null answer without ever reading storage.
+/// answered upstream in `crate::ir_lower` by a real call. Runtime writes defer `__set` to the
+/// write-site lowering, which owns the receiver/name reentrancy guard.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum PropertyAccessKind {
     /// `$o->name`, with php's fetch mode.
@@ -718,11 +718,31 @@ pub(super) fn dynamic_property_runtime_plan_for_class(
     let normalized = class_name.trim_start_matches('\\');
     let answers_dynamically = property_name_is_scope_dynamic(ctx, normalized, property)
         || dynamic_property_hash_offset_for_class(ctx, normalized, property)?.is_some()
-        || subtree_answers_from_its_own_hash(ctx, normalized, property)?;
+        || subtree_answers_from_its_own_hash(ctx, normalized, property)?
+        || kind
+            .magic_method()
+            .is_some_and(|method| subtree_declares_magic_method(ctx, normalized, method));
     if !answers_dynamically {
         return Ok(None);
     }
     resolve_property_runtime_plan(ctx, normalized, property, kind, inst).map(Some)
+}
+
+/// Returns whether the receiver class or one of its runtime subclasses declares an accessor.
+fn subtree_declares_magic_method(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method: &str,
+) -> bool {
+    ctx.module.class_infos.iter().any(|(candidate, class_info)| {
+        (candidate == class_name
+            || crate::types::class_inherits_from(
+                &ctx.module.class_infos,
+                candidate,
+                class_name,
+            ))
+            && class_info.methods.contains_key(&php_symbol_key(method))
+    })
 }
 
 /// Returns whether a module-declared SUBCLASS answers this name from its OWN per-instance hash

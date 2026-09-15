@@ -61,7 +61,8 @@ pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conv
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{
-    collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
+    collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
+    ReturnArgAlias,
 };
 pub(crate) use result::LoopStorageTypes;
 pub use checker::CheckOptions;

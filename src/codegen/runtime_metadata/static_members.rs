@@ -47,6 +47,7 @@ pub(in crate::codegen) fn referenced_static_property_class_names(module: &Module
             if !matches!(
                 inst.op,
                 Op::LoadStaticProperty
+                    | Op::LoadStaticPropertyRefCell
                     | Op::StoreStaticProperty
                     | Op::StaticPropInitialized
                     | Op::LoadReflectionStaticProperty

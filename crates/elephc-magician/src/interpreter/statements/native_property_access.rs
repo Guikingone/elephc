@@ -10,6 +10,47 @@
 
 use super::*;
 
+/// Invokes a native class's `__set` method with eval and native recursion guards aligned.
+pub(in crate::interpreter) fn eval_native_magic_property_set(
+    object: RuntimeCellHandle,
+    object_class: &str,
+    property: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(flags) = values.reflection_method_flags(object_class, "__set")? else {
+        return Ok(false);
+    };
+    if flags & (EVAL_REFLECTION_MEMBER_FLAG_STATIC | EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT) != 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let identity = values.object_identity(object)?;
+    let owner = values
+        .reflection_method_declaring_class(object_class, "__set")?
+        .unwrap_or_else(|| object_class.to_string());
+    let mut native_node = std::pin::pin!([0_u64; 4]);
+    if !values.native_magic_set_guard_push(identity, property, native_node.as_mut().get_mut())? {
+        return Ok(false);
+    }
+    let result = (|| {
+        let name = values.string(property)?;
+        let call = eval_native_method_with_evaluated_args(
+            object,
+            &owner,
+            "__set",
+            positional_args(vec![name.borrowed(), value.borrowed()]),
+            context,
+            values,
+        );
+        let call = call.and_then(|result| release_expr_result(result, context, values));
+        let released = release_expr_result(name, context, values);
+        call.and(released)
+    })();
+    let popped = values.native_magic_set_guard_pop(native_node.as_mut().get_mut());
+    result.and(popped).map(|()| true)
+}
+
 /// Reads a native property through its getter, or its backing storage when no getter exists.
 pub(in crate::interpreter) fn eval_native_property_get_authorized(
     object: RuntimeCellHandle,

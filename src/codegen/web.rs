@@ -77,6 +77,11 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // stack-backed borrow chain before any reset cleanup can run user destructors, so a
     // failed request never leaves them scanning an address in its retired native stack.
     abi::emit_store_zero_to_symbol(emitter, "_rt_unmanaged_ref_borrow_top", 0);
+    // A normal or throwing `__set` call unlinks its stack-backed recursion node locally. The web
+    // reset is the final backstop for non-Throwable request escapes, before the retired request
+    // stack can be reused and before any reset destructor performs another property write.
+    abi::emit_store_zero_to_symbol(emitter, "_magic_set_guard_head", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_fiber_main_saved_magic_set_guard", 0);
     let mut labels = LabelGen::new();
     if super::context::module_uses_pcntl_signal_handlers(module) {
         abi::emit_call_label(emitter, "__rt_pcntl_release_handlers");
@@ -240,12 +245,22 @@ mod handler_reset_tests {
             emit_web_reset(&mut emitter, &Module::new(target), &DataSection::new());
             let asm = emitter.output();
             let borrowed_refs = asm.find("_rt_unmanaged_ref_borrow_top").unwrap();
+            let magic_set_guards = asm.find("_magic_set_guard_head").unwrap();
+            let saved_magic_set_guards = asm.find("_fiber_main_saved_magic_set_guard").unwrap();
             let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
             let heap = asm.find("_heap_off").unwrap();
             for symbol in ["__rt_core_error_handler_pop", "__rt_core_exception_handler_pop", "_php_error_reporting"] {
                 assert!(asm.find(symbol).unwrap() < inventory, "{target:?}: {symbol}");
             }
             assert!(borrowed_refs < inventory, "{target:?}: stale borrow state must clear first");
+            assert!(
+                magic_set_guards < inventory,
+                "{target:?}: stale magic-set guard state must clear first"
+            );
+            assert!(
+                saved_magic_set_guards < inventory,
+                "{target:?}: saved main magic-set guard state must clear first"
+            );
             assert!(inventory < heap, "{target:?}: handlers need the live request heap");
         }
     }

@@ -27,7 +27,7 @@ use crate::names::Name;
 use crate::span::Span;
 use crate::types::{
     collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, FunctionSig,
-    PackedClassInfo, PhpType, TypeEnv,
+    PackedClassInfo, PhpType, ReturnArgAlias, TypeEnv,
 };
 
 mod builtin_wrappers;
@@ -53,7 +53,8 @@ struct RecursiveClosureBinding {
     local_name: String,
     closure_name: String,
     signature: FunctionSig,
-    capture_names: Vec<String>,
+    captures: Vec<(String, bool)>,
+    return_alias: ReturnArgAlias,
 }
 
 /// Lowers the top-level statement list as the synthetic `main` EIR function.
@@ -68,6 +69,13 @@ pub(crate) fn lower_main(
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
     let all_global_var_names = collect_global_var_names(program);
+    let mut function_global_names =
+        crate::ir_lower::program::collect_function_global_names(program);
+    crate::ir_lower::program::close_function_global_names_over_calls(
+        &mut function_global_names,
+        &module.functions,
+        &module.data.function_names,
+    );
     let top_level_env = web_gated_global_env(&check_result.global_env, web);
     let closures = lower_body_into_function(
         &mut function,
@@ -106,6 +114,7 @@ pub(crate) fn lower_main(
         None,
         true,
         all_global_var_names,
+        Some(function_global_names),
         module.source_path.clone(),
         None,
         web,
@@ -233,6 +242,7 @@ pub(crate) fn lower_user_function(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -348,6 +358,7 @@ pub(crate) fn lower_class_method(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -451,6 +462,7 @@ pub(crate) fn lower_eval_aot_function(
         None,
         false,
         collect_global_var_names(body),
+        None,
         module.source_path.clone(),
         None,
         module.web,
@@ -567,6 +579,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         None,
         false,
         collect_global_var_names(body),
+        None,
         module.source_path.clone(),
         eval_scope_reads,
         module.web,
@@ -675,6 +688,7 @@ pub(crate) fn lower_property_init_thunk(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -1035,6 +1049,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -1151,6 +1166,7 @@ pub(crate) fn lower_clone_override_function(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -1306,6 +1322,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             None,
             false,
             std::collections::HashSet::new(),
+            None,
             module.source_path.clone(),
             None,
             module.web,
@@ -1414,8 +1431,8 @@ pub(crate) fn lower_closure_function_with_context(
             signature.return_type = contextual_return_type.clone();
         }
     }
-    for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
-        if type_ann.is_none() {
+    for (idx, (_, type_ann, _, is_ref)) in params.iter().enumerate() {
+        if type_ann.is_none() && !is_ref {
             if let Some(contextual_ty) = contextual_arg_types.get(idx) {
                 if let Some((_, param_ty)) = signature.params.get_mut(idx) {
                     *param_ty = contextual_ty.clone();
@@ -1469,10 +1486,16 @@ fn lower_closure_function_with_signature(
         local_name: local_name.to_string(),
         closure_name: name.to_string(),
         signature: signature.clone(),
-        capture_names: captures
+        captures: captures
             .iter()
-            .map(|(capture_name, _, _)| capture_name.clone())
+            .map(|(capture_name, _, by_ref)| (capture_name.clone(), *by_ref))
             .collect(),
+        return_alias: crate::types::summarize_callable_return_alias(
+            signature.params.iter().map(|(name, _)| name.as_str()),
+            None,
+            signature.by_ref_return,
+            body,
+        ),
     });
     let closures = lower_body_into_function(
         &mut function,
@@ -1511,6 +1534,7 @@ fn lower_closure_function_with_signature(
         recursive_binding,
         false,
         collect_global_var_names(body),
+        None,
         parent.source_path().map(str::to_string),
         None,
         parent.web,
@@ -1563,6 +1587,9 @@ fn lower_body_into_function(
     recursive_closure_binding: Option<RecursiveClosureBinding>,
     in_main: bool,
     all_global_var_names: std::collections::HashSet<String>,
+    function_global_names: Option<
+        std::collections::HashMap<String, Option<std::collections::HashSet<String>>>,
+    >,
     source_path: Option<String>,
     eval_scope_reads: Option<(
         String,
@@ -1619,6 +1646,9 @@ fn lower_body_into_function(
         source_path,
         web,
     );
+    if let Some(function_global_names) = function_global_names {
+        ctx.set_function_global_names(function_global_names);
+    }
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
@@ -1686,10 +1716,11 @@ fn seed_recursive_closure_binding(
         return;
     };
     let captures = binding
-        .capture_names
+        .captures
         .iter()
-        .map(|capture_name| ClosureCapture {
+        .map(|(capture_name, by_ref)| ClosureCapture {
             value: ctx.load_local(capture_name, None).value,
+            by_ref_local: by_ref.then(|| capture_name.clone()),
         })
         .collect();
     ctx.bind_static_callable_local(
@@ -1698,6 +1729,7 @@ fn seed_recursive_closure_binding(
             name: binding.closure_name,
             signature: binding.signature,
             captures,
+            return_alias: binding.return_alias,
         },
     );
 }

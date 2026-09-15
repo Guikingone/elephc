@@ -600,7 +600,9 @@ impl Checker {
                 {
                     return Ok(ret_ty);
                 }
-                let specialized_sig = if self.callable_param_names.contains(var) {
+                let descriptor_args = self.callable_param_names.contains(var)
+                    || self.first_class_callable_args_need_descriptor_binder(&target, args, env)?;
+                let specialized_sig = if descriptor_args {
                     self.specialize_first_class_callable_target_for_descriptor_call(
                         &target, args, expr.span, env,
                     )?
@@ -611,7 +613,7 @@ impl Checker {
                     .insert(var.to_string(), specialized_sig.clone());
                 self.closure_return_types
                     .insert(var.to_string(), specialized_sig.return_type.clone());
-                if self.callable_param_names.contains(var) {
+                if descriptor_args {
                     return self.check_known_callable_call_allowing_by_ref_spread(
                         &specialized_sig,
                         args,
@@ -636,7 +638,9 @@ impl Checker {
                 env,
                 &format!("callable ${}", var),
             )?;
-            if self.callable_param_names.contains(var) {
+            if self.callable_param_names.contains(var)
+                || self.callable_local_requires_descriptor_binder(var)
+            {
                 return self.check_known_callable_call_allowing_by_ref_spread(
                     &specialized_sig,
                     args,
@@ -665,6 +669,63 @@ impl Checker {
             .get(var)
             .cloned()
             .unwrap_or(PhpType::Mixed))
+    }
+
+    /// Mirrors closure-call lowering when an instance FCC spread needs descriptor binding.
+    fn first_class_callable_args_need_descriptor_binder(
+        &mut self,
+        target: &CallableTarget,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        if !matches!(target, CallableTarget::Method { .. }) {
+            return Ok(false);
+        }
+        for arg in args {
+            let ExprKind::Spread(source) = &arg.kind else {
+                continue;
+            };
+            if matches!(source.kind, ExprKind::ArrayLiteralAssoc(_)) {
+                continue;
+            }
+            if !matches!(self.infer_type(source, env)?.codegen_repr(), PhpType::Array(_)) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Mirrors closure lowering when captured storage cannot be rematerialized directly.
+    fn callable_local_requires_descriptor_binder(&self, var: &str) -> bool {
+        let Some(captures) = self.callable_captures.get(var) else {
+            return true;
+        };
+        captures.iter().any(|(_, _, captured_from_cell)| *captured_from_cell)
+    }
+
+    /// Mirrors the lowerer's direct-call classification for callable expressions with a known
+    /// signature. Assignment expressions lower their RHS target directly; closure captures use
+    /// the storage kind observed when the closure value itself is created.
+    fn expr_callable_requires_descriptor_binder(&self, callee: &Expr) -> bool {
+        match &callee.kind {
+            ExprKind::Closure {
+                captures,
+                capture_refs,
+                ..
+            } => {
+                !capture_refs.is_empty()
+                    || captures
+                        .iter()
+                        .any(|name| self.ref_aliased_locals.contains(name))
+            }
+            ExprKind::FirstClassCallable(target) => {
+                matches!(target, CallableTarget::Method { .. })
+            }
+            ExprKind::Assignment { value, .. } => {
+                self.expr_callable_requires_descriptor_binder(value)
+            }
+            _ => true,
+        }
     }
 
     /// Infers the return type of an arbitrary expression callable call: `expr(...)`.
@@ -746,7 +807,10 @@ impl Checker {
                         )? {
                             return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                         }
-                        let descriptor_args = self.callable_param_names.contains(var_name);
+                        let descriptor_args = self.callable_param_names.contains(var_name)
+                            || self.first_class_callable_args_need_descriptor_binder(
+                                &target, args, env,
+                            )?;
                         let specialized_sig = if descriptor_args {
                             self.specialize_first_class_callable_target_for_descriptor_call(
                                 &target, args, expr.span, env,
@@ -787,7 +851,9 @@ impl Checker {
                         env,
                         &format!("callable ${}", var_name),
                     )?;
-                    let ret_ty = if self.callable_param_names.contains(var_name) {
+                    let ret_ty = if self.callable_param_names.contains(var_name)
+                        || self.callable_local_requires_descriptor_binder(var_name)
+                    {
                         self.check_known_callable_call_allowing_by_ref_spread(
                             &specialized_sig,
                             args,
@@ -813,28 +879,54 @@ impl Checker {
                 {
                     return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                 }
-                let sig = self.specialize_first_class_callable_target_for_descriptor_call(
-                    target, args, expr.span, env,
-                )?;
-                let ret_ty = self.check_known_callable_call_allowing_by_ref_spread(
-                    &sig,
-                    args,
-                    expr.span,
-                    env,
-                    "first-class callable",
-                )?;
+                let descriptor_dispatch = matches!(target, CallableTarget::Method { .. });
+                let sig = if descriptor_dispatch {
+                    self.specialize_first_class_callable_target_for_descriptor_call(
+                        target, args, expr.span, env,
+                    )?
+                } else {
+                    self.specialize_first_class_callable_target(target, args, expr.span, env)?
+                };
+                let ret_ty = if descriptor_dispatch {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &sig,
+                        args,
+                        expr.span,
+                        env,
+                        "first-class callable",
+                    )?
+                } else {
+                    self.check_known_callable_call(
+                        &sig,
+                        args,
+                        expr.span,
+                        env,
+                        "first-class callable",
+                    )?
+                };
                 return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
             }
             _ => {}
         }
         if let Some(sig) = self.resolve_expr_callable_sig(callee, env)? {
-            let ret_ty = self.check_known_callable_call(
-                &sig,
-                args,
-                expr.span,
-                env,
-                "callable expression",
-            )?;
+            let descriptor_dispatch = self.expr_callable_requires_descriptor_binder(callee);
+            let ret_ty = if descriptor_dispatch {
+                self.check_known_callable_call_allowing_by_ref_spread(
+                    &sig,
+                    args,
+                    expr.span,
+                    env,
+                    "callable expression",
+                )?
+            } else {
+                self.check_known_callable_call(
+                    &sig,
+                    args,
+                    expr.span,
+                    env,
+                    "callable expression",
+                )?
+            };
             return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
         }
         // Everything below this point failed to produce a signature: the return type may still be

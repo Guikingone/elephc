@@ -53,7 +53,7 @@ pub(super) fn emit_property_hash_slot_helper(module: &Module, emitter: &mut Emit
                 emitter.instruction(&format!("jne {next}"));                    // try the next layout on a class mismatch
             }
         }
-        if name != "stdClass" && !info.allow_dynamic_properties {
+        if name != "stdClass" && !info.dynamic_property_hash_is_name_addressable() {
             let callback = module.target.extern_symbol("__elephc_eval_dynamic_object_owns_properties");
             abi::emit_call_label(emitter, &callback);
             match module.target.arch {
@@ -178,6 +178,30 @@ mod tests {
             let call = if target.arch == Arch::AArch64 { "bl" } else { "call" };
             assert!(asm.contains(&format!("{call} {callback}")), "{name}");
             assert!(asm.contains("__elephc_eval_property_hash_slot_miss:"), "{name}");
+            let offset = if target.arch == Arch::AArch64 { "#24" } else { "[rdi + 24]" };
+            assert!(asm.contains(offset), "{name}: missing one-property tail offset");
+        }
+    }
+
+    /// Eval-reachable native instances use compiler-reserved name-addressable storage directly.
+    #[test]
+    fn scope_dynamic_hash_skips_eval_ownership_guard_on_every_target() {
+        let tokens = crate::lexer::tokenize("<?php class RuntimeEvalPlain { public int $x = 1; }").unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let checked = crate::types::check(&program).unwrap();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut module = Module::new(target);
+            let mut info = checked.classes["RuntimeEvalPlain"].clone();
+            info.scope_dynamic_property_storage = true;
+            assert!(!info.allow_dynamic_properties);
+            assert!(info.dynamic_property_hash_is_name_addressable());
+            module.class_infos.insert("RuntimeEvalPlain".to_string(), info);
+            let mut emitter = Emitter::new(target);
+            emit_property_hash_slot_helper(&module, &mut emitter);
+            let asm = emitter.output();
+            let callback = target.extern_symbol("__elephc_eval_dynamic_object_owns_properties");
+            assert!(!asm.contains(&callback), "{name}");
             let offset = if target.arch == Arch::AArch64 { "#24" } else { "[rdi + 24]" };
             assert!(asm.contains(offset), "{name}: missing one-property tail offset");
         }

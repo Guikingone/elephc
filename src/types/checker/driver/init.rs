@@ -125,6 +125,7 @@ impl Checker {
             local_retype_sites: HashMap::new(),
             statement_position_expr: None,
             body_contains_eval: false,
+            program_contains_eval: false,
             mixed_storage_locals: HashSet::new(),
             mixed_storage_store_sites: HashMap::new(),
             buffer_read_observations: HashMap::new(),

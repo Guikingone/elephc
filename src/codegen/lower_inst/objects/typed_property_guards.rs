@@ -42,7 +42,13 @@ pub(super) fn emit_property_read_state_guard(
     missing_result: PropertyReadMissingResult<'_>,
 ) -> Result<Option<String>> {
     if slot.is_declared {
-        emit_uninitialized_typed_property_guard(ctx, slot, object_reg);
+        if slot.is_reference {
+            let cell_reg = reference_pointer_reg(ctx, object_reg);
+            abi::emit_load_from_address(ctx.emitter, cell_reg, object_reg, slot.offset);
+            emit_uninitialized_owned_ref_property_guard(ctx, slot, cell_reg);
+        } else {
+            emit_uninitialized_typed_property_guard(ctx, slot, object_reg);
+        }
         return Ok(None);
     }
     if !slot_supports_untyped_unset_marker(slot) {
@@ -121,6 +127,39 @@ pub(super) fn emit_uninitialized_typed_property_guard(
     ctx.emitter.label(&initialized_label);
 }
 
+/// Guards an object-owned reference property whose initialization marker lives in cell[0].
+pub(super) fn emit_uninitialized_owned_ref_property_guard(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    cell_reg: &str,
+) {
+    let initialized_label = ctx.next_label("typed_ref_prop_initialized");
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, marker_reg, cell_reg, 0);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        sentinel_reg,
+        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the owned reference payload against the uninitialized sentinel
+            ctx.emitter
+                .instruction(&format!("b.ne {}", initialized_label)); // continue once the reference property has been initialized
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the owned reference payload against the uninitialized sentinel
+            ctx.emitter
+                .instruction(&format!("jne {}", initialized_label)); // continue once the reference property has been initialized
+        }
+    }
+    emit_uninitialized_typed_property_fatal(ctx, slot);
+    ctx.emitter.label(&initialized_label);
+}
+
 /// Compares a typed instance-property marker with the uninitialized sentinel.
 pub(super) fn emit_typed_property_initialized_bool(
     ctx: &mut FunctionContext<'_>,
@@ -129,7 +168,13 @@ pub(super) fn emit_typed_property_initialized_bool(
 ) {
     let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
     let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_load_from_address(ctx.emitter, marker_reg, object_reg, slot.offset + 8);
+    if slot.is_reference {
+        let cell_reg = reference_pointer_reg(ctx, object_reg);
+        abi::emit_load_from_address(ctx.emitter, cell_reg, object_reg, slot.offset);
+        abi::emit_load_from_address(ctx.emitter, marker_reg, cell_reg, 0);
+    } else {
+        abi::emit_load_from_address(ctx.emitter, marker_reg, object_reg, slot.offset + 8);
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         sentinel_reg,

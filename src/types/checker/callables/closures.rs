@@ -37,8 +37,8 @@ impl Checker {
     /// receives (for example `usort`/`uasort` over an array of objects) pass the
     /// element type as a hint so an unannotated parameter is checked against the
     /// real value type instead of the default `Int`/`Mixed` placeholder. An
-    /// explicitly annotated parameter always keeps its declared type; the hint is
-    /// only consulted for parameters with no type annotation.
+    /// explicitly annotated parameter always keeps its declared type. An untyped by-reference
+    /// parameter uses canonical Mixed storage; other untyped parameters consult the hint.
     pub(crate) fn prepare_closure_signature_context_with_param_hints(
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
@@ -82,6 +82,7 @@ impl Checker {
                     )?;
                     (declared_ty.clone(), declared_ty)
                 }
+                None if *is_ref => (PhpType::Mixed, PhpType::Mixed),
                 None => match contextual_param_types.get(idx) {
                     Some(hint) => (hint.clone(), hint.clone()),
                     None => (PhpType::Int, PhpType::Mixed),

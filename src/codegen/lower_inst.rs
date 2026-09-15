@@ -333,6 +333,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
         Op::LoadPropRefCellChecked => objects::lower_load_prop_ref_cell_checked(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
+        Op::LoadArrayElemRefCellExisting => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
         Op::BindRefCellPtr | Op::AdoptRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
         Op::AcquireRefCell => lower_acquire_ref_cell(ctx, &inst),
         Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, &inst),
@@ -348,6 +349,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StoreStaticLocal => static_locals::lower_store_static_local(ctx, &inst),
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
+        Op::LoadStaticPropertyRefCell => {
+            static_properties::lower_load_static_property_ref_cell(ctx, &inst)
+        }
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
         Op::StaticPropInitialized => {
             static_properties::lower_static_property_initialized(ctx, &inst)

@@ -167,6 +167,7 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     // heap block it owned. `lower_foreach` now wraps a borrowed object source in an
     // `Op::Acquire`, which the loop's existing exit/`LoopCleanup` release paths balance.
     let initial_cursor = match &source_kind {
+        IteratorSourceKind::Indexed { .. } if by_ref => 0,
         IteratorSourceKind::Indexed { .. } => -1,
         IteratorSourceKind::Hash => 0,
         IteratorSourceKind::DynamicIterable => 0,
@@ -247,9 +248,13 @@ pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         emit_release_successor_keys(ctx, offset);
     }
     match iterator_source_kind(ctx, iterator, inst)? {
+        IteratorSourceKind::Indexed { .. } if by_ref => match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset, has_origin),
+            Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset, has_origin),
+        },
         IteratorSourceKind::Indexed { .. } => match ctx.emitter.target.arch {
-            Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset, by_ref),
-            Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset, by_ref),
+            Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset, false),
+            Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset, false),
         },
         IteratorSourceKind::Hash => match ctx.emitter.target.arch {
             Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset, has_origin),
@@ -281,6 +286,12 @@ pub(super) fn lower_iter_current_key(
     let iterator = expect_operand(inst, 0)?;
     let offset = iterator_state_offset(ctx, iterator, inst)?;
     match iterator_source_kind(ctx, iterator, inst)? {
+        IteratorSourceKind::Indexed { .. } if iterator_is_by_ref(ctx, iterator, inst)? => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
+                Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
+            }
+        }
         IteratorSourceKind::Indexed { .. } => {
             let result_reg = abi::int_result_reg(ctx.emitter);
             abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
@@ -401,9 +412,7 @@ pub(super) fn lower_iter_current_value_ref(
     let slot = expect_local_slot(inst)?;
     let offset = iterator_state_offset(ctx, iterator, inst)?;
     match iterator_source_kind(ctx, iterator, inst)? {
-        IteratorSourceKind::Indexed { elem } => {
-            bind_indexed_current_value_ref(ctx, offset, slot, &elem)?;
-        }
+        IteratorSourceKind::Indexed { .. } => bind_hash_current_value_ref(ctx, offset, slot)?,
         IteratorSourceKind::Hash => {
             bind_hash_current_value_ref(ctx, offset, slot)?;
         }
@@ -413,7 +422,7 @@ pub(super) fn lower_iter_current_value_ref(
         // Dead code in practice — `IterNext` already reported "no more elements" — but bind
         // the slot to a null cell so nothing downstream dereferences stack garbage.
         IteratorSourceKind::NonIterable { .. } => {
-            ctx.release_hash_entry_ref_binding(slot);
+            ctx.release_counted_ref_binding(slot);
             let local_offset = ctx.local_offset(slot)?;
             let result_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
@@ -455,7 +464,7 @@ fn initialize_dynamic_iterable_iterator(
         convert_dynamic_indexed_source_for_ref(ctx, offset)?;
         store_iter_source_to_origin_if_local(ctx, offset, source)?;
     }
-    store_iterator_cursor(ctx, offset, -1);
+    store_iterator_cursor(ctx, offset, if by_ref { 0 } else { -1 });
     if !by_ref {
         snapshot_indexed_array_length(ctx, offset);
     }
@@ -507,7 +516,7 @@ fn initialize_dynamic_mixed_iterator(
     } else {
         store_mixed_payload_low_as_iterator_source(ctx, offset);
     }
-    store_iterator_cursor(ctx, offset, -1);
+    store_iterator_cursor(ctx, offset, if by_ref { 0 } else { -1 });
     if !by_ref {
         snapshot_indexed_array_length(ctx, offset);
     }
@@ -925,7 +934,17 @@ fn ensure_unique_static_iter_source(
     source_kind: &IteratorSourceKind,
 ) -> Result<()> {
     let helper = match source_kind {
-        IteratorSourceKind::Indexed { .. } => "__rt_array_ensure_unique",
+        // Every indexed by-reference source becomes a hash before iteration. Hash entries carry
+        // the persistent tag-11 reference-set marker, so the last alias can safely outlive a
+        // literal or function-result source without introducing a second indexed wrapper format.
+        IteratorSourceKind::Indexed { .. } => {
+            convert_loaded_indexed_source_to_hash(ctx);
+            ctx.store_result_value(source)?;
+            if let Some(slot) = source_load_local_slot(ctx, source)? {
+                ctx.store_value_to_local(slot, source)?;
+            }
+            return Ok(());
+        }
         // Hash references use the boxed Mixed entry slot as their stable value cell. The
         // converter performs COW itself before replacing concrete entry payloads.
         IteratorSourceKind::Hash => "__rt_hash_to_mixed",
@@ -940,6 +959,62 @@ fn ensure_unique_static_iter_source(
         ctx.store_value_to_local(slot, source)?;
     }
     Ok(())
+}
+
+/// Converts the array-like value in the integer result register into a Mixed-entry hash.
+///
+/// A source may already have been promoted by addressable-source preparation before this shared
+/// helper reaches it. Probe the runtime heap kind first so that existing hashes go directly
+/// through the idempotent Mixed-entry conversion instead of being reinterpreted as indexed
+/// storage. For a genuine indexed array, `__rt_array_to_hash` borrows its input and returns a
+/// fresh hash. The replacement consumes the caller's indexed-array reference, so this helper
+/// releases that old owner after the hash has retained every child.
+pub(super) fn convert_loaded_indexed_source_to_hash(ctx: &mut FunctionContext<'_>) {
+    let already_hash = ctx.next_label("iter_indexed_source_already_hash");
+    let done = ctx.next_label("iter_indexed_source_hash_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // detect a source already promoted by addressable-source lowering
+            ctx.emitter.instruction(&format!("b.eq {}", already_hash));         // never reinterpret an existing hash as indexed storage
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // release the indexed owner replaced by the promoted hash
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.emitter.instruction(&format!("b {}", done));                    // join the already-hash and newly-promoted results
+            ctx.emitter.label(&already_hash);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the indexed source to hash promotion
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // detect a source already promoted by addressable-source lowering
+            ctx.emitter.instruction(&format!("je {}", already_hash));           // never reinterpret an existing hash as indexed storage
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            ctx.emitter.instruction("mov rdi, rax");                            // widen the promoted hash entries to boxed Mixed
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // release the indexed owner replaced by the promoted hash
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // join the already-hash and newly-promoted results
+            ctx.emitter.label(&already_hash);
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+    }
+    ctx.emitter.label(&done);
 }
 
 /// Stores a converted dynamic iterator source back to its originating local when possible.
@@ -963,7 +1038,7 @@ fn store_iter_source_to_origin_if_local(
     ctx.store_value_to_local(slot, source)
 }
 
-/// Resolves a source SSA value back to a local slot when it was produced by `load_local`.
+/// Resolves a source SSA value back to its direct or reference-bound local origin.
 fn source_load_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
@@ -978,7 +1053,7 @@ fn source_load_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::LoadLocal {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         return Ok(None);
     }
     let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
@@ -989,7 +1064,7 @@ fn source_load_local_slot(
     Ok(Some(slot))
 }
 
-/// Converts the raw dynamic indexed-array iterator source to boxed Mixed slots.
+/// Converts the raw dynamic indexed-array iterator source to a Mixed-entry hash.
 fn convert_dynamic_indexed_source_for_ref(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
@@ -997,18 +1072,13 @@ fn convert_dynamic_indexed_source_for_ref(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before by-reference Mixed conversion
-            ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
-            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            convert_loaded_indexed_source_to_hash(ctx);
             abi::store_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
         }
         Arch::X86_64 => {
             abi::load_at_offset(ctx.emitter, "rdi", offset - ITER_SOURCE_OFFSET_DELTA);
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before by-reference Mixed conversion
-            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
-            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            ctx.emitter.instruction("mov rax, rdi");                            // put the indexed source in the shared promotion input register
+            convert_loaded_indexed_source_to_hash(ctx);
             abi::store_at_offset(ctx.emitter, "rax", offset - ITER_SOURCE_OFFSET_DELTA);
         }
     }
@@ -1035,29 +1105,27 @@ fn convert_dynamic_hash_source_for_ref(
     Ok(())
 }
 
-/// Converts an unboxed Mixed indexed payload and updates the preserved Mixed source cell.
+/// Converts an unboxed Mixed indexed payload to hash storage and updates its owning Mixed cell.
 fn convert_mixed_indexed_source_for_ref(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
 ) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before by-reference Mixed conversion
-            ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
-            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed payload to hash promotion
+            convert_loaded_indexed_source_to_hash(ctx);
             ctx.emitter.instruction("ldr x9, [sp]");                            // reload the preserved boxed Mixed source cell
-            ctx.emitter.instruction("str x0, [x9, #8]");                        // publish the unique converted indexed-array pointer into the Mixed cell
+            ctx.emitter.instruction("mov x10, #5");                             // runtime Mixed tag 5 identifies associative hash storage
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the promoted container's new runtime tag
+            ctx.emitter.instruction("str x0, [x9, #8]");                        // publish the promoted hash pointer into the Mixed cell
             abi::store_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before by-reference Mixed conversion
-            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
-            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed indexed payload to hash promotion
+            convert_loaded_indexed_source_to_hash(ctx);
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the preserved boxed Mixed source cell
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // publish the unique converted indexed-array pointer into the Mixed cell
+            ctx.emitter.instruction("mov QWORD PTR [r10], 5");                  // publish associative-hash as the new runtime Mixed tag
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // publish the promoted hash pointer into the Mixed cell
             abi::store_at_offset(ctx.emitter, "rax", offset - ITER_SOURCE_OFFSET_DELTA);
         }
     }
@@ -1087,45 +1155,6 @@ fn convert_mixed_hash_source_for_ref(
     Ok(())
 }
 
-/// Binds a local slot to the current indexed-array element address.
-fn bind_indexed_current_value_ref(
-    ctx: &mut FunctionContext<'_>,
-    offset: usize,
-    slot: LocalSlotId,
-    elem_ty: &PhpType,
-) -> Result<()> {
-    ctx.mark_promoted_ref_cell(slot);
-    let local_offset = ctx.local_offset(slot)?;
-    let is_string_slot = matches!(elem_ty.codegen_repr(), PhpType::Str);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::load_at_offset_scratch(ctx.emitter, "x9", offset - ITER_SOURCE_OFFSET_DELTA, "x11");
-            abi::load_at_offset_scratch(ctx.emitter, "x10", offset - ITER_CURSOR_OFFSET_DELTA, "x11");
-            if is_string_slot {
-                ctx.emitter.instruction("lsl x10, x10, #4");                    // scale the cursor to the 16-byte indexed string slot
-            } else {
-                ctx.emitter.instruction("lsl x10, x10, #3");                    // scale the cursor to the 8-byte indexed payload slot
-            }
-            ctx.emitter.instruction("add x9, x9, #24");                         // skip the indexed-array header to reach payload storage
-            ctx.emitter.instruction("add x9, x9, x10");                         // compute the current indexed element address
-            abi::store_at_offset_scratch(ctx.emitter, "x9", local_offset, "x11");
-        }
-        Arch::X86_64 => {
-            abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
-            abi::load_at_offset(ctx.emitter, "r10", offset - ITER_CURSOR_OFFSET_DELTA);
-            if is_string_slot {
-                ctx.emitter.instruction("shl r10, 4");                          // scale the cursor to the 16-byte indexed string slot
-            } else {
-                ctx.emitter.instruction("shl r10, 3");                          // scale the cursor to the 8-byte indexed payload slot
-            }
-            ctx.emitter.instruction("add r11, 24");                             // skip the indexed-array header to reach payload storage
-            ctx.emitter.instruction("add r11, r10");                            // compute the current indexed element address
-            abi::store_at_offset(ctx.emitter, "r11", local_offset);
-        }
-    }
-    Ok(())
-}
-
 /// Binds a local slot to the current associative-array entry's managed reference cell.
 ///
 /// The entry is promoted into a PHP reference set first, so what the local receives is a real
@@ -1139,7 +1168,7 @@ fn bind_hash_current_value_ref(
     offset: usize,
     slot: LocalSlotId,
 ) -> Result<()> {
-    ctx.release_hash_entry_ref_binding(slot);
+    ctx.release_counted_ref_binding(slot);
     let local_offset = ctx.local_offset(slot)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -1181,7 +1210,7 @@ fn bind_dynamic_current_value_ref(
     }
 
     ctx.emitter.label(&indexed_case);
-    bind_indexed_current_value_ref(ctx, offset, slot, &PhpType::Mixed)?;
+    bind_hash_current_value_ref(ctx, offset, slot)?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);

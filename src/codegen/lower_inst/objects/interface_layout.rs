@@ -115,11 +115,10 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
         .iter()
         .enumerate()
         .filter_map(|(index, (property, _))| {
-            let is_owned_reference = class_info.owned_reference_properties.contains(property)
-                && class_info.property_slot_is_reference(index, property);
             let starts_uninitialized = class_info.property_slot_is_declared(index, property)
                 && class_info.defaults.get(index).is_some_and(|default| default.is_none())
-                && !is_owned_reference;
+                && !(class_info.owned_reference_properties.contains(property)
+                    && class_info.property_slot_is_reference(index, property));
             if starts_uninitialized {
                 Some(8 + index * 16 + 8)
             } else {
@@ -131,7 +130,9 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
 
 /// Collects the slot offsets of object-owned reference properties, whose ref-cells the
 /// object allocates at construction and releases on destruction.
-pub(super) fn owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<(usize, PhpType)> {
+pub(super) fn owned_reference_property_offsets(
+    class_info: &ClassInfo,
+) -> Vec<(usize, PhpType, bool)> {
     class_info
         .properties
         .iter()
@@ -140,7 +141,12 @@ pub(super) fn owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<(u
             if class_info.owned_reference_properties.contains(property)
                 && class_info.property_slot_is_reference(index, property)
             {
-                Some((8 + index * 16, php_type.clone()))
+                let starts_uninitialized = class_info.property_slot_is_declared(index, property)
+                    && class_info
+                        .defaults
+                        .get(index)
+                        .is_some_and(|default| default.is_none());
+                Some((8 + index * 16, php_type.clone(), starts_uninitialized))
             } else {
                 None
             }

@@ -450,10 +450,13 @@ mod iter_start_immediate_tests {
         );
     }
 
-    /// An absent origin adds nothing, so existing dumps are unchanged.
+    /// An absent origin still prints the mandatory iterator-state slot.
     #[test]
     fn iter_start_without_origin_is_unchanged() {
-        assert_eq!(printed(false, None, None), " by_ref=false");
-        assert_eq!(printed(false, Some(2), None), " by_ref=false owner=slot[2]");
+        assert_eq!(printed(false, None, None), " by_ref=false state=slot[1]");
+        assert_eq!(
+            printed(false, Some(2), None),
+            " by_ref=false state=slot[1] owner=slot[2]"
+        );
     }
 }

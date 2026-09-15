@@ -23,7 +23,7 @@ use crate::span::Span;
 use crate::types::{
     array_storage_conversion, join_array_storage_conversion, ClassInfo, EnumInfo,
     ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
-    ReturnAliasSummaries, ThrowAccessInfo, TypeEnv,
+    ReturnAliasSummaries, ReturnArgAlias, ThrowAccessInfo, TypeEnv,
 };
 
 /// Value returned by expression lowering with its PHP metadata.
@@ -83,6 +83,7 @@ pub(crate) enum StaticCallableBinding {
         name: String,
         signature: FunctionSig,
         captures: Vec<ClosureCapture>,
+        return_alias: ReturnArgAlias,
     },
     StaticMethod {
         receiver: StaticReceiver,
@@ -104,16 +105,22 @@ pub(crate) enum StaticCallableBinding {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClosureCapture {
     pub value: ValueId,
+    /// Caller local whose reference cell this capture exposes to the closure body.
+    pub by_ref_local: Option<String>,
 }
 
 /// Records one temporary owner published while a call argument list is evaluated.
 #[derive(Debug, Clone)]
 pub(crate) struct CallArgumentEvaluationOwner {
-    pub value: ValueId,
-    pub borrow: ValueId,
+    pub value: Option<ValueId>,
+    pub borrow: Option<ValueId>,
     pub temp_name: String,
     pub slot: LocalSlotId,
     pub span: Span,
+    /// Payload type when this slot owns a managed reference cell instead of a value.
+    pub ref_cell_payload: Option<PhpType>,
+    /// Whether this is an intermediate receiver alias created for one nested ref argument.
+    pub scoped_receiver_alias: bool,
 }
 
 /// Keeps one call's evaluation owners distinct from nested expression lowering.
@@ -153,6 +160,7 @@ pub(crate) struct LoweringSnapshot {
     finally_stack: Vec<FinallyFrame>,
     handler_loop_depths: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
+    static_callable_local_epochs: HashMap<String, u64>,
     reflection_class_locals: HashMap<String, String>,
     reflection_function_locals: HashMap<String, String>,
     reflection_property_locals: HashMap<String, (String, String)>,
@@ -302,6 +310,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Explicit throws retire only loops entered after the nearest handler.
     pub(crate) handler_loop_depths: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
+    /// Per-local mutation generations used to distinguish a control-flow fact clear from an
+    /// actual reassignment while lowering a try/catch region.
+    static_callable_local_epochs: HashMap<String, u64>,
+    /// Program-global names directly reachable from each statically declared function.
+    function_global_names: HashMap<String, Option<HashSet<String>>>,
     reflection_class_locals: HashMap<String, String>,
     reflection_function_locals: HashMap<String, String>,
     reflection_property_locals: HashMap<String, (String, String)>,
@@ -459,6 +472,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             finally_stack: Vec::new(),
             handler_loop_depths: Vec::new(),
             static_callable_locals: HashMap::new(),
+            static_callable_local_epochs: HashMap::new(),
+            function_global_names: HashMap::new(),
             reflection_class_locals: HashMap::new(),
             reflection_function_locals: HashMap::new(),
             reflection_property_locals: HashMap::new(),
@@ -512,6 +527,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             finally_stack: self.finally_stack.clone(),
             handler_loop_depths: self.handler_loop_depths.clone(),
             static_callable_locals: self.static_callable_locals.clone(),
+            static_callable_local_epochs: self.static_callable_local_epochs.clone(),
             reflection_class_locals: self.reflection_class_locals.clone(),
             reflection_function_locals: self.reflection_function_locals.clone(),
             reflection_property_locals: self.reflection_property_locals.clone(),
@@ -557,6 +573,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.finally_stack = snapshot.finally_stack;
         self.handler_loop_depths = snapshot.handler_loop_depths;
         self.static_callable_locals = snapshot.static_callable_locals;
+        self.static_callable_local_epochs = snapshot.static_callable_local_epochs;
         self.reflection_class_locals = snapshot.reflection_class_locals;
         self.reflection_function_locals = snapshot.reflection_function_locals;
         self.reflection_property_locals = snapshot.reflection_property_locals;
@@ -1381,6 +1398,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Applies the static part of the eval barrier to visible PHP local storage.
     pub(crate) fn apply_eval_barrier(&mut self) {
         self.eval_barrier_active = true;
+        self.invalidate_static_callable_locals();
         self.declare_eval_context_local();
         self.declare_eval_scope_local();
         self.declare_eval_global_scope_local();
@@ -1463,6 +1481,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Applies the materialized local scope and widens caller slots written by EIR eval AOT.
     pub(crate) fn apply_eval_scope_barrier(&mut self, write_names: &BTreeSet<String>) {
         self.eval_barrier_active = true;
+        for name in write_names {
+            self.clear_static_callable_local(name);
+            self.clear_reflection_class_local(name);
+            self.clear_reflection_function_local(name);
+            self.clear_reflection_property_local(name);
+            self.clear_reflection_method_local(name);
+            self.clear_reflection_arg_array_local(name);
+            self.clear_fiber_start_sig(name);
+        }
         self.declare_eval_scope_local();
         // Scope-sync codegen paths flush program globals into the local scope,
         // so the global-scope handle slot must exist alongside the scope slot.
@@ -1527,7 +1554,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns the hidden owner slot for a promoted local ref-cell, if any.
-    fn ref_cell_owner_slot(&self, variable: &str) -> Option<LocalSlotId> {
+    pub(crate) fn ref_cell_owner_slot(&self, variable: &str) -> Option<LocalSlotId> {
         self.ref_cell_owner_locals.get(variable).copied()
     }
 
@@ -1621,13 +1648,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let slot = self.declare_local(name, php_type.clone());
         let ir_type = value_ir_type(&php_type);
-        let ownership = Ownership::for_php_type(&php_type);
         let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal;
         let op = match (is_ref_bound, uses_global, kind) {
             (true, _, _) => Op::LoadRefCell,
             (false, true, _) => Op::LoadGlobal,
             (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
             _ => Op::LoadLocal,
+        };
+        // A normal ref-cell read borrows the pointee. Only `load_local_storage`, used when
+        // retiring the slot's stored owner, may claim ownership of that same payload.
+        let ownership = if op == Op::LoadRefCell {
+            Ownership::Borrowed
+        } else {
+            Ownership::for_php_type(&php_type)
         };
         let immediate = if uses_global {
             Some(Immediate::GlobalName(self.intern_global_name(name)))
@@ -1839,14 +1872,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let storage_type = self.builder.local_php_type(slot);
-        let tracked = Ownership::php_type_needs_lifetime_tracking(&storage_type);
         // A ref-bound slot stores an alias, not the payload owner being replaced.
+        // StoreRefCell publishes the replacement through that alias before it retires
+        // the previous payload, so generic slot cleanup must never release it first.
         if self.is_ref_bound_local(name) {
-            if tracked {
-                self.release_stored_local_value(name, slot, span);
-            }
             return;
         }
+        let tracked = Ownership::php_type_needs_lifetime_tracking(&storage_type);
         let eval_may_have_reloaded_slot = self.eval_barrier_active
             && self.builder.local_kind(slot) == LocalKind::PhpLocal;
         if !tracked && self.loop_stack.is_empty() && !eval_may_have_reloaded_slot {
@@ -2076,6 +2108,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 PhpType::Mixed
             )
             && matches!(previous_type.codegen_repr(), PhpType::Int);
+        // A ref-cell store publishes its replacement before retiring the old pointee. That
+        // retirement can run user destructors and throw, so an owned source whose ordinary
+        // post-store release has not run yet needs an unwind-visible owner of its own. The
+        // store's acquired value becomes the new pointee owner; this root owns only the source
+        // expression lease that normal control flow retires immediately after publication.
+        let ref_store_source_owner = if is_ref_bound
+            && release_source_after_store
+            && !transfer_source_to_store
+            && !ref_cell_narrowed_mixed_to_int
+        {
+            let (_, owner) = crate::ir_lower::expr::root_owned_call_operand(
+                self,
+                source,
+                span.unwrap_or_else(Span::dummy),
+            );
+            owner
+        } else {
+            None
+        };
         if is_ref_bound {
             let value = self.box_typed_array_for_mixed_ref_cell(value, &previous_type, span);
             self.store_ref_cell_slot(slot, value, previous_type.clone(), span);
@@ -2085,9 +2136,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !is_ref_bound {
             self.set_local_type(name, php_type);
         }
+        if let Some(owner) = ref_store_source_owner {
+            crate::ir_lower::expr::retire_owned_call_operand(
+                self,
+                owner,
+                span.unwrap_or_else(Span::dummy),
+            );
+        }
         if release_source_after_store
             && !transfer_source_to_store
             && !ref_cell_narrowed_mixed_to_int
+            && ref_store_source_owner.is_none()
         {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
         }
@@ -2272,7 +2331,28 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_mutated_local_impl(name, value, php_type, span, true, true)
+        self.store_mutated_local_impl(name, value, php_type, span, true, true, false)
+    }
+
+    /// Stores a one-word container replacement while changing only the local's logical type.
+    ///
+    /// Indexed-to-hash promotion keeps the same raw pointer slot. Widening the frame metadata from
+    /// `Array` to `AssocArray` would instead choose boxed Mixed storage and invalidate earlier
+    /// indexed loads, so this path preserves the established frame representation while making
+    /// every subsequent load select associative lowering.
+    pub(crate) fn store_retyped_container_local(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        self.store_mutated_local_impl(name, value, php_type, span, true, true, true)
+    }
+
+    /// Changes only the flow-sensitive view of a raw one-word container slot.
+    pub(crate) fn set_retyped_container_local_type(&mut self, name: &str, php_type: PhpType) {
+        self.local_types.insert(name.to_string(), php_type);
     }
 
     /// Stores a by-reference call's internal array normalization without hoisting it.
@@ -2288,7 +2368,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_mutated_local_impl(name, value, php_type, span, true, false)
+        self.store_mutated_local_impl(name, value, php_type, span, true, false, false)
     }
 
     /// Stores a mutation result whose previous boxed local owner was released beforehand.
@@ -2299,7 +2379,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_mutated_local_impl(name, value, php_type, span, false, true)
+        self.store_mutated_local_impl(name, value, php_type, span, false, true, false)
     }
 
     /// Implements consuming local storeback with caller-selected cleanup timing.
@@ -2311,6 +2391,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
         release_previous: bool,
         track_array_conversion: bool,
+        preserve_frame_storage: bool,
     ) -> LoweredValue {
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
@@ -2328,12 +2409,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let slot = self.declare_local(name, php_type.clone());
         if uses_global {
             self.store_global_name(name, slot, value, span);
-            self.set_local_type_impl(name, php_type, track_array_conversion);
+            if preserve_frame_storage {
+                self.local_types.insert(name.to_string(), php_type);
+            } else {
+                self.set_local_type_impl(name, php_type, track_array_conversion);
+            }
             return value;
         }
         let is_ref_bound = self.is_ref_bound_local(name) && previous_kind == LocalKind::PhpLocal;
         let value_type = self.builder.value_php_type(value.value).codegen_repr();
-        self.set_local_type_impl(name, php_type.clone(), track_array_conversion);
+        if preserve_frame_storage {
+            self.local_types.insert(name.to_string(), php_type.clone());
+        } else {
+            self.set_local_type_impl(name, php_type.clone(), track_array_conversion);
+        }
         let storage_type = self.builder.local_php_type(slot).codegen_repr();
         if release_previous
             && !is_ref_bound
@@ -2935,6 +3024,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return;
         };
         let owner_ty = self.builder.local_php_type(owner_slot);
+        self.invalidate_callable_facts_after_user_code(
+            Op::ReleaseLocalRefCell,
+            &[],
+            Some(&Immediate::LocalSlot(owner_slot)),
+            Op::ReleaseLocalRefCell.default_effects(),
+        );
         self.builder.emit_with_effects(
             Op::ReleaseLocalRefCell,
             Vec::new(),
@@ -3494,7 +3589,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Records that a PHP local currently holds a compile-time-known callable.
     pub(crate) fn bind_static_callable_local(&mut self, name: &str, target: StaticCallableBinding) {
-        if self.can_track_static_callable_local(name) {
+        let top_level_program_global = self.in_main
+            && self.all_global_var_names.contains(name)
+            && self
+                .local_kinds
+                .get(name)
+                .copied()
+                .unwrap_or(LocalKind::PhpLocal)
+                == LocalKind::PhpLocal;
+        if self.can_track_static_callable_local(name) || top_level_program_global {
+            self.static_callable_local_epochs
+                .entry(name.to_string())
+                .or_default();
             self.static_callable_locals.insert(name.to_string(), target);
         }
     }
@@ -3606,9 +3712,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .get(&(self.owner_name.clone(), name.to_string()))
     }
 
-    /// Clears the compile-time callable association for one local.
+    /// Invalidates one local's callable association after a known mutation.
+    ///
+    /// This advances the mutation generation. CFG joins that only discard flow-sensitive facts
+    /// must use `clear_static_callable_locals` instead.
     pub(crate) fn clear_static_callable_local(&mut self, name: &str) {
         self.static_callable_locals.remove(name);
+        let epoch = self
+            .static_callable_local_epochs
+            .entry(name.to_string())
+            .or_default();
+        *epoch = epoch.saturating_add(1);
     }
 
     /// Captures the straight-line callable facts at a control-flow split.
@@ -3616,6 +3730,31 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         &self,
     ) -> HashMap<String, StaticCallableBinding> {
         self.static_callable_locals.clone()
+    }
+
+    /// Captures per-local mutation generations alongside callable flow facts.
+    pub(crate) fn static_callable_local_epochs_snapshot(&self) -> HashMap<String, u64> {
+        self.static_callable_local_epochs.clone()
+    }
+
+    /// Restores entry closure facts that no executable path in a lowered region mutated.
+    ///
+    /// Try/catch lowering clears all flow-sensitive callable facts at its handler and join. That
+    /// conservative clear must not erase an unchanged closure's compile-time function identity,
+    /// because a later explicit `Closure::bind` scope needs that identity to clone the function
+    /// with the requested lexical access class. Mutation epochs distinguish those CFG clears from
+    /// stores, unsets, and reference rebindings, all of which clear one named local directly.
+    pub(crate) fn restore_unchanged_static_closure_locals(
+        &mut self,
+        mut snapshot: HashMap<String, StaticCallableBinding>,
+        epochs: &HashMap<String, u64>,
+    ) {
+        snapshot.retain(|name, target| {
+            matches!(target, StaticCallableBinding::Closure { .. })
+                && self.static_callable_local_epochs.get(name).copied().unwrap_or(0)
+                    == epochs.get(name).copied().unwrap_or(0)
+        });
+        self.static_callable_locals = snapshot;
     }
 
     /// Restores the callable facts for one control-flow arm or completed join.
@@ -3657,6 +3796,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Clears all compile-time callable associations after a control-flow join.
+    ///
+    /// This deliberately leaves mutation generations unchanged so an enclosing region can
+    /// restore entry facts when no executable operation could have changed their local values.
     pub(crate) fn clear_static_callable_locals(&mut self) {
         self.static_callable_locals.clear();
         self.reflection_class_locals.clear();
@@ -3665,6 +3807,211 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_method_locals.clear();
         self.reflection_arg_array_locals.clear();
         self.fiber_start_sigs.clear();
+    }
+
+    /// Invalidates all compile-time callable associations after an unknown local mutation.
+    ///
+    /// Unlike a control-flow join, an eval or unresolved include can replace locals even when a
+    /// preceding join already cleared their flow facts. Advance every tracked generation before
+    /// clearing so an enclosing try region cannot restore an entry closure after the mutation.
+    pub(crate) fn invalidate_static_callable_locals(&mut self) {
+        for epoch in self.static_callable_local_epochs.values_mut() {
+            *epoch = epoch.saturating_add(1);
+        }
+        self.clear_static_callable_locals();
+    }
+
+    /// Invalidates callable identity facts after an opaque opcode that can invoke PHP code.
+    ///
+    /// Statically resolved calls invalidate their known by-reference captures and arguments at
+    /// their lowering sites. This fallback is reserved for invokers whose target cannot be
+    /// recovered. Keeping known harmless calls out of it preserves unrelated closure identity.
+    fn invalidate_callable_facts_after_user_code(
+        &mut self,
+        op: Op,
+        operands: &[ValueId],
+        immediate: Option<&Immediate>,
+        effects: Effects,
+    ) {
+        let operand_types = operands
+            .iter()
+            .map(|operand| self.builder.value_php_type(*operand))
+            .collect::<Vec<_>>();
+        let local_type = match immediate {
+            Some(Immediate::LocalSlot(slot)) => Some(self.builder.local_php_type(*slot)),
+            _ => None,
+        };
+        if instruction_has_opaque_user_code_boundary(
+            op,
+            immediate,
+            effects,
+            &operand_types,
+            local_type.as_ref(),
+        ) {
+            self.invalidate_escaped_callable_locals();
+        }
+        if let Some(callback_index) = runtime_callback_operand_index(op, immediate) {
+            let binding = operands
+                .get(callback_index)
+                .and_then(|operand| self.static_callable_binding_for_operand(*operand));
+            match binding {
+                Some(StaticCallableBinding::Closure { captures, .. }) => {
+                    self.invalidate_callable_capture_locals(&captures);
+                }
+                Some(StaticCallableBinding::UserFunction(function)) => {
+                    self.invalidate_callable_user_function(&function, None, &[]);
+                }
+                Some(
+                    StaticCallableBinding::StaticMethod { .. }
+                    | StaticCallableBinding::StaticMethodDescriptor { .. }
+                    | StaticCallableBinding::InstanceMethod { .. },
+                ) => self.invalidate_escaped_callable_locals(),
+                Some(
+                    StaticCallableBinding::ExternFunction(_)
+                    | StaticCallableBinding::Builtin(_),
+                ) => {}
+                None => self.invalidate_escaped_callable_locals(),
+            }
+            return;
+        }
+    }
+
+    /// Invalidates every tracked callable local whose cell escaped this activation.
+    fn invalidate_escaped_callable_locals(&mut self) {
+        let escaped = self
+            .static_callable_local_epochs
+            .keys()
+            .filter(|name| {
+                self.ref_bound_locals.contains(*name)
+                    || (self.in_main && self.all_global_var_names.contains(*name))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for name in escaped {
+            self.clear_static_callable_local(&name);
+        }
+    }
+
+    /// Invalidates callable locals whose cells can be reached through any PHP reference alias.
+    fn invalidate_ref_bound_callable_locals(&mut self) {
+        let names = self.ref_bound_locals.iter().cloned().collect::<Vec<_>>();
+        for name in names {
+            self.clear_static_callable_local(&name);
+        }
+    }
+
+    /// Invalidates callable facts for caller locals passed to declared by-reference parameters.
+    ///
+    /// Argument normalization leaves regular operands in parameter order. Reference operands
+    /// retain their original local-load marker, so this can identify exactly which caller cells
+    /// the callee may write without discarding unrelated closure facts.
+    pub(crate) fn invalidate_callable_ref_argument_locals(
+        &mut self,
+        signature: Option<&FunctionSig>,
+        operands: &[ValueId],
+    ) {
+        let Some(signature) = signature else {
+            return;
+        };
+        let names = operands
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                signature
+                    .ref_params
+                    .get(*index)
+                    .copied()
+                    .unwrap_or(false)
+            })
+            .filter_map(|(_, operand)| self.operand_local_name(*operand))
+            .collect::<Vec<_>>();
+        for name in names {
+            self.clear_static_callable_local(&name);
+        }
+    }
+
+    /// Invalidates caller cells directly writable by one statically resolved user function.
+    pub(crate) fn invalidate_callable_user_function(
+        &mut self,
+        function: &str,
+        signature: Option<&FunctionSig>,
+        operands: &[ValueId],
+    ) {
+        self.invalidate_callable_ref_argument_locals(signature, operands);
+        self.invalidate_ref_bound_callable_locals();
+        match self
+            .function_global_names
+            .get(&php_symbol_key(function.trim_start_matches('\\')))
+            .cloned()
+        {
+            Some(Some(globals)) => {
+                for name in globals {
+                    self.clear_static_callable_local(&name);
+                }
+            }
+            Some(None) | None => self.invalidate_top_level_global_callable_locals(),
+        }
+    }
+
+    /// Invalidates callable facts backed by the top-level global storage namespace.
+    fn invalidate_top_level_global_callable_locals(&mut self) {
+        if !self.in_main {
+            return;
+        }
+        let names = self
+            .static_callable_local_epochs
+            .keys()
+            .filter(|name| self.all_global_var_names.contains(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        for name in names {
+            self.clear_static_callable_local(&name);
+        }
+    }
+
+    /// Installs transitive direct-function global reachability for the top-level activation.
+    pub(crate) fn set_function_global_names(
+        &mut self,
+        names: HashMap<String, Option<HashSet<String>>>,
+    ) {
+        self.function_global_names = names;
+    }
+
+    /// Invalidates exactly the caller locals exposed through one known closure's by-reference
+    /// capture list. Direct static closure calls use this instead of treating every escaped local
+    /// in the frame as reachable from that specific closure.
+    pub(crate) fn invalidate_callable_capture_locals(&mut self, captures: &[ClosureCapture]) {
+        self.invalidate_ref_bound_callable_locals();
+        for name in captures
+            .iter()
+            .filter_map(|capture| capture.by_ref_local.as_deref())
+        {
+            self.clear_static_callable_local(name);
+        }
+    }
+
+    /// Resolves a callable descriptor operand back to a tracked local binding when possible.
+    fn static_callable_binding_for_operand(
+        &self,
+        operand: ValueId,
+    ) -> Option<StaticCallableBinding> {
+        let name = self.operand_local_name(operand)?;
+        self.static_callable_local(&name)
+    }
+
+    /// Records callable identity for a compiler-owned callback temporary.
+    pub(crate) fn bind_static_callable_temp(
+        &mut self,
+        name: &str,
+        target: StaticCallableBinding,
+    ) {
+        let slot = self.local_slots.get(name).copied();
+        if slot.is_some_and(|slot| self.builder.local_kind(slot) == LocalKind::HiddenTemp) {
+            self.static_callable_local_epochs
+                .entry(name.to_string())
+                .or_default();
+            self.static_callable_locals.insert(name.to_string(), target);
+        }
     }
 
     /// Returns whether the named PHP variable should use program-global storage.
@@ -3687,6 +4034,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let data = self.intern_global_name(name);
+        self.invalidate_callable_facts_after_user_code(
+            Op::StoreGlobal,
+            &[value.value],
+            Some(&Immediate::GlobalName(data)),
+            Op::StoreGlobal.default_effects(),
+        );
         self.builder.emit_with_effects(
             Op::StoreGlobal,
             vec![value.value],
@@ -3708,6 +4061,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         op: Op,
         span: Option<Span>,
     ) {
+        self.invalidate_callable_facts_after_user_code(
+            op,
+            &[value.value],
+            Some(&Immediate::LocalSlot(slot)),
+            op.default_effects(),
+        );
         self.builder.emit_with_effects(
             op,
             vec![value.value],
@@ -3729,6 +4088,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         alias_ty: PhpType,
         span: Option<Span>,
     ) {
+        self.invalidate_callable_facts_after_user_code(
+            Op::StoreRefCell,
+            &[value.value],
+            Some(&Immediate::LocalSlot(slot)),
+            Op::StoreRefCell.default_effects(),
+        );
         self.builder.emit_with_effects(
             Op::StoreRefCell,
             vec![value.value],
@@ -3751,6 +4116,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         effects: Effects,
         span: Option<Span>,
     ) {
+        self.invalidate_callable_facts_after_user_code(op, &operands, immediate.as_ref(), effects);
         self.builder.emit_with_effects(
             op,
             operands,
@@ -3802,6 +4168,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ) -> LoweredValue {
         let ir_type = value_ir_type(&php_type);
         let ownership = Ownership::for_php_type(&php_type);
+        self.invalidate_callable_facts_after_user_code(op, &operands, immediate.as_ref(), effects);
         let value = self
             .builder
             .emit_with_effects(
@@ -3825,6 +4192,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) -> LoweredValue {
         let ir_type = value_ir_type(&php_type);
+        self.invalidate_callable_facts_after_user_code(op, &operands, immediate.as_ref(), effects);
         let value = self
             .builder
             .emit_with_effects(
@@ -4095,6 +4463,253 @@ fn local_kind_uses_plain_store_cleanup(kind: LocalKind) -> bool {
             | LocalKind::HiddenTemp
             | LocalKind::OwnedTemp
             | LocalKind::NamedArgTemp
+    )
+}
+
+/// Returns the callback operand used by a runtime helper that invokes PHP code.
+pub(super) fn runtime_callback_operand_index(op: Op, immediate: Option<&Immediate>) -> Option<usize> {
+    let (
+        Op::RuntimeCall,
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::Function(target)
+            | crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
+        )),
+    ) = (op, immediate)
+    else {
+        return None;
+    };
+    target.string_callback_operand_index()
+}
+
+/// Returns whether one emitted operation invokes PHP through an unresolved target.
+pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Immediate>) -> bool {
+    if matches!(
+        op,
+        Op::FunctionVariantCall
+            | Op::ClosureCall
+            | Op::CallableDescriptorInvoke
+            | Op::ExprCall
+            | Op::PipeCall
+            | Op::MethodCall
+            | Op::NullsafeMethodCall
+            | Op::StaticMethodCall
+            | Op::EvalStaticMethodCall
+            | Op::EvalLiteralCall
+            | Op::EvalFunctionCall
+            | Op::EvalFunctionCallArray
+            | Op::ObjectNew
+            | Op::EvalObjectNew
+            | Op::IteratorMethodCall
+            | Op::IterStart
+            | Op::IterCurrentKey
+            | Op::IterCurrentValue
+            | Op::IterNext
+            | Op::SplRuntimeCall
+            | Op::FiberRuntimeCall
+            | Op::DynamicObjectNew
+            | Op::DynamicObjectNewMixed
+            | Op::DynamicPdoStatementConstructorCall
+            | Op::MixedArrayGetForWrite
+            | Op::GeneratorYield
+            | Op::GeneratorYieldFrom
+            | Op::PropGet
+            | Op::PropGetForWrite
+            | Op::PropSet
+            | Op::PropUnset
+            | Op::DynamicPropGet
+            | Op::DynamicPropSet
+            | Op::DynamicPropUnset
+            | Op::NullsafePropGet
+            | Op::GcCollect
+            | Op::Warn
+    ) {
+        return true;
+    }
+    match (op, immediate) {
+        (
+            Op::RuntimeCall,
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(target)
+                | crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
+            )),
+        ) => {
+            matches!(
+                target,
+                crate::ir::RuntimeFnId::CloneWith
+                    | crate::ir::RuntimeFnId::CurlEasyPerform
+                    | crate::ir::RuntimeFnId::CurlMultiExec
+                    | crate::ir::RuntimeFnId::Serialize
+                    | crate::ir::RuntimeFnId::Unserialize
+                    | crate::ir::RuntimeFnId::Implode
+                    | crate::ir::RuntimeFnId::ArrayFlip
+                    | crate::ir::RuntimeFnId::ArraySum
+                    | crate::ir::RuntimeFnId::ArrayProduct
+                    | crate::ir::RuntimeFnId::ObClean
+                    | crate::ir::RuntimeFnId::ObEndClean
+                    | crate::ir::RuntimeFnId::ObEndFlush
+                    | crate::ir::RuntimeFnId::ObFlush
+                    | crate::ir::RuntimeFnId::ObGetClean
+                    | crate::ir::RuntimeFnId::ObGetFlush
+            )
+        }
+        (
+            Op::RuntimeCall,
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Pcntl(
+                crate::ir::PcntlRuntime::SignalDispatch,
+            ))),
+        ) => true,
+        (Op::CoreBuiltin, Some(Immediate::I64(selector))) => {
+            crate::ir::CoreBuiltinOp::from_i64(*selector)
+                == Some(crate::ir::CoreBuiltinOp::TriggerError)
+        }
+        _ => false,
+    }
+}
+
+/// Returns whether releasing a value of this storage type can reach a user destructor.
+pub(super) fn php_type_cleanup_may_invoke_user_code(php_type: &PhpType) -> bool {
+    matches!(
+        php_type.codegen_repr(),
+        PhpType::Object(_)
+            | PhpType::Mixed
+            | PhpType::Iterable
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+    )
+}
+
+/// Returns the value type an indexed or associative mutation may remove from its container.
+pub(super) fn container_mutation_released_value_type(php_type: &PhpType) -> Option<PhpType> {
+    match php_type.codegen_repr() {
+        PhpType::Array(value) => Some(*value),
+        PhpType::AssocArray { value, .. } => Some(*value),
+        PhpType::Mixed => Some(PhpType::Mixed),
+        _ => None,
+    }
+}
+
+/// Returns whether one instruction can re-enter PHP outside a statically resolved direct call.
+///
+/// Direct `Call` instructions are closed through the user-function call graph instead. Treating
+/// their deliberately broad default effects as an immediate opaque boundary would discard the
+/// precise harmless-call summaries that closure binding relies on.
+pub(super) fn instruction_has_opaque_user_code_boundary(
+    op: Op,
+    immediate: Option<&Immediate>,
+    effects: Effects,
+    operand_types: &[PhpType],
+    local_type: Option<&PhpType>,
+) -> bool {
+    if op != Op::Call && effects.intersects(Effects::MAY_WARN | Effects::OUTPUT) {
+        return true;
+    }
+
+    let released_type = match op {
+        Op::Release | Op::ReleaseUnlessAliases => operand_types.first().cloned(),
+        Op::ReleaseLocalSlot
+        | Op::ReleaseLocalRefCell
+        | Op::StoreStaticLocal
+        | Op::StoreRefCell => local_type.cloned(),
+        Op::StoreGlobal | Op::StoreStaticProperty | Op::StoreReflectionStaticProperty => {
+            return true;
+        }
+        Op::ArraySet | Op::HashSet | Op::HashUnset | Op::HashSpread => operand_types
+            .first()
+            .and_then(container_mutation_released_value_type),
+        Op::ArraySetMixedKey
+        | Op::OffsetUnset
+        | Op::AcquireRefCell
+        | Op::MixedArrayAppend
+        | Op::EvalScopeSet => return true,
+        Op::CoreBuiltin => return core_builtin_registration_cleanup(immediate),
+        // DescriptorArgSet writes only into a fresh internal argument container, after the
+        // lowering-emitted duplicate-key guard. It cannot replace a live PHP value.
+        _ => None,
+    };
+    if released_type
+        .as_ref()
+        .is_some_and(php_type_cleanup_may_invoke_user_code)
+    {
+        return true;
+    }
+
+    if opcode_has_opaque_user_code_target(op, immediate) {
+        return true;
+    }
+    if matches!(op, Op::MixedCastString) {
+        return true;
+    }
+    if op == Op::Cast
+        && matches!(immediate, Some(Immediate::CastTarget(IrType::Str)))
+        && operand_types
+            .first()
+            .is_some_and(php_type_may_reach_user_object)
+    {
+        return true;
+    }
+    runtime_call_may_invoke_implicit_user_code(immediate, operand_types)
+}
+
+/// Returns whether a type can directly or transitively contain an object with a PHP hook.
+fn php_type_may_reach_user_object(php_type: &PhpType) -> bool {
+    match php_type.codegen_repr() {
+        PhpType::Object(_) | PhpType::Mixed | PhpType::Iterable => true,
+        PhpType::Array(value) => php_type_may_reach_user_object(&value),
+        PhpType::AssocArray { key, value } => {
+            php_type_may_reach_user_object(&key) || php_type_may_reach_user_object(&value)
+        }
+        PhpType::Union(members) => members.iter().any(php_type_may_reach_user_object),
+        _ => false,
+    }
+}
+
+/// Returns whether a typed runtime operation can invoke an implicit PHP protocol method.
+fn runtime_call_may_invoke_implicit_user_code(
+    immediate: Option<&Immediate>,
+    operand_types: &[PhpType],
+) -> bool {
+    let Some(Immediate::RuntimeCall(target)) = immediate else {
+        return false;
+    };
+    match target {
+        crate::ir::RuntimeCallTarget::ArrayFetchForWrite => true,
+        crate::ir::RuntimeCallTarget::Pcntl(
+            crate::ir::PcntlRuntime::Signal | crate::ir::PcntlRuntime::SignalDispatch,
+        ) => true,
+        crate::ir::RuntimeCallTarget::Pcntl(crate::ir::PcntlRuntime::Exec) => {
+            operand_types.iter().any(php_type_may_reach_user_object)
+        }
+        crate::ir::RuntimeCallTarget::Function(target)
+        | crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. } => match target {
+            crate::ir::RuntimeFnId::Count
+            | crate::ir::RuntimeFnId::JsonEncode
+            | crate::ir::RuntimeFnId::Printf
+            | crate::ir::RuntimeFnId::Sprintf
+            | crate::ir::RuntimeFnId::Vprintf
+            | crate::ir::RuntimeFnId::Vsprintf
+            | crate::ir::RuntimeFnId::Getenv => {
+                operand_types.iter().any(php_type_may_reach_user_object)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Returns whether a Core operation can retire a registered handler and its captured values.
+pub(super) fn core_builtin_registration_cleanup(immediate: Option<&Immediate>) -> bool {
+    let Some(Immediate::I64(selector)) = immediate else {
+        return false;
+    };
+    matches!(
+        crate::ir::CoreBuiltinOp::from_i64(*selector),
+        Some(
+            crate::ir::CoreBuiltinOp::RestoreErrorHandler
+                | crate::ir::CoreBuiltinOp::RestoreExceptionHandler
+                | crate::ir::CoreBuiltinOp::SetErrorHandler
+                | crate::ir::CoreBuiltinOp::SetExceptionHandler
+        )
     )
 }
 

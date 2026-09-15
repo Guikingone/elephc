@@ -13,6 +13,7 @@
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::sentinels::{
     emit_throwable_creation_line_unknown, x86_64_heap_kind_word, REFERENCE_CELL_HEAP_KIND,
+    UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
 use crate::types::PhpType;
 
@@ -192,6 +193,18 @@ fn emit_clone(emitter: &mut Emitter) {
         abi::emit_store_to_address(emitter, word, result, offset);
     }
     abi::emit_load_from_address(emitter, result, result, 0);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_reference_cell_clone_finish");
+    abi::emit_load_int_immediate(emitter, scratch, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, {}", result, scratch));       // keep an uninitialized property sentinel out of payload retention
+            emitter.instruction("b.eq __rt_reference_cell_clone_finish");       // cloned uninitialized reference cells have no live payload owner
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, {}", result, scratch));       // keep an uninitialized property sentinel out of payload retention
+            emitter.instruction("je __rt_reference_cell_clone_finish");         // cloned uninitialized reference cells have no live payload owner
+        }
+    }
     let tag = match emitter.target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r9" };
     abi::load_at_offset(emitter, tag, 24);
     emit_payload_dispatch(emitter, "__rt_reference_cell_clone_retain", "__rt_reference_cell_clone_retain");

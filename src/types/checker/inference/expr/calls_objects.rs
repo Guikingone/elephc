@@ -203,6 +203,18 @@ impl Checker {
                 // The unpack-after-named shape is syntactic in
                 // PHP, so it is still rejected without a known constructor.
                 self.require_no_spread_after_named_args(args, "Dynamic constructor")?;
+                for arg in args {
+                    let value = match &arg.kind {
+                        ExprKind::NamedArg { value, .. } => value.as_ref(),
+                        _ => arg,
+                    };
+                    if matches!(value.kind, ExprKind::ArrayAccess { .. }) {
+                        return Err(CompileError::new(
+                            value.span,
+                            "Dynamic constructor cannot bind an array element by reference because its runtime signature is unknown",
+                        ));
+                    }
+                }
                 // No constructor signature means no parameter binding modes either, so every
                 // argument is conservatively reference-aliased — see
                 // `Checker::record_unresolved_callee_argument_aliases`.

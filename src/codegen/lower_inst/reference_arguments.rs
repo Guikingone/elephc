@@ -8,8 +8,8 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 //! - Method argument coercions use the shared cleanup plan; callers retire its block before
 //!   processing reference writebacks, whose addresses include the intervening cleanup bytes.
-//! - Reference arguments borrow caller storage or element addresses. Scalar-to-Mixed
-//!   writebacks use stack cells; omitted defaults use managed cells with scoped owner records.
+//! - Reference arguments borrow caller locals or indexed element addresses. Managed hash-entry
+//!   cells and omitted defaults use scoped owner records; scalar-to-Mixed uses writeback cells.
 //! - Closures can retain default cells beyond the call. Normal return and exception unwinding
 //!   retire only the caller's lease, leaving any captured lease intact.
 //! - Constructor-promoted borrowed properties still use the separate persistent-cell fallback.
@@ -42,6 +42,8 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
     }
     let visible_param_types = &param_types[1..];
     let visible_ref_params = &ref_params[1..];
+    let preleased_ref_cells =
+        plan_preleased_ref_arg_cells(ctx, operands, visible_ref_params)?;
     let mut ref_writebacks =
         plan_ref_arg_writebacks(ctx, operands, visible_param_types, visible_ref_params)?;
     let mut ref_temp_cells = plan_ref_arg_temp_cells(
@@ -52,7 +54,11 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         &ref_writebacks,
         lifetime,
     )?;
-    emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
+    emit_ref_arg_cell_block(
+        ctx,
+        &mut ref_writebacks,
+        &mut ref_temp_cells,
+    )?;
     let cleanup_slots = plan_call_arg_temp_cleanups(
         ctx, operands, visible_param_types, visible_ref_params, &[],
     )?;
@@ -88,6 +94,7 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
+        preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
@@ -119,6 +126,7 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         )));
     }
     let ref_writebacks = plan_ref_arg_writebacks(ctx, operands, param_types, ref_params)?;
+    let preleased_ref_cells = plan_preleased_ref_arg_cells(ctx, operands, ref_params)?;
     if !ref_writebacks.is_empty() {
         return Err(CodegenIrError::unsupported(
             "receiver-register method call with scalar-to-mixed by-reference writebacks",
@@ -130,8 +138,8 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         plan_ref_arg_temp_cells(ctx, operands, param_types, ref_params, &ref_writebacks, lifetime)?;
     // THE RECEIVER IS ALREADY IN A REGISTER, AND THE CELL BLOCK IS ALLOWED TO DESTROY
     // CALLER-SAVED ONES: materializing a cell's value runs `load_value_to_result` and may
-    // call runtime helpers, so anything the caller left in a caller-saved register — or in
-    // the integer result register — is gone by the time the receiver is staged below.
+    // call runtime helpers, so anything the caller left in a caller-saved register, or in
+    // the integer result register, is gone by the time the receiver is staged below.
     //
     // Every caller that can reach a non-empty block therefore hands the receiver over in the
     // reserved CALLEE-SAVED nested-call register (`abi::nested_call_reg`, x19/r12), which
@@ -146,7 +154,11 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         )));
     }
     let mut no_writebacks: Vec<RefArgWriteback> = Vec::new();
-    emit_ref_arg_cell_block(ctx, &mut no_writebacks, &mut ref_temp_cells)?;
+    emit_ref_arg_cell_block(
+        ctx,
+        &mut no_writebacks,
+        &mut ref_temp_cells,
+    )?;
     let cleanup_slots = plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
     let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
@@ -186,6 +198,7 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
+        preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
@@ -228,11 +241,22 @@ pub(super) fn plan_ref_arg_writebacks(
         if !ref_params[param_index] || param_types[param_index].codegen_repr() != PhpType::Mixed {
             continue;
         }
+        // An acquired hash-entry cell already is the caller's writable Mixed storage. Looking
+        // through it to the entry's earlier concrete payload type would incorrectly schedule a
+        // scalar writeback against a value that has no local source slot.
+        if value_is_acquired_array_element_ref_cell(ctx, *value)? {
+            continue;
+        }
         let source_ty = if let Some(array) = array_element_address_source(ctx, *value)? {
-            let PhpType::Array(element) = ctx.value_php_type(array)?.codegen_repr() else {
-                return Err(CodegenIrError::invalid_module("array element address requires an indexed receiver"));
-            };
-            element.codegen_repr()
+            match ctx.value_php_type(array)?.codegen_repr() {
+                PhpType::Array(element) => element.codegen_repr(),
+                PhpType::AssocArray { value, .. } => value.codegen_repr(),
+                _ => {
+                    return Err(CodegenIrError::invalid_module(
+                        "array element address requires an array receiver",
+                    ));
+                }
+            }
         } else {
             ctx.raw_value_php_type(*value)?.codegen_repr()
         };
@@ -270,8 +294,8 @@ pub(super) fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType)
     )))
 }
 
-/// Plans managed default cells for reference operands without an existing caller location.
-/// Writebacks, locals and element addresses already supply storage and need no new cell.
+/// Plans managed reference-cell leases and default cells required by call arguments.
+/// Writebacks, locals, and borrowed indexed element addresses need no additional cell.
 pub(super) fn plan_ref_arg_temp_cells(
     ctx: &FunctionContext<'_>,
     args: &[ValueId],
@@ -299,6 +323,19 @@ pub(super) fn plan_ref_arg_temp_cells(
         if local_ref_arg_source(ctx, *value).is_ok() {
             continue;
         }
+        if value_is_acquired_array_element_ref_cell(ctx, *value)? {
+            continue;
+        }
+        if value_is_managed_array_element_ref_cell(ctx, *value)? {
+            cells.push(RefArgTempCell {
+                param_index,
+                source_value: *value,
+                cell_ty: param_types[param_index].codegen_repr(),
+                cell_offset: 0,
+                retain_existing: true,
+            });
+            continue;
+        }
         if value_is_array_element_address(ctx, *value)? {
             continue;
         }
@@ -307,9 +344,105 @@ pub(super) fn plan_ref_arg_temp_cells(
             source_value: *value,
             cell_ty: param_types[param_index].codegen_repr(),
             cell_offset: 0,
+            retain_existing: false,
         });
     }
     Ok(cells)
+}
+
+/// Returns whether EIR already acquired the managed array-element cell used by this operand.
+/// `Borrow` marks ledger cleanup and `Move` is a neutral forward, but both still name the same
+/// acquired writable cell and must bypass scalar writeback and backend fallback-cell planning.
+fn value_is_acquired_array_element_ref_cell(
+    ctx: &FunctionContext<'_>,
+    mut value: ValueId,
+) -> Result<bool> {
+    loop {
+        let Some(value_ref) = ctx.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let inst_ref = ctx
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        match inst_ref.op {
+            Op::AcquireRefCell => return Ok(true),
+            Op::Borrow | Op::Move => value = expect_operand(inst_ref, 0)?,
+            _ => return Ok(false),
+        }
+    }
+}
+
+/// Finds managed cell owners acquired during EIR argument evaluation without an EIR ledger.
+/// A ledger-protected operand carries an outer `Borrow`, while a bare `AcquireRefCell` delegates
+/// normal-path retirement to the shared ABI call cleanup.
+pub(super) fn plan_preleased_ref_arg_cells(
+    ctx: &FunctionContext<'_>,
+    args: &[ValueId],
+    ref_params: &[bool],
+) -> Result<Vec<PreleasedRefArgCell>> {
+    let mut cells = Vec::new();
+    for (value, is_ref) in args.iter().zip(ref_params.iter()) {
+        if !is_ref {
+            continue;
+        }
+        let Some((owner_slot, publication_order)) = preleased_ref_cell_owner(ctx, *value)? else {
+            continue;
+        };
+        if !cells
+            .iter()
+            .any(|(_, cell): &(u32, PreleasedRefArgCell)| cell.owner_slot == owner_slot)
+        {
+            cells.push((
+                publication_order,
+                PreleasedRefArgCell {
+                    owner_slot,
+                    cell_ty: PhpType::Mixed,
+                },
+            ));
+        }
+    }
+    // Named arguments are stored in ABI parameter order, which can be the reverse of source
+    // evaluation and cleanup-record publication. Instruction order is the EIR source order and
+    // therefore the only valid basis for the later LIFO pop.
+    cells.sort_by_key(|(publication_order, _)| *publication_order);
+    Ok(cells.into_iter().map(|(_, cell)| cell).collect())
+}
+
+/// Traces neutral forwarding around a bare EIR-managed argument lease.
+/// `Borrow` is a deliberate stop marker: its enclosing EIR ledger owns cleanup.
+fn preleased_ref_cell_owner(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<(LocalSlotId, u32)>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op == Op::Borrow {
+        return Ok(None);
+    }
+    if inst_ref.op == Op::Move {
+        return preleased_ref_cell_owner(ctx, expect_operand(inst_ref, 0)?);
+    }
+    if inst_ref.op != Op::AcquireRefCell {
+        return Ok(None);
+    }
+    let Some(Immediate::LocalSlot(owner_slot)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "preleased reference-cell argument has no owner slot",
+        ));
+    };
+    Ok(Some((owner_slot, inst.as_raw())))
 }
 
 /// Keeps the persistent fallback only when the constructed hierarchy can borrow a property cell.
@@ -354,6 +487,23 @@ pub(super) fn emit_ref_arg_cell_block(
     }
     for (index, cell) in temp_cells.iter_mut().enumerate() {
         cell.cell_offset = writeback_bytes + index * CALL_ARG_TEMP_CLEANUP_BYTES;
+        if cell.retain_existing {
+            ctx.load_value_to_reg(cell.source_value, abi::int_result_reg(ctx.emitter))?;
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            abi::emit_pop_reg(ctx.emitter, cell_reg);
+            abi::emit_store_to_sp(ctx.emitter, cell_reg, cell.cell_offset);
+            let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
+            abi::emit_temporary_stack_address(ctx.emitter, owner_address, cell.cell_offset);
+            abi::emit_link_call_operand_owner_at_stack(
+                ctx.emitter,
+                owner_address,
+                false,
+                cell.cell_offset + 16,
+            );
+            continue;
+        }
         let source_ty = ctx.load_value_to_result(cell.source_value)?;
         coerce_ref_cell_store_value(ctx, &source_ty, &cell.cell_ty)?;
         if source_ty.codegen_repr() == cell.cell_ty.codegen_repr() {
@@ -412,10 +562,6 @@ pub(super) fn materialize_ref_arg_address(
     if local_ref_arg_source(ctx, value).is_ok() {
         return materialize_local_ref_arg_address(ctx, value);
     }
-    if value_is_array_element_address(ctx, value)? {
-        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
-        return Ok(());
-    }
     if let Some(cell) = temp_cells
         .iter()
         .find(|cell| cell.param_index == param_index)
@@ -426,6 +572,10 @@ pub(super) fn materialize_ref_arg_address(
             abi::int_result_reg(ctx.emitter),
             cell_offset,
         );
+        return Ok(());
+    }
+    if value_is_array_element_address(ctx, value)? {
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
         return Ok(());
     }
     materialize_temporary_ref_arg_cell(ctx, value, param_ty)
@@ -522,6 +672,14 @@ pub(super) fn emit_ref_arg_writebacks(
     let block_bytes = call_args.ref_writebacks.len() * 16
         + call_args.ref_temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     abi::emit_release_temporary_stack(ctx.emitter, block_bytes);
+    for cell in call_args.preleased_ref_cells.iter().rev() {
+        abi::emit_pop_call_operand_owner(ctx.emitter);
+        super::local_stores::release_local_ref_cell_owner(
+            ctx,
+            cell.owner_slot,
+            &cell.cell_ty,
+        )?;
+    }
     Ok(())
 }
 
@@ -567,7 +725,7 @@ pub(super) fn materialize_local_ref_arg_address(ctx: &mut FunctionContext<'_>, v
     ctx.materialize_local_storage_address(source.slot, abi::int_result_reg(ctx.emitter))
 }
 
-/// Returns true when a value already holds a direct pointer to an array element slot.
+/// Returns true when a value already holds a direct pointer to array element reference storage.
 pub(super) fn value_is_array_element_address(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
     Ok(array_element_address_source(ctx, value)?.is_some())
 }
@@ -584,10 +742,44 @@ fn array_element_address_source(ctx: &FunctionContext<'_>, value: ValueId) -> Re
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::ArrayElemAddr {
+    if matches!(inst_ref.op, Op::AcquireRefCell | Op::Borrow | Op::Move) {
+        return array_element_address_source(ctx, expect_operand(inst_ref, 0)?);
+    }
+    if !matches!(inst_ref.op, Op::ArrayElemAddr | Op::LoadArrayElemRefCell) {
         return Ok(None);
     }
     Ok(Some(expect_operand(inst_ref, 0)?))
+}
+
+/// Returns whether an element-address operand names a managed hash reference cell.
+///
+/// `ArrayElemAddr` and a concrete indexed-array ref-cell load are borrowed interior addresses.
+/// Associative, boxed, and runtime-shaped `Array(Mixed)` sources normalize to hash storage, so
+/// their `LoadArrayElemRefCell` result needs a caller lease while the callee can replace its entry
+/// owner.
+fn value_is_managed_array_element_ref_cell(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::LoadArrayElemRefCell {
+        return Ok(false);
+    }
+    let source = expect_operand(inst_ref, 0)?;
+    Ok(match ctx.value_php_type(source)?.codegen_repr() {
+        PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) => true,
+        _ => false,
+    })
 }
 
 /// Describes a local operand used as a by-reference call argument.

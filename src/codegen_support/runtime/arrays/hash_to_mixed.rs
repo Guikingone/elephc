@@ -39,6 +39,12 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #80");                                    // establish a stable conversion frame
     emitter.instruction("bl __rt_hash_ensure_unique");                          // split shared hashes before rewriting entry payloads
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique hash pointer
+    emit_branch_if_null_container(
+        emitter,
+        "x0",
+        "x9",
+        "__rt_hash_to_mixed_null",
+    );
     emitter.instruction("str xzr, [sp, #8]");                                   // initialize the insertion-order cursor
 
     emitter.label("__rt_hash_to_mixed_loop");
@@ -77,6 +83,11 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the conversion frame
     emitter.instruction("ret");                                                 // return the converted hash pointer
+
+    emitter.label("__rt_hash_to_mixed_null");
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore the frame around an absent container
+    emitter.instruction("add sp, sp, #96");                                     // release conversion slots without touching the sentinel
+    emitter.instruction("ret");                                                 // return the null-like source unchanged
 
     emitter.label_shared("__rt_hash_to_mixed_box_owned");
     emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can carry the null sentinel
@@ -127,6 +138,12 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve slots for hash pointer, cursor, payload, and entry address
     emitter.instruction("call __rt_hash_ensure_unique");                        // split shared hashes before rewriting entry payloads
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique hash pointer
+    emit_branch_if_null_container(
+        emitter,
+        "rax",
+        "r10",
+        "__rt_hash_to_mixed_x86_null",
+    );
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // initialize the insertion-order cursor
 
     emitter.label("__rt_hash_to_mixed_x86_loop");
@@ -163,6 +180,11 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 64");                                         // release the conversion frame slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the converted hash pointer
+
+    emitter.label("__rt_hash_to_mixed_x86_null");
+    emitter.instruction("add rsp, 64");                                         // release conversion slots without touching the sentinel
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer for the null-like return
+    emitter.instruction("ret");                                                 // return the null-like source unchanged
 
     emitter.label_shared("__rt_hash_to_mixed_x86_box_owned");
     emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can carry the null sentinel

@@ -166,11 +166,112 @@ impl Checker {
     ) -> Result<bool, CompileError> {
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
-            ExprKind::ArrayAccess { array, .. } if matches!(array.kind, ExprKind::Variable(_)) => {
-                Ok(matches!(
-                    self.infer_type(array, env)?.codegen_repr(),
-                    PhpType::Array(_)
-                ))
+            ExprKind::ArrayAccess { array, .. } => {
+                self.is_addressable_ref_array_receiver(array, env)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Mirrors the recursive receiver shapes prepared by EIR reference-argument lowering.
+    fn is_addressable_ref_array_receiver(
+        &mut self,
+        receiver: &Expr,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        let receiver_ty = self.infer_type(receiver, env)?.codegen_repr();
+        let array_like = matches!(
+            &receiver_ty,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+        );
+        if !array_like {
+            return Ok(false);
+        }
+        match &receiver.kind {
+            ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => Ok(true),
+            ExprKind::ArrayAccess { array, .. } => {
+                self.is_addressable_ref_array_receiver(array, env)
+            }
+            ExprKind::PropertyAccess { object, property }
+                if matches!(&receiver_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) =>
+            {
+                self.is_addressable_ref_property(object, property, env)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Returns whether a named property is a declared slot under a stable object root.
+    fn is_addressable_ref_property(
+        &mut self,
+        object: &Expr,
+        property: &str,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        if !self.is_stable_ref_object_receiver(object, env)? {
+            return Ok(false);
+        }
+        let Some((class_name, addressable)) = self.ref_property_slot_addressability(
+            object,
+            property,
+            env,
+        )? else {
+            return Ok(false);
+        };
+        if addressable {
+            self.reference_property_promotions
+                .insert((class_name, property.to_string()));
+        }
+        Ok(addressable)
+    }
+
+    /// Resolves a stable declared property without changing its storage representation.
+    fn ref_property_slot_addressability(
+        &mut self,
+        object: &Expr,
+        property: &str,
+        env: &TypeEnv,
+    ) -> Result<Option<(String, bool)>, CompileError> {
+        let object_ty = self.infer_type(object, env)?;
+        let Some(class_name) = crate::types::checker::single_object_class_name(&object_ty) else {
+            return Ok(None);
+        };
+        let class_name = class_name.trim_start_matches('\\');
+        let addressable = self.classes.get(class_name).is_some_and(|info| {
+            !info.methods.contains_key(&crate::names::php_symbol_key(
+                &crate::names::property_hook_get_method(property),
+            )) && matches!(
+                crate::types::resolve_property_name(
+                    &self.classes,
+                    class_name,
+                    property,
+                    self.current_class.as_deref(),
+                ),
+                crate::types::PropertyNameResolution::Visible
+                    | crate::types::PropertyNameResolution::ScopePrivate { .. }
+            )
+        });
+        Ok(Some((class_name.to_string(), addressable)))
+    }
+
+    /// Accepts only object roots whose declared-slot chain remains writable after evaluation.
+    fn is_stable_ref_object_receiver(
+        &mut self,
+        object: &Expr,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        match &object.kind {
+            ExprKind::Variable(_) | ExprKind::This => Ok(true),
+            ExprKind::PropertyAccess {
+                object: parent,
+                property,
+            } => {
+                if !self.is_stable_ref_object_receiver(parent, env)? {
+                    return Ok(false);
+                }
+                Ok(self
+                    .ref_property_slot_addressability(parent, property, env)?
+                    .is_some_and(|(_, addressable)| addressable))
             }
             _ => Ok(false),
         }
@@ -179,10 +280,9 @@ impl Checker {
     /// Returns whether an argument can be bound to a BUILTIN's by-reference parameter.
     ///
     /// Deliberately separate from `is_by_ref_argument_lvalue`, which answers the same question
-    /// for a USER function and must stay narrower: that path writes its result back to a LOCAL
-    /// SLOT (`RefArgWriteback::source_slot`), and a property has no slot, so widening the shared
-    /// predicate would let the checker accept what the backend cannot lower — the exact
-    /// "checker accepts, backend refuses" trade this codebase treats as a false win.
+    /// for a USER function through the addressable-origin path. That path accepts properties and
+    /// static properties only as stable receivers inside recursively addressable array access,
+    /// and excludes direct scalar property binding plus dynamic/nullsafe member fetches.
     ///
     /// Builtins reach their by-reference argument through the storage itself, which is why
     /// `array_push($this->items, 9)` already compiles and runs today. What PHP refuses, and
@@ -605,6 +705,20 @@ impl Checker {
                 let supplied_reference = sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     && !defaults.get(param_idx).copied().unwrap_or(false);
                 if supplied_reference {
+                    if descriptor_invocation && matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
+                        let param_name = sig
+                            .params
+                            .get(param_idx)
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or("arg");
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "{} parameter ${} cannot bind an array element by reference through callable descriptor dispatch; call the target directly or bind the element to a reference variable first",
+                                callee_desc, param_name
+                            ),
+                        ));
+                    }
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -700,11 +814,36 @@ impl Checker {
                 // body that calls `func_get_args()` it names the slot BEFORE the collector, and
                 // this read answered with the hidden count slot's flag instead.
                 let variadic_index = crate::types::signatures::variadic_param_index(sig);
-                if variadic_index
+                let variadic_by_ref = variadic_index
                     .and_then(|index| sig.ref_params.get(index))
                     .copied()
-                    .unwrap_or(false)
-                {
+                    .unwrap_or(false);
+                if variadic_by_ref {
+                    if matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
+                        let vname = sig.variadic.as_deref().unwrap_or("args");
+                        let detail = if descriptor_invocation {
+                            "through callable descriptor dispatch"
+                        } else {
+                            "for a by-reference variadic call"
+                        };
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "{} variadic parameter ${} cannot bind an array element by reference {}; bind the element to a reference variable first",
+                                callee_desc, vname, detail
+                            ),
+                        ));
+                    }
+                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                        let vname = sig.variadic.as_deref().unwrap_or("args");
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "{} variadic parameter ${} must be passed a variable",
+                                callee_desc, vname
+                            ),
+                        ));
+                    }
                     self.record_reference_alias_root(arg);
                 }
                 if let (Some(vname), Some(expected_ty)) =

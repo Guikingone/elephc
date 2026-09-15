@@ -169,6 +169,7 @@ pub(super) fn lower_method_call(
         op.default_effects(),
         Some(expr.span),
     );
+    ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &arg_values);
     let call = finish_reference_return_call(
         ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
     );
@@ -251,6 +252,7 @@ pub(super) fn lower_closure_bind_method(
 pub(super) struct ScopedClosureBindPlan {
     name: String,
     signature: FunctionSig,
+    return_alias: ReturnArgAlias,
 }
 
 /// Plans a scope-specialized binding without emitting EIR or evaluating source expressions.
@@ -270,6 +272,7 @@ pub(super) fn plan_scoped_closure_bind(
         name,
         signature,
         captures,
+        return_alias,
     } = binding
     else {
         return None;
@@ -299,6 +302,7 @@ pub(super) fn plan_scoped_closure_bind(
     Some(ScopedClosureBindPlan {
         name: scoped_name,
         signature,
+        return_alias,
     })
 }
 
@@ -332,6 +336,7 @@ pub(super) fn lower_planned_scoped_closure_bind(
     };
     let captures = vec![ClosureCapture {
         value: boxed_this.value,
+        by_ref_local: None,
     }];
     let data = ctx.intern_string(&plan.name);
     let bound = ctx.emit_value(
@@ -357,6 +362,7 @@ pub(super) fn lower_planned_scoped_closure_bind(
         name: plan.name,
         signature: plan.signature,
         captures,
+        return_alias: plan.return_alias,
     });
     bound
 }

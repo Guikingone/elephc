@@ -68,8 +68,36 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
     if source_ty == target_ty {
         return value;
     }
+    let container_value = coerce_container_to_mixed_payload(
+        ctx,
+        value,
+        &source_ty,
+        &target_ty,
+        span,
+    );
+    if container_value.value != value.value {
+        return container_value;
+    }
     match target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
+        target @ PhpType::AssocArray { .. } if matches!(source_ty, PhpType::Array(_)) => {
+            // `ArrayToHash` consumes its input owner. An assignment from a borrowed local must
+            // preserve that local's indexed owner while producing the independent hash stored in
+            // the associative destination; a fresh expression already supplies the owned input.
+            let source = if ctx.value_is_owning_temporary(value) {
+                value
+            } else {
+                crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+            };
+            ctx.emit_value(
+                Op::ArrayToHash,
+                vec![source.value],
+                None,
+                target,
+                Op::ArrayToHash.default_effects(),
+                Some(span),
+            )
+        }
         target @ (PhpType::Callable | PhpType::Object(_)) if source_ty == PhpType::Mixed => {
             let effects = Op::mixed_unbox_effects(&target);
             ctx.emit_value(
@@ -98,10 +126,34 @@ pub(super) fn lower_foreach(
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
+    let prepared_source = value_by_ref
+        .then(|| prepare_addressable_by_ref_foreach_source(ctx, array))
+        .flatten();
+    let array = prepared_source.as_ref().unwrap_or(array);
     // Promote a by-reference indexed source BEFORE it is loaded, so the loop iterates the hash
     // the rest of the program will see in that local.
     let by_ref_origin = promote_by_ref_foreach_source(ctx, array, value_by_ref);
-    let (source, source_is_borrowed_fetch) = lower_foreach_source(ctx, array, value_by_ref);
+    let (mut source, source_is_borrowed_fetch) = lower_foreach_source(ctx, array, value_by_ref);
+    if value_by_ref
+        && by_ref_origin.is_none()
+        && matches!(
+            ctx.builder.value_php_type(source.value).codegen_repr(),
+            PhpType::Array(_)
+        )
+    {
+        let hash_ty = PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Mixed),
+        };
+        source = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![source.value],
+            None,
+            hash_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(array.span),
+        );
+    }
     // Orthogonal to the borrowed fetch-for-write pin taken after `IterStart` below: that one
     // keeps a by-reference element or property container alive, while this one takes the loop's
     // reference on an object source. Borrowed fetch-for-write sources are containers, never
@@ -238,12 +290,18 @@ pub(super) fn lower_foreach(
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
-    let cleanup = (source_owner.is_none() && ctx.value_is_owning_temporary(source)).then_some(
-        LoopCleanup {
-            value: source,
-            span: array.span,
-        },
-    );
+    // `IterStart` consumes a by-reference local load while making the source unique, then
+    // publishes that replacement owner into the origin local. The SSA value no longer owns a
+    // second reference after that transfer, so putting it in the loop cleanup would free the
+    // live local table on normal and early exits. Sources without an origin, including literal
+    // temporaries, keep their ordinary cleanup obligation.
+    let cleanup = (source_owner.is_none()
+        && by_ref_origin.is_none()
+        && ctx.value_is_owning_temporary(source))
+    .then_some(LoopCleanup {
+        value: source,
+        span: array.span,
+    });
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
@@ -312,7 +370,7 @@ pub(super) fn lower_foreach(
     }
     if let Some(slot) = source_owner {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, array.span);
-    } else if ctx.value_is_owning_temporary(source) {
+    } else if by_ref_origin.is_none() && ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(array.span));
     }
     // Normal termination is the exit this block IS, so the pin is dropped here. Every other way
@@ -320,6 +378,62 @@ pub(super) fn lower_foreach(
     // `emit_innermost_loop_cleanups` through the loop frame instead.
     if let Some(pin) = source_pin {
         crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
+    }
+}
+
+/// Reifies a property, static property, or nested element source as a local reference.
+///
+/// Iterator relocation can only reload a local slot. A synthetic alias turns an addressable
+/// non-local source into such a slot without copying the container: instance properties use
+/// their promoted property cell, native static properties use their process-lifetime symbol
+/// address, and nested elements first promote their parent to hash storage and then retain the
+/// entry's tag-11 cell. Growth through any spelling writes into that same cell, so `IterNext`
+/// always reloads the live table.
+fn prepare_addressable_by_ref_foreach_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+) -> Option<Expr> {
+    match &source.kind {
+        ExprKind::Variable(_) => Some(source.clone()),
+        ExprKind::PropertyAccess { object, property }
+            if crate::ir_lower::expr::by_ref_foreach_property_source_is_addressable(
+                ctx, object, property,
+            ) =>
+        {
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            crate::ir_lower::expr::lower_ref_assign_property(ctx, &alias, source, source.span);
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        ExprKind::StaticPropertyAccess { .. } => {
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            crate::ir_lower::expr::lower_ref_assign_static_property(
+                ctx,
+                &alias,
+                source,
+                source.span,
+            );
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            let parent = prepare_addressable_by_ref_foreach_source(ctx, array)?;
+            promote_by_ref_foreach_source(ctx, &parent, true)?;
+            let element = Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(parent),
+                    index: index.clone(),
+                },
+                source.span,
+            );
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            crate::ir_lower::expr::lower_owned_ref_assign_array_elem(
+                ctx,
+                &alias,
+                &element,
+                source.span,
+            );
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        _ => None,
     }
 }
 
@@ -338,19 +452,18 @@ pub(super) fn lower_foreach(
 /// and strings persisted) whose entries are then widened to boxed Mixed cells, which is where the
 /// reference word lives. `Op::ArrayToHash` consumes the loaded owner and returns its replacement,
 /// and `store_mutated_local` releases the local's own reference, so the array is freed exactly
-/// once and the hash owns every child. The local keeps the runtime-polymorphic `Array(Mixed)`
-/// representation, mirroring the checker: earlier operations still see indexed storage, while
-/// later reads safely dispatch on the promoted heap kind.
+/// once and the hash owns every child. The replacement local is typed `AssocArray<Int, Mixed>`;
+/// earlier SSA values keep their indexed type, while every later operation selects hash lowering.
 ///
 /// Only an indexed source needs physical promotion. An associative source is already a hash, but
 /// it still has to return its local slot as the iterator origin: growth can replace that table just
-/// as it can replace the promoted table. Element and property sources keep the existing
-/// fetch-for-write path and therefore do not name a local origin.
+/// as it can replace the promoted table. Element, instance-property, and static-property sources
+/// are first represented by synthetic reference locals, so they use this same origin protocol.
 ///
 /// Returns the promoted local slot so `IterStart` can record it as the iterator origin. Growth
 /// and copy-on-write inside the loop body republish the replacement table into that slot, and
 /// `IterNext` reloads it from there instead of walking the table captured at loop entry.
-fn promote_by_ref_foreach_source(
+pub(crate) fn promote_by_ref_foreach_source(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     value_by_ref: bool,
@@ -363,13 +476,35 @@ fn promote_by_ref_foreach_source(
     };
     let slot = *ctx.local_slots.get(name.as_str())?;
     let source_ty = ctx.local_type(name).codegen_repr();
-    if matches!(source_ty, PhpType::AssocArray { .. }) {
+    if matches!(source_ty, PhpType::Mixed | PhpType::Iterable | PhpType::Union(_)) {
+        return Some(slot);
+    }
+    if let PhpType::AssocArray { key, value } = source_ty {
+        if value.codegen_repr() != PhpType::Mixed {
+            let storage_ty = PhpType::AssocArray {
+                key,
+                value: Box::new(PhpType::Mixed),
+            };
+            let hash = ctx.load_local(name, Some(array.span));
+            let mixed = ctx.emit_value(
+                Op::HashToMixed,
+                vec![hash.value],
+                None,
+                storage_ty.clone(),
+                Op::HashToMixed.default_effects(),
+                Some(array.span),
+            );
+            ctx.store_mutated_local(name, mixed, storage_ty, Some(array.span));
+        }
         return Some(slot);
     }
     let PhpType::Array(_) = source_ty else {
         return None;
     };
-    let storage_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let storage_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: Box::new(PhpType::Mixed),
+    };
     let array_value = ctx.load_local(name, Some(array.span));
     let hash = ctx.emit_value(
         Op::ArrayToHash,
@@ -379,7 +514,7 @@ fn promote_by_ref_foreach_source(
         Op::ArrayToHash.default_effects(),
         Some(array.span),
     );
-    ctx.store_mutated_local(name, hash, storage_ty, Some(array.span));
+    ctx.store_retyped_container_local(name, hash, storage_ty, Some(array.span));
     Some(slot)
 }
 
@@ -470,7 +605,10 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
 /// Returns the local value type used when a foreach binds the value by reference.
 pub(super) fn foreach_ref_value_type(source_ty: &PhpType) -> PhpType {
     match source_ty.codegen_repr() {
-        PhpType::Array(elem) => *elem,
+        // By-reference iteration widens indexed slots to boxed Mixed storage before binding.
+        // The local must use that same shape so reads, writes, and final alias cleanup operate
+        // on the box stored in the element rather than interpreting its pointer as a scalar.
+        PhpType::Array(_) => PhpType::Mixed,
         // Hash foreach references point at boxed Mixed entry slots. Keeping the local Mixed
         // lets assignment replace the entry cell without interpreting its pointer as a typed
         // scalar payload, and preserves PHP's ability to change the referenced value's type.

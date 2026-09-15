@@ -40,6 +40,9 @@ pub(super) fn lower_static_property_assign(
     span: Span,
 ) {
     let value = lower_expr(ctx, value);
+    let value = static_property_type(ctx, receiver, property)
+        .map(|slot_ty| coerce_typed_assign_value(ctx, value, &slot_ty, span))
+        .unwrap_or(value);
     if static_property_store_retains_independent_value(ctx, receiver, property, value) {
         store_static_property(ctx, receiver, property, value.value, span);
         if ctx.value_is_owning_temporary(value) {

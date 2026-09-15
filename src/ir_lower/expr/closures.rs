@@ -248,7 +248,10 @@ pub(super) fn lower_closure_with_context(
         } else {
             by_value_capture_views.push(captured);
         }
-        captured_values.push(ClosureCapture { value: captured.value });
+        captured_values.push(ClosureCapture {
+            value: captured.value,
+            by_ref_local: by_ref.then(|| capture.clone()),
+        });
         capture_params.push((capture.clone(), php_type, by_ref));
     }
     if ctx.current_class.is_some()
@@ -275,6 +278,7 @@ pub(super) fn lower_closure_with_context(
         );
         captured_values.push(ClosureCapture {
             value: called_class_id.value,
+            by_ref_local: None,
         });
         capture_params.push((
             CALLED_CLASS_ID_CAPTURE.to_string(),
@@ -318,6 +322,12 @@ pub(super) fn lower_closure_with_context(
         )
     };
     let data = ctx.intern_string(&name);
+    let return_alias = crate::types::summarize_callable_return_alias(
+        params.iter().map(|(name, _, _, _)| name.as_str()),
+        variadic,
+        by_ref_return,
+        body,
+    );
     let closure_operands = captured_values
         .iter()
         .map(|capture| capture.value)
@@ -326,6 +336,7 @@ pub(super) fn lower_closure_with_context(
         name,
         signature,
         captures: captured_values,
+        return_alias,
     });
     let closure = ctx.emit_value(
         Op::ClosureNew,

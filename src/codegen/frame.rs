@@ -360,6 +360,11 @@ fn function_uses_nested_call_reg(function: &Function) -> bool {
         if matches!(inst.op, Op::DynamicObjectNew | Op::DynamicObjectNewMixed) {
             return true;
         }
+        // A runtime-name property write can dispatch a missing name to `__set`, preserving the
+        // selected receiver in the same callee-saved register while its arguments are staged.
+        if inst.op == Op::DynamicPropSet {
+            return true;
+        }
         // A boxed-Mixed STRING context holds its `__toString` receiver in the same register
         // and is neither of the method-call opcodes below, so it used to slip through: a
         // function whose only use was `echo $mixed` wrote `mov x19, x1` under a prologue that
@@ -1029,7 +1034,7 @@ fn emit_hash_entry_ref_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     slots.sort_by_key(|slot| slot.as_raw());
     slots.dedup();
     for slot in slots {
-        ctx.release_hash_entry_ref_binding(slot);
+        ctx.release_counted_ref_binding(slot);
     }
 }
 
@@ -1587,6 +1592,8 @@ fn local_load_transfers_stored_owner(local_ty: &PhpType, result_ty: &PhpType) ->
         (local_ty, result_ty),
         (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::Array(_), PhpType::AssocArray { .. })
+            | (PhpType::AssocArray { .. }, PhpType::Array(_))
     )
 }
 
@@ -1602,6 +1609,8 @@ fn return_preserves_result_owner(result_ty: &PhpType, return_ty: &PhpType) -> bo
         (result_ty, return_ty),
         (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::Array(_), PhpType::AssocArray { .. })
+            | (PhpType::AssocArray { .. }, PhpType::Array(_))
     )
 }
 

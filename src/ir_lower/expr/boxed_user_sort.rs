@@ -58,6 +58,7 @@ pub(super) fn lower_boxed_usort(
     {
         return None;
     }
+    let callback_binding = static_callable_binding_for_expr(ctx, callback);
 
     let handler = ctx.builder.create_named_block("usort.catch", Vec::new());
     let started = ctx.declare_hidden_temp(PhpType::Bool);
@@ -72,6 +73,9 @@ pub(super) fn lower_boxed_usort(
         let callback_source = root_expression(ctx, callback);
         (capture_place(ctx, array), callback_source)
     };
+    if let Some(binding) = callback_binding.clone() {
+        ctx.bind_static_callable_temp(&callback_source, binding);
+    }
     // Capturing a reference must not take a snapshot before a later callback
     // factory runs: that factory can replace the referenced PHP array.
     let source = lower_expr(ctx, &place.target);
@@ -92,6 +96,9 @@ pub(super) fn lower_boxed_usort(
     );
     let descriptor_slot = ctx.declare_hidden_temp(PhpType::Callable);
     ctx.store_local(&descriptor_slot, descriptor, PhpType::Callable, Some(expr.span));
+    if let Some(binding) = callback_binding {
+        ctx.bind_static_callable_temp(&descriptor_slot, binding);
+    }
     sort_and_publish(ctx, &place, &work_slot, &descriptor_slot, &callback_source, &guard, expr);
     Some(lower_null(ctx, expr))
 }

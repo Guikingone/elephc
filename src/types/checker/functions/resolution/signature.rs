@@ -432,6 +432,7 @@ fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
 fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
     for (idx, (_, ty)) in sig.params.iter_mut().enumerate() {
         if !sig.declared_params.get(idx).copied().unwrap_or(false)
+            && !sig.ref_params.get(idx).copied().unwrap_or(false)
             && matches!(ty, PhpType::Mixed)
         {
             *ty = PhpType::Int;

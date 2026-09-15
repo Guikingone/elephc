@@ -169,6 +169,47 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
     let target_offset = ctx.local_offset(target_slot)?;
     let pointer_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(value, pointer_reg)?;
+    if let Some(owner) = owner.filter(|_| inst.op == Op::BindRefCellPtr) {
+        let provided = ctx.next_label("bind_ref_cell_ptr_provided");
+        let done = ctx.next_label("bind_ref_cell_ptr_done");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &provided);
+        // An existing-only element lookup uses zero to report a miss. Give the synthetic source
+        // alias its own managed null cell, without inserting anything into the source container,
+        // so the following foreach can warn for null and skip safely.
+        crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
+        abi::emit_push_reg(ctx.emitter, pointer_reg);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            crate::codegen_support::runtime::reference_cells::payload_tag(&PhpType::Mixed),
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
+        let boxed = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_pop_reg(ctx.emitter, boxed);
+        abi::emit_store_to_address(ctx.emitter, boxed, pointer_reg, 0);
+        abi::emit_store_zero_to_address(ctx.emitter, pointer_reg, 8);
+        abi::store_at_offset_scratch(
+            ctx.emitter,
+            pointer_reg,
+            target_offset,
+            abi::tertiary_scratch_reg(ctx.emitter),
+        );
+        abi::store_at_offset(ctx.emitter, pointer_reg, ctx.local_offset(owner)?);
+        abi::emit_jump(ctx.emitter, &done);
+
+        ctx.emitter.label(&provided);
+        abi::store_at_offset_scratch(
+            ctx.emitter,
+            pointer_reg,
+            target_offset,
+            abi::tertiary_scratch_reg(ctx.emitter),
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+        abi::store_at_offset(ctx.emitter, pointer_reg, ctx.local_offset(owner)?);
+        ctx.emitter.label(&done);
+        ctx.mark_promoted_ref_cell(target_slot);
+        return Ok(());
+    }
     abi::store_at_offset_scratch(
         ctx.emitter,
         pointer_reg,
@@ -570,6 +611,16 @@ pub(super) fn store_value_to_ref_cell_as(
     value: ValueId,
     target_ty: &PhpType,
 ) -> Result<()> {
+    store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty)
+}
+
+/// Writes through a borrowed address or a managed cell whose payload uses the declared shape.
+fn store_value_to_raw_ref_cell_as(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    value: ValueId,
+    target_ty: &PhpType,
+) -> Result<()> {
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = target_ty.codegen_repr();
     reject_multiword_ref_param_local(&target_ty, "store")?;
@@ -583,9 +634,19 @@ pub(super) fn store_value_to_ref_cell_as(
     } else {
         coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
     }
+    let retires_previous = matches!(target_ty, PhpType::Str | PhpType::Callable)
+        || target_ty.is_refcounted();
+    if retires_previous {
+        abi::emit_push_result_value(ctx.emitter, &target_ty);
+    }
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
+    let old_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    if retires_previous {
+        abi::emit_load_from_address(ctx.emitter, old_reg, pointer_reg, 0);
+        pop_ref_cell_store_value(ctx, &target_ty);
+    }
     match target_ty {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
@@ -621,9 +682,42 @@ pub(super) fn store_value_to_ref_cell_as(
                 pointer_reg,
                 0,
             );
+            if target_ty == PhpType::Mixed {
+                abi::emit_store_zero_to_address(ctx.emitter, pointer_reg, 8);
+            }
+        }
+    }
+    if retires_previous {
+        // Publish before retirement because object/callable cleanup can execute PHP code.
+        // Both raw Mixed aliases and descriptor-7 managed cells store the same boxed pointer.
+        abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), old_reg);
+        if target_ty == PhpType::Str {
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_decref_preserving_exception(ctx.emitter, &target_ty);
+            abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
         }
     }
     Ok(())
+}
+
+/// Restores a staged ref-cell replacement into the target ABI result registers.
+fn pop_ref_cell_store_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        }
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, abi::int_result_reg(ctx.emitter), tag_reg);
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)),
+    }
 }
 
 /// Converts the current result registers to the target shape needed by a ref-cell store.

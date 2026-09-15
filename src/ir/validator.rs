@@ -441,6 +441,20 @@ mod instruction_effect_tests {
             assert!(op.default_effects().contains(required), "{op:?}");
         }
     }
+
+    /// Nested element reference loads can normalize and replace their parent container.
+    #[test]
+    fn array_element_reference_load_models_mutation_and_ownership_effects() {
+        let required = Effects::READS_HEAP
+            | Effects::WRITES_HEAP
+            | Effects::ALLOC_HEAP
+            | Effects::REFCOUNT_OP
+            | Effects::MAY_FATAL;
+        assert!(
+            Op::LoadArrayElemRefCell.default_effects().contains(required),
+            "LoadArrayElemRefCell must remain an ownership-sensitive heap mutation"
+        );
+    }
 }
 
 /// Validates immediate shape for opcodes whose immediate is structurally required.
@@ -457,6 +471,7 @@ fn validate_instruction_immediate(
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
         | LoadPropRefCellChecked
+        | LoadStaticPropertyRefCell
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
         | EvalStaticMethodCall
@@ -685,6 +700,7 @@ fn validate_opcode_rules(
         | LoadGlobal
         | LoadStaticLocal
         | LoadStaticProperty
+        | LoadStaticPropertyRefCell
         | LoadReflectionStaticProperty
         | ReflectionStaticPropertyInitialized
         | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
@@ -758,10 +774,26 @@ fn validate_opcode_rules(
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)")
         }
-        LoadArrayElemRefCell => {
+        LoadArrayElemRefCell | LoadArrayElemRefCellExisting => {
             check_count(inst_id, inst, 2, "2")?;
-            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
-            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
+            let operand = inst.operands[0];
+            let actual = function
+                .value(operand)
+                .ok_or(ValidationError::UnknownValue(operand))?
+                .ir_type;
+            if matches!(
+                actual,
+                IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Mixed)
+            ) {
+                Ok(())
+            } else {
+                Err(ValidationError::OperandTypeMismatch {
+                    inst: inst_id,
+                    operand,
+                    expected: "Heap(Array), Heap(Hash), or Heap(Mixed)",
+                    actual,
+                })
+            }
         }
         MixedArrayAppend | OffsetUnset => {
             check_count(inst_id, inst, 2, "2")?;
@@ -1486,6 +1518,24 @@ fn validate_use(
     if value_ref.ir_type == IrType::Void {
         return Err(ValidationError::VoidValueUsed(value));
     }
+    // A structured lowering can leave a fully formed continuation unreachable after its only
+    // prospective predecessor terminates. Values from entry-reachable setup blocks remain valid
+    // there, but same-block ordering and values from unrelated dead blocks must still satisfy the
+    // ordinary SSA rules.
+    let use_is_unreachable = use_block != function.entry
+        && dominators
+            .get(&use_block)
+            .is_some_and(|set| set.len() == 1 && set.contains(&use_block));
+    let definition_block = match value_ref.def {
+        ValueDef::BlockParam { block, .. } | ValueDef::Instruction { block, .. } => block,
+    };
+    let definition_is_reachable = definition_block == function.entry
+        || dominators
+            .get(&definition_block)
+            .is_some_and(|set| set.contains(&function.entry));
+    if use_is_unreachable && definition_block != use_block && definition_is_reachable {
+        return Ok(());
+    }
     if definition_dominates_use(value_ref.def, use_block, use_inst_index, dominators) {
         Ok(())
     } else {
@@ -1525,14 +1575,14 @@ fn definition_dominates_use(
 ///
 /// Only predecessors reachable from the entry are intersected. An unreachable
 /// block carries no real control flow from the entry, so including it as a
-/// predecessor would wrongly shrink a reachable block's dominator set — e.g. a
+/// predecessor would wrongly shrink a reachable block's dominator set. For example, a
 /// loop whose `for.update` is skipped by an unconditional `break` leaves that
 /// update block unreachable yet still branching back to the loop header, which
 /// would otherwise strip the entry block out of the header's dominators and
 /// produce spurious `UseNotDominated` errors for any value the entry defines and
-/// a later pass forwards into the loop. Unreachable blocks themselves still
-/// resolve to `{self}` (no reachable predecessor), so genuine uses inside dead
-/// code remain flagged until they are neutralized.
+/// a later pass forwards into the loop. Unreachable blocks themselves resolve
+/// to `{self}`. Validation accepts values produced by entry-reachable setup,
+/// while still rejecting local use-before-definition and sibling dead-block uses.
 fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
     let predecessors = compute_predecessors(function);
     let reachable = reachable_from_entry(function, &predecessors);
