@@ -227,7 +227,13 @@ impl Checker {
             can_widen_local,
             &format!("{} variadic parameter ${}", callee_desc, variadic_name),
         )?;
-        self.record_boxed_reference_output(arg, &PhpType::Mixed, actual_ty, call_span);
+        self.record_boxed_reference_output(
+            arg,
+            &PhpType::Mixed,
+            actual_ty,
+            call_span,
+            caller_env,
+        );
         self.record_reference_alias_root(arg);
         Ok(())
     }
@@ -811,7 +817,13 @@ impl Checker {
                             can_widen_by_ref_local,
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
-                        self.record_boxed_reference_output(arg, expected_ty, &actual_ty, span);
+                        self.record_boxed_reference_output(
+                            arg,
+                            expected_ty,
+                            &actual_ty,
+                            span,
+                            caller_env,
+                        );
                     }
                     // `strict_types` applies to every declared parameter type, including the
                     // closure and first-class-callable surfaces that stay off the coercive

@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Arguments are already normalized by the shared call planner.
-//! - Only an eligible referenced local changes representation, not an element-reference root.
+//! - A referenced array element widens its local root to boxed Mixed element storage.
 
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
@@ -22,6 +22,7 @@ impl Checker {
         expected: &PhpType,
         actual: &PhpType,
         call_span: Span,
+        env: &TypeEnv,
     ) {
         let output_ty = if expected.is_php_array()
             && matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. })
@@ -41,18 +42,43 @@ impl Checker {
         while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
             arg = value;
         }
-        if let ExprKind::Variable(name) = &arg.kind {
-            if output_ty == PhpType::Mixed && arg.span.identifies_a_node() {
-                self.boxed_reference_promotion_sites
-                    .entry((self.current_loop_storage_scope.clone(), arg.span))
-                    .or_default()
-                    .insert(name.clone());
+        let (name, output_ty) = match &arg.kind {
+            ExprKind::Variable(name) => {
+                if output_ty == PhpType::Mixed && arg.span.identifies_a_node() {
+                    self.boxed_reference_promotion_sites
+                        .entry((self.current_loop_storage_scope.clone(), arg.span))
+                        .or_default()
+                        .insert(name.clone());
+                }
+                (name, output_ty)
             }
-            self.boxed_reference_outputs
-                .entry((self.current_loop_storage_scope.clone(), call_span))
-                .or_default()
-                .insert(name.clone(), output_ty);
-        }
+            ExprKind::ArrayAccess { array, .. } if output_ty == PhpType::Mixed => {
+                let mut root = array.as_ref();
+                while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+                    root = array;
+                }
+                let ExprKind::Variable(name) = &root.kind else {
+                    return;
+                };
+                let Some(root_ty) = env.get(name) else {
+                    return;
+                };
+                let widened = match root_ty.codegen_repr() {
+                    PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+                    PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+                        key,
+                        value: Box::new(PhpType::Mixed),
+                    },
+                    _ => return,
+                };
+                (name, widened)
+            }
+            _ => return,
+        };
+        self.boxed_reference_outputs
+            .entry((self.current_loop_storage_scope.clone(), call_span))
+            .or_default()
+            .insert(name.clone(), output_ty);
     }
 
     /// Returns whether this call has already approved boxing the same local for an earlier slot.

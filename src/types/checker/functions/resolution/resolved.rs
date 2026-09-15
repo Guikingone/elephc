@@ -207,7 +207,13 @@ impl Checker {
                             can_widen_by_ref_local,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
-                        self.record_boxed_reference_output(arg, expected_ty, &actual_ty, span);
+                        self.record_boxed_reference_output(
+                            arg,
+                            expected_ty,
+                            &actual_ty,
+                            span,
+                            caller_env,
+                        );
                     }
                     // PHP's parameter binding only applies to a *declared* parameter type.
                     // An inferred parameter's "expected" type is just what earlier call sites
