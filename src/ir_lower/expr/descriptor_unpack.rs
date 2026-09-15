@@ -143,7 +143,11 @@ pub(super) fn lower_descriptor_unpack_source(
     // Pin even borrowed sources: iterator methods can rebind the caller's original storage.
     let pinned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
     let (pinned, source_owner) = root_owned_call_operand(ctx, pinned, span);
-    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    // The pin owns its added reference. Retire the original only when expression lowering also
+    // produced an owner, since a LoadRefCell source merely borrows its caller's pointee.
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
     let source = pinned;
     reject_non_iterable_source(ctx, source, span);
     let key_slot = ctx.declare_owned_hidden_temp(PhpType::Mixed);
