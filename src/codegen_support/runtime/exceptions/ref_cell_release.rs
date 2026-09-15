@@ -8,6 +8,7 @@
 //! - C arguments are a nullable unary payload-release entry, the owned cell pointer, and a defer flag.
 //! - The cell is freed before an accumulated exception rejoins the enclosing exception chain.
 
+use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 const FRAME: usize = 64;
@@ -47,11 +48,13 @@ pub fn emit_local_ref_cell_release(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("ldrb w9, [x0, #-8]");                          // distinguish managed property cells from typed local fallback cells
-            emitter.instruction("cmp w9, #7");                                  // managed cells carry their own payload release metadata
+            emitter.instruction(&format!("cmp w9, #{REFERENCE_CELL_HEAP_KIND}")); // managed cells carry their own payload release metadata
             emitter.instruction("b.eq __rt_local_ref_cell_release_managed");    // release the payload using its current cell shape
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp BYTE PTR [rax - 8], 7");                   // managed cells carry their own payload release metadata
+            emitter.instruction(&format!(                                       // managed cells carry their own payload release metadata
+                "cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}"
+            ));
             emitter.instruction("je __rt_local_ref_cell_release_managed");      // release the payload using its current cell shape
         }
     }
@@ -110,6 +113,15 @@ mod tests {
                 "subs w9, w9, #1"
             };
             assert!(asm.find(retain_guard).unwrap() < release, "{name}: shared cells skip payload retirement");
+            let managed_kind_guard = if name == "linux-x86_64" {
+                format!("cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}")
+            } else {
+                format!("cmp w9, #{REFERENCE_CELL_HEAP_KIND}")
+            };
+            assert!(
+                asm.find(&managed_kind_guard).unwrap() < release,
+                "{name}: managed cells use the registered heap kind"
+            );
             assert_eq!(asm.matches("__rt_heap_free").count(), 1, "{name}: retire the cell once");
         }
     }
