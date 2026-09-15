@@ -1540,37 +1540,32 @@ fn test_by_ref_capture_not_killable() {
     expect_error("<?php $a = 1; $f = function() use (&$a) { return $a; }; unset($a); $a = \"x\";", "cannot reassign");
 }
 
-/// A local passed to a by-ref parameter is aliased from that point on.
+/// A local passed to an untyped by-ref parameter is promoted to rebindable boxed Mixed storage.
 #[test]
-fn test_by_ref_call_arg_not_killable() {
-    expect_error("<?php function f(&$x) { $x = 2; } $a = 1; f($a); unset($a); $a = \"s\";", "cannot reassign");
+fn test_untyped_by_ref_call_arg_uses_rebindable_boxed_storage() {
+    expect_no_error("<?php function f(&$x) { $x = 2; } $a = 1; f($a); unset($a); $a = \"s\";");
 }
 
-/// A BY-REF PARAMETER itself (`active_ref_params`, not an aliased caller-side local) is excluded
-/// from the kill: `unset($x)` on it is a checker no-op, exactly like the pre-feature behavior — a
-/// later read sees the still-bound param and a later incompatible assignment is the old hard
-/// error, not a fresh kill-then-rebind.
+/// An untyped by-ref parameter uses boxed Mixed storage, so `unset` followed by a rebind can
+/// replace the referenced payload with a value of another PHP type.
 #[test]
-fn test_by_ref_param_unset_is_not_a_kill() {
+fn test_untyped_by_ref_param_unset_and_rebind_uses_boxed_storage() {
     expect_no_error("<?php function f(&$x) { unset($x); echo $x; } $a = 1; f($a);");
-    expect_error(
+    expect_no_error(
         "<?php function f(&$x) { unset($x); $x = \"s\"; } $a = 1; f($a);",
-        "cannot reassign $x from int to string",
     );
 }
 
-/// A BY-REF PARAMETER is also excluded from the straight-line retype: reassigning it to an
-/// incompatible type stays the old hard error in permissive mode, whether the param carries an
-/// explicit type hint or only the type the call site infers.
+/// A typed by-ref parameter keeps its declared cell ABI, while an untyped parameter uses boxed
+/// Mixed storage and can replace its payload with a value of another PHP type.
 #[test]
-fn test_by_ref_param_retype_not_permitted() {
+fn test_by_ref_param_retype_follows_declared_storage() {
     expect_error(
         "<?php function f(int &$x) { $x = \"s\"; } $a = 1; f($a);",
         "cannot reassign $x from int to string",
     );
-    expect_error(
+    expect_no_error(
         "<?php function f(&$x) { $x = \"s\"; } $a = 1; f($a);",
-        "cannot reassign $x from int to string",
     );
 }
 
@@ -1862,13 +1857,11 @@ fn test_typed_property_stays_strict() {
     );
 }
 
-/// A local passed to a METHOD's by-ref parameter is aliased too — that path validates its
-/// arguments from a `FunctionSig`, not from the `FnDecl` the plain-function test exercises.
+/// An untyped method by-ref parameter promotes its argument to rebindable boxed Mixed storage.
 #[test]
-fn test_method_by_ref_call_arg_not_killable() {
-    expect_error(
+fn test_untyped_method_by_ref_call_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php class C { function m(&$x) { $x = 2; } } $c = new C(); $a = 1; $c->m($a); unset($a); $a = \"s\";",
-        "cannot reassign",
     );
 }
 
@@ -1902,13 +1895,11 @@ fn test_branch_created_list_unpack_target_not_killable() {
     );
 }
 
-/// A local passed to a by-REFERENCE variadic (`&...$xs`) is aliased just like one bound to a
-/// regular by-ref parameter: the callee can write back through the collected slot.
+/// An untyped by-reference variadic promotes each argument to rebindable boxed Mixed storage.
 #[test]
-fn test_by_ref_variadic_call_arg_not_killable() {
-    expect_error(
+fn test_untyped_by_ref_variadic_call_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php function f(&...$xs) { $xs[0] = 9; } $a = 1; f($a); unset($a); $a = \"s\";",
-        "cannot reassign",
     );
 }
 

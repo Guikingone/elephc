@@ -190,10 +190,8 @@ echo $alias;
     }
 }
 
-/// Returning an alias of an indexed-array element by reference is refused.
-///
-/// `__rt_reference_cell_owner` answers zero for that interior address, so nothing can be
-/// transferred and the array could be released while the caller still holds the alias.
+/// Returning an alias of an indexed-array element through an incompatible typed reference is
+/// refused. Element aliases use boxed Mixed cells, which cannot satisfy an `int` cell ABI.
 #[test]
 fn borrowed_array_element_alias_reference_return_is_refused() {
     let message = refusal(
@@ -207,10 +205,10 @@ $alias = &escapingElementAlias();
 echo $alias;
 "#,
     );
-    assert!(message.contains("alias of an array element"), "{message}");
+    assert!(message.contains("different payload representation"), "{message}");
 }
 
-/// A transitive alias of an array element inherits the interior marker and is refused too.
+/// A transitive alias retains the element's boxed Mixed representation and is refused too.
 #[test]
 fn transitive_array_element_alias_reference_return_is_refused() {
     let message = refusal(
@@ -225,7 +223,7 @@ $alias = &relayedElementAlias();
 echo $alias;
 "#,
     );
-    assert!(message.contains("alias of an array element"), "{message}");
+    assert!(message.contains("different payload representation"), "{message}");
 }
 
 /// Returning a value expression by reference is refused instead of lowered as a scalar.
@@ -608,7 +606,7 @@ fn refusals_survive_re_lowering_and_do_not_leak_between_runs() {
     // point lowers it speculatively, discards that lowering, and lowers it again. The refused
     // reference return sits INSIDE that statement, which is what the rollback has to survive.
     let source = r#"<?php
-function &refusedInsideConvertedStatement(int $choice): mixed {
+function &refusedInsideConvertedStatement(int $choice): int {
     $numbers = [1, 2];
     $slot = &$numbers[0];
     if ($choice > 0) {
@@ -621,7 +619,7 @@ $alias = &refusedInsideConvertedStatement($argc);
 echo $alias;
 "#;
     let first = refusal(source);
-    assert!(first.contains("alias of an array element"), "{first}");
+    assert!(first.contains("different payload representation"), "{first}");
     let second = refusal(source);
     assert_eq!(first, second, "successive runs report the same refusal");
 

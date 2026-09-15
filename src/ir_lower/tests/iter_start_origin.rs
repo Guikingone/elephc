@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - A by-reference `foreach` over a simple array variable records the promoted local slot
-//!   as the iterator origin; every other source shape records `None`.
+//!   as the iterator origin; nested and static sources use the synthetic alias that owns their
+//!   relocated storage, while direct instance properties keep their fetch-for-write path.
 //! - `lower_source_at_for_target` validates the module it returns, so these tests also pin the
 //!   validator rule that an origin slot may only appear on a by-reference start.
 //! - All five supported targets are checked, and the emitted assembly must carry the table
@@ -84,9 +85,9 @@ foreach ($a as $v) {
     }
 }
 
-/// A by-reference `foreach` over an array ELEMENT keeps the fetch-for-write path and no origin.
+/// A by-reference `foreach` over an array element follows relocation through a synthetic origin.
 #[test]
-fn by_ref_foreach_over_an_element_source_records_no_origin_on_every_target() {
+fn by_ref_foreach_over_an_element_source_records_synthetic_origin_on_every_target() {
     let source = r#"<?php
 $outer = ["inner" => [1, 2, 3]];
 foreach ($outer["inner"] as &$v) {
@@ -98,7 +99,7 @@ echo count($outer["inner"]);
     for name in SUPPORTED_TARGETS {
         let starts = iter_start_immediates(source, name);
         assert_eq!(starts.len(), 1, "{name}");
-        assert_eq!(starts[0], (true, false), "{name}: element sources have no origin local");
+        assert_eq!(starts[0], (true, true), "{name}: element sources need a synthetic origin local");
     }
 }
 
