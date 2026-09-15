@@ -136,3 +136,55 @@ echo callBound(1);
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
 }
+
+/// A restored top-level closure keeps its runtime-shaped return when explicit scope is cloned.
+#[test]
+fn scoped_bind_after_try_keeps_mixed_property_return_on_every_target() {
+    let source = r#"<?php
+function increment(int $value): int { return $value + 1; }
+class Vault {
+    private string $code = "open";
+    public string $label = "abc";
+}
+$peek = function() { return $this->code; };
+try {
+    $vault = new Vault();
+    echo increment(strlen($vault->label));
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#;
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let scoped = module
+            .closures
+            .iter()
+            .find(|function| function.lexical_class.as_deref() == Some("Vault"))
+            .unwrap_or_else(|| panic!("{name}: explicit scope must clone the closure"));
+        assert_eq!(
+            scoped.return_php_type,
+            PhpType::Mixed,
+            "{name}: the cloned body must transport its runtime-shaped property value",
+        );
+        assert_eq!(
+            scoped
+                .params
+                .iter()
+                .find(|param| param.name == "this")
+                .map(|param| param.php_type.clone()),
+            Some(PhpType::Mixed),
+            "{name}: the rebound receiver remains boxed for runtime property dispatch",
+        );
+    }
+}

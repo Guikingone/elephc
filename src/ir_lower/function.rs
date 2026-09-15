@@ -2303,14 +2303,24 @@ fn direct_closure_return_expr_type(
                         .find(|(param_name, _)| param_name == receiver_name)
                         .map(|(_, ty)| ty)
                 });
-            if let Some(PhpType::Object(class)) = receiver_ty {
-                if let Some(info) = classes.get(class.trim_start_matches('\\')) {
-                    if let Some((_, ty)) =
-                        info.properties.iter().find(|(name, _)| name == property)
-                    {
-                        return ty.clone();
+            match receiver_ty {
+                Some(PhpType::Object(class)) => {
+                    if let Some(info) = classes.get(class.trim_start_matches('\\')) {
+                        if let Some((_, ty)) =
+                            info.properties.iter().find(|(name, _)| name == property)
+                        {
+                            return ty.clone();
+                        }
                     }
                 }
+                Some(receiver_ty) if receiver_ty.codegen_repr() == PhpType::Mixed => {
+                    // A runtime-shaped receiver makes the property runtime-shaped too. Falling
+                    // through to syntactic inference stamps an otherwise unknown property read
+                    // as `int`; a later scoped `Closure::bind` clone can then find a string slot
+                    // correctly but coerce that string through the stale integer signature.
+                    return PhpType::Mixed;
+                }
+                _ => {}
             }
         }
     }
