@@ -551,12 +551,12 @@ fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
     );
 }
 
-/// Array-slot widening does not authorize incompatible scalar-local reference storage.
+/// Mixed-local widening does not relabel an existing concrete reference set.
 #[test]
-fn test_error_mixed_by_ref_scalar_local_still_requires_boxed_storage() {
+fn test_error_mixed_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
     for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
         expect_error(
-            &format!("<?php function replaceScalar(mixed &$slot): void {{ $slot = 'changed'; }} $value = 1; {call}"),
+            &format!("<?php function replaceScalar(mixed &$slot): void {{ $slot = 'changed'; }} $value = 1; $alias =& $value; {call}"),
             "requires a variable with mixed/union/nullable storage when passed by reference",
         );
     }
