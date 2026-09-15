@@ -193,10 +193,9 @@ return $box->calls . ":" . $box->dynamic;"#,
     );
 }
 
-/// Verifies a public dynamic entry created by guarded helper reentry wins over an inaccessible
-/// declared property on later external writes.
+/// Verifies guarded `__set` reentry cannot create a public dynamic entry over a private slot.
 #[test]
-fn execute_program_updates_existing_dynamic_property_named_like_private_slot() {
+fn execute_program_rejects_dynamic_property_named_like_private_slot() {
     let program = parse_fragment(
         br#"function eval_store_public_dynamic($object, $name, $value) {
     $object->{$name} = $value;
@@ -213,9 +212,12 @@ class EvalMagicPrivateDynamicBox {
     }
 }
 $box = new EvalMagicPrivateDynamicBox();
-$box->hidden = "first";
-$box->hidden = "second";
-return $box->calls . ":" . $box->privateValue();"#,
+try {
+    $box->hidden = "first";
+    return "missed visibility error";
+} catch (Error $error) {
+    return $box->calls . ":" . $box->privateValue();
+}"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
@@ -224,6 +226,38 @@ return $box->calls . ":" . $box->privateValue();"#,
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.get(result), FakeValue::String("1:private".to_string()));
+}
+
+/// Verifies an ancestor's private name remains available for a distinct child dynamic property.
+#[test]
+fn execute_program_creates_dynamic_property_named_like_ancestor_private_slot() {
+    let program = parse_fragment(
+        br#"class EvalMagicPrivateAncestor {
+    private string $hidden = "ancestor";
+    public function privateValue() { return $this->hidden; }
+}
+class EvalMagicPrivateChild extends EvalMagicPrivateAncestor {
+    public int $calls = 0;
+    public function __set($name, $value) {
+        $this->calls = $this->calls + 1;
+        $this->{$name} = $value;
+    }
+}
+$box = new EvalMagicPrivateChild();
+$box->hidden = "first";
+$box->hidden = "second";
+return $box->calls . ":" . $box->hidden . ":" . $box->privateValue();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("1:second:ancestor".to_string())
+    );
 }
 
 /// Verifies eval property probes and unsets dispatch through `__isset` and `__unset`.

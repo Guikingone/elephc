@@ -22,7 +22,13 @@ pub(in crate::interpreter) fn eval_property_get_result(
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
         if let Some((declaring_class, visibility, _, is_static)) =
-            eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?
+            eval_native_instance_property_metadata_for_access(
+                &class_name,
+                &class_name,
+                property_name,
+                context,
+                values,
+            )?
         {
             if !is_static && validate_eval_member_access(&declaring_class, visibility, context).is_err() {
                 return eval_throw_property_access_error(
@@ -170,7 +176,13 @@ pub(in crate::interpreter) fn eval_property_set_result(
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
         if let Some((declaring_class, _, write_visibility, is_static)) =
-            eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?
+            eval_native_instance_property_metadata_for_access(
+                &class_name,
+                &class_name,
+                property_name,
+                context,
+                values,
+            )?
         {
             if !is_static
                 && validate_eval_member_access(&declaring_class, write_visibility, context).is_err()
@@ -186,9 +198,6 @@ pub(in crate::interpreter) fn eval_property_set_result(
                         values,
                     );
                 }
-                let has_magic_set = values
-                    .reflection_method_flags(&class_name, "__set")?
-                    .is_some();
                 if eval_native_magic_property_set(
                     object,
                     &class_name,
@@ -198,17 +207,6 @@ pub(in crate::interpreter) fn eval_property_set_result(
                     values,
                 )? {
                     return Ok(());
-                }
-                if has_magic_set {
-                    return eval_create_public_dynamic_property(
-                        object,
-                        identity,
-                        &class_name,
-                        property_name,
-                        value,
-                        context,
-                        values,
-                    );
                 }
                 return eval_throw_property_access_error(
                     &declaring_class,
@@ -302,9 +300,6 @@ pub(in crate::interpreter) fn eval_property_set_result(
                     values,
                 );
             }
-            let has_magic_set = context
-                .class_method(&object_class_name, "__set")
-                .is_some();
             if eval_magic_property_set(
                 object,
                 &object_class_name,
@@ -314,17 +309,6 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 values,
             )? {
                 return Ok(());
-            }
-            if has_magic_set {
-                return eval_create_public_dynamic_property(
-                    object,
-                    identity,
-                    &object_class_name,
-                    property_name,
-                    value,
-                    context,
-                    values,
-                );
             }
             return eval_throw_property_access_error(
                 &declaring_class,
@@ -420,9 +404,6 @@ pub(in crate::interpreter) fn eval_property_set_result(
                             values,
                         );
                     }
-                    let has_magic_set = context
-                        .class_method(&object_class_name, "__set")
-                        .is_some();
                     if eval_magic_property_set(
                         object,
                         &object_class_name,
@@ -432,17 +413,6 @@ pub(in crate::interpreter) fn eval_property_set_result(
                         values,
                     )? {
                         return Ok(());
-                    }
-                    if has_magic_set {
-                        return eval_create_public_dynamic_property(
-                            object,
-                            identity,
-                            &object_class_name,
-                            property_name,
-                            value,
-                            context,
-                            values,
-                        );
                     }
                     return eval_throw_property_access_error(
                         &declaring_class,
@@ -578,53 +548,6 @@ fn eval_write_public_dynamic_property(
     })?;
     context.mark_dynamic_property_initialized(identity, property_name);
     Ok(())
-}
-
-/// Creates the public dynamic entry used by a same-name write suppressed inside `__set`.
-fn eval_create_public_dynamic_property(
-    object: RuntimeCellHandle,
-    identity: u64,
-    class_name: &str,
-    property_name: &str,
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let class_is_readonly = if let Some(class) = context.class(class_name) {
-        class.is_readonly_class()
-    } else {
-        values
-            .reflection_class_flags(class_name)?
-            .is_some_and(|flags| flags & EVAL_REFLECTION_CLASS_FLAG_READONLY != 0)
-    };
-    if class_is_readonly {
-        return eval_throw_dynamic_property_creation_error(
-            class_name,
-            property_name,
-            context,
-            values,
-        );
-    }
-    if !eval_class_allows_dynamic_properties(class_name, context) {
-        eval_dispatch_php_error(
-            &format!(
-                "Creation of dynamic property {}::${property_name} is deprecated",
-                class_name.trim_start_matches('\\')
-            ),
-            E_DEPRECATED,
-            context,
-            values,
-        )?;
-    }
-    eval_write_public_dynamic_property(
-        object,
-        identity,
-        class_name,
-        property_name,
-        value,
-        context,
-        values,
-    )
 }
 
 /// Enforces readonly one-shot initialization for properties owned by generated classes.

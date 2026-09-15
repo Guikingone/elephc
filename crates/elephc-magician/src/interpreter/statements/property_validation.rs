@@ -73,7 +73,13 @@ pub(super) fn eval_dynamic_property_for_access(
             }
         }
     }
-    context.class_property(object_class_name, property_name)
+    let (declaring_class, property) = context.class_property(object_class_name, property_name)?;
+    if property.visibility() == EvalVisibility::Private
+        && !same_eval_class_name(&declaring_class, object_class_name)
+    {
+        return None;
+    }
+    Some((declaring_class, property))
 }
 
 /// Returns the physical storage name for an eval object property slot.

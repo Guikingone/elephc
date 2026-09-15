@@ -534,7 +534,43 @@ pub(super) fn eval_dynamic_class_native_property_metadata(
     let Some(parent) = context.class_native_parent_name(called_class_name) else {
         return Ok(None);
     };
-    eval_reflection_aot_property_access_metadata(&parent, property_name, values)
+    eval_native_instance_property_metadata_for_access(
+        called_class_name,
+        &parent,
+        property_name,
+        context,
+        values,
+    )
+}
+
+/// Resolves native instance metadata while treating a strict ancestor's private name as absent.
+pub(super) fn eval_native_instance_property_metadata_for_access(
+    runtime_class_name: &str,
+    metadata_class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility, EvalVisibility, bool)>, EvalStatus> {
+    if let Some(scope) = context.current_class_scope() {
+        if native_class_is_a(metadata_class_name, scope, context) {
+            if let Some(metadata) =
+                eval_reflection_aot_property_access_metadata(scope, property_name, values)?
+            {
+                if metadata.1 == EvalVisibility::Private
+                    && !metadata.3
+                    && same_eval_class_name(&metadata.0, scope)
+                {
+                    return Ok(Some(metadata));
+                }
+            }
+        }
+    }
+    let metadata =
+        eval_reflection_aot_property_access_metadata(metadata_class_name, property_name, values)?;
+    Ok(metadata.filter(|(owner, visibility, _, _)| {
+        *visibility != EvalVisibility::Private
+            || same_eval_class_name(owner, runtime_class_name)
+    }))
 }
 
 /// Accesses an already authorized eval property using its non-private native slot's declaring scope.

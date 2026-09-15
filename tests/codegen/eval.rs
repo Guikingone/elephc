@@ -16968,10 +16968,9 @@ echo $dynamic->calls, ":", $dynamic->dynamic;
     assert_eq!(out.stdout, "1:second|1:second");
 }
 
-/// Verifies eval updates a public dynamic entry created by guarded helper reentry even when an
-/// inaccessible declared property has the same source name.
+/// Verifies guarded eval `__set` reentry cannot create a dynamic entry over a private slot.
 #[test]
-fn test_eval_existing_dynamic_property_named_like_private_slot_skips_magic_set() {
+fn test_eval_rejects_dynamic_property_named_like_private_slot() {
     let out = compile_and_run_capture(
         r#"<?php
 function eval_store_private_named_dynamic(mixed $object, string $name, mixed $value): void {
@@ -16989,8 +16988,13 @@ class AotEvalPrivateDynamicBox {
     }
 }
 $aot = new AotEvalPrivateDynamicBox();
-eval('$aot->hidden = "first"; $aot->hidden = "second";');
-echo $aot->calls, ":", $aot->privateValue(), "|";
+eval('try {
+    $aot->hidden = "first";
+    echo "missed";
+} catch (Error $error) {
+    echo $aot->calls, ":", $aot->privateValue(), ":caught";
+}');
+echo "|";
 $dynamic = eval('class EvalPrivateDynamicBox {
     private string $hidden = "private";
     public int $calls = 0;
@@ -17003,12 +17007,53 @@ $dynamic = eval('class EvalPrivateDynamicBox {
     }
 }
 return new EvalPrivateDynamicBox();');
-eval('$dynamic->hidden = "first"; $dynamic->hidden = "second";');
-echo $dynamic->calls, ":", $dynamic->privateValue();
+eval('try {
+    $dynamic->hidden = "first";
+    echo "missed";
+} catch (Error $error) {
+    echo $dynamic->calls, ":", $dynamic->privateValue(), ":caught";
+}');
 "#,
     );
     assert!(out.success, "fixture failed: {}", out.stderr);
-    assert_eq!(out.stdout, "1:private|1:private");
+    assert_eq!(out.stdout, "1:private:caught|1:private:caught");
+}
+
+/// Verifies eval treats a native ancestor's private name as absent on its runtime child.
+#[test]
+fn test_eval_creates_dynamic_property_named_like_native_ancestor_private_slot() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class AotPrivateDynamicAncestor {
+    private string $hidden = "ancestor";
+    public function privateValue(): string { return $this->hidden; }
+}
+class AotPrivateDynamicChild extends AotPrivateDynamicAncestor {
+    public int $calls = 0;
+    public function __set(string $name, mixed $value): void {
+        $this->calls++;
+        $this->{$name} = $value;
+    }
+}
+
+$aot = new AotPrivateDynamicChild();
+eval('$aot->hidden = "first"; $aot->hidden = "second";');
+echo $aot->calls, ":", $aot->hidden, ":", $aot->privateValue(), "|";
+
+$dynamic = eval('class EvalNativePrivateDynamicChild extends AotPrivateDynamicAncestor {
+    public int $calls = 0;
+    public function __set(string $name, mixed $value): void {
+        $this->calls++;
+        $this->{$name} = $value;
+    }
+}
+return new EvalNativePrivateDynamicChild();');
+eval('$dynamic->hidden = "first"; $dynamic->hidden = "second";');
+echo $dynamic->calls, ":", $dynamic->hidden, ":", $dynamic->privateValue();
+"#,
+    );
+    assert!(out.success, "fixture failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:second:ancestor|1:second:ancestor");
 }
 
 /// Verifies eval-declared readonly classes cannot extend non-readonly parents.
