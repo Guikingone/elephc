@@ -15,6 +15,7 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 pub fn emit_array_take_boxed(emitter: &mut Emitter) {
     emit_cell_ensure_unique(emitter);
     emit_take(emitter);
+    emit_hash_pop(emitter);
 }
 
 /// Accepts an array cell in the first C argument and consumes its old owner only when splitting.
@@ -181,6 +182,104 @@ fn emit_take(emitter: &mut Emitter) {
     abi::emit_return(emitter);
 }
 
+/// Removes the insertion-order tail from a unique associative array and returns owned Mixed.
+///
+/// The hash remains at the same address, so codegen can publish a COW split before entering this
+/// helper. The selected payload is retained or boxed before `hash_unset` retires the entry owner.
+fn emit_hash_pop(emitter: &mut Emitter) {
+    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
+    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
+    let arg2 = abi::int_arg_reg_name(emitter.target, 2);
+    let result = abi::int_result_reg(emitter);
+    emitter.blank();
+    emitter.label_global("__rt_hash_pop_boxed");
+    abi::emit_frame_prologue(emitter, 48);
+    // FP-relative slots: hash 8, key words 16/24, removed owner 32.
+    abi::store_at_offset(emitter, arg0, 8);
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter,
+        arg0,
+        abi::secondary_scratch_reg(emitter),
+        "__rt_hash_pop_boxed_empty",
+    );
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [x0]");                                // inspect the live entry count before selecting the tail
+            emitter.instruction("cbz x9, __rt_hash_pop_boxed_empty");           // an empty associative array returns owned null
+            emitter.instruction("ldr x10, [x0, #32]");                          // load the insertion-order tail slot index
+            emitter.instruction("add x10, x0, x10, lsl #6");                    // scale the tail index by the sixty-four-byte bucket size
+            emitter.instruction("add x10, x10, #40");                           // skip the fixed hash header
+            emitter.instruction("ldp x1, x2, [x10, #8]");                       // preserve the tail key for unlinking
+            abi::store_at_offset(emitter, "x1", 16);
+            abi::store_at_offset(emitter, "x2", 24);
+            emitter.instruction("ldr x0, [x10, #40]");                          // load the runtime payload tag
+            emitter.instruction("ldp x1, x2, [x10, #24]");                      // borrow the tail payload words
+            super::hash_entry_reference::emit_inline_entry_deref(
+                emitter,
+                "__rt_hash_pop_boxed_deref_done",
+                "x0",
+                "x1",
+                "x2",
+            );
+            emitter.instruction("cmp x0, #7");                                  // existing Mixed payloads need a retained owner
+            emitter.instruction("b.ne __rt_hash_pop_boxed_box_value");          // concrete payloads need a fresh Mixed cell
+            emitter.instruction("mov x0, x1");                                  // pass the existing Mixed cell to incref
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp QWORD PTR [rdi], 0");                      // inspect the live entry count before selecting the tail
+            emitter.instruction("je __rt_hash_pop_boxed_empty");                // an empty associative array returns owned null
+            emitter.instruction("mov r11, QWORD PTR [rdi + 32]");               // load the insertion-order tail slot index
+            emitter.instruction("shl r11, 6");                                  // scale the tail index by the sixty-four-byte bucket size
+            emitter.instruction("lea r11, [rdi + r11 + 40]");                   // skip the fixed hash header
+            emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                // preserve the tail key low word
+            emitter.instruction("mov rsi, QWORD PTR [r11 + 16]");               // preserve the tail key high word
+            abi::store_at_offset(emitter, "rdi", 16);
+            abi::store_at_offset(emitter, "rsi", 24);
+            emitter.instruction("mov rax, QWORD PTR [r11 + 40]");               // load the runtime payload tag
+            emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");               // borrow the tail payload low word
+            emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");               // borrow its paired high word when present
+            super::hash_entry_reference::emit_inline_entry_deref(
+                emitter,
+                "__rt_hash_pop_boxed_deref_done",
+                "rax",
+                "rdi",
+                "rsi",
+            );
+            emitter.instruction("cmp rax, 7");                                  // existing Mixed payloads need a retained owner
+            emitter.instruction("jne __rt_hash_pop_boxed_box_value");           // concrete payloads need a fresh Mixed cell
+            emitter.instruction("mov rax, rdi");                                // pass the existing Mixed cell to incref
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_incref");
+    abi::emit_jump(emitter, "__rt_hash_pop_boxed_unlink");
+    emitter.label("__rt_hash_pop_boxed_box_value");
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");
+    emitter.label("__rt_hash_pop_boxed_unlink");
+    abi::store_at_offset(emitter, result, 32);
+    abi::load_at_offset(emitter, arg0, 8);
+    abi::load_at_offset(emitter, arg1, 16);
+    abi::load_at_offset(emitter, arg2, 24);
+    abi::emit_call_label(emitter, "__rt_hash_unset");
+    abi::emit_jump(emitter, "__rt_hash_pop_boxed_done");
+
+    emitter.label("__rt_hash_pop_boxed_empty");
+    abi::emit_load_int_immediate(emitter, result, 8);
+    if emitter.target.arch == Arch::AArch64 {
+        abi::emit_load_int_immediate(emitter, "x1", 0);
+        abi::emit_load_int_immediate(emitter, "x2", 0);
+    } else {
+        abi::emit_load_int_immediate(emitter, "rdi", 0);
+        abi::emit_load_int_immediate(emitter, "rsi", 0);
+    }
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");
+    abi::store_at_offset(emitter, result, 32);
+
+    emitter.label("__rt_hash_pop_boxed_done");
+    abi::load_at_offset(emitter, result, 32);
+    abi::emit_frame_restore(emitter, 48);
+    abi::emit_return(emitter);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +297,9 @@ mod tests {
             assert!(take.find("__rt_incref").unwrap() < unlink, "{name}");
             assert!(take.find("__rt_mixed_from_value").unwrap() < unlink, "{name}");
             assert!(take.find("__rt_hash_spread").unwrap() > unlink, "{name}");
+            let hash_pop = &asm[asm.find("__rt_hash_pop_boxed:").unwrap()..];
+            assert!(hash_pop.find("__rt_incref").unwrap() < hash_pop.find("__rt_hash_unset").unwrap(), "{name}");
+            assert!(hash_pop.contains("__rt_mixed_from_value"), "{name}");
             if name == "linux-x86_64" {
                 let release = take.find("call __rt_decref_hash").unwrap();
                 let reload = take[..release].rfind("mov rax, QWORD PTR [rbp - 16]").unwrap();

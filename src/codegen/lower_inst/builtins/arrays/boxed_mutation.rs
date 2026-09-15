@@ -26,6 +26,25 @@ pub(super) fn lower_boxed_array_take(
     store_if_result(ctx, inst)
 }
 
+/// Removes the insertion-order tail from a concrete associative array.
+pub(super) fn lower_assoc_array_pop(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable("array_pop")?;
+    if let Some(slot) = receiver.slot() {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
+    super::sort_dispatch::ensure_unique_hash_sort_source(ctx, array)?;
+    receiver.store_back_value(ctx, array)?;
+    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_pop_boxed");
+    store_if_result(ctx, inst)
+}
+
 /// Validates a boxed array and publishes a unique cell before any payload mutation.
 pub(super) fn prepare_boxed_array_receiver(
     ctx: &mut FunctionContext<'_>,
@@ -34,11 +53,15 @@ pub(super) fn prepare_boxed_array_receiver(
 ) -> Result<()> {
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable(name)?;
-    if matches!(receiver, ReceiverPlace::RefCell(_)) {
-        // A ref-cell load borrows the boxed value, while the COW helper consumes one owner when
-        // it splits. Give it a temporary owner so StoreRefCell can retire the place's old owner
-        // after publishing the returned cell. The extra count also forces a split when the place
-        // is the boxed value's only owner, avoiding a same-pointer publish followed by release.
+    if matches!(
+        receiver,
+        ReceiverPlace::RefCell(_) | ReceiverPlace::Property { .. }
+    ) {
+        // Ref-cell and property loads borrow the boxed value, while the COW helper consumes one
+        // owner when it splits. Give it a temporary owner so the place write-back can retire its
+        // old owner after publishing the returned cell. The extra count also forces a split when
+        // the place is the boxed value's only owner, avoiding same-pointer publication followed
+        // by release.
         ctx.load_value_to_result(array)?;
         abi::emit_call_label(ctx.emitter, "__rt_incref");
     }

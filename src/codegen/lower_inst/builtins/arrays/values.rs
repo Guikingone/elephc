@@ -15,6 +15,7 @@ use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::context::FunctionContext;
 use crate::codegen::{CodegenIrError, Result};
+use crate::codegen_support::sentinels;
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
@@ -66,6 +67,7 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_boxed_array_values(
 ) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let indexed = ctx.next_label("avals_boxed_indexed");
+    let indexed_empty = ctx.next_label("avals_boxed_indexed_empty");
     let invalid = ctx.next_label("avals_boxed_invalid");
     let done = ctx.next_label("avals_boxed_done");
     match ctx.emitter.target.arch {
@@ -79,11 +81,23 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_boxed_array_values(
             ctx.emitter.instruction(&format!("b {done}"));                      // the hash path already produced owned Mixed slots
             ctx.emitter.label(&indexed);
             ctx.emitter.instruction("mov x0, x1");                              // borrow the indexed payload from the source Mixed cell
+            sentinels::emit_branch_if_null_container(
+                ctx.emitter,
+                "x0",
+                "x9",
+                &indexed_empty,
+            );
             abi::emit_call_label(ctx.emitter, "__rt_incref");
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // discover the actual scalar, string, or boxed element layout
             ctx.emitter.instruction("ubfx x1, x1, #8, #7");                     // exclude heap kind and persistent COW metadata from the value tag
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
             ctx.emitter.instruction(&format!("b {done}"));                      // transfer the converted array owner to the result
+            ctx.emitter.label(&indexed_empty);
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            emit_indexed_array_value_type_stamp(ctx, "x0", &PhpType::Mixed);
+            ctx.emitter.instruction(&format!("b {done}"));                      // materialize an allocated empty working array for consumers that read its header
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 4");                              // packed payloads need a normalized Mixed-slot result
@@ -95,6 +109,12 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_boxed_array_values(
             ctx.emitter.instruction(&format!("jmp {done}"));                    // the hash path already produced owned Mixed slots
             ctx.emitter.label(&indexed);
             ctx.emitter.instruction("mov rax, rdi");                            // borrow the indexed payload from the source Mixed cell
+            sentinels::emit_branch_if_null_container(
+                ctx.emitter,
+                "rax",
+                "r10",
+                &indexed_empty,
+            );
             abi::emit_call_label(ctx.emitter, "__rt_incref");
             ctx.emitter.instruction("mov rdi, rax");                            // pass an independent owner to the consuming conversion helper
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // discover the actual scalar, string, or boxed element layout
@@ -102,6 +122,12 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_boxed_array_values(
             ctx.emitter.instruction("and rsi, 0x7f");                           // discard persistent COW metadata above the value tag
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
             ctx.emitter.instruction(&format!("jmp {done}"));                    // transfer the converted array owner to the result
+            ctx.emitter.label(&indexed_empty);
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            emit_indexed_array_value_type_stamp(ctx, "rax", &PhpType::Mixed);
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // materialize an allocated empty working array for consumers that read its header
         }
     }
     ctx.emitter.label(&invalid);
