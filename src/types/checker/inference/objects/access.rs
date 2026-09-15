@@ -37,7 +37,18 @@ impl Checker {
         }
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
-            return self.infer_property_on_class_type(class_name, property, expr);
+            let inferred = self.infer_property_on_class_type(class_name, property, expr);
+            if inferred.is_err()
+                && self.closure_depth > 0
+                && matches!(object.kind, ExprKind::This)
+            {
+                // A method-nested closure initially captures the enclosing receiver, but PHP
+                // can later rebind it to an unrelated class. Keep precise types for properties
+                // that exist on the enclosing class; an otherwise-invalid `$this` member is a
+                // runtime-shaped access whose validity and type depend on the bound receiver.
+                return Ok(PhpType::Mixed);
+            }
+            return inferred;
         }
         // Non-nullsafe property access on a nullable / union object type is
         // allowed when the union resolves to a single object class.

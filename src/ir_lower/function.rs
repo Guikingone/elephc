@@ -2312,6 +2312,13 @@ fn direct_closure_return_expr_type(
                             return ty.clone();
                         }
                     }
+                    if receiver_name == "this" {
+                        // A method-defined closure may later be rebound to an unrelated class.
+                        // Its signature keeps the enclosing `$this` type so ordinary known
+                        // properties remain precise, but a property absent from that class is
+                        // resolved against the eventual bound receiver and must stay boxed.
+                        return PhpType::Mixed;
+                    }
                 }
                 Some(receiver_ty) if receiver_ty.codegen_repr() == PhpType::Mixed => {
                     // A runtime-shaped receiver makes the property runtime-shaped too. Falling

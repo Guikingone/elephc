@@ -141,15 +141,18 @@ echo callBound(1);
 #[test]
 fn scoped_bind_after_try_keeps_mixed_property_return_on_every_target() {
     let source = r#"<?php
-function increment(int $value): int { return $value + 1; }
+function expose_callable_global(): void { global $peek; }
 class Vault {
     private string $code = "open";
     public string $label = "abc";
 }
+$indexed = [1];
+$hash = ["key" => 1];
 $peek = function() { return $this->code; };
 try {
-    $vault = new Vault();
-    echo increment(strlen($vault->label));
+    $indexed[0] = 2;
+    $hash["key"] = 2;
+    unset($hash["key"]);
 } catch (Error $error) {}
 $bound = Closure::bind($peek, new Vault(), Vault::class);
 echo $bound();
@@ -186,5 +189,74 @@ echo $bound();
             Some(PhpType::Mixed),
             "{name}: the rebound receiver remains boxed for runtime property dispatch",
         );
+    }
+}
+
+/// Deferred global writers and a method-nested rebound receiver stay runtime-shaped.
+#[test]
+fn deferred_global_closure_rebinding_stays_mixed_on_every_target() {
+    let source = r#"<?php
+class DeferredClosureMutator {
+    public function __destruct() {
+        global $peek;
+        $peek = function() { return $this->label; };
+    }
+}
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+function suspended_writer(): Generator {
+    global $peek;
+    $peek = function() { return $this->label; };
+    yield 1;
+}
+set_error_handler(function(int $level, string $message): bool {
+    global $peek;
+    $peek = function() { return $this->label; };
+    return true;
+});
+$peek = function() { return $this->code; };
+$victim = new DeferredClosureMutator();
+$generator = suspended_writer();
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#;
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let rebound = module
+            .closures
+            .iter()
+            .find(|function| {
+                function.lexical_class.as_deref() == Some("DeferredClosureMutator")
+            })
+            .unwrap_or_else(|| panic!("{name}: destructor closure was not lowered"));
+        assert_eq!(
+            rebound.return_php_type,
+            PhpType::Mixed,
+            "{name}: an absent enclosing-class property is selected by the rebound receiver",
+        );
+        assert_eq!(
+            rebound
+                .params
+                .iter()
+                .find(|param| param.name == "this")
+                .map(|param| param.php_type.clone()),
+            Some(PhpType::Mixed),
+            "{name}: the rebound receiver must remain boxed",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
 }

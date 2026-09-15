@@ -1183,7 +1183,7 @@ fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
 ///
 /// For each variable name, marks it as a global in `checker.active_globals` and
 /// populates the local type environment with the variable's type from
-/// `checker.top_level_env` if available, otherwise defaults to `Int`.
+/// `checker.top_level_env` if available, otherwise uses `Mixed`.
 pub(super) fn check_global(
     checker: &mut Checker,
     vars: &[String],
@@ -1195,7 +1195,12 @@ pub(super) fn check_global(
             if let Some(global_ty) = checker.top_level_env.get(var) {
                 env.insert(var.clone(), global_ty.clone());
             } else {
-                env.insert(var.clone(), PhpType::Int);
+                // Function-like bodies are checked before the top-level statement walk has
+                // necessarily reached the global's first assignment. PHP globals have no
+                // implicit integer contract: a later callback, generator resume, or destructor
+                // may replace the cell with any value. Seeding an unseen alias as `Int` made a
+                // perfectly valid `$global = function () { ... };` fail before lowering.
+                env.insert(var.clone(), PhpType::Mixed);
             }
         }
     }
