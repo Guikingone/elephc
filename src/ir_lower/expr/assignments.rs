@@ -256,14 +256,14 @@ pub(super) fn lower_dynamic_property_assign(
     let object = lower_expr(ctx, object);
     let property = lower_expr(ctx, property);
     let value = lower_expr(ctx, value);
-    // The NAME is only known at run time, so even a statically known receiver can land this value
-    // on any one of its typed slots. Box the source before the name ladder is built: only the
-    // runtime weak-mode guard can decide whether the selected slot coerces or refuses it. Keeping
-    // a concrete source type here made an unrelated declared slot reject the whole compilation.
-    let value = if matches!(
-        ctx.builder.value_php_type(value.value).codegen_repr(),
-        PhpType::Mixed
-    ) {
+    // The NAME is only known at run time, so a statically known receiver can still land this
+    // value on any slot in its runtime-class subtree. Typed or representation-incompatible
+    // slots need the boxed runtime guard. An all-untyped subtree whose refined slots already
+    // share this concrete representation must keep that representation, because replacing a
+    // refined raw slot with a Mixed cell is not representation-safe.
+    let value = if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed)
+        || !runtime_name_value_needs_boxing(ctx, object.value, value.value)
+    {
         value
     } else {
         ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
@@ -290,6 +290,30 @@ pub(super) fn lower_dynamic_property_assign(
     crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
         ctx, &PhpType::Mixed, value, span,
     );
+}
+
+/// Returns whether a runtime-name write needs a boxed value for a reachable fixed slot.
+fn runtime_name_value_needs_boxing(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+    value: ValueId,
+) -> bool {
+    let value_ty = ctx.builder.value_php_type(value).codegen_repr();
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return true;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    if !ctx.classes.contains_key(normalized) {
+        return true;
+    }
+    ctx.classes.iter().any(|(candidate, class_info)| {
+        (candidate == normalized
+            || crate::types::class_inherits_from(ctx.classes, candidate, normalized))
+            && class_info.properties.iter().enumerate().any(|(index, (property, slot_ty))| {
+                class_info.property_slot_is_declared(index, property)
+                    || slot_ty.codegen_repr() != value_ty
+            })
+    })
 }
 
 /// Lowers pre/post increment and decrement expressions.

@@ -193,9 +193,11 @@ function exercise(mixed &$value): mixed { return observe($value, replace($value)
 #[test]
 fn contextual_by_ref_closure_parameters_remain_mixed_on_all_targets() {
     let source = r#"<?php
-$values = [1, 2];
-array_walk($values, function (&$value): void { $value = "changed"; });
-echo $values[0];
+function walk_contextual(array $values): void {
+    array_walk($values, function (&$value): void { $value = "changed"; });
+    echo $values[0];
+}
+walk_contextual([1, 2]);
 "#;
     for target in [
         "macos-aarch64",
@@ -211,16 +213,75 @@ echo $values[0];
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let closure = module
-            .functions
+            .closures
             .iter()
             .find(|function| {
                 function.flags.is_closure
                     && function.params.first().is_some_and(|parameter| parameter.by_ref)
             })
-            .unwrap();
+            .unwrap_or_else(|| panic!("{target}: contextual by-reference closure was not lowered"));
         let value = closure.params.first().unwrap();
         assert!(value.by_ref, "{target}");
         assert_eq!(value.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Runtime-name stores box for typed slots but preserve compatible refined untyped slots.
+#[test]
+fn runtime_name_property_store_boxing_follows_reachable_slot_shapes_on_all_targets() {
+    let source = r#"<?php
+class RuntimeUntypedAncestor { private $value = "ancestor"; }
+class RuntimeUntypedBase extends RuntimeUntypedAncestor {}
+class RuntimeUntypedLeaf extends RuntimeUntypedBase { public $value = "leaf"; }
+function store_runtime_untyped(
+    RuntimeUntypedBase $object,
+    string $name,
+    string $value,
+): void {
+    $object->{$name} = $value;
+}
+
+class RuntimeTypedBase {}
+class RuntimeTypedLeaf extends RuntimeTypedBase { public int $value = 0; }
+function store_runtime_typed(
+    RuntimeTypedBase $object,
+    string $name,
+    string $value,
+): void {
+    $object->{$name} = $value;
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for (name, expected) in [
+            ("store_runtime_untyped", crate::types::PhpType::Str),
+            ("store_runtime_typed", crate::types::PhpType::Mixed),
+        ] {
+            let function = module
+                .functions
+                .iter()
+                .find(|function| function.name == name)
+                .unwrap_or_else(|| panic!("{target}: missing {name}"));
+            let store = function
+                .instructions
+                .iter()
+                .find(|instruction| instruction.op == Op::DynamicPropSet)
+                .unwrap_or_else(|| panic!("{target}: missing runtime-name store in {name}"));
+            let value = function.value(store.operands[2]).unwrap();
+            assert_eq!(value.php_type.codegen_repr(), expected, "{target}: {name}");
+        }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
@@ -279,9 +340,9 @@ fn static_property_stores_preserve_concrete_and_retyped_local_owners_on_all_targ
     }
 }
 
-/// Dynamic property stores retire concrete object temporaries after their boxes retain them.
+/// Property stores retire concrete object temporaries when their stored owner becomes independent.
 #[test]
-fn dynamic_property_stores_release_temporary_object_sources_on_all_targets() {
+fn property_stores_retire_temporary_object_sources_on_all_targets() {
     let source = r#"<?php
         class DynamicStoredOwner { public function __destruct() { echo "released"; } }
         function store_dynamic_owner(stdClass $holder, string $name): void {
@@ -296,13 +357,31 @@ fn dynamic_property_stores_release_temporary_object_sources_on_all_targets() {
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let function = module.functions.iter().find(|function| function.name == "store_dynamic_owner").unwrap();
-        for op in [Op::PropSet, Op::DynamicPropSet] {
-            let index = function.instructions.iter().position(|inst| inst.op == op).unwrap();
-            let source = *function.instructions[index].operands.last().unwrap();
-            assert!(function.instructions[index + 1..].iter().any(|inst| {
-                inst.op == Op::Release && inst.operands == [source]
-            }), "{target}: {op:?} must retire the boxed object's original owner");
-        }
+        let direct_index = function.instructions.iter().position(|inst| inst.op == Op::PropSet).unwrap();
+        let direct_source = *function.instructions[direct_index].operands.last().unwrap();
+        assert!(function.instructions[direct_index + 1..].iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [direct_source]
+        }), "{target}: PropSet must retire the retained object's original owner");
+
+        let (dynamic_index, original_source) = function
+            .instructions
+            .iter()
+            .enumerate()
+            .find_map(|(index, inst)| {
+                if inst.op != Op::DynamicPropSet {
+                    return None;
+                }
+                let boxed = *inst.operands.last()?;
+                let ValueDef::Instruction { inst: producer, .. } = function.value(boxed)?.def else {
+                    return None;
+                };
+                let producer = function.instruction(producer)?;
+                (producer.op == Op::MixedBox).then_some((index, *producer.operands.first()?))
+            })
+            .expect("runtime-name property store with boxed source");
+        assert!(function.instructions[..dynamic_index].iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [original_source]
+        }), "{target}: boxing for DynamicPropSet must retire the concrete object's original owner");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
