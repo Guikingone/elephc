@@ -372,12 +372,12 @@ bindRootedArguments($argc);
     }
 }
 
-/// The interior-alias marker survives whichever branch arm is lowered last.
+/// An element cell with a Mixed payload cannot be returned through an `int` reference contract.
 ///
-/// Branch lowering sequences the arms, so a managed rebinding in the arm lowered second would
-/// otherwise clear a marker the first arm established and let a borrowed element address escape.
+/// Both branch orders must retain the incompatible payload fact after the element source is
+/// promoted to its managed hash cell and the other arm binds the same name to an integer property.
 #[test]
-fn array_element_alias_reference_return_is_refused_in_both_branch_orders() {
+fn managed_array_element_reference_return_payload_is_refused_in_both_branch_orders() {
     for (first, second) in [
         ("$slot = &$numbers[0];", "$slot = &$holder->value;"),
         ("$slot = &$holder->value;", "$slot = &$numbers[0];"),
@@ -401,7 +401,7 @@ echo $alias;
         );
         let message = refusal(&source);
         assert!(
-            message.contains("alias of an array element"),
+            message.contains("payload representation"),
             "{first} / {second}: {message}"
         );
     }

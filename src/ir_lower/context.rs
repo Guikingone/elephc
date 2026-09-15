@@ -1655,9 +1655,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
             _ => Op::LoadLocal,
         };
-        // A normal ref-cell read borrows the pointee. Only `load_local_storage`, used when
-        // retiring the slot's stored owner, may claim ownership of that same payload.
-        let ownership = if op == Op::LoadRefCell {
+        // A normal ref-cell read borrows a lifetime-tracked pointee. Scalar payloads remain
+        // `NonHeap`. Only `load_local_storage`, used when retiring the slot's stored owner, may
+        // claim ownership of the same refcounted payload.
+        let ownership = if op == Op::LoadRefCell
+            && Ownership::php_type_needs_lifetime_tracking(&php_type)
+        {
             Ownership::Borrowed
         } else {
             Ownership::for_php_type(&php_type)

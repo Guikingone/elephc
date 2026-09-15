@@ -9,7 +9,7 @@
 //! - Every supported target must emit balanced retain and retirement helpers.
 
 use crate::codegen::platform::Target;
-use crate::ir::{Effects, Immediate, LocalKind, Op};
+use crate::ir::{Effects, Immediate, LocalKind, Op, Ownership};
 use std::path::Path;
 
 /// Non-promoting constructors and explicit parent calls use managed defaults on every target.
@@ -295,6 +295,11 @@ repeatReferenceAlias();
         assert!(function.instructions[..retained].iter().any(|inst| {
             inst.op == Op::ReleaseLocalRefCell && inst.immediate == Some(Immediate::LocalSlot(owner))
         }), "{name}: loop aliases retire their previous owner before retaining another");
+        assert!(function.instructions.iter().filter(|inst| inst.op == Op::LoadRefCell).all(|inst| {
+            inst.result.is_some_and(|value| {
+                function.value(value).is_some_and(|value| value.ownership == Ownership::NonHeap)
+            })
+        }), "{name}: scalar reference loads use non-owning scalar metadata");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }

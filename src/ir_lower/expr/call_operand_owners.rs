@@ -342,7 +342,7 @@ pub(super) fn lease_managed_call_argument_ref_cell(
             None,
             captured.ir_type,
             PhpType::Pointer(None),
-            Ownership::Borrowed,
+            Ownership::NonHeap,
             Op::Borrow.default_effects(),
             Some(span),
         )
