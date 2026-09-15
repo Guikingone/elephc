@@ -838,8 +838,9 @@ echo invokeManagedLease(['k' => new ManagedLeaseCleanupBomb()]);
             .instructions
             .iter()
             .enumerate()
-            .find(|(_, inst)| inst.op == Op::ClosureCall)
-            .expect("the direct closure call is lowered");
+            .rev()
+            .find(|(_, inst)| inst.op == Op::Call)
+            .expect("the statically resolved closure call is lowered directly");
         let result = call.result.expect("the closure call produces a string");
         let result_slot = staged_result_slot(&caller, result);
         let result_publish = slot_instruction(&caller, Op::PushCallOperandOwner, result_slot)
