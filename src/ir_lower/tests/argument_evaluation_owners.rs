@@ -182,9 +182,9 @@ function exerciseByRef(string &$text): void {
     }
 }
 
-/// A widened local keeps its exact reference-place marker while its incidental string view is rooted.
+/// A detached local keeps its exact string reference place while its incidental value view is rooted.
 #[test]
-fn widened_string_reference_place_roots_only_its_prethrow_value_view() {
+fn detached_string_reference_place_roots_only_its_prethrow_value_view() {
     use crate::ir::{Immediate, Op};
     use crate::types::PhpType;
 
@@ -217,8 +217,8 @@ unset($text);
             .expect("reference source slot");
         assert_eq!(
             function.locals[source_slot.as_raw() as usize].php_type.codegen_repr(),
-            PhpType::Mixed,
-            "{target}: unset must expose the final widened-storage case",
+            PhpType::Str,
+            "{target}: unset detaches the name without widening its former reference place",
         );
         let (load_index, place) = function
             .instructions

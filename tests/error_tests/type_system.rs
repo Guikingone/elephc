@@ -1578,53 +1578,43 @@ fn test_ref_alias_target_retype_not_permitted() {
     expect_error("<?php $a = 1; $r = &$a; $r = \"s\";", "cannot reassign $r from int to string");
 }
 
-/// A local handed to a callable whose signature the checker cannot resolve is aliased.
+/// A local handed to an unresolved callable is promoted to rebindable boxed Mixed storage.
 ///
-/// The plan's eligibility rule disqualifies a name "passed as an argument to a by-ref parameter
-/// anywhere in the body", and mandates conservatism "when the callee cannot be resolved
-/// statically". `$cb` here is a `callable` parameter with no signature attached, so nothing says
-/// whether its first parameter is by-reference — and if it is, the kill would abandon a slot the
-/// callee still holds a reference into. The branch-divergent pre-scan already disqualifies every
-/// `ClosureCall`/`ExprCall` argument for the same reason.
+/// The runtime descriptor may discover that the parameter is by-reference. Promoting the caller
+/// place preserves that possibility while still allowing PHP's ordinary type-changing assignment,
+/// and `unset()` detaches the local name before a fresh binding is created.
 #[test]
-fn test_unresolved_callable_arg_not_killable() {
-    expect_error(
+fn test_unresolved_callable_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php function g(callable $cb) { $a = 1; $cb($a); unset($a); $a = \"s\"; echo $a; }",
-        "cannot reassign",
     );
 }
 
-/// The same rule for a variable function (`$f = \"sort\"; $f($a);`), whose callee is a string
-/// resolved at runtime: `sort()` binds its argument by reference, and no signature reaches the
-/// call site. Both the `unset` kill and the straight-line retype must step aside.
+/// A string variable callee uses the same boxed caller place because its runtime target may bind
+/// the argument by-reference. Both local detachment and a direct type change remain valid PHP.
 #[test]
-fn test_string_variable_callee_arg_not_killable() {
-    expect_error(
+fn test_string_variable_callee_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php $f = \"sort\"; $a = 1; $f($a); unset($a); $a = \"s\"; echo $a;",
-        "cannot reassign",
     );
-    expect_error(
+    expect_no_error(
         "<?php $f = \"sort\"; $a = 1; $f($a); $a = \"s\"; echo $a;",
-        "cannot reassign",
     );
 }
 
-/// Sibling unknown-callee shapes reach the same rule: a dynamic class static call
-/// (`$c::m($a)`, which desugars to `call_user_func([$c, "m"], $a)`), a dynamic constructor
-/// (`new $c($a)`), and a method call on a `mixed` receiver dispatched over runtime candidates.
+/// Sibling unknown-callee shapes promote simple local arguments to the same rebindable boxed
+/// storage: a dynamic class static call, a dynamic constructor, and a method call on a `mixed`
+/// receiver. After `unset()` detaches the local name, each may create a fresh typed binding.
 #[test]
-fn test_unknown_callee_siblings_not_killable() {
-    expect_error(
+fn test_unknown_callee_siblings_use_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php class C { static function m(&$x) { $x = 2; } } function g() { $a = 1; $c = \"C\"; $c::m($a); unset($a); $a = \"s\"; echo $a; }",
-        "cannot reassign",
     );
-    expect_error(
+    expect_no_error(
         "<?php function g(string $c) { $a = 1; $x = new $c($a); unset($a); $a = \"s\"; echo $a, $x; }",
-        "cannot reassign",
     );
-    expect_error(
+    expect_no_error(
         "<?php class C { function m(&$x) { $x = 2; } } function g($o) { $a = 1; $o->m($a); unset($a); $a = \"s\"; echo $a; }",
-        "cannot reassign",
     );
 }
 
@@ -1652,15 +1642,14 @@ fn test_unknown_callee_does_not_over_reach() {
 /// is narrow — the RFC gives the pipe no by-ref
 /// parameters and the known-signature path rejects one outright — but the conservatism must not
 /// depend on which call syntax reached the callee.
+/// The promoted boxed place makes both subsequent assignment shapes valid.
 #[test]
-fn test_unresolved_pipe_target_arg_not_killable() {
-    expect_error(
+fn test_unresolved_pipe_target_arg_uses_rebindable_boxed_storage() {
+    expect_no_error(
         "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; unset($a); $a = \"s\"; echo $a, $r; }",
-        "cannot reassign",
     );
-    expect_error(
+    expect_no_error(
         "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; $a = \"s\"; echo $a, $r; }",
-        "cannot reassign",
     );
 }
 
@@ -1863,13 +1852,12 @@ fn test_untyped_method_by_ref_call_arg_uses_rebindable_boxed_storage() {
     );
 }
 
-/// A local passed to a BUILTIN's by-ref parameter (`sort`, `preg_match`, …) is aliased: the
-/// builtin reaches the local through its storage.
+/// A local passed to a builtin by-reference parameter may still detach from that storage.
+/// After `unset()`, a fresh binding may have a different PHP type.
 #[test]
-fn test_builtin_by_ref_call_arg_not_killable() {
-    expect_error(
+fn test_builtin_by_ref_call_arg_can_detach_and_rebind() {
+    expect_no_error(
         "<?php $a = [3, 1]; sort($a); unset($a); $a = \"s\";",
-        "cannot reassign",
     );
 }
 
@@ -1909,13 +1897,13 @@ fn test_by_value_variadic_call_arg_stays_killable() {
     );
 }
 
-/// `foreach ($arr as &$v)` takes references into `$arr`'s elements, so `$arr` is aliased and
-/// its binding can no longer be killed.
+/// `foreach ($arr as &$v)` may leave `$v` referring to an element cell, but `unset($arr)` still
+/// detaches the iterable's local name. The surviving element reference does not prevent `$arr`
+/// from receiving a fresh binding.
 #[test]
-fn test_by_ref_foreach_iterable_not_killable() {
-    expect_error(
+fn test_by_ref_foreach_iterable_can_detach_and_rebind() {
+    expect_no_error(
         "<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } unset($arr); $arr = \"gone\";",
-        "cannot reassign",
     );
 }
 
@@ -2064,32 +2052,35 @@ fn test_by_ref_foreach_value_var_is_never_mixed_marked() {
     expect_error_strict(src, "cannot reassign $v from int to string");
 }
 
-/// A kill site a SUPERSEDED checker pass recorded must not survive into `CheckResult`.
+/// A late-discovered by-reference callable keeps the final pass's detach decision.
 ///
 /// The checker walks the top level twice (`check_types_impl`: an initial pass, then a final one
 /// after method bodies stabilize). Here the first pass cannot yet know that `$g` holds a closure
-/// with a BY-REFERENCE parameter — `make()`'s return type is only inferred by
-/// `type_check_methods_until_stable`, which runs between the two passes — so it records no
-/// reference alias for `$a`, judges `unset($a)` killable, and records a kill site. The final pass
-/// does know, refuses the kill, and leaves `$a` bound (which is why `$a = 5` merges silently
-/// instead of erroring). Only the final pass's decision may reach EIR lowering: acting on the
-/// stale one would abandon the frame slot the closure still holds a reference to.
+/// with a by-reference parameter. The final pass learns that signature, promotes `$a` to boxed
+/// Mixed storage, and retains the `unset()` binding kill. Lowering can therefore detach the local
+/// name while any escaped reference continues to point at the old cell.
 #[test]
-fn test_superseded_pass_kill_site_does_not_reach_the_result() {
+fn test_late_discovered_by_ref_callable_keeps_final_detach_site() {
     let result = check_source_full(
         "<?php class C { public function make() { return function (&$x) { $x = 2; }; } } \
          $o = new C(); $a = 1; $g = $o->make(); $g($a); unset($a); $a = 5; echo $a;",
     )
     .expect("fixture should type-check");
+    assert_eq!(
+        result.local_bind_kill_sites.len(),
+        1,
+        "the final pass must preserve the detach site for the promoted caller place"
+    );
     assert!(
-        result.local_bind_kill_sites.is_empty(),
-        "a superseded pass's kill site survived into CheckResult: {:?}",
-        result.local_bind_kill_sites
+        result
+            .boxed_reference_promotion_sites
+            .values()
+            .any(|names| names.contains("a")),
+        "the final pass must promote the late-discovered by-reference argument"
     );
 }
 
-/// The same program with the late-discovered alias REMOVED still records its kill site, so the
-/// test above is pinning cross-pass staleness rather than a checker that stopped killing.
+/// The by-value twin also records its detach site, but needs no caller-place promotion.
 #[test]
 fn test_final_pass_kill_site_still_reaches_the_result() {
     let result = check_source_full(
