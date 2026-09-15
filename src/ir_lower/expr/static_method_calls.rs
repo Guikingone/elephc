@@ -31,11 +31,37 @@ pub(super) fn lower_static_method_call(
                     );
                 }
             }
+            // Callable identity invalidation widens an escaped closure local to boxed Mixed
+            // storage. ClosureBind consumes the descriptor payload, not the Mixed-cell address,
+            // so normalize it at the same boundary as bindTo() before publishing operand roots.
+            let closure = if matches!(
+                ctx.builder.value_php_type(closure.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) {
+                unbox_callable_param_storage(ctx, closure, Some(args[0].span))
+            } else {
+                closure
+            };
+            let result_staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
+            let (closure, closure_owner) = root_owned_call_operand(ctx, closure, args[0].span);
             let new_this = match args.get(1) {
                 Some(arg) => lower_expr(ctx, arg),
                 None => lower_null(ctx, expr),
             };
-            return emit_closure_bind(ctx, closure.value, new_this.value, expr);
+            let (new_this, receiver_owner) = root_owned_call_operand(
+                ctx,
+                new_this,
+                args.get(1).map_or(expr.span, |arg| arg.span),
+            );
+            let bound = emit_closure_bind(ctx, closure.value, new_this.value, expr);
+            stage_call_result(ctx, result_staging.as_ref(), bound, expr.span);
+            if let Some(slot) = receiver_owner {
+                retire_owned_call_operand(ctx, slot, expr.span);
+            }
+            if let Some(slot) = closure_owner {
+                retire_owned_call_operand(ctx, slot, expr.span);
+            }
+            return take_prepublished_call_result(ctx, result_staging, bound, expr.span);
         }
     }
 
