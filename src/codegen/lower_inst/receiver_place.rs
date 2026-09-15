@@ -3,6 +3,7 @@
 //! and republishes a possibly-relocated container pointer into that place.
 //!
 //! Called from:
+//! - `crate::codegen::lower_inst::arrays` (managed associative element references).
 //! - `crate::codegen::lower_inst::builtins::arrays` (`array_pop`, `array_shift`, `array_unshift`,
 //!   `array_splice`, the sort/shuffle family, `array_multisort`, the hash link sorters).
 //! - `crate::codegen::lower_inst::hashes` (`hash_set`).
@@ -20,6 +21,7 @@
 
 use crate::codegen::context::FunctionContext;
 use crate::codegen::{CodegenIrError, Result};
+use crate::codegen_support::abi;
 use crate::ir::{Immediate, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
@@ -93,6 +95,30 @@ impl ReceiverPlace {
                 what
             ))),
             _ => Ok(()),
+        }
+    }
+
+    /// Gives a consuming COW helper the owner it is allowed to retire.
+    ///
+    /// A raw local transfers its existing slot owner into the helper. A ref-cell or property
+    /// load is only a borrowed view of storage whose previous owner is retired during write-back,
+    /// so those places need a separate helper owner before the call. Acquiring that owner also
+    /// forces the helper to split a sole stored value, avoiding same-pointer publication followed
+    /// by retirement. Concrete containers unboxed from a Mixed raw local already carry a detached
+    /// owner; releasing the superseded box transfers that owner into the helper.
+    pub(super) fn prepare_consuming_storeback(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        value: ValueId,
+    ) -> Result<()> {
+        match self {
+            Self::Local(slot) => ctx.release_mutated_source_local_owner(*slot, value),
+            Self::RefCell(_) | Self::Property { .. } => {
+                let value_ty = ctx.load_value_to_result(value)?;
+                abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+                Ok(())
+            }
+            Self::Opaque => Ok(()),
         }
     }
 

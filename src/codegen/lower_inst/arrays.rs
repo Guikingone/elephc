@@ -423,6 +423,7 @@ pub(super) fn lower_load_array_elem_ref_cell(
     {
         let receiver = ReceiverPlace::resolve(ctx, array)?;
         receiver.require_writable("runtime-shaped array element reference")?;
+        receiver.prepare_consuming_storeback(ctx, array)?;
         ctx.load_value_to_result(array)?;
         super::iterators::convert_loaded_indexed_source_to_hash(ctx);
         ctx.store_result_value(array)?;
@@ -485,6 +486,7 @@ fn lower_hash_elem_ref_cell_aarch64(
 ) -> Result<()> {
     let found = ctx.next_label("hash_elem_ref_found");
     let done = ctx.next_label("hash_elem_ref_done");
+    receiver.prepare_consuming_storeback(ctx, hash)?;
     ctx.load_value_to_reg(hash, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
     ctx.store_result_value(hash)?;
@@ -495,6 +497,7 @@ fn lower_hash_elem_ref_cell_aarch64(
     ctx.emitter.instruction(&format!("cbnz x4, {found}"));                      // skip insertion when the requested key already exists
 
     if create_missing {
+        receiver.prepare_consuming_storeback(ctx, hash)?;
         crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
         abi::emit_push_reg(ctx.emitter, "x0");
         super::hashes::materialize_hash_key_aarch64(ctx, key)?;
@@ -533,6 +536,7 @@ fn lower_hash_elem_ref_cell_x86_64(
 ) -> Result<()> {
     let found = ctx.next_label("hash_elem_ref_found");
     let done = ctx.next_label("hash_elem_ref_done");
+    receiver.prepare_consuming_storeback(ctx, hash)?;
     ctx.load_value_to_reg(hash, "rdi")?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
     ctx.store_result_value(hash)?;
@@ -544,6 +548,7 @@ fn lower_hash_elem_ref_cell_x86_64(
     ctx.emitter.instruction(&format!("jnz {found}"));                           // preserve an existing entry without overwriting its value
 
     if create_missing {
+        receiver.prepare_consuming_storeback(ctx, hash)?;
         crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
         abi::emit_push_reg(ctx.emitter, "rax");
         super::hashes::materialize_hash_key_x86_64(ctx, key)?;

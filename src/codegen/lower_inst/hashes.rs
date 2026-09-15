@@ -315,9 +315,7 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
-    if let Some(slot) = receiver.slot() {
-        ctx.release_mutated_source_local_owner(slot, hash)?;
-    }
+    receiver.prepare_consuming_storeback(ctx, hash)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_hash_set_aarch64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
         Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
