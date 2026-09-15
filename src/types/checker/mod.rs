@@ -100,6 +100,10 @@ pub(crate) struct Checker {
     /// any statement check, which keeps class/constant/default-value checking on PHP's coercive
     /// rules — the behaviour elephc had before the directive was honoured.
     pub strict_types: bool,
+    /// Whether the checker is validating arguments synthesized by an internal callback site.
+    /// These expressions describe engine-provided values, not caller-owned lvalues, so they
+    /// must not publish reference aliases or boxed write-back metadata.
+    pub internal_callback_binding: bool,
     /// Tracks which undeclared function parameters have already had their type
     /// adopted from a real call site, keyed by (function_name, param_index). The
     /// first such call adopts the actual argument type; later disagreeing calls

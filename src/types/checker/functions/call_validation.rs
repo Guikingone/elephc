@@ -761,7 +761,7 @@ impl Checker {
             if param_idx < regular_param_count {
                 let supplied_reference = sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     && !defaults.get(param_idx).copied().unwrap_or(false);
-                if supplied_reference {
+                if supplied_reference && !self.internal_callback_binding {
                     if descriptor_invocation && matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
                         let param_name = sig
                             .params
@@ -799,6 +799,7 @@ impl Checker {
                         && descriptor_projected
                         && !supplied_reference;
                     let tracks_boxed_reference_output = supplied_reference
+                        && !self.internal_callback_binding
                         && (sig.declared_params.get(param_idx).copied().unwrap_or(false)
                             || matches!(expected_ty, PhpType::Mixed));
                     if tracks_boxed_reference_output {
@@ -878,15 +879,17 @@ impl Checker {
                     .copied()
                     .unwrap_or(false);
                 if variadic_by_ref {
-                    self.validate_by_ref_variadic_argument(
-                        arg,
-                        &actual_ty,
-                        caller_env,
-                        span,
-                        callee_desc,
-                        sig.variadic.as_deref().unwrap_or("args"),
-                        descriptor_invocation,
-                    )?;
+                    if !self.internal_callback_binding {
+                        self.validate_by_ref_variadic_argument(
+                            arg,
+                            &actual_ty,
+                            caller_env,
+                            span,
+                            callee_desc,
+                            sig.variadic.as_deref().unwrap_or("args"),
+                            descriptor_invocation,
+                        )?;
+                    }
                 }
                 if let (Some(vname), Some(expected_ty)) =
                     (sig.variadic.as_ref(), variadic_elem_ty.as_ref())

@@ -164,9 +164,12 @@ impl Checker {
         operation: impl FnOnce(&mut Self) -> T,
     ) -> T {
         let outer_strict_types = self.strict_types;
+        let outer_internal_callback_binding = self.internal_callback_binding;
         self.strict_types = false;
+        self.internal_callback_binding = true;
         let result = operation(self);
         self.strict_types = outer_strict_types;
+        self.internal_callback_binding = outer_internal_callback_binding;
         result
     }
 

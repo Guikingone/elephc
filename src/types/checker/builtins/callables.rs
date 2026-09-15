@@ -17,6 +17,7 @@
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
+use crate::types::call_args;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::canonical_builtin_function_name;
@@ -1213,6 +1214,59 @@ fn static_call_user_func_array_args(arg_array: &Expr) -> Option<Vec<Expr>> {
     }
 }
 
+/// Rejects static CUFA values that the descriptor invoker cannot publish back into an array
+/// element. Direct builtin calls have a dedicated element write-back path, while CUFA only
+/// accepts independently addressable reference storage.
+fn validate_static_cufa_reference_arguments(
+    sig: &FunctionSig,
+    args: &[Expr],
+    callee_desc: &str,
+) -> Result<(), CompileError> {
+    let regular_param_count = call_args::regular_param_count(sig);
+    let variadic_index = crate::types::signatures::variadic_param_index(sig);
+    let mut positional_index = 0usize;
+
+    for arg in args {
+        let (param_index, storage_arg) = match &arg.kind {
+            ExprKind::NamedArg { name, value } => (
+                call_args::named_param_index(sig, regular_param_count, name)
+                    .or(variadic_index),
+                value.as_ref(),
+            ),
+            _ => {
+                let index = if positional_index < regular_param_count {
+                    Some(positional_index)
+                } else {
+                    variadic_index
+                };
+                positional_index += 1;
+                (index, arg)
+            }
+        };
+        let Some(param_index) = param_index else {
+            continue;
+        };
+        if !sig.ref_params.get(param_index).copied().unwrap_or(false)
+            || !matches!(storage_arg.kind, ExprKind::ArrayAccess { .. })
+        {
+            continue;
+        }
+        let param_name = sig
+            .params
+            .get(param_index)
+            .map(|(name, _)| name.as_str())
+            .unwrap_or("arg");
+        return Err(CompileError::new(
+            storage_arg.span,
+            &format!(
+                "{} parameter ${} cannot bind an array element by reference through callable descriptor dispatch; call the target directly or bind the element to a reference variable first",
+                callee_desc, param_name
+            ),
+        ));
+    }
+    Ok(())
+}
+
 
 /// Type-checks a `call_user_func_array` call: resolves the callback (first-class callable,
 /// variable-bound callable, string name, extern/builtin, or object/array descriptor),
@@ -1236,6 +1290,11 @@ pub(crate) fn check_call_user_func_array(
         };
         validate_call_user_func_array_dynamic_arg_array(checker, &sig, &args[1], span, env)?;
         if let Some(elems) = static_args.as_deref() {
+            validate_static_cufa_reference_arguments(
+                &sig,
+                elems,
+                "call_user_func_array() callback",
+            )?;
             if let Some(ret_ty) = checker
                 .infer_contextual_first_class_builtin_call(target, elems, span, env)?
             {
@@ -1280,6 +1339,11 @@ pub(crate) fn check_call_user_func_array(
                 env,
             )?;
             if let Some(elems) = static_args.as_deref() {
+                validate_static_cufa_reference_arguments(
+                    &sig,
+                    elems,
+                    "call_user_func_array() callback",
+                )?;
                 if let Some(ret_ty) = checker
                     .infer_contextual_first_class_builtin_call(&target, elems, span, env)?
                 {
@@ -1319,6 +1383,13 @@ pub(crate) fn check_call_user_func_array(
         }
         if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
             if let Some(elems) = static_args.as_deref() {
+                if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name) {
+                    validate_static_cufa_reference_arguments(
+                        &sig,
+                        elems,
+                        "call_user_func_array() callback",
+                    )?;
+                }
                 if let Some(ret_ty) = checker.check_builtin(&builtin_name, elems, span, env)? {
                     return Ok(ret_ty);
                 }
