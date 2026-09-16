@@ -441,8 +441,11 @@ thread_local! {
 /// compilation runs on the calling thread, so it reaches this test's fixtures and no other
 /// test's. It is restored on the way out, panics included.
 pub(crate) fn without_ir_opt<T>(body: impl FnOnce() -> T) -> T {
+    /// Carries the override this block displaced, so the block cannot leak its own setting
+    /// into whatever the harness schedules on this thread next.
     struct Restore(Option<bool>);
     impl Drop for Restore {
+        /// Puts the displaced override back, on the panicking path as much as the normal one.
         fn drop(&mut self) {
             IR_OPT_OVERRIDE.with(|cell| cell.set(self.0));
         }
