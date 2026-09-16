@@ -24,6 +24,14 @@
 /// anything.
 pub const COMPILER_STACK_BYTES: usize = 256 * 1024 * 1024;
 
+/// The headroom a caller must already have for [`with_compiler_stack`] to use its stack as is.
+///
+/// Half the reservation, so the phases NESTED inside a wrapped run -- `main` wraps the whole
+/// compile, and every phase re-checks on entry -- keep using the run's own budget instead of
+/// reserving a second one each. A phase that really is starting from a small thread stack sees
+/// far less than this and reserves.
+const COMPILER_STACK_HEADROOM: usize = COMPILER_STACK_BYTES / 2;
+
 /// Runs `body` with at least [`COMPILER_STACK_BYTES`] of stack, returning what it returns.
 ///
 /// This is the contract for running the pipeline in-process: the binary wraps `main` in it, and
@@ -43,5 +51,5 @@ pub const COMPILER_STACK_BYTES: usize = 256 * 1024 * 1024;
 /// Already having the budget -- a caller on a stack this size, or a nested call -- reuses the
 /// current stack instead of reserving a second one.
 pub fn with_compiler_stack<R>(body: impl FnOnce() -> R) -> R {
-    stacker::maybe_grow(COMPILER_STACK_BYTES, COMPILER_STACK_BYTES, body)
+    stacker::maybe_grow(COMPILER_STACK_HEADROOM, COMPILER_STACK_BYTES, body)
 }

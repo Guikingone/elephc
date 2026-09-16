@@ -33,24 +33,6 @@ impl Checker {
     /// references. The result feeds statement checking, function call
     /// validation, and optimizer-visible type metadata.
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
-        // Inference recurses once per nesting level, so a deeply nested literal recurses as deep
-        // as the source nests. `MAX_COMPILER_NESTING` (1024) is the limit the parser DIAGNOSES,
-        // and reaching it takes more stack than a thread has: `$a = [[[…1…]]]` at 200 levels
-        // aborted the process with `has overflowed its stack` around 140, well short of the guard
-        // that exists to report it (issue #686).
-        //
-        // Growing here rather than lowering the limit keeps the diagnostic meaningful and keeps
-        // elephc accepting the depths PHP accepts. Same budget as the parser's own guard in
-        // `parse_expr_bp`, which is why that side never overflowed.
-        crate::parser::grow_stack_for_recursion(|| self.infer_type_inner(expr, env))
-    }
-
-    /// The expression dispatcher behind the stack-growth guard of [`Checker::infer_type`].
-    fn infer_type_inner(
-        &mut self,
-        expr: &Expr,
-        env: &TypeEnv,
-    ) -> Result<PhpType, CompileError> {
         match &expr.kind {
             ExprKind::IncludeValue { .. }
             | ExprKind::BoolLiteral(_)

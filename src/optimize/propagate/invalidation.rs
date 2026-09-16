@@ -82,12 +82,6 @@ impl Invalidation {
 /// there is deliberately no faster pre-scan sharing the job, so lvalue-root
 /// extraction and call handling cannot drift between two implementations.
 pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
-    // As deep as the source nests; see `parser::grow_stack_for_recursion` (issue #686).
-    crate::parser::grow_stack_for_recursion(|| expr_invalidation_inner(expr))
-}
-
-/// The write-set dispatcher behind the stack-growth guard of [`expr_invalidation`].
-fn expr_invalidation_inner(expr: &Expr) -> Invalidation {
     match &expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.

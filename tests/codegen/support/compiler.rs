@@ -228,9 +228,14 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
 ///
 /// The run happens inside `with_compiler_stack` because this function IS the embedder: it
 /// drives the crate's phases by hand the way an external consumer would, off a libtest worker
-/// thread whose stack is whatever `RUST_MIN_STACK` says. Every recursive pass -- the parser,
-/// the checker, constant propagation, EIR lowering -- nests once per source nesting level, and
-/// `MAX_COMPILER_NESTING` allows 1024 of them (issue #686).
+/// thread whose stack is whatever `RUST_MIN_STACK` says.
+///
+/// Each PHASE carries its own budget, so this wrapper is not what makes the phases survive
+/// `MAX_COMPILER_NESTING`; `tests/embedder_stack_tests.rs` proves that separately by calling
+/// them one at a time on a 512 KiB thread. What it covers is everything a driver does BETWEEN
+/// the phases with an AST that deep -- moving it, cloning it, dropping it -- which recurses
+/// through derived `Clone` and `Drop` code no guard can be put inside. Removing this wrapper
+/// aborts the 1024-level fixture in `ExprKind::clone` (issue #686).
 #[allow(clippy::too_many_arguments)]
 fn try_compile_source_to_asm_with_defines_repr(
     source: &str,
