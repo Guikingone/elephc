@@ -1135,6 +1135,11 @@ class J { use T1; }
 $j = new J(); echo $j->t1 + $j->t2, "\n";
 class K { public int $u = 8; public int $v = 9; const X = 10; const Y = 11; }
 $k = new K(); echo $k->u + $k->v + K::X + K::Y, "\n";
+interface Limits { const MIN = 1, MAX = 10; }
+class M implements Limits {}
+echo Limits::MIN + Limits::MAX + M::MAX, "\n";
+class N { public int $p = 7, $q, $r = 9; public function __construct() { $this->q = 8; } }
+$n = new N(); echo $n->p, ",", $n->q, ",", $n->r, "\n";
 class L {
     public int $c1 = 1, $c2 = 2;
     public int $hooked { get => 42; }
@@ -1156,6 +1161,8 @@ $l = new L(); echo $l->c1 + $l->c2 + $l->hooked, "\n";
             "7\n",
             "3\n",
             "38\n",
+            "21\n",
+            "7,8,9\n",
             "45\n",
         )
     );
