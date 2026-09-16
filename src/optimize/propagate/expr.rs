@@ -32,6 +32,12 @@ pub(crate) fn captured_constant_env(
 /// so a stale fact is never propagated across an in-expression write. Returns a new
 /// expression with substitutions applied, followed by constant folding.
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
+    // As deep as the source nests; see `parser::grow_stack_for_recursion` (issue #686).
+    crate::parser::grow_stack_for_recursion(|| propagate_expr_inner(expr, env))
+}
+
+/// The rewriter behind the stack-growth guard of [`propagate_expr`].
+fn propagate_expr_inner(expr: Expr, env: &ConstantEnv) -> Expr {
     let reduced_env;
     // Drop the names this expression may write before substituting, so a stale
     // constant is never propagated into a read sequenced after the write in the

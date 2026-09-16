@@ -349,26 +349,3 @@ fn test_method_global_declaration_uses_final_top_level_environment() {
         "explicit global declarations must resolve final top-level bindings",
     );
 }
-
-
-/// Verifies the IN-PROCESS front end survives deep nesting too, not only the binary.
-///
-/// The compiler binary runs on a thread sized for `MAX_COMPILER_NESTING` (issue #686), but an
-/// embedder calling the crate — and this test harness — gets whatever stack its own thread has.
-/// The recursive passes therefore also grow their own stack through
-/// `parser::grow_stack_for_recursion`, and this is what pins that they do: the depth here is far
-/// past the ~140 levels the default stack used to manage, and a regression aborts the test
-/// PROCESS rather than failing an assertion, which is exactly why it is worth having.
-#[test]
-fn test_deeply_nested_literal_type_checks_in_process() {
-    let depth = 1024;
-    let source = format!(
-        "<?php\n$a = {}1{};\necho count($a);\n",
-        "[".repeat(depth),
-        "]".repeat(depth)
-    );
-    assert!(
-        check_source(&source).is_ok(),
-        "a {depth}-level literal must type-check without exhausting the stack"
-    );
-}

@@ -225,8 +225,48 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
 
 /// Runs the codegen-fixture pipeline and hands back the backend's `Result` instead of
 /// unwrapping it, so callers can assert on either outcome.
+///
+/// The run happens inside `with_compiler_stack` because this function IS the embedder: it
+/// drives the crate's phases by hand the way an external consumer would, off a libtest worker
+/// thread whose stack is whatever `RUST_MIN_STACK` says. Every recursive pass -- the parser,
+/// the checker, constant propagation, EIR lowering -- nests once per source nesting level, and
+/// `MAX_COMPILER_NESTING` allows 1024 of them (issue #686).
 #[allow(clippy::too_many_arguments)]
 fn try_compile_source_to_asm_with_defines_repr(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    counters: bool,
+    heap_debug: bool,
+    null_repr: elephc::codegen::NullRepr,
+    with_regex: bool,
+    php_version: elephc::php_version::PhpVersion,
+) -> (
+    std::result::Result<String, elephc::codegen::CodegenIrError>,
+    String,
+    TestLinkRequirements,
+) {
+    elephc::compiler_stack::with_compiler_stack(|| {
+        try_compile_source_to_asm_with_defines_repr_inner(
+            source,
+            dir,
+            defines,
+            heap_size,
+            gc_stats,
+            counters,
+            heap_debug,
+            null_repr,
+            with_regex,
+            php_version,
+        )
+    })
+}
+
+/// The pipeline behind the stack budget of `try_compile_source_to_asm_with_defines_repr`.
+#[allow(clippy::too_many_arguments)]
+fn try_compile_source_to_asm_with_defines_repr_inner(
     source: &str,
     dir: &Path,
     defines: &HashSet<String>,

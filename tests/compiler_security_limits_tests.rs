@@ -242,10 +242,16 @@ fn deeply_nested_unserialize_is_rejected_before_runtime_recursion() {
 ///
 /// — no diagnostic, no file, no position, and a source PHP itself compiles.
 ///
-/// The compiler now runs on a thread sized against that limit, so this fixture checks the two
-/// ends of it: 1000 levels produce a working program, and the depth-limit test above still gets
-/// its diagnostic rather than an abort. The exit STATUS is asserted too, because a stack
-/// overflow and a rejection both fail — only the message tells them apart.
+/// The compiler now runs inside `compiler_stack::with_compiler_stack`, sized against that
+/// limit, so this fixture checks the two ends of it: 1000 levels produce a working program, and
+/// the depth-limit test above still gets its diagnostic rather than an abort. The exit STATUS is
+/// asserted too, because a stack overflow and a rejection both fail — only the message tells
+/// them apart.
+///
+/// This one drives the BINARY. Its in-process twin is
+/// `codegen::regressions::syntax_edges::test_deeply_nested_literal_compiles_and_runs_in_process`,
+/// which runs the same depth through the crate's phases on a libtest worker thread: the two
+/// together pin both the CLI and the embedding path.
 #[test]
 fn nesting_below_the_limit_compiles_and_runs() {
     let _guard = LIMIT_TEST_LOCK.lock().unwrap();
