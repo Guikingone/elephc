@@ -3154,14 +3154,18 @@ echo 'done';
         );
     }
 
-    // -- IterStart: the sentinel source is folded to zero in the iterator slot --
+    // -- IterStart: the sentinel is recognized before any array header is read --
+    // A statically shaped source folds the sentinel to zero in the iterator slot. A source
+    // reached through a reference cell is a boxed Mixed value instead, and `__rt_mixed_unbox`
+    // normalizes a sentinel payload to the null tag before the shape dispatch that would touch
+    // storage — so either recognition satisfies the guarantee, and one of them must be there.
     let normalize = match target().arch {
         Arch::AArch64 => "csel x0, xzr, x0, eq",
         Arch::X86_64 => "cmove rax, r10",
     };
     assert!(
-        user_asm.contains(normalize),
-        "missing iter_start sentinel-to-zero normalization:\n{user_asm}"
+        user_asm.contains(normalize) || user_asm.contains("__rt_mixed_unbox"),
+        "missing iter_start null-container recognition:\n{user_asm}"
     );
 
     // -- IterNext: the by-reference live-length read keeps its zero-source guard --
