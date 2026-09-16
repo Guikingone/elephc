@@ -182,7 +182,7 @@ function exerciseByRef(string &$text): void {
     }
 }
 
-/// A detached local keeps its exact string reference place while its incidental value view is rooted.
+/// A detached local keeps its exact string reference place while a protected view of it is rooted.
 #[test]
 fn detached_string_reference_place_roots_only_its_prethrow_value_view() {
     use crate::ir::{Immediate, Op};
@@ -266,30 +266,25 @@ unset($text);
                     .then_some(index)
             })
             .expect("prethrow owner publication");
-        let release_index = function
-            .instructions
-            .iter()
-            .enumerate()
-            .find_map(|(index, inst)| {
-                (index > push_index && inst.op == Op::Release && inst.operands == [place])
-                    .then_some(index)
-            })
-            .expect("detached value-view transfer");
+        // The slot never widens, so the load stays a borrowed view of the frame's own string:
+        // the provisional release lowering emits for it is pruned at finalization
+        // (`Builder::prune_borrowed_local_load_release_ops`). Keeping it would drop an owner
+        // the caller place still holds.
         assert_eq!(
             function
                 .instructions
                 .iter()
                 .filter(|inst| inst.op == Op::Release && inst.operands == [place])
                 .count(),
-            1,
-            "{target}: the incidental value view must be released exactly once",
+            0,
+            "{target}: a borrowed reference-place view must not be released",
         );
         let throw_index = function
             .instructions
             .iter()
             .enumerate()
             .find_map(|(index, inst)| {
-                (index > release_index && inst.op == Op::Call && inst.operands.is_empty())
+                (index > push_index && inst.op == Op::Call && inst.operands.is_empty())
                     .then_some(index)
             })
             .expect("later throwing argument call");

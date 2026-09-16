@@ -439,7 +439,7 @@ pub(super) fn lower_load_array_elem_ref_cell(
         ctx.load_value_to_result(array)?;
         super::iterators::convert_loaded_indexed_source_to_hash(ctx);
         ctx.store_result_value(array)?;
-        receiver.store_back_value(ctx, array)?;
+        receiver.store_back_container_writeback(ctx, array)?;
         return lower_hash_elem_ref_cell(ctx, inst, array, index, true);
     }
     if matches!(array_ty.codegen_repr(), PhpType::AssocArray { .. }) {
@@ -504,7 +504,7 @@ fn lower_hash_elem_ref_cell_aarch64(
     ctx.load_value_to_reg(hash, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
     super::hashes::materialize_hash_key_aarch64(ctx, key)?;
     ctx.load_value_to_reg(hash, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
@@ -523,7 +523,7 @@ fn lower_hash_elem_ref_cell_aarch64(
         abi::emit_load_int_immediate(ctx.emitter, "x5", runtime_value_tag(&PhpType::Mixed) as i64);
         abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         ctx.store_result_value(hash)?;
-        receiver.store_back_value(ctx, hash)?;
+        receiver.store_back_container_writeback(ctx, hash)?;
         super::hashes::materialize_hash_key_aarch64(ctx, key)?;
         ctx.load_value_to_reg(hash, "x0")?;
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
@@ -554,7 +554,7 @@ fn lower_hash_elem_ref_cell_x86_64(
     ctx.load_value_to_reg(hash, "rdi")?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
     super::hashes::materialize_hash_key_x86_64(ctx, key)?;
     ctx.load_value_to_reg(hash, "rdi")?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
@@ -574,7 +574,7 @@ fn lower_hash_elem_ref_cell_x86_64(
         abi::emit_load_int_immediate(ctx.emitter, "r9", runtime_value_tag(&PhpType::Mixed) as i64);
         abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         ctx.store_result_value(hash)?;
-        receiver.store_back_value(ctx, hash)?;
+        receiver.store_back_container_writeback(ctx, hash)?;
         super::hashes::materialize_hash_key_x86_64(ctx, key)?;
         ctx.load_value_to_reg(hash, "rdi")?;
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");

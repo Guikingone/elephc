@@ -321,7 +321,7 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
     }
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
@@ -369,7 +369,7 @@ pub(super) fn lower_descriptor_arg_set(
         )?,
     }
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
@@ -458,7 +458,7 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     ctx.load_value_to_reg(hash, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -496,7 +496,7 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
         Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty)?,
     }
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
@@ -598,7 +598,7 @@ pub(super) fn lower_hash_spread(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_spread");
     ctx.store_result_value(dest)?;
-    receiver.store_back_value(ctx, dest)?;
+    receiver.store_back_container_writeback(ctx, dest)?;
     ctx.writeback_global_array_source(dest)?;
     Ok(())
 }

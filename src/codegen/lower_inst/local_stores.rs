@@ -79,14 +79,42 @@ pub(in crate::codegen) enum RefCellStorePrevious {
 pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    retire_raw_occupant_before_ref_store(ctx, slot)?;
-    store_value_through_ref_cell_slot(
-        ctx,
-        slot,
-        value,
-        &inst.result_php_type,
-        RefCellStorePrevious::Retire,
-    )
+    let previous = if value_is_consuming_conversion_of_ref_cell(ctx, value, slot)? {
+        RefCellStorePrevious::Keep
+    } else {
+        retire_raw_occupant_before_ref_store(ctx, slot)?;
+        RefCellStorePrevious::Retire
+    };
+    store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)
+}
+
+/// Returns true when `value` is `ArrayToHash(LoadRefCell(slot))` for the slot being stored.
+///
+/// `ArrayToHash` CONSUMES the array it converts: the convert path releases the source after the
+/// copy and returns a fresh hash, the already-a-hash path returns the source pointer itself. Either
+/// way the cell's previous owner is accounted for by the conversion, so the store must only
+/// publish the result. Retiring the previous pointee again — the default for a PHP assignment
+/// through the reference — freed a by-reference variadic's argument array a second time
+/// (`function r(&...$items) { $items[0] = 1; $items["k"] = 2; }` called through a first-class
+/// callable), and the freed block's reuse by the persisted key string then walked that string as a
+/// hash on the next release.
+fn value_is_consuming_conversion_of_ref_cell(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    slot: LocalSlotId,
+) -> Result<bool> {
+    let Some(conversion) = instruction_for_value(ctx, value)? else {
+        return Ok(false);
+    };
+    if conversion.op != Op::ArrayToHash {
+        return Ok(false);
+    }
+    let Some(source) = conversion.operands.first().copied() else {
+        return Ok(false);
+    };
+    Ok(instruction_for_value(ctx, source)?.is_some_and(|load| {
+        load.op == Op::LoadRefCell && load.immediate == Some(Immediate::LocalSlot(slot))
+    }))
 }
 
 /// Retires what a still-raw slot holds before a ref-cell store overwrites it.

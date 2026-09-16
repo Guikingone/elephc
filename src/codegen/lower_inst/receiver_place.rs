@@ -190,9 +190,44 @@ impl ReceiverPlace {
             Self::Property { object, slot } => {
                 super::objects::store_mutated_container_property_owner(ctx, *object, slot, value)
             }
-            Self::Global { symbol, php_type } => {
-                emit_global_receiver_store_back(ctx, symbol, php_type, value)
-            }
+            Self::Global { symbol, php_type } => emit_global_receiver_store_back(
+                ctx,
+                symbol,
+                php_type,
+                value,
+                crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Retire,
+            ),
+        }
+    }
+
+    /// Republishes a container an element-write helper may have relocated.
+    ///
+    /// `__rt_hash_set`, `__rt_hash_unset`, `__rt_hash_append`, `__rt_hash_spread` and the
+    /// element-cell helpers split under the `ensure_unique` convention: a copy-on-write split drops
+    /// the mutator's own owner and a growth frees the block it replaced. A raw or global-backed
+    /// receiver therefore only PUBLISHES the pointer handed back — retiring the previous occupant
+    /// as `store_back_value` does for the mutating builtins released the pre-growth table a second
+    /// time. That is how `$_GET` with more than sixteen parameters crashed the web handler: its
+    /// population loop grew the table through this write-back, the decref of the old block freed
+    /// storage the allocator had already handed to a key string, and the request-end reset then
+    /// walked that string as a hash. A ref-cell receiver keeps its retirement because
+    /// `prepare_consuming_storeback` gave the helper a separate owner for exactly that release.
+    pub(super) fn store_back_container_writeback(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        value: ValueId,
+    ) -> Result<()> {
+        match self {
+            Self::Opaque => Ok(()),
+            Self::Local(slot) => ctx.store_container_writeback_to_local(*slot, value),
+            Self::RefCell(_) | Self::Property { .. } => self.store_back_value(ctx, value),
+            Self::Global { symbol, php_type } => emit_global_receiver_store_back(
+                ctx,
+                symbol,
+                php_type,
+                value,
+                crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Keep,
+            ),
         }
     }
 
@@ -218,12 +253,16 @@ impl ReceiverPlace {
 ///
 /// The symbol already owns the cell the builtin mutated in place; storing the same pointer again
 /// would change nothing, and retiring the "previous" occupant would free the very cell being
-/// published. A replacement cell takes the symbol's owner slot and the old cell is released.
+/// published. A replacement cell takes the symbol's owner slot; whether the old cell is released
+/// here (`Retire`, the mutating builtins' convention) or was already dropped by the helper
+/// (`Keep`, the element-write helpers' convention) is the caller's call — see
+/// [`ReceiverPlace::store_back_container_writeback`].
 fn emit_global_receiver_store_back(
     ctx: &mut FunctionContext<'_>,
     symbol: &str,
     php_type: &PhpType,
     value: ValueId,
+    previous: crate::codegen::lower_inst::local_stores::RefCellStorePrevious,
 ) -> Result<()> {
     let unchanged = ctx.next_label("global_receiver_unchanged");
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -242,8 +281,10 @@ fn emit_global_receiver_store_back(
         }
     }
     abi::emit_store_reg_to_symbol(ctx.emitter, new_reg, symbol, 0);
-    abi::emit_reg_move(ctx.emitter, result_reg, old_reg);
-    abi::emit_decref_if_refcounted(ctx.emitter, &php_type.codegen_repr());
+    if previous == crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Retire {
+        abi::emit_reg_move(ctx.emitter, result_reg, old_reg);
+        abi::emit_decref_if_refcounted(ctx.emitter, &php_type.codegen_repr());
+    }
     ctx.emitter.label(&unchanged);
     Ok(())
 }
