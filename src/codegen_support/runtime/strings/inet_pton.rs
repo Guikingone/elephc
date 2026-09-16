@@ -104,7 +104,7 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pass the NUL-terminated copy as the second
     emitter.bl_c("inet_pton");                                                  // parse the address for the selected family
     emitter.instruction("cmp w0, #1");                                          // 1 means the address parsed; 0 and -1 do not
-    emitter.instruction("b.ne __rt_inet_pton_false");                           // anything else is an invalid address
+    emitter.instruction("b.ne __rt_inet_pton_unparsed");                        // release the reservation before reporting false
 
     emitter.instruction("ldr x1, [sp, #256]");                                  // the packed pointer
     emitter.instruction("ldr x2, [sp, #264]");                                  // the packed length
@@ -112,6 +112,15 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #288]");                            // restore frame pointer and return address
     emitter.instruction("add sp, sp, #304");                                    // release the frame
     emitter.instruction("ret");                                                 // return the packed address
+
+    // A reservation that was never published still has to be released: `__rt_concat_reserve`
+    // answers with an OWNED heap block once the scratch buffer can no longer fit the request,
+    // and a well-formed-looking address that the parser then rejects would leak one per call.
+    // `__rt_heap_free_safe` ignores a scratch pointer, which is the ordinary case.
+    emitter.label("__rt_inet_pton_unparsed");
+    emitter.instruction("ldr x0, [sp, #256]");                                  // the reservation this call never published
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");                       // a no-op for scratch, a free for the heap fallback
+    emitter.instruction("b __rt_inet_pton_false");                              // report the invalid address
 
     emitter.label("__rt_inet_pton_false");
     emitter.instruction("mov x1, #0");                                          // a null pointer signals an invalid address
@@ -184,7 +193,7 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // no vector arguments in this call
     emitter.bl_c("inet_pton");                                                  // parse the address for the selected family
     emitter.instruction("cmp eax, 1");                                          // 1 means the address parsed; 0 and -1 do not
-    emitter.instruction("jne __rt_inet_pton_false_x86");                        // anything else is an invalid address
+    emitter.instruction("jne __rt_inet_pton_unparsed_x86");                     // release the reservation before reporting false
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the packed pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // the packed length
@@ -192,6 +201,12 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the packed address
+
+    // See the AArch64 twin: an unpublished reservation may be an owned heap block.
+    emitter.label("__rt_inet_pton_unparsed_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the reservation this call never published
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");                       // a no-op for scratch, a free for the heap fallback
+    emitter.instruction("jmp __rt_inet_pton_false_x86");                        // report the invalid address
 
     emitter.label("__rt_inet_pton_false_x86");
     emitter.instruction("xor eax, eax");                                        // a null pointer signals an invalid address
@@ -258,6 +273,28 @@ mod tests {
         assert!(assembly_for(Target::new(Platform::MacOS, Arch::AArch64)).contains("bl _inet_pton"));
         assert!(assembly_for(Target::new(Platform::Linux, Arch::AArch64)).contains("bl inet_pton"));
         assert!(assembly_for(Target::new(Platform::Linux, Arch::X86_64)).contains("call inet_pton"));
+    }
+
+    /// A reservation the parser rejects is released rather than leaked.
+    ///
+    /// `__rt_concat_reserve` answers with an OWNED heap block once the scratch buffer can no
+    /// longer fit the request, so an address that looks well-formed enough to be reserved for
+    /// and is then refused would leak one allocation per call.
+    #[test]
+    fn inet_pton_releases_a_reservation_it_never_publishes() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = assembly_for(target);
+            assert!(
+                asm.contains("__rt_heap_free_safe"),
+                "{:?} must release an unpublished reservation: {}",
+                target,
+                asm
+            );
+        }
     }
 
     /// The destination is RESERVED, never taken straight from the scratch cursor.

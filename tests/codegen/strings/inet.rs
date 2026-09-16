@@ -195,3 +195,47 @@ echo bin2hex(inet_pton('9.9.9.9')), "\n";
         )
     );
 }
+
+/// Verifies a non-string argument behaves the way PHP's own coercion does, where it can.
+///
+/// The parameter is `string $ip`, so an int coerces and the answer is the one PHP gives for the
+/// coerced text -- `inet_pton(42)` asks about `"42"`, which is no address either way.
+#[test]
+fn test_inet_helpers_coerce_a_scalar_argument_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(inet_pton(42));
+var_dump(inet_ntop(42));
+var_dump(inet_pton(true));
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\nbool(false)\n");
+}
+
+/// Verifies an argument with no string form is REFUSED, by name, rather than compiled.
+///
+/// PHP raises `TypeError: inet_pton(): Argument #1 ($ip) must be of type string, array given`.
+/// elephc declines the program instead, which is the shared behaviour of every builtin taking a
+/// single string argument -- the refusal is named after the builtin and the offending type, so
+/// the divergence is legible rather than silent. Pinned here because the family gained IPv6 and
+/// this is the boundary a caller hits when it passes the wrong thing.
+#[test]
+fn test_inet_helpers_refuse_an_argument_with_no_string_form() {
+    let pton = compile_source_expect_backend_error(r#"<?php var_dump(inet_pton([1]));"#);
+    assert!(
+        pton.contains("inet_pton string coercion for PHP type Array(Int)"),
+        "expected a named refusal, got: {pton}"
+    );
+    let ntop = compile_source_expect_backend_error(r#"<?php var_dump(inet_ntop([1]));"#);
+    assert!(
+        ntop.contains("inet_ntop string coercion for PHP type Array(Int)"),
+        "expected a named refusal, got: {ntop}"
+    );
+    let object = compile_source_expect_backend_error(
+        r#"<?php var_dump(inet_pton(new stdClass()));"#,
+    );
+    assert!(
+        object.contains("inet_pton string coercion for PHP type Object(\"stdClass\")"),
+        "expected a named refusal, got: {object}"
+    );
+}
