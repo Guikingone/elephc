@@ -998,9 +998,13 @@ class BoxedPushEmitter {
     public array $items = [1];
     public static array $shared = [2];
 }
+function pushIntoBoxedProperty(BoxedPushEmitter $owner, int $value): void {
+    array_push($owner->items, $value);
+}
 $owner = new BoxedPushEmitter();
 array_push($owner->items, $argc);
 array_push(BoxedPushEmitter::$shared, $argc);
+pushIntoBoxedProperty($owner, $argc);
 echo count($owner->items), count(BoxedPushEmitter::$shared);
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -1009,8 +1013,8 @@ echo count($owner->items), count(BoxedPushEmitter::$shared);
         );
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        assert_eq!(assembly.matches("__rt_array_cell_ensure_unique").count(), 2, "{name}");
-        assert_eq!(assembly.matches("__rt_mixed_array_append").count(), 2, "{name}");
+        assert_eq!(assembly.matches("__rt_array_cell_ensure_unique").count(), 3, "{name}");
+        assert_eq!(assembly.matches("__rt_mixed_array_append").count(), 3, "{name}");
     }
 }
 

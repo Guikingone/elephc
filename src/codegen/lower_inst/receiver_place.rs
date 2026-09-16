@@ -188,9 +188,10 @@ impl ReceiverPlace {
 
 /// Finds a declared property behind the direct sort path's transparent value transitions.
 ///
-/// `Acquire` owns the borrowed property payload during conversion, and `ArrayToHash` changes only
-/// its physical representation. Neither changes the PHP lvalue that must receive the final COW
-/// pointer, so both are peeled until the originating `PropGet` is reached.
+/// `Acquire` owns the borrowed property payload during conversion, `Borrow` and `Move` preserve
+/// the same value identity, and `ArrayToHash` changes only its physical representation. None
+/// changes the PHP lvalue that must receive the final COW pointer, so they are peeled until the
+/// originating `PropGet` is reached.
 fn direct_property_receiver(
     ctx: &FunctionContext<'_>,
     mut value: ValueId,
@@ -206,7 +207,7 @@ fn direct_property_receiver(
             return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
         };
         match inst_ref.op {
-            Op::Acquire | Op::ArrayToHash => {
+            Op::Acquire | Op::Borrow | Op::Move | Op::ArrayToHash => {
                 let Some(source) = inst_ref.operands.first().copied() else {
                     return Ok(None);
                 };
