@@ -335,3 +335,64 @@ echo implode(",", $x);
         "expected the named receiver-promotion diagnostic, got: {error}"
     );
 }
+
+/// Pins `array_splice($a, …, $a)`: `$replacement` naming the receiver inserts what the receiver
+/// held BEFORE the removal, not what the removal left behind (issue #676).
+///
+/// PHP evaluates `$replacement` into its own array first. elephc passed the receiver pointer
+/// twice, so the insertion re-read slots the removal had already overwritten and `[1,2,3]` came
+/// back as `1,1,1,3` instead of `1,1,2,3,3`. The matrix covers the receiver payloads the issue
+/// named — `int`, `string`, `float`, refcounted children — plus the shapes where the pointer
+/// reuse was easiest to miss: the returned removal window, a negative offset, a pure insertion,
+/// a single-element and an empty receiver, a by-reference parameter, and the named-argument
+/// spelling.
+#[test]
+fn test_array_splice_self_replacement_inserts_the_pre_splice_contents() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1,2,3]; $r = array_splice($a, 1, 1, $a); echo implode(",",$a), "|", implode(",",$r), "\n";
+$s = ["a","b","c"]; array_splice($s, 1, 1, $s); echo implode(",",$s), "\n";
+$f = [1.5,2.5,3.5]; array_splice($f, 2, 0, $f); echo count($f), ",", $f[0], ",", $f[2], ",", $f[5], "\n";
+$n = [[1],[2]]; array_splice($n, 0, 1, $n); echo count($n), ",", $n[0][0], ",", $n[1][0], ",", $n[2][0], "\n";
+$g = [1,2,3,4]; array_splice($g, -2, 1, $g); echo implode(",",$g), "\n";
+$o = [7]; array_splice($o, 0, 1, $o); echo implode(",",$o), "\n";
+$e = []; array_splice($e, 0, 0, $e); echo count($e), "\n";
+function viaRef(array &$r): void { array_splice($r, 1, 1, $r); }
+$b = [10,20,30]; viaRef($b); echo implode(",",$b), "\n";
+$m = [1,2,3]; array_splice(array: $m, offset: 1, length: 1, replacement: $m); echo implode(",",$m), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"1,1,2,3,3|2
+a,a,b,c,c
+6,1.5,1.5,3.5
+3,1,2,2
+1,2,1,2,3,4,4
+7
+0
+10,10,20,30,30
+1,1,2,3,3
+"#
+    );
+}
+
+/// Verifies the snapshot the self-replacement fix inserts is released rather than leaked.
+///
+/// The copy is a real owned array, so a missing release would accumulate one allocation per
+/// splice; the loop makes that visible instead of hiding it in a single-iteration total.
+#[test]
+fn test_array_splice_self_replacement_snapshot_is_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 32; $i++) { $a = [1,2,3]; array_splice($a, 1, 1, $a); }
+echo implode(",", $a), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "1,1,2,3,3\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "self-replacement snapshot leaked: {}",
+        out.stderr
+    );
+}

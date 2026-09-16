@@ -747,8 +747,69 @@ fn lower_array_splice_args(
     } else {
         lower_positional_builtin_args_with_signature(ctx, sig, args)
     };
+    snapshot_array_splice_self_replacement(ctx, sig, args, &mut operands);
     widen_array_splice_receiver_for_replacement(ctx, sig, args, &mut operands);
     operands
+}
+
+/// Copies `$replacement` before the splice runs when it names the receiver itself.
+///
+/// PHP evaluates `$replacement` into its own array before touching the receiver, so
+/// `array_splice($a, 1, 1, $a)` inserts what `$a` held on the way in. elephc passed the receiver
+/// pointer twice and the insertion then read slots the removal had already overwritten:
+/// `[1, 2, 3]` came back as `[1, 1, 1, 3]` where PHP gives `[1, 1, 2, 3, 3]` (issue #676).
+///
+/// Decided on the SOURCE, not on the lowered pointer: the two arguments spell the same variable,
+/// so no runtime compare is needed and a call that cannot alias pays nothing. It runs before
+/// `widen_array_splice_receiver_for_replacement` so the snapshot holds the receiver's original
+/// payload rather than a re-boxed copy of it, and unlike that pass it accepts every receiver
+/// shape — a by-ref parameter and a `&$x` binding alias just as hard, and neither needs the slot
+/// retyping that forces the other pass to turn them away.
+///
+/// Only the same-variable shape is covered. A replacement reaching the same array another way —
+/// two references to one slot, or a property both arguments read — still aliases; deciding that
+/// needs the receiver's place rather than its spelling.
+fn snapshot_array_splice_self_replacement(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    operands: &mut [crate::ir::ValueId],
+) {
+    let Some(sig) = sig else {
+        return;
+    };
+    let Some(replacement) = operands.get(3).copied() else {
+        return;
+    };
+    let Some(receiver) = array_splice_receiver_place(sig, args) else {
+        return;
+    };
+    let ExprKind::Variable(receiver_name) = &receiver.kind else {
+        return;
+    };
+    let Some(replacement_arg) = args.get(3) else {
+        return;
+    };
+    let replacement_place = match &replacement_arg.kind {
+        ExprKind::NamedArg { value, .. } => value.as_ref(),
+        _ => replacement_arg,
+    };
+    let ExprKind::Variable(replacement_name) = &replacement_place.kind else {
+        return;
+    };
+    if replacement_name != receiver_name {
+        return;
+    }
+    let replacement_ty = ctx.builder.value_php_type(replacement);
+    let snapshot = ctx.emit_value(
+        Op::ArrayCloneShallow,
+        vec![replacement],
+        None,
+        replacement_ty,
+        Op::ArrayCloneShallow.default_effects(),
+        Some(replacement_place.span),
+    );
+    operands[3] = snapshot.value;
 }
 
 /// Promotes an `array_splice()` receiver local to `array<mixed>` when `$replacement` retypes it.
@@ -796,6 +857,23 @@ fn widen_array_splice_receiver_for_replacement(
     operands[0] = ctx.load_local(&name, Some(span)).value;
 }
 
+/// Returns the expression `array_splice()`'s by-reference receiver argument was written as.
+///
+/// Positional and named spellings both land on parameter 0, so callers see one shape whichever
+/// way the call was written.
+fn array_splice_receiver_place<'a>(sig: &FunctionSig, args: &'a [Expr]) -> Option<&'a Expr> {
+    args.iter().enumerate().find_map(|(index, arg)| {
+        let (param_index, place) = match &arg.kind {
+            ExprKind::NamedArg { name, value } => (
+                sig.params.iter().position(|(param, _)| param == name)?,
+                value.as_ref(),
+            ),
+            _ => (index, arg),
+        };
+        (param_index == 0).then_some(place)
+    })
+}
+
 /// Returns the plain local variable bound to `array_splice()`'s by-reference receiver.
 ///
 /// Two receiver shapes are deliberately excluded even though they name a local. A by-reference
@@ -809,16 +887,7 @@ fn array_splice_receiver_local(
     sig: &FunctionSig,
     args: &[Expr],
 ) -> Option<(String, Span)> {
-    let receiver = args.iter().enumerate().find_map(|(index, arg)| {
-        let (param_index, place) = match &arg.kind {
-            ExprKind::NamedArg { name, value } => (
-                sig.params.iter().position(|(param, _)| param == name)?,
-                value.as_ref(),
-            ),
-            _ => (index, arg),
-        };
-        (param_index == 0).then_some(place)
-    })?;
+    let receiver = array_splice_receiver_place(sig, args)?;
     let ExprKind::Variable(name) = &receiver.kind else {
         return None;
     };
