@@ -203,11 +203,28 @@ impl Checker {
     /// `function grow($arr) { … ; return $arr; }` called as `$arr = grow($arr);` would record
     /// `mixed`, the caller's local would become `mixed`, the next call would re-specialize the
     /// parameter to `mixed`, and `array_push($arr, …)` inside the body would stop type-checking.
+    /// Whether a real call site ever passed arguments to this declaration.
+    ///
+    /// An include-variant declaration is registered under a GENERATED symbol
+    /// (`__elephc_include_variant_{hash}_{local}`) while the call site names the function the way
+    /// the source wrote it, so the two never match directly. A call to `append_item` reaches
+    /// whichever variant of `append_item` is live, so any variant of a called name counts as
+    /// called — the conservative direction, since the only effect is to leave a return type
+    /// alone. A variant reachable solely through a dynamic callable therefore keeps the
+    /// placeholder, exactly as it did before the widening existed.
+    fn function_was_called_directly(&self, name: &str) -> bool {
+        if self.functions_called_directly.contains(name) {
+            return true;
+        }
+        crate::resolver::include_variant_local_name(name)
+            .is_some_and(|local| self.functions_called_directly.contains(local))
+    }
+
     pub(super) fn widen_dynamic_only_passthrough_returns(&mut self) {
         let candidates: Vec<String> = self
             .fn_decls
             .keys()
-            .filter(|name| !self.functions_called_directly.contains(*name))
+            .filter(|name| !self.function_was_called_directly(name))
             .cloned()
             .collect();
         for name in candidates {
