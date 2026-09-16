@@ -50,7 +50,8 @@ fn test_boxed_direct_calls_bind_named_spread_and_reference_arguments() {
 function boxedCallTargets(): array {
     return [
         function(int $left, int $right): int { return $left * 10 + $right; },
-        function(int &$value): void { $value += 7; }
+        function(int &$value): void { $value += 7; },
+        function(mixed &$value): void { $value = "mixed"; }
     ];
 }
 $callbacks = boxedCallTargets();
@@ -58,10 +59,13 @@ $callback = $callbacks[0];
 echo $callback(right: 2, left: 1), "|", $callbacks[0](...[3, 4]), "|";
 $value = 5;
 $callbacks[1]($value);
-echo $value;
+echo $value, "|";
+$mixed = 1;
+$callbacks[2]($mixed);
+echo $mixed;
 unset($callback, $callbacks);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "12|34|12", "{}", out.stderr);
+    assert_eq!(out.stdout, "12|34|12|mixed", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

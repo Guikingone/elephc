@@ -162,8 +162,8 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_value(
         ExprKind::Variable(name) => {
             // Type checking authorizes this promotion only for signature-unknown calls, where
             // the runtime descriptor decides whether the marker binds by value or by reference.
-            // Canonicalize eligible caller locals before capturing their address, so an untyped
-            // `mixed &$value` target never interprets a narrower scalar slot as a boxed cell.
+            // Canonicalize eligible caller locals before capturing their address. The runtime
+            // invoker adapts this boxed storage when the selected target has a concrete ref type.
             if ctx.boxed_reference_promotion_is_authorized(name, arg.span)
                 && !ctx.is_ref_bound_local(name)
                 && ctx.local_is_promotable_to_ref_cell(name)

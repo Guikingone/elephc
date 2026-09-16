@@ -1176,8 +1176,10 @@ fn push_loaded_indexed_array_ref_arg(
     abi::emit_jump(emitter, &temp_label);
 
     emitter.label(&special_label);
-    abi::emit_load_from_address(emitter, result_reg, result_reg, 8);
-    abi::emit_push_result_value(emitter, &PhpType::Int);
+    let storage_reg = abi::symbol_scratch_reg(emitter);
+    abi::emit_load_from_address(emitter, storage_reg, result_reg, 8);
+    abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+    push_invoker_ref_storage_address(storage_reg, tag_reg, target_ty, emitter, ctx);
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&temp_label);
@@ -1185,6 +1187,58 @@ fn push_loaded_indexed_array_ref_arg(
 
     emitter.label(&done_label);
     PhpType::Int
+}
+
+/// Pushes caller storage for an invoker ref marker, adapting a Mixed cell to a concrete target.
+///
+/// Signature-unknown calls canonicalize promotable caller locals as Mixed so an untyped or
+/// `mixed &$value` target can retype them safely. If runtime dispatch instead selects a concrete
+/// ref parameter, that callee needs the address of the payload inside the existing Mixed box,
+/// not the address of the frame/ref-cell slot that holds the box pointer.
+fn push_invoker_ref_storage_address(
+    storage_reg: &str,
+    source_tag_reg: &str,
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+) {
+    let result_reg = abi::int_result_reg(emitter);
+    let target_is_mixed = target_ty.is_none_or(|ty| {
+        matches!(
+            ty.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
+        )
+    });
+    if target_is_mixed {
+        abi::emit_reg_move(emitter, result_reg, storage_reg);
+        abi::emit_push_result_value(emitter, &PhpType::Int);
+        return;
+    }
+
+    let direct_label = ctx.next_label("invoker_ref_storage_direct");
+    let done_label = ctx.next_label("invoker_ref_storage_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #7", source_tag_reg));       // is caller storage a boxed Mixed handle?
+            emitter.instruction(&format!("b.ne {}", direct_label));            // concrete source storage already has the target ABI shape
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, 7", source_tag_reg));        // is caller storage a boxed Mixed handle?
+            emitter.instruction(&format!("jne {}", direct_label));             // concrete source storage already has the target ABI shape
+        }
+    }
+    abi::emit_load_from_address(emitter, result_reg, storage_reg, 0);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("add {}, {}, #8", result_reg, result_reg)), // address the mutable payload inside the Mixed cell
+        Arch::X86_64 => emitter.instruction(&format!("add {}, 8", result_reg)), // address the mutable payload inside the Mixed cell
+    }
+    abi::emit_push_result_value(emitter, &PhpType::Int);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&direct_label);
+    abi::emit_reg_move(emitter, result_reg, storage_reg);
+    abi::emit_push_result_value(emitter, &PhpType::Int);
+    emitter.label(&done_label);
 }
 
 /// Pushes a loaded indexed-array element as a by-value callback argument.
@@ -2072,8 +2126,7 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     emitter.label(&boxed_marker_label);
     load_boxed_invoker_ref_cell_to_raw_regs(raw_lo_reg, raw_hi_reg, emitter);
-    move_raw_hash_value_lo_to_result(emitter);
-    abi::emit_push_result_value(emitter, &PhpType::Int);
+    push_invoker_ref_storage_address(raw_lo_reg, raw_hi_reg, target_ty, emitter, ctx);
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&ordinary_label);
@@ -3320,6 +3373,54 @@ mod tests {
             assert!(boxed < mixed && mixed < retained && retained < done, "{name}: {asm}");
             assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}: {asm}");
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+        }
+    }
+
+    /// Concrete ref targets mutate the payload inside promoted Mixed caller storage in place.
+    #[test]
+    fn invoker_ref_markers_adapt_promoted_mixed_storage_to_concrete_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let (storage_reg, source_tag_reg, mixed_compare, payload_address) = match target.arch {
+                Arch::AArch64 => ("x19", "x20", "cmp x20, #7", "add x0, x0, #8"),
+                Arch::X86_64 => ("r12", "r13", "cmp r13, 7", "add rax, 8"),
+            };
+
+            let mut concrete = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut concrete_ctx =
+                InvokerEmitContext::new("concrete_ref", owners, false, Vec::new());
+            push_invoker_ref_storage_address(
+                storage_reg,
+                source_tag_reg,
+                Some(&PhpType::Int),
+                &mut concrete,
+                &mut concrete_ctx,
+            );
+            let concrete_asm = concrete.output();
+            assert!(concrete_asm.contains(mixed_compare), "{name}: {concrete_asm}");
+            assert!(concrete_asm.contains(payload_address), "{name}: {concrete_asm}");
+            assert!(concrete_asm.contains("concrete_ref_invoker_ref_storage_direct_0"), "{name}: {concrete_asm}");
+
+            let mut mixed = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut mixed_ctx = InvokerEmitContext::new("mixed_ref", owners, false, Vec::new());
+            push_invoker_ref_storage_address(
+                storage_reg,
+                source_tag_reg,
+                Some(&PhpType::Mixed),
+                &mut mixed,
+                &mut mixed_ctx,
+            );
+            let mixed_asm = mixed.output();
+            assert!(!mixed_asm.contains(mixed_compare), "{name}: {mixed_asm}");
+            assert!(!mixed_asm.contains(payload_address), "{name}: {mixed_asm}");
         }
     }
 
