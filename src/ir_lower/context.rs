@@ -1889,9 +1889,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         &mut self,
         name: &str,
         slot: LocalSlotId,
+        storage_type: &PhpType,
         span: Option<Span>,
     ) {
-        let storage_type = self.builder.local_php_type(slot);
+        let storage_type = storage_type.clone();
         // A ref-bound slot stores an alias, not the payload owner being replaced.
         // StoreRefCell publishes the replacement through that alias before it retires
         // the previous payload, so generic slot cleanup must never release it first.
@@ -2002,7 +2003,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             php_type.clone()
         };
-        self.builder.widen_local_storage_type(slot, widen_type);
+        // What the slot will be typed AFTER this store: the release decisions below follow it,
+        // because a slot becoming `Mixed` needs its cleanup even when this value is an int.
+        let widened_storage_type = self.builder.widened_local_php_type(slot, &widen_type);
         let source = value;
         let source_is_owning_temporary = self.value_is_owning_temporary(value);
         let transfer_catch_source_to_store = matches!(
@@ -2067,7 +2070,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| self.initialized_slots.contains(&slot))
         {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, &widened_storage_type, span);
         }
         // A loop-carried slot can exist globally without being definitely initialized
         // on this CFG path. An earlier eval barrier can likewise reload a future PHP local
@@ -2079,7 +2082,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && (!self.loop_stack.is_empty()
                 || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, &widened_storage_type, span);
         }
         // A first syntactic store inside a loop body (main or function) can still
         // overwrite a prior runtime iteration's value. The same is true after eval, whose
@@ -2092,7 +2095,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && (!self.loop_stack.is_empty()
                 || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, &widened_storage_type, span);
         }
         // NO release of the previous occupant is emitted here for the string case: the
         // BACKEND already does it. `lower_store_static_local` calls
@@ -2105,6 +2108,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // So the two layers split cleanly for a static string store: this layer owns the
         // RETAIN (the backend's `emit_incref_if_refcounted` skips `Str`), the backend owns
         // the RELEASE of what it overwrites.
+        //
+        // The slot widens only AFTER the releases above were emitted, and the two sides read
+        // different types on purpose. WHETHER a release is emitted follows the widened storage
+        // type (`widened_storage_type` above): a slot that becomes `Mixed` needs its cleanup
+        // even when this store's own value is an int. WHAT that release is analysed as follows
+        // the slot's type at emission, which still describes what the slot HOLDS: a `string`
+        // local being overwritten with `null` retires a string, not the `Mixed` the widened slot
+        // will carry. Widening first made that release look like a possible destructor and
+        // erased every global-backed closure fact in the frame. The backend lays the frame out
+        // from the final widened type either way.
+        self.builder.widen_local_storage_type(slot, widen_type);
         if uses_global {
             self.store_global_name(name, slot, value, span);
             self.set_local_type(name, php_type);
@@ -2238,14 +2252,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && (!self.loop_stack.is_empty()
                 || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, &self.builder.local_php_type(slot), span);
         }
         if local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
             && (!self.loop_stack.is_empty()
                 || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, &self.builder.local_php_type(slot), span);
         }
         self.store_slot_with_op(slot, stored, Op::StoreLocal, span);
         self.set_local_type(name, php_type);
@@ -2676,7 +2690,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // occupant when this path definitely wrote it, and also when a loop back-edge can carry a
         // previous iteration's value into a slot straight-line flow has not initialized yet.
         if self.initialized_slots.contains(&slot) || !self.loop_stack.is_empty() {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, &self.builder.local_php_type(slot), span);
         }
         self.emit_void(
             Op::ZeroLocalSlot,
@@ -3034,7 +3048,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         // Retire the slot itself, avoiding a cleanup load whose representation may later widen.
         // The new cell has already been staged, so this may safely destroy the source object.
-        self.release_stored_local_value_before_overwrite(name, slot, span);
+        self.release_stored_local_value_before_overwrite(name, slot, &self.builder.local_php_type(slot), span);
     }
 
     /// Releases a promoted fallback ref-cell owner if the variable still owns one.
@@ -4623,6 +4637,13 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
 
 /// Returns whether releasing a value of this storage type can reach a user destructor.
 pub(super) fn php_type_cleanup_may_invoke_user_code(php_type: &PhpType) -> bool {
+    // A union is asked member by member BEFORE its representation is consulted: `?string`
+    // collapses to `Mixed` storage, but releasing a string-or-null slot can never reach a
+    // destructor. Answering from the representation made `$text = null` inside a `try` an
+    // opaque user-code boundary, which erased a global-backed closure fact nothing had touched.
+    if let PhpType::Union(members) = php_type {
+        return members.iter().any(php_type_cleanup_may_invoke_user_code);
+    }
     match php_type.codegen_repr() {
         PhpType::Object(_) | PhpType::Mixed | PhpType::Iterable | PhpType::Callable => true,
         PhpType::Array(value) => php_type_cleanup_may_invoke_user_code(&value),
@@ -4653,7 +4674,25 @@ pub(super) fn instruction_has_opaque_user_code_boundary(
     operand_types: &[PhpType],
     local_type: Option<&PhpType>,
 ) -> bool {
-    if op != Op::Call && effects.intersects(Effects::MAY_WARN | Effects::OUTPUT) {
+    // A release-family op carries the conservative `all()` default effects, so the effects test
+    // below would call every one of them a boundary. Only the payload it retires decides: freeing
+    // a string or an int slot cannot re-enter PHP, while a `Mixed`, object or object-bearing
+    // container can run a destructor. Answering from the effects instead erased a global-backed
+    // closure fact on `unset($number, $text)` and sent `Closure::bind` down the scope-less
+    // runtime path for a closure nothing had touched.
+    let releases_only = matches!(
+        op,
+        Op::Release
+            | Op::ReleaseUnlessAliases
+            | Op::ReleaseLocalSlot
+            | Op::ReleaseLocalRefCell
+            | Op::StoreStaticLocal
+            | Op::StoreRefCell
+    );
+    if !releases_only
+        && op != Op::Call
+        && effects.intersects(Effects::MAY_WARN | Effects::OUTPUT)
+    {
         return true;
     }
 

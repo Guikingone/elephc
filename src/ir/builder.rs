@@ -169,6 +169,15 @@ impl<'f> Builder<'f> {
         local.php_type = storage_type;
     }
 
+    /// Returns the storage type a slot WOULD have after widening with `php_type`, unchanged.
+    ///
+    /// The store lowering decides whether a slot needs a release from the widened type but
+    /// emits that release before the widening lands, so the release is still analysed against
+    /// what the slot currently holds.
+    pub fn widened_local_php_type(&self, slot: LocalSlotId, php_type: &PhpType) -> PhpType {
+        widened_local_storage_type(&self.func.locals[slot.as_raw() as usize].php_type, php_type)
+    }
+
     /// Returns the current frame storage PHP type for a local slot.
     pub fn local_php_type(&self, slot: LocalSlotId) -> PhpType {
         self.func.locals[slot.as_raw() as usize].php_type.clone()
