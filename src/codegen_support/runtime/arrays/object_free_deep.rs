@@ -66,6 +66,21 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer for the destructor call
     super::deep_cleanup::invoke(emitter, "__rt_call_object_destructor", "x0");
     emitter.instruction("bl __rt_gc_destructor_end");                           // accumulate the completed outer destructor interval
+    // -- resurrection: a destructor that stored `$this` somewhere (a closure it created, a
+    // global) gave the object a new owner. php keeps such an object alive and never runs its
+    // destructor again; freeing it here left that owner holding dead storage, and the next
+    // release of the same block ran `__destruct` a second time. Drop the in-progress guard,
+    // remember completion in kind bit 17 exactly like the collector does, and leave.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer after the destructor returned
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // reload the refcount word carrying the in-progress guard
+    emitter.instruction("and w10, w9, #0x7fffffff");                            // isolate the real owners the destructor body left behind
+    emitter.instruction("cbz w10, __rt_object_free_deep_not_resurrected");      // no surviving owner: release the storage as before
+    emitter.instruction("str w10, [x0, #-12]");                                 // clear the guard so those owners release normally later
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the uniform heap kind word
+    emitter.instruction("orr x10, x10, #0x20000");                              // mark the destructor as completed for the final release
+    emitter.instruction("str x10, [x0, #-8]");                                  // persist the completion mark in the header
+    emitter.instruction("b __rt_object_free_deep_resurrected");                 // keep the object and unwind only this cleanup frame
+    emitter.label("__rt_object_free_deep_not_resurrected");
     emitter.instruction("ldr x0, [sp]");                                        // pass the object identity before any property payload is released
     super::deep_cleanup::invoke(emitter, "__rt_eval_object_release_children", "x0");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer after the destructor returns
@@ -294,6 +309,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.label("__rt_object_free_deep_no_dyn_props");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer before freeing it
     emitter.instruction("bl __rt_heap_free");                                   // return the object storage to the heap allocator
+    emitter.label("__rt_object_free_deep_resurrected");
     super::deep_cleanup::finish(emitter, "__rt_object_free_deep_return");
 
     emitter.label("__rt_object_free_deep_done");
@@ -339,6 +355,16 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // load the object pointer as $this for the destructor call
     super::deep_cleanup::invoke(emitter, "__rt_call_object_destructor", "rdi");
     emitter.instruction("call __rt_gc_destructor_end");                         // accumulate the completed outer destructor interval
+    // -- resurrection: same rule as the AArch64 arm above. A destructor that handed `$this` to a
+    // new owner keeps the object alive; the completion mark stops a second `__destruct` later.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after the destructor returned
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // reload the refcount word carrying the in-progress guard
+    emitter.instruction("and r10d, 0x7fffffff");                                // isolate the real owners the destructor body left behind
+    emitter.instruction("jz __rt_object_free_deep_not_resurrected_x");          // no surviving owner: release the storage as before
+    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // clear the guard so those owners release normally later
+    emitter.instruction("or QWORD PTR [rax - 8], 0x20000");                     // mark the destructor as completed for the final release
+    emitter.instruction("jmp __rt_object_free_deep_resurrected_x");             // keep the object and unwind only this cleanup frame
+    emitter.label("__rt_object_free_deep_not_resurrected_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the object identity through the C ABI
     super::deep_cleanup::invoke(emitter, "__rt_eval_object_release_children", "rdi");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after the destructor returns
@@ -538,6 +564,7 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.label("__rt_object_free_deep_no_dyn_props");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after finishing the optional property cleanup pass
     emitter.instruction("call __rt_heap_free");                                 // release the object storage itself through the x86_64 heap wrapper
+    emitter.label("__rt_object_free_deep_resurrected_x");
     super::deep_cleanup::finish(emitter, "__rt_object_free_deep_return");
 
     emitter.label("__rt_object_free_deep_done");
