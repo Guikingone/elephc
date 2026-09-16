@@ -10,6 +10,95 @@
 
 use crate::ir::print_module;
 
+/// A dynamic callable may widen an object local without making its array property unwritable.
+#[test]
+fn widened_object_property_array_push_rewrites_through_a_local_on_every_target() {
+    let source = r#"<?php
+class ValueReferenceHolder { public array $items = [1]; }
+function &valueReference(ValueReferenceHolder $holder): array { return $holder->items; }
+function &otherValueReference(ValueReferenceHolder $holder): array { return $holder->items; }
+function referenceValueCopies(int $choice): void {
+    $holder = new ValueReferenceHolder();
+    $direct = valueReference($holder);
+    $callback = $choice > 0 ? 'valueReference' : 'otherValueReference';
+    $dynamic = $callback($holder);
+    $firstClass = valueReference(...);
+    $first = $firstClass($holder);
+    array_push($holder->items, 2);
+}
+referenceValueCopies($argc);
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Runtime hash promotion keeps the append receiver live across heap-kind classification.
+#[test]
+fn promoted_array_push_spills_its_receiver_on_every_target() {
+    let source = r#"<?php
+function appendWhileIterating(array $values): void {
+    foreach ($values as &$value) {
+        $values[] = $value + 1;
+        break;
+    }
+}
+appendWhileIterating([1]);
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        let classify = if target == "linux-x86_64" {
+            "call __rt_heap_kind"
+        } else {
+            "bl __rt_heap_kind"
+        };
+        let append = if target == "linux-x86_64" {
+            "call __rt_hash_append"
+        } else {
+            "bl __rt_hash_append"
+        };
+        let classify = asm.find(classify).unwrap_or_else(|| panic!("{target}: {asm}"));
+        let append = asm[classify..]
+            .find(append)
+            .map(|offset| classify + offset)
+            .unwrap_or_else(|| panic!("{target}: {asm}"));
+        let window = &asm[classify.saturating_sub(256)..append];
+        if target == "linux-x86_64" {
+            assert!(window.contains("push rax"), "{target}: {window}");
+            assert!(window.contains("pop rdi"), "{target}: {window}");
+        } else {
+            assert!(window.contains("str x0, [sp, #-16]!"), "{target}: {window}");
+            assert!(window.contains("ldr x0, [sp], #16"), "{target}: {window}");
+        }
+    }
+}
+
 /// Declared array walks select the boxed COW and descriptor path on every supported target.
 #[test]
 fn declared_array_walks_use_boxed_callback_storage_on_every_target() {

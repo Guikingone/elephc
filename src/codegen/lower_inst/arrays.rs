@@ -1232,19 +1232,21 @@ fn lower_runtime_polymorphic_array_push(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the receiver while heap-kind classification clobbers x0
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
             ctx.emitter.instruction("cmp x0, #3");                              // select associative storage after a runtime promotion
             ctx.emitter.instruction(&format!("b.eq {hash}"));                   // hash append has a distinct header and growth helper
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // restore the indexed receiver before ordinary append lowering
+            ctx.store_result_value(array)?;
             lower_array_push_aarch64(ctx, array, value, elem_ty)?;
             stamp_scalar_array_write_result(ctx, stored_type);
             ctx.emitter.instruction(&format!("b {done}"));                      // join with the updated container pointer in x0
 
             ctx.emitter.label(&hash);
             prepare_boxed_mixed_value_for_container(ctx, value)?;
-            abi::emit_push_reg(ctx.emitter, "x0");
-            ctx.load_value_to_reg(array, "x9")?;
+            abi::emit_push_reg(ctx.emitter, "x0");                              // stack the owned Mixed cell above the preserved receiver
             abi::emit_pop_reg(ctx.emitter, "x1");                               // transfer the owned Mixed cell into the hash entry
-            ctx.emitter.instruction("mov x0, x9");                              // pass the runtime hash receiver
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // recover the receiver without reloading a call-clobbered SSA register
             ctx.emitter.instruction("mov x2, xzr");                             // boxed Mixed values use only the low payload word
             abi::emit_load_int_immediate(
                 ctx.emitter,
@@ -1255,19 +1257,21 @@ fn lower_runtime_polymorphic_array_push(
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the receiver while heap-kind classification clobbers rax
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
             ctx.emitter.instruction("cmp rax, 3");                              // select associative storage after a runtime promotion
             ctx.emitter.instruction(&format!("je {hash}"));                     // hash append has a distinct header and growth helper
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the indexed receiver before ordinary append lowering
+            ctx.store_result_value(array)?;
             lower_array_push_x86_64(ctx, array, value, elem_ty)?;
             stamp_scalar_array_write_result(ctx, stored_type);
             ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the updated container pointer in rax
 
             ctx.emitter.label(&hash);
             prepare_boxed_mixed_value_for_container(ctx, value)?;
-            abi::emit_push_reg(ctx.emitter, "rax");
-            ctx.load_value_to_reg(array, "r11")?;
+            abi::emit_push_reg(ctx.emitter, "rax");                             // stack the owned Mixed cell above the preserved receiver
             abi::emit_pop_reg(ctx.emitter, "rsi");                              // transfer the owned Mixed cell into the hash entry
-            ctx.emitter.instruction("mov rdi, r11");                            // pass the runtime hash receiver
+            abi::emit_pop_reg(ctx.emitter, "rdi");                              // recover the receiver without reloading a call-clobbered SSA register
             ctx.emitter.instruction("xor edx, edx");                            // boxed Mixed values use only the low payload word
             abi::emit_load_int_immediate(
                 ctx.emitter,

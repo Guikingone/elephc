@@ -93,7 +93,9 @@ pub(super) fn lower_builtin_ref_place_call(
         .iter()
         .enumerate()
         .filter(|(index, arg)| {
-            ref_param_place(&sig, *index, arg).is_some_and(|place| is_array_place(ctx, place))
+            ref_param_binding(&sig, *index, arg).is_some_and(|(param_index, place)| {
+                is_array_place(ctx, place, &sig.params[param_index].1)
+            })
         })
         .map(|(index, _)| index)
         .collect();
@@ -148,7 +150,11 @@ pub(super) fn lower_builtin_ref_place_call(
 /// (`sort(array: $obj->items)`) binds to the parameter its name selects, so both call forms
 /// reach the same rewrite. Variadic tail positions are excluded because only the visible
 /// regular parameters carry the registry's by-reference markers.
-fn ref_param_place<'a>(sig: &FunctionSig, index: usize, arg: &'a Expr) -> Option<&'a Expr> {
+fn ref_param_binding<'a>(
+    sig: &FunctionSig,
+    index: usize,
+    arg: &'a Expr,
+) -> Option<(usize, &'a Expr)> {
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let (param_index, place) = match &arg.kind {
         ExprKind::NamedArg { name, value } => (
@@ -163,7 +169,12 @@ fn ref_param_place<'a>(sig: &FunctionSig, index: usize, arg: &'a Expr) -> Option
     if !sig.ref_params.get(param_index).copied().unwrap_or(false) {
         return None;
     }
-    Some(place)
+    Some((param_index, place))
+}
+
+/// Returns only the bound place for consumers that do not need parameter metadata.
+fn ref_param_place<'a>(sig: &FunctionSig, index: usize, arg: &'a Expr) -> Option<&'a Expr> {
+    ref_param_binding(sig, index, arg).map(|(_, place)| place)
 }
 
 /// Returns whether a by-reference argument is a non-local place holding array storage.
@@ -171,16 +182,50 @@ fn ref_param_place<'a>(sig: &FunctionSig, index: usize, arg: &'a Expr) -> Option
 /// Plain locals are excluded because the existing lowering already writes the separated array
 /// back to their frame slot. Scalar places are excluded so builtins that re-type their
 /// by-reference argument keep their current lowering and diagnostics.
-fn is_array_place(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+fn is_array_place(ctx: &LoweringContext<'_, '_>, arg: &Expr, param_type: &PhpType) -> bool {
     if !is_candidate_place_shape(arg) {
         return false;
     }
-    static_place_type(ctx, arg).is_some_and(|php_type| {
+    if static_place_type(ctx, arg).is_some_and(|php_type| {
         php_type.is_php_array() || matches!(
             php_type.codegen_repr(),
             PhpType::Array(_) | PhpType::AssocArray { .. }
         )
-    })
+    }) {
+        return true;
+    }
+    stable_mixed_property_for_array_param(ctx, arg, param_type)
+}
+
+/// Accepts a direct stable property after an unknown callable widened its receiver to Mixed.
+///
+/// The builtin's array by-reference contract performs the runtime value check. Rewriting through
+/// a local preserves the writable place without assuming that the receiver still has its earlier
+/// object type, while restricting the fallback to a local or `$this` avoids evaluating an
+/// effectful receiver twice for the read and write-back.
+fn stable_mixed_property_for_array_param(
+    ctx: &LoweringContext<'_, '_>,
+    arg: &Expr,
+    param_type: &PhpType,
+) -> bool {
+    if !param_type.is_php_array()
+        && !matches!(
+            param_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
+    {
+        return false;
+    }
+    let ExprKind::PropertyAccess { object, .. } = &arg.kind else {
+        return false;
+    };
+    if !matches!(object.kind, ExprKind::Variable(_) | ExprKind::This) {
+        return false;
+    }
+    matches!(
+        static_place_type(ctx, object).map(|ty| ty.codegen_repr()),
+        Some(PhpType::Mixed | PhpType::Union(_))
+    )
 }
 
 /// Returns whether an argument has one of the place shapes this rewrite can read and write.
