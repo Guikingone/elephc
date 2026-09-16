@@ -3095,11 +3095,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         if self.builder.value_ownership(value.value) == Ownership::Owned
             && self.builder.value_defining_op(value.value) == Some(Op::MixedUnbox)
-            && php_type.codegen_repr() == PhpType::Callable
+            && php_type.is_refcounted()
         {
-            // Callable parameter coercion extracts and retains a descriptor from physical
-            // Mixed storage. That exact producer owns the retained descriptor even though
-            // MixedUnbox is otherwise a borrowed projection for other result types.
+            // Callable and object coercion extract and retain a payload from physical Mixed
+            // storage. Only a producer that asked for `Owned` claims that lease; every other
+            // `MixedUnbox` stays the borrowed projection its consumers expect.
             return true;
         }
         if self.value_is_owned_temp_load(value.value) {

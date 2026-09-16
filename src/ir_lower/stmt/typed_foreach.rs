@@ -99,8 +99,11 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
             )
         }
         target @ (PhpType::Callable | PhpType::Object(_)) if source_ty == PhpType::Mixed => {
+            // The backend retains the extracted payload, so this value owns a lease of its own.
+            // Marking it `MaybeOwned` made every consumer add a second `Acquire` on top, which is
+            // one leaked object per `static::$prop = $mixed` store.
             let effects = Op::mixed_unbox_effects(&target);
-            ctx.emit_value(
+            ctx.emit_owned_value(
                 Op::MixedUnbox,
                 vec![value.value],
                 None,
