@@ -1645,6 +1645,8 @@ class ContainerUnsetMutator {
 }
 function unset_victim(): mixed { return new ContainerUnsetMutator(); }
 function boxed_unset_container(): mixed { return ["key" => unset_victim()]; }
+function unset_container(array &$values): void { unset($values["key"]); }
+function invoke_container_unset(array &$values): void { unset_container($values); }
 class Vault {
     private string $code = "old";
     public string $label = "new";
@@ -1660,7 +1662,7 @@ echo $bound(), "|";
 $boxed = boxed_unset_container();
 $peek = function() { return $this->code; };
 try {
-    unset($boxed["key"]);
+    invoke_container_unset($boxed);
 } catch (Error $error) {}
 $bound = Closure::bind($peek, $vault, Vault::class);
 echo $bound();
@@ -1918,7 +1920,8 @@ class Vault {
 }
 $peek = function() { return $this->code; };
 $box = new ClosureAliasBox();
-$box->slot =& $peek;
+$box->slot = $peek;
+$peek =& $box->slot;
 $mutate = function() use ($box): void {
     $box->slot = function() { return $this->label; };
 };
@@ -1949,7 +1952,8 @@ class Vault {
 }
 $peek = function() { return $this->code; };
 $box = new FunctionAliasBox();
-$box->slot =& $peek;
+$box->slot = $peek;
+$peek =& $box->slot;
 try {
     mutate_alias($box);
 } catch (Error $error) {}
