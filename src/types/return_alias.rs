@@ -10,11 +10,16 @@
 //! - `Unknown` is deliberately conservative; only proven non-aliasing paths
 //!   allow cleanup that the previous type-only guard suppressed.
 //! - Local provenance is merged across branches and to a fixed point in loops.
+//! - A cast only passes storage through when EIR lowering elides it, which is why the
+//!   analysis carries which parameters are declared `string`: `(string)` over a `string`
+//!   is the one cast `lower_cast` removes entirely. Every other cast COPIES (issue #700).
 
 use std::collections::{BTreeSet, HashMap};
 
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{
+    CastType, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
+};
 
 /// Describes which visible parameters a callable result may reuse as storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +62,31 @@ impl ReturnArgAlias {
     /// Returns whether analysis proved the result aliases `parameter_index`.
     pub(crate) fn proven_aliases_parameter(&self, parameter_index: usize) -> bool {
         matches!(self, Self::Parameters(parameters) if parameters.contains(&parameter_index))
+    }
+}
+
+/// Local alias provenance plus the parameter facts a cast decision needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AliasState<'a> {
+    /// Provenance of every live local name.
+    locals: HashMap<String, ReturnArgAlias>,
+    /// Whether each visible parameter is declared exactly `string`, indexed as the summary
+    /// indexes parameters. That is the only declared type a `(string)` cast passes through.
+    string_parameters: &'a [bool],
+}
+
+impl<'a> AliasState<'a> {
+    /// Creates an empty state for a callable with these parameter declarations.
+    fn new(string_parameters: &'a [bool]) -> Self {
+        Self {
+            locals: HashMap::new(),
+            string_parameters,
+        }
+    }
+
+    /// Returns whether one visible parameter is declared exactly `string`.
+    fn parameter_is_string(&self, index: usize) -> bool {
+        self.string_parameters.get(index).copied().unwrap_or(false)
     }
 }
 
@@ -104,7 +134,9 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
                 summaries.functions.insert(
                     name.clone(),
                     summarize_callable(
-                        params.iter().map(|(name, _, _, _)| name.as_str()),
+                        params
+                            .iter()
+                            .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
                         variadic.as_deref(),
                         *by_ref_return,
                         body,
@@ -134,7 +166,10 @@ fn collect_method_summaries(
     for method in methods {
         let summary = if method.has_body {
             summarize_callable(
-                method.params.iter().map(|(name, _, _, _)| name.as_str()),
+                method
+                    .params
+                    .iter()
+                    .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
                 method.variadic.as_deref(),
                 method.by_ref_return,
                 &method.body,
@@ -154,7 +189,7 @@ fn collect_method_summaries(
 
 /// Summarizes one function-like body from its parameter names and statements.
 fn summarize_callable<'a>(
-    params: impl Iterator<Item = &'a str>,
+    params: impl Iterator<Item = (&'a str, Option<&'a TypeExpr>)>,
     variadic: Option<&str>,
     by_ref_return: bool,
     body: &[Stmt],
@@ -162,13 +197,25 @@ fn summarize_callable<'a>(
     if by_ref_return {
         return ReturnArgAlias::Unknown;
     }
-    let mut state = HashMap::new();
-    for (index, name) in params.enumerate() {
-        state.insert(name.to_string(), ReturnArgAlias::parameter(index));
+    let params: Vec<(&str, Option<&TypeExpr>)> = params.collect();
+    let mut string_parameters: Vec<bool> = params
+        .iter()
+        .map(|(_, hint)| matches!(hint, Some(TypeExpr::Str)))
+        .collect();
+    if variadic.is_some() {
+        // A variadic collects its arguments into a fresh array, which no cast passes through.
+        string_parameters.push(false);
+    }
+    let mut state = AliasState::new(&string_parameters);
+    for (index, (name, _)) in params.iter().enumerate() {
+        state
+            .locals
+            .insert((*name).to_string(), ReturnArgAlias::parameter(index));
     }
     if let Some(name) = variadic {
-        let index = state.len();
-        state.insert(name.to_string(), ReturnArgAlias::parameter(index));
+        state
+            .locals
+            .insert(name.to_string(), ReturnArgAlias::parameter(params.len()));
     }
     let mut returned = ReturnArgAlias::None;
     analyze_body(body, &mut state, &mut returned);
@@ -178,7 +225,7 @@ fn summarize_callable<'a>(
 /// Applies statement provenance effects and accumulates every reachable return path.
 fn analyze_body(
     body: &[Stmt],
-    state: &mut HashMap<String, ReturnArgAlias>,
+    state: &mut AliasState<'_>,
     returned: &mut ReturnArgAlias,
 ) {
     for stmt in body {
@@ -189,18 +236,18 @@ fn analyze_body(
 /// Applies one statement to the local alias-provenance state.
 fn analyze_stmt(
     stmt: &Stmt,
-    state: &mut HashMap<String, ReturnArgAlias>,
+    state: &mut AliasState<'_>,
     returned: &mut ReturnArgAlias,
 ) {
     match &stmt.kind {
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
             let alias = expr_alias(value, state);
             apply_expr_effects(value, state);
-            state.insert(name.clone(), alias);
+            state.locals.insert(name.clone(), alias);
         }
         StmtKind::RefAssign { target, source } => {
             apply_expr_effects(source, state);
-            state.insert(target.clone(), ReturnArgAlias::Unknown);
+            state.locals.insert(target.clone(), ReturnArgAlias::Unknown);
             // The new ref cell can connect either name to storage whose later
             // writes are not represented by ordinary assignment statements.
             invalidate_all_aliases(state);
@@ -282,11 +329,11 @@ fn analyze_stmt(
             apply_expr_effects(array, state);
             let mut iteration = state.clone();
             if let Some(key) = key_var {
-                iteration.insert(key.clone(), ReturnArgAlias::None);
+                iteration.locals.insert(key.clone(), ReturnArgAlias::None);
             }
             // A by-value element can still borrow nested refcounted storage from
             // the iterated parameter, so only the container itself is known fresh.
-            iteration.insert(value_var.clone(), ReturnArgAlias::Unknown);
+            iteration.locals.insert(value_var.clone(), ReturnArgAlias::Unknown);
             analyze_body(body, &mut iteration, returned);
             *state = merge_states(vec![state.clone(), iteration]);
         }
@@ -331,7 +378,7 @@ fn analyze_stmt(
                 // writes that happened immediately before the throw.
                 invalidate_all_aliases(&mut catch_state);
                 if let Some(variable) = &catch.variable {
-                    catch_state.insert(variable.clone(), ReturnArgAlias::Unknown);
+                    catch_state.locals.insert(variable.clone(), ReturnArgAlias::Unknown);
                 }
                 analyze_body(&catch.body, &mut catch_state, returned);
                 paths.push(catch_state);
@@ -353,11 +400,17 @@ fn analyze_stmt(
         } => {
             apply_expr_effects(index, state);
             apply_expr_effects(value, state);
-            state.entry(array.clone()).or_insert(ReturnArgAlias::Unknown);
+            state
+                .locals
+                .entry(array.clone())
+                .or_insert(ReturnArgAlias::Unknown);
         }
         StmtKind::ArrayPush { array, value } => {
             apply_expr_effects(value, state);
-            state.entry(array.clone()).or_insert(ReturnArgAlias::Unknown);
+            state
+                .locals
+                .entry(array.clone())
+                .or_insert(ReturnArgAlias::Unknown);
         }
         StmtKind::NestedArrayAssign { target, value } => {
             apply_expr_effects(target, state);
@@ -389,17 +442,17 @@ fn analyze_stmt(
         StmtKind::ListUnpack { vars, value } => {
             apply_expr_effects(value, state);
             for name in vars {
-                state.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
             }
         }
         StmtKind::Global { vars } => {
             for name in vars {
-                state.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
             }
         }
         StmtKind::StaticVar { name, init } => {
             apply_expr_effects(init, state);
-            state.insert(name.clone(), ReturnArgAlias::Unknown);
+            state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
         }
         StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) | StmtKind::Throw(expr) => {
             apply_expr_effects(expr, state);
@@ -422,11 +475,11 @@ fn analyze_stmt(
 }
 
 /// Runs one branch body from a cloned incoming state.
-fn analyzed_path(
+fn analyzed_path<'a>(
     body: &[Stmt],
-    incoming: &HashMap<String, ReturnArgAlias>,
+    incoming: &AliasState<'a>,
     returned: &mut ReturnArgAlias,
-) -> HashMap<String, ReturnArgAlias> {
+) -> AliasState<'a> {
     let mut state = incoming.clone();
     analyze_body(body, &mut state, returned);
     state
@@ -437,7 +490,7 @@ fn analyze_loop(
     body: &[Stmt],
     updates: &[&Stmt],
     condition: Option<&Expr>,
-    state: &mut HashMap<String, ReturnArgAlias>,
+    state: &mut AliasState<'_>,
     returned: &mut ReturnArgAlias,
 ) {
     let entry = state.clone();
@@ -461,19 +514,24 @@ fn analyze_loop(
 }
 
 /// Merges local provenance across mutually exclusive control-flow paths.
-fn merge_states(
-    states: Vec<HashMap<String, ReturnArgAlias>>,
-) -> HashMap<String, ReturnArgAlias> {
+fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
+    let string_parameters = states
+        .first()
+        .map(|state| state.string_parameters)
+        .unwrap_or(&[]);
     let mut keys = BTreeSet::new();
     for state in &states {
-        keys.extend(state.keys().cloned());
+        keys.extend(state.locals.keys().cloned());
     }
-    keys.into_iter()
+    let locals = keys
+        .into_iter()
         .map(|key| {
-            let mut aliases = states.iter().filter_map(|state| state.get(&key));
+            let mut aliases = states.iter().filter_map(|state| state.locals.get(&key));
             let first = aliases.next().cloned().unwrap_or(ReturnArgAlias::Unknown);
             let merged = aliases.fold(first, |current, alias| current.merge(alias));
-            let missing_on_path = states.iter().any(|state| !state.contains_key(&key));
+            let missing_on_path = states
+                .iter()
+                .any(|state| !state.locals.contains_key(&key));
             (
                 key,
                 if missing_on_path {
@@ -483,20 +541,25 @@ fn merge_states(
                 },
             )
         })
-        .collect()
+        .collect();
+    AliasState {
+        locals,
+        string_parameters,
+    }
 }
 
 /// Computes the argument provenance of one expression's resulting storage.
-fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArgAlias {
+fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
     match &expr.kind {
         ExprKind::Variable(name) => state
+            .locals
             .get(name)
             .cloned()
             .unwrap_or(ReturnArgAlias::Unknown),
         ExprKind::ErrorSuppress(inner)
         | ExprKind::NamedArg { value: inner, .. }
-        | ExprKind::Spread(inner)
-        | ExprKind::Cast { expr: inner, .. } => expr_alias(inner, state),
+        | ExprKind::Spread(inner) => expr_alias(inner, state),
+        ExprKind::Cast { expr: inner, target } => cast_alias(target, inner, state),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
             expr_alias(value, state).merge(&expr_alias(default, state))
@@ -570,8 +633,43 @@ fn builtin_result_is_proven_independent(name: &str) -> bool {
     })
 }
 
+/// Computes the argument provenance of a cast's result.
+///
+/// Only a cast EIR lowering ELIDES can hand an argument's storage back, and `lower_cast` elides
+/// exactly one shape: `(string)` over a value whose IR type is already `Str`. Everything else
+/// emits `Op::Cast`, whose backend helpers write into storage independent of the source -- a
+/// `mixed` holding a string is copied into a fresh allocation, and an `(array)` cast allocates
+/// even when its operand is already an array.
+///
+/// Calling those copies an alias of the parameter told the caller its result was borrowed, so
+/// the caller never released it and one block leaked per call (issue #700). A scalar target
+/// answers `None` for a second reason as well: an `int`, `float` or `bool` result has no
+/// refcounted storage to share with anything.
+fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
+    if !matches!(target, CastType::String) {
+        return ReturnArgAlias::None;
+    }
+    match expr_alias(inner, state) {
+        // An operand already independent of every argument stays independent either way.
+        ReturnArgAlias::None => ReturnArgAlias::None,
+        // An unprovable operand keeps the conservative answer: this may be the elided cast.
+        ReturnArgAlias::Unknown => ReturnArgAlias::Unknown,
+        ReturnArgAlias::Parameters(parameters) => {
+            let passed_through: BTreeSet<usize> = parameters
+                .into_iter()
+                .filter(|index| state.parameter_is_string(*index))
+                .collect();
+            if passed_through.is_empty() {
+                ReturnArgAlias::None
+            } else {
+                ReturnArgAlias::Parameters(passed_through)
+            }
+        }
+    }
+}
+
 /// Conservatively invalidates locals that an expression can rewrite by reference.
-fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) {
+fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
     match &expr.kind {
         ExprKind::Assignment {
             target,
@@ -732,7 +830,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
         }
         ExprKind::Closure { capture_refs, .. } => {
             for name in capture_refs {
-                state.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
             }
         }
         ExprKind::StringLiteral(_)
@@ -757,7 +855,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
 }
 
 /// Visits a slice of expressions for nested call or assignment effects.
-fn visit_expr_effects(exprs: &[Expr], state: &mut HashMap<String, ReturnArgAlias>) {
+fn visit_expr_effects(exprs: &[Expr], state: &mut AliasState<'_>) {
     for expr in exprs {
         apply_expr_effects(expr, state);
     }
@@ -782,21 +880,21 @@ fn named_call_can_rebind_unlisted_locals(name: &str) -> bool {
 }
 
 /// Replaces every tracked provenance with the conservative top element.
-fn invalidate_all_aliases(state: &mut HashMap<String, ReturnArgAlias>) {
-    for alias in state.values_mut() {
+fn invalidate_all_aliases(state: &mut AliasState<'_>) {
+    for alias in state.locals.values_mut() {
         *alias = ReturnArgAlias::Unknown;
     }
 }
 
 /// Marks direct variable call arguments unknown because the callee may accept them by reference.
-fn invalidate_call_variables(args: &[Expr], state: &mut HashMap<String, ReturnArgAlias>) {
+fn invalidate_call_variables(args: &[Expr], state: &mut AliasState<'_>) {
     for arg in args {
         let value = match &arg.kind {
             ExprKind::NamedArg { value, .. } | ExprKind::Spread(value) => value.as_ref(),
             _ => arg,
         };
         if let ExprKind::Variable(name) = &value.kind {
-            state.insert(name.clone(), ReturnArgAlias::Unknown);
+            state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
         }
     }
 }
