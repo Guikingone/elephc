@@ -66,6 +66,17 @@ impl Checker {
             return Ok(());
         }
         if by_ref {
+            // php binds `array &$p` to a `mixed` variable and checks the value at run time.
+            // The declared PHP-array union lowers to the same boxed `Mixed` cell the variable
+            // already holds, so the reference needs no storage change; only the compile-time
+            // contract stood in the way, and it refused a `mixed` return value handed straight
+            // to such a parameter.
+            if expected.is_php_array()
+                && matches!(actual.codegen_repr(), PhpType::Mixed)
+                && matches!(arg.kind, crate::parser::ast::ExprKind::Variable(_))
+            {
+                return Ok(());
+            }
             return self.require_compatible_arg_type(expected, actual, arg.span, context);
         }
         match classify_param_binding(expected, actual, arg) {
