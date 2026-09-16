@@ -675,17 +675,18 @@ fn store_value_to_raw_ref_cell_as(
                 8,
             );
         }
-        _ => {
-            abi::emit_store_to_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                pointer_reg,
-                0,
-            );
-            if target_ty == PhpType::Mixed {
-                abi::emit_store_zero_to_address(ctx.emitter, pointer_reg, 8);
-            }
-        }
+        // A boxed Mixed payload occupies ONE word, and that is all this store may touch. The
+        // pointer is not always a two-word managed cell: a by-reference parameter receives the
+        // bare address of the caller's frame slot, so clearing a second word there wrote a zero
+        // over the caller's NEXT local — `f($left, $right)` with two written `&$array` params
+        // nulled `$left`. Managed cells keep their second word cleared from construction, so
+        // there was nothing to clear for them either.
+        _ => abi::emit_store_to_address(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            pointer_reg,
+            0,
+        ),
     }
     if retires_previous {
         // Publish before retirement because object/callable cleanup can execute PHP code.
