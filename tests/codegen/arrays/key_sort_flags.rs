@@ -89,7 +89,7 @@ foreach ($modes as $mode) {
 fn key_sort_ignores_the_flag_words_php_ignores() {
     let out = compile_and_run(
         r#"<?php
-$modes = [SORT_REGULAR, SORT_FLAG_CASE, 3, 4, 7, 999];
+$modes = [SORT_REGULAR, SORT_FLAG_CASE, SORT_DESC, SORT_ASC, 7, 999];
 foreach ($modes as $mode) {
     $a = [10 => 1, 9 => 1, "b" => 1, "A" => 1];
     ksort($a, $mode);

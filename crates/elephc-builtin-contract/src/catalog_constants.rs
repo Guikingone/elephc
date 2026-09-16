@@ -347,6 +347,8 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("PSFS_FLAG_NORMAL", Standard, ConstValue::Int(0)),
     constant!("PSFS_PASS_ON", Standard, ConstValue::Int(2)),
     constant!("SID", Session, ConstValue::Str(""), route: Dynamic),
+    constant!("SORT_ASC", Standard, ConstValue::Int(4)),
+    constant!("SORT_DESC", Standard, ConstValue::Int(3)),
     constant!("SORT_FLAG_CASE", Standard, ConstValue::Int(8)),
     constant!("SORT_LOCALE_STRING", Standard, ConstValue::Int(5)),
     constant!("SORT_NATURAL", Standard, ConstValue::Int(6)),
