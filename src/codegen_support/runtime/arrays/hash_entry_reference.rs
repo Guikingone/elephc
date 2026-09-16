@@ -41,11 +41,21 @@ pub fn emit_hash_entry_reference(emitter: &mut Emitter) {
 /// Emits `__rt_hash_entry_make_reference`, which promotes a boxed Mixed hash entry into a
 /// managed reference cell and returns that cell.
 ///
-/// The entry must already have been widened by `__rt_hash_to_mixed`, so `value_lo` owns a boxed
-/// Mixed cell. Ownership of that box moves into the new reference cell and the cell itself
-/// becomes the entry payload, so the net refcount change is zero. The helper is idempotent: an
-/// entry that already carries tag 11 returns its existing cell untouched, which is what keeps a
-/// repeated by-reference foreach from restamping a live reference entry.
+/// `__rt_hash_to_mixed` widens every entry present when the walk starts, so `value_lo` normally
+/// owns a boxed Mixed cell already. An entry INSERTED after that point carries its own concrete
+/// runtime tag — `$a[] = 3` inside `foreach ($a as &$v)` writes a plain integer — so the payload
+/// is widened here first, taking over the entry's ownership without a retain. Skipping that step
+/// let a raw scalar be published as a reference-cell payload and crash the first read of `$v`.
+/// A shallow hash clone retains, rather than copies, each boxed Mixed entry, so the same zval can
+/// back two arrays' buckets after `$b = $a`. A reference set must own its zval exclusively — PHP
+/// separates on the way into a reference — so a shared cell is copied here before it is wrapped.
+/// Without that, `foreach ($a[0] as &$v)` republished the promoted container through `$b`'s bucket
+/// too.
+///
+/// Ownership of the box then moves into the new reference cell and the cell itself becomes the
+/// entry payload, so the net refcount change is zero. The helper is idempotent: an entry that
+/// already carries tag 11 returns its existing cell untouched, which is what keeps a repeated
+/// by-reference foreach from restamping a live reference entry.
 ///
 /// Input: argument 0 = address of `entry.value_lo` (the by-reference foreach value address).
 /// Output: integer result register = managed reference-cell pointer.
@@ -58,6 +68,43 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.instruction("ldr x9, [x0, #16]");                           // read the entry runtime value tag before wrapping the payload
             emitter.instruction(&format!("cmp x9, #{REFERENCE_CELL_VALUE_TAG}")); // is this entry already part of a PHP reference set?
             emitter.instruction("b.eq __rt_hash_entry_make_reference_existing"); // reuse the live cell instead of restamping the entry
+            emitter.instruction(&format!("cmp x9, #{REFERENCE_CELL_PAYLOAD_TAG}")); // does the entry already own a boxed Mixed payload?
+            emitter.instruction("b.eq __rt_hash_entry_make_reference_boxed");   // entries widened at iteration start need no conversion
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // save frame pointer and return address across the widening
+            emitter.instruction("mov x29, sp");                                 // establish the widening frame
+            emitter.instruction("str x0, [sp, #16]");                           // save the mutable entry value address across the allocation
+            emitter.instruction("ldr x1, [x0]");                                // take the concrete low payload word out of the entry
+            emitter.instruction("ldr x2, [x0, #8]");                            // take the concrete high payload word out of the entry
+            emitter.instruction("mov x0, x9");                                  // pass the entry runtime value tag to the owned-box helper
+            emitter.instruction("bl __rt_hash_to_mixed_box_owned");             // box the payload without adding a retain
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the mutable entry value address
+            emitter.instruction("str x0, [x9]");                                // publish the boxed Mixed pointer in value_lo
+            emitter.instruction("str xzr, [x9, #8]");                           // boxed Mixed entries carry no high payload word
+            emitter.instruction(&format!("mov x10, #{REFERENCE_CELL_PAYLOAD_TAG}")); // runtime value tag 7 = boxed Mixed
+            emitter.instruction("str x10, [x9, #16]");                          // stamp the widened entry as boxed Mixed
+            emitter.instruction("mov x0, x9");                                  // restore the entry value address as the promotion argument
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore frame pointer and return address
+            emitter.label("__rt_hash_entry_make_reference_boxed");
+            emitter.instruction("ldr x9, [x0]");                                // load the boxed Mixed cell this entry owns
+            emitter.instruction("cbz x9, __rt_hash_entry_make_reference_separated"); // an absent payload has nothing to separate
+            emitter.instruction("ldr w10, [x9, #-12]");                         // read the cell refcount from the uniform heap header
+            emitter.instruction("cmp w10, #1");                                 // is this zval shared with another array's bucket?
+            emitter.instruction("b.ls __rt_hash_entry_make_reference_separated"); // a sole owner can join the reference set in place
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // save frame pointer and return address across the separation
+            emitter.instruction("mov x29, sp");                                 // establish the separation frame
+            emitter.instruction("str x0, [sp, #16]");                           // save the mutable entry value address across the copy
+            emitter.instruction("ldr x2, [x9, #16]");                           // copy the shared cell high payload word
+            emitter.instruction("ldr x1, [x9, #8]");                            // copy the shared cell low payload word
+            emitter.instruction("ldr x0, [x9]");                                // copy the shared cell runtime value tag
+            emitter.instruction("bl __rt_mixed_from_value");                    // allocate this entry a private zval that retains the payload
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the mutable entry value address
+            emitter.instruction("ldr x10, [x9]");                               // reload the shared cell this entry is giving up
+            emitter.instruction("str x0, [x9]");                                // publish the private copy as the entry payload
+            emitter.instruction("mov x0, x10");                                 // release this entry's share of the old cell
+            emitter.instruction("bl __rt_decref_mixed");                        // the other bucket keeps the shared cell alive
+            emitter.instruction("ldr x0, [sp, #16]");                           // restore the entry value address as the promotion argument
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore frame pointer and return address
+            emitter.label("__rt_hash_entry_make_reference_separated");
             emitter.instruction("stp x29, x30, [sp, #-32]!");                   // save frame pointer and return address across the allocation
             emitter.instruction("mov x29, sp");                                 // establish the promotion frame
             emitter.instruction("str x0, [sp, #16]");                           // save the mutable entry value address across the allocation
@@ -80,6 +127,47 @@ fn emit_make_reference(emitter: &mut Emitter) {
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp QWORD PTR [rdi + 16], {REFERENCE_CELL_VALUE_TAG}")); // is this entry already part of a PHP reference set?
             emitter.instruction("je __rt_hash_entry_make_reference_existing");  // reuse the live cell instead of restamping the entry
+            emitter.instruction(&format!("cmp QWORD PTR [rdi + 16], {REFERENCE_CELL_PAYLOAD_TAG}")); // does the entry already own a boxed Mixed payload?
+            emitter.instruction("je __rt_hash_entry_make_reference_boxed");     // entries widened at iteration start need no conversion
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer across the widening
+            emitter.instruction("mov rbp, rsp");                                // establish the widening frame
+            emitter.instruction("sub rsp, 16");                                 // reserve one aligned spill slot for the entry value address
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // save the mutable entry value address across the allocation
+            emitter.instruction("mov rax, QWORD PTR [rdi + 16]");               // pass the entry runtime value tag to the owned-box helper
+            emitter.instruction("mov rsi, QWORD PTR [rdi + 8]");                // take the concrete high payload word out of the entry
+            emitter.instruction("mov rdi, QWORD PTR [rdi]");                    // take the concrete low payload word out of the entry
+            emitter.instruction("call __rt_hash_to_mixed_x86_box_owned");       // box the payload without adding a retain
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the mutable entry value address
+            emitter.instruction("mov QWORD PTR [r10], rax");                    // publish the boxed Mixed pointer in value_lo
+            emitter.instruction("mov QWORD PTR [r10 + 8], 0");                  // boxed Mixed entries carry no high payload word
+            emitter.instruction(&format!("mov QWORD PTR [r10 + 16], {REFERENCE_CELL_PAYLOAD_TAG}")); // stamp the widened entry as boxed Mixed
+            emitter.instruction("mov rdi, r10");                                // restore the entry value address as the promotion argument
+            emitter.instruction("add rsp, 16");                                 // release the widening spill slot
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.label("__rt_hash_entry_make_reference_boxed");
+            emitter.instruction("mov r10, QWORD PTR [rdi]");                    // load the boxed Mixed cell this entry owns
+            emitter.instruction("test r10, r10");                               // an absent payload has nothing to separate
+            emitter.instruction("jz __rt_hash_entry_make_reference_separated"); // fall through to the ordinary promotion
+            emitter.instruction("mov r11d, DWORD PTR [r10 - 12]");              // read the cell refcount from the uniform heap header
+            emitter.instruction("cmp r11d, 1");                                 // is this zval shared with another array's bucket?
+            emitter.instruction("jbe __rt_hash_entry_make_reference_separated"); // a sole owner can join the reference set in place
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer across the separation
+            emitter.instruction("mov rbp, rsp");                                // establish the separation frame
+            emitter.instruction("sub rsp, 16");                                 // reserve one aligned spill slot for the entry value address
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // save the mutable entry value address across the copy
+            emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");               // copy the shared cell high payload word
+            emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                // copy the shared cell low payload word
+            emitter.instruction("mov rax, QWORD PTR [r10]");                    // copy the shared cell runtime value tag
+            emitter.instruction("call __rt_mixed_from_value");                  // allocate this entry a private zval that retains the payload
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the mutable entry value address
+            emitter.instruction("mov r11, QWORD PTR [r10]");                    // reload the shared cell this entry is giving up
+            emitter.instruction("mov QWORD PTR [r10], rax");                    // publish the private copy as the entry payload
+            emitter.instruction("mov rax, r11");                                // release this entry's share of the old cell
+            emitter.instruction("call __rt_decref_mixed");                      // the other bucket keeps the shared cell alive
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // restore the entry value address as the promotion argument
+            emitter.instruction("add rsp, 16");                                 // release the separation spill slot
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.label("__rt_hash_entry_make_reference_separated");
             emitter.instruction("push rbp");                                    // preserve the caller frame pointer across the allocation
             emitter.instruction("mov rbp, rsp");                                // establish the promotion frame
             emitter.instruction("sub rsp, 16");                                 // reserve one aligned spill slot for the entry value address
