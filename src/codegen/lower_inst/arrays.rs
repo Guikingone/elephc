@@ -1188,20 +1188,12 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_indexed_array(array_ty.clone(), inst)?;
     let elem_ty = indexed_array_element_type(&array_ty, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
-    if elem_ty.codegen_repr() == PhpType::Mixed {
-        lower_runtime_polymorphic_array_push(ctx, array, value)?;
-    } else {
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, &elem_ty)?,
-            Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
-        }
-    }
     let stored_type = if matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never) {
         ctx.value_php_type(value)?.codegen_repr()
     } else {
         elem_ty.codegen_repr()
     };
-    stamp_scalar_array_write_result(ctx, &stored_type);
+    lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type)?;
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
@@ -1210,27 +1202,32 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     Ok(())
 }
 
-/// Appends to `Array(Mixed)`, whose payload may have been promoted to associative hash storage.
+/// Appends to an indexed array whose payload may have been promoted to associative hash storage.
 ///
-/// A runtime-shaped key write can preserve this static type while changing the runtime heap kind.
-/// Dispatching here prevents an append after promotion from
+/// A runtime-shaped key write or a by-reference `foreach` can preserve the static array type while
+/// changing the runtime heap kind. Dispatching every append here prevents a typed append after
+/// promotion from
 /// passing a hash header to an indexed-array helper. Each branch materializes its own owned Mixed
 /// payload because indexed append retains then releases the temporary, while hash append consumes
-/// the owned payload directly.
+/// the owned payload directly. Scalar storage stamps apply only to the indexed branch because a
+/// promoted hash has its own header layout and always stores boxed Mixed values.
 fn lower_runtime_polymorphic_array_push(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     value: ValueId,
+    elem_ty: &PhpType,
+    stored_type: &PhpType,
 ) -> Result<()> {
-    let hash = ctx.next_label("array_push_mixed_hash");
-    let done = ctx.next_label("array_push_mixed_done");
+    let hash = ctx.next_label("array_push_hash");
+    let done = ctx.next_label("array_push_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
             ctx.emitter.instruction("cmp x0, #3");                              // select associative storage after a runtime promotion
             ctx.emitter.instruction(&format!("b.eq {hash}"));                   // hash append has a distinct header and growth helper
-            lower_array_push_aarch64(ctx, array, value, &PhpType::Mixed)?;
+            lower_array_push_aarch64(ctx, array, value, elem_ty)?;
+            stamp_scalar_array_write_result(ctx, stored_type);
             ctx.emitter.instruction(&format!("b {done}"));                      // join with the updated container pointer in x0
 
             ctx.emitter.label(&hash);
@@ -1252,7 +1249,8 @@ fn lower_runtime_polymorphic_array_push(
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
             ctx.emitter.instruction("cmp rax, 3");                              // select associative storage after a runtime promotion
             ctx.emitter.instruction(&format!("je {hash}"));                     // hash append has a distinct header and growth helper
-            lower_array_push_x86_64(ctx, array, value, &PhpType::Mixed)?;
+            lower_array_push_x86_64(ctx, array, value, elem_ty)?;
+            stamp_scalar_array_write_result(ctx, stored_type);
             ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the updated container pointer in rax
 
             ctx.emitter.label(&hash);
