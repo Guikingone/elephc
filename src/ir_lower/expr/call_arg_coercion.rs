@@ -490,6 +490,21 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
         ctx.store_call_argument_local(
             array_name, converted, boxed_parent_ty, Some(arg.span),
         );
+        // The parent now stores boxed slots, so this element is a managed cell like any other
+        // `array<mixed>` element. Handing out a bare interior address instead left the FIRST of
+        // two aliases of one element pointing at a slot the second argument then replaced with a
+        // reference cell, so the callee read that cell pointer as the element's value.
+        let array_value = ctx.load_local(array_name, Some(array.span));
+        let element_index = lower_expr(ctx, element_index);
+        let cell = ctx.emit_value(
+            Op::LoadArrayElemRefCell,
+            vec![array_value.value, element_index.value],
+            None,
+            PhpType::Pointer(None),
+            Op::LoadArrayElemRefCell.default_effects(),
+            Some(arg.span),
+        );
+        return Some(lease_managed_call_argument_ref_cell(ctx, cell, arg.span).value);
     }
     let array_value = ctx.load_local(array_name, Some(array.span));
     let element_index = lower_expr(ctx, element_index);
