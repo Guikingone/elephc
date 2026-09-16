@@ -385,7 +385,7 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 583 + curl_surface);
+        assert_eq!(eval_registry, 584 + curl_surface);
         // 88 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use. The six most recent helpers are the
         // `__elephc_opcache_rt_*` family: three readers the injected `opcache_get_status()`
@@ -406,7 +406,7 @@ mod tests {
         // six `__elephc_opcache_rt_*` runtime script-cache helpers (three readers, the
         // `_blacklist_entry` reader `opcache_get_configuration()` uses, the `_swap` setter
         // `ini_set()` uses, and the `_reset` scheduler `opcache_reset()` uses).
-        assert_eq!(aot_registry, 635);
+        assert_eq!(aot_registry, 636);
         // Ten constructs/dedicated-syntax/hash surfaces, the 397 prelude-provided and
         // name-resolver-rewritten contracts (54 of them the xml prelude), and the curl
         // prelude when published.
@@ -458,7 +458,7 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 562 + curl_surface);
+        assert_eq!(interpreter_adapter, 563 + curl_surface);
         // Includes the six `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own.
         assert_eq!(unsupported, 462);
