@@ -197,3 +197,87 @@ echo "not reached";
         "the Error must stop the program, got: {out}"
     );
 }
+
+/// Verifies a throw CAUGHT INSIDE the loop leaves the loop's own storage alone.
+///
+/// The catch is inside the loop, so control resumes there and iteration continues — PHP does not
+/// leave the loop at all. Releasing what the loop holds on the way to that catch frees the
+/// container it is still writing into, and the loop's normal termination then releases it a
+/// second time. Measured before the fix: the read-back printed nothing for a property receiver,
+/// and the element receiver segfaulted.
+///
+/// The array-element, direct-property and plain-element receivers are covered together,
+/// including the two that predate issue #690: the defect was in how a throw decides which loops
+/// it leaves, so it reached every by-reference source, not just the ones this change added. The
+/// runtime-named receiver is left to its own fixture above — a by-reference call in this one
+/// blocks the propagation that folds its name, and an unfolded name is a separate gap.
+#[test]
+fn test_regression_690_a_throw_caught_inside_the_loop_keeps_iterating() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public array $x = [1, 2, 3]; }
+function step(&$v) {
+    try {
+        if ($v === 2) { throw new RuntimeException('mid'); }
+    } catch (RuntimeException $e) {
+        echo "caught;";
+    }
+    $v *= 10;
+}
+
+$arr = [new C()];
+foreach ($arr[0]->x as &$a) { step($a); }
+unset($a);
+echo implode(',', $arr[0]->x), "|";
+
+$o = new C();
+foreach ($o->x as &$b) { step($b); }
+unset($b);
+echo implode(',', $o->x), "|";
+
+$plain = [[1, 2, 3]];
+foreach ($plain[0] as &$e) { step($e); }
+unset($e);
+echo implode(',', $plain[0]);
+"#,
+    );
+    assert_eq!(out, "caught;10,20,30|caught;10,20,30|caught;10,20,30");
+}
+
+/// Verifies an unmatched catch inside the loop still releases what the loop holds.
+///
+/// The exception continues outward, so the rethrow DOES leave the loop — the opposite of the
+/// fixture above, and the reason the decision cannot simply be "a `try` is active". Leaking there
+/// would be one object per throw; releasing twice would free a live one.
+#[test]
+fn test_regression_690_an_unmatched_catch_rethrows_out_of_the_loop_and_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public array $x = [1, 2, 3]; }
+$hits = 0;
+for ($i = 0; $i < 30; $i++) {
+    $arr = [new C()];
+    try {
+        foreach ($arr[0]->x as &$v) {
+            try {
+                throw new RuntimeException('inner');
+            } catch (LogicException $e) {
+                echo "wrong;";
+            }
+        }
+    } catch (RuntimeException $e) {
+        $hits++;
+    }
+    unset($v);
+    $hits += $arr[0]->x[0];
+}
+echo $hits;
+"#,
+    );
+    assert_eq!(out.stdout, "60", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "a rethrow that leaves the loop must release exactly once: {}",
+        out.stderr
+    );
+}

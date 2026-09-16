@@ -199,7 +199,9 @@ pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::i
         }
         return;
     }
-    emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
+    // NOT every active loop: a `try` inside one catches without leaving it. See
+    // `loops_a_throw_would_leave` (issue #690).
+    emit_innermost_loop_cleanups(ctx, ctx.loops_a_throw_would_leave());
     ctx.builder.terminate(Terminator::Throw { value });
 }
 
