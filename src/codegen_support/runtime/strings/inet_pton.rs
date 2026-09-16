@@ -7,28 +7,25 @@
 //!
 //! Key details:
 //! - The parsing is the platform's own `inet_pton(3)`, which is where PHP's goes too. A
-//!   hand-written IPv6 parser would have to reproduce `::` compression, the embedded-IPv4
-//!   form and zone identifiers, and be wrong in a different way on each target (issue #692).
+//!   hand-written IPv6 parser would have to reproduce `::` compression and the embedded-IPv4
+//!   form, and be wrong in a different way on each target (issue #692).
 //! - The family is chosen the way php-src chooses it: a `:` anywhere in the input selects
 //!   `AF_INET6`, everything else `AF_INET`. `AF_INET6` differs by platform (30 on Darwin,
 //!   10 on Linux); `AF_INET` is 2 everywhere.
-//! - The packed bytes are written straight into the concat buffer, exactly where the previous
-//!   IPv4-only version wrote them, so the caller's string contract is unchanged.
+//! - The destination comes from `__rt_concat_reserve` and is published with
+//!   `__rt_concat_publish`, so a 16-byte result cannot run off the end of the 64 KiB scratch
+//!   buffer and falls back to the heap when it no longer fits.
 
-use crate::codegen_support::abi::emit_symbol_address;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
 /// The longest textual address this helper accepts, not counting the NUL.
 ///
 /// A full IPv6 address with an embedded IPv4 tail is 45 bytes. The rest is room for a zone
-/// identifier, which `inet_pton(3)` accepts on both platforms (`fe80::1%eth0`) and whose real
-/// upper bound is `IF_NAMESIZE`, 16. 255 leaves an order of magnitude of slack so the bound is
-/// reachable only by input that is not an address, and such input is refused before the copy
-/// rather than truncated into one that parses.
-///
-/// Reference PHP has no bound here -- it hands the whole string to `inet_pton(3)`, which
-/// ignores everything past the `%` -- so a longer zone identifier than this is accepted there
-/// and refused here. Both answers are `false` for anything that is actually an address.
+/// identifier, which the platform parser may or may not accept -- Darwin's takes
+/// `fe80::1%eth0`, glibc's refuses it, and PHP inherits whichever one it was built against.
+/// 255 leaves an order of magnitude of slack so the bound is reachable only by input that is
+/// not an address, and such input is refused before the copy rather than truncated into one
+/// that parses.
 const MAX_ADDRESS_BYTES: i64 = 255;
 
 /// The `AF_INET6` value of the target's own headers.
@@ -59,7 +56,7 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
     emitter.label_global("__rt_inet_pton");
 
     // Frame: [sp, #0..256) NUL-terminated address copy, #256 packed destination,
-    // #264 packed length, #272 concat offset, #288 saved frame/link.
+    // #264 packed length, #272 address family, #288 saved frame/link.
     emitter.instruction("sub sp, sp, #304");                                    // allocate the address copy and the saved bookkeeping
     emitter.instruction("stp x29, x30, [sp, #288]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #288");                                   // establish the helper frame pointer
@@ -87,33 +84,31 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
     emitter.instruction("strb wzr, [x11]");                                     // terminate the copy for the C parser
 
     // -- select the family and the packed width it produces --
-    emitter.instruction("mov w0, #2");                                          // AF_INET
+    emitter.instruction("mov x13, #2");                                         // AF_INET
     emitter.instruction("mov x14, #4");                                         // an IPv4 address packs into four bytes
     emitter.instruction("cbz x12, __rt_inet_pton_family_ready");                // no colon: keep the IPv4 family
-    emitter.instruction(&format!("mov w0, #{}", inet6));                        // AF_INET6 for this platform
+    emitter.instruction(&format!("mov x13, #{}", inet6));                       // AF_INET6 for this platform
     emitter.instruction("mov x14, #16");                                        // an IPv6 address packs into sixteen bytes
     emitter.label("__rt_inet_pton_family_ready");
-    emitter.instruction("str x14, [sp, #264]");                                 // save the packed length across the parse
+    emitter.instruction("str x13, [sp, #272]");                                 // save the family across the reservation
+    emitter.instruction("str x14, [sp, #264]");                                 // save the packed length across the reservation
 
-    // -- parse straight into the concat buffer --
-    emit_symbol_address(emitter, "x15", "_concat_off");
-    emitter.instruction("ldr x13, [x15]");                                      // current concat-buffer offset
-    emitter.instruction("str x13, [sp, #272]");                                 // save it for the publish below
-    emit_symbol_address(emitter, "x15", "_concat_buf");
-    emitter.instruction("add x13, x15, x13");                                   // compute the packed destination
-    emitter.instruction("str x13, [sp, #256]");                                 // save the destination as the result pointer
-    emitter.instruction("mov x2, x13");                                         // pass it as inet_pton's third argument
+    // -- reserve the destination, so sixteen bytes cannot run off the scratch buffer --
+    emitter.instruction("mov x0, x14");                                         // ask for exactly the packed width
+    abi::emit_call_label(emitter, "__rt_concat_reserve");                       // clobbers the caller-saved registers
+    emitter.instruction("str x0, [sp, #256]");                                  // save the reserved destination
+
+    // -- parse straight into the reserved destination --
+    emitter.instruction("mov x2, x0");                                          // inet_pton writes its answer there
+    emitter.instruction("ldr x0, [sp, #272]");                                  // reload the selected family as the first C argument
     emitter.instruction("add x1, sp, #0");                                      // pass the NUL-terminated copy as the second
     emitter.bl_c("inet_pton");                                                  // parse the address for the selected family
     emitter.instruction("cmp w0, #1");                                          // 1 means the address parsed; 0 and -1 do not
     emitter.instruction("b.ne __rt_inet_pton_false");                           // anything else is an invalid address
 
-    emitter.instruction("ldr x1, [sp, #256]");                                  // return the packed pointer
-    emitter.instruction("ldr x2, [sp, #264]");                                  // return the packed length
-    emitter.instruction("ldr x13, [sp, #272]");                                 // reload the concat offset the parse started at
-    emitter.instruction("add x13, x13, x2");                                    // reserve the bytes the parse wrote
-    emit_symbol_address(emitter, "x15", "_concat_off");
-    emitter.instruction("str x13, [x15]");                                      // publish the updated concat-buffer offset
+    emitter.instruction("ldr x1, [sp, #256]");                                  // the packed pointer
+    emitter.instruction("ldr x2, [sp, #264]");                                  // the packed length
+    abi::emit_call_label(emitter, "__rt_concat_publish");                       // charge the scratch and preserve x1/x2
     emitter.instruction("ldp x29, x30, [sp, #288]");                            // restore frame pointer and return address
     emitter.instruction("add sp, sp, #304");                                    // release the frame
     emitter.instruction("ret");                                                 // return the packed address
@@ -135,7 +130,7 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_inet_pton");
 
     // Frame: [rbp-304 .. rbp-48) NUL-terminated address copy, [rbp-40] packed destination,
-    // [rbp-32] packed length, [rbp-24] concat offset.
+    // [rbp-32] packed length, [rbp-24] address family.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 304");                                        // allocate the address copy and the saved bookkeeping
@@ -167,32 +162,33 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r10], 0");                               // terminate the copy for the C parser
 
     // -- select the family and the packed width it produces --
-    emitter.instruction("mov edi, 2");                                          // AF_INET
-    emitter.instruction("mov rcx, 4");                                          // an IPv4 address packs into four bytes
+    emitter.instruction("mov rcx, 2");                                          // AF_INET
+    emitter.instruction("mov rdx, 4");                                          // an IPv4 address packs into four bytes
     emitter.instruction("test r11d, r11d");                                     // did the address contain a colon?
     emitter.instruction("jz __rt_inet_pton_family_ready_x86");                  // no colon: keep the IPv4 family
-    emitter.instruction(&format!("mov edi, {}", inet6));                        // AF_INET6 for this platform
-    emitter.instruction("mov rcx, 16");                                         // an IPv6 address packs into sixteen bytes
+    emitter.instruction(&format!("mov rcx, {}", inet6));                        // AF_INET6 for this platform
+    emitter.instruction("mov rdx, 16");                                         // an IPv6 address packs into sixteen bytes
     emitter.label("__rt_inet_pton_family_ready_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the packed length across the parse
+    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the family across the reservation
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the packed length across the reservation
 
-    // -- parse straight into the concat buffer --
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
-    emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save it for the publish below
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
-    emitter.instruction("lea rdx, [r10 + r9]");                                 // compute the packed destination
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the destination as the result pointer
-    emitter.instruction("lea rsi, [rbp - 304]");                                // pass the NUL-terminated copy as the second argument
+    // -- reserve the destination, so sixteen bytes cannot run off the scratch buffer --
+    emitter.instruction("mov rax, rdx");                                        // ask for exactly the packed width
+    abi::emit_call_label(emitter, "__rt_concat_reserve");                       // clobbers the caller-saved registers
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the reserved destination
+
+    // -- parse straight into the reserved destination --
+    emitter.instruction("mov rdx, rax");                                        // inet_pton writes its answer there
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the selected family as the first argument
+    emitter.instruction("lea rsi, [rbp - 304]");                                // pass the NUL-terminated copy as the second
     emitter.instruction("xor eax, eax");                                        // no vector arguments in this call
     emitter.bl_c("inet_pton");                                                  // parse the address for the selected family
     emitter.instruction("cmp eax, 1");                                          // 1 means the address parsed; 0 and -1 do not
     emitter.instruction("jne __rt_inet_pton_false_x86");                        // anything else is an invalid address
 
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the packed pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // return the packed length
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the concat offset the parse started at
-    emitter.instruction("add r9, rdx");                                         // reserve the bytes the parse wrote
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated offset
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the packed pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // the packed length
+    abi::emit_call_label(emitter, "__rt_concat_publish");                       // charge the scratch and preserve rax/rdx
     emitter.instruction("mov rsp, rbp");                                        // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the packed address
@@ -226,16 +222,16 @@ mod tests {
     #[test]
     fn inet_pton_selects_the_targets_own_ipv6_family() {
         for (target, expected) in [
-            (Target::new(Platform::MacOS, Arch::AArch64), "mov w0, #30"),
+            (Target::new(Platform::MacOS, Arch::AArch64), "mov x13, #30"),
             (
                 Target::new_apple(Arch::AArch64, AppleVariant::IOS),
-                "mov w0, #30",
+                "mov x13, #30",
             ),
             (
                 Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
-                "mov w0, #30",
+                "mov x13, #30",
             ),
-            (Target::new(Platform::Linux, Arch::AArch64), "mov w0, #10"),
+            (Target::new(Platform::Linux, Arch::AArch64), "mov x13, #10"),
         ] {
             let asm = assembly_for(target);
             assert!(
@@ -245,15 +241,15 @@ mod tests {
                 asm
             );
         }
-        assert!(assembly_for(Target::new(Platform::Linux, Arch::X86_64)).contains("mov edi, 10"));
+        assert!(assembly_for(Target::new(Platform::Linux, Arch::X86_64)).contains("mov rcx, 10"));
     }
 
     /// `AF_INET` is 2 on every supported target, so the IPv4 path carries no platform split.
     #[test]
     fn inet_pton_uses_the_same_ipv4_family_everywhere() {
-        assert!(assembly_for(Target::new(Platform::MacOS, Arch::AArch64)).contains("mov w0, #2"));
-        assert!(assembly_for(Target::new(Platform::Linux, Arch::AArch64)).contains("mov w0, #2"));
-        assert!(assembly_for(Target::new(Platform::Linux, Arch::X86_64)).contains("mov edi, 2"));
+        assert!(assembly_for(Target::new(Platform::MacOS, Arch::AArch64)).contains("mov x13, #2"));
+        assert!(assembly_for(Target::new(Platform::Linux, Arch::AArch64)).contains("mov x13, #2"));
+        assert!(assembly_for(Target::new(Platform::Linux, Arch::X86_64)).contains("mov rcx, 2"));
     }
 
     /// The parse is the platform's, so every target has to actually call it.
@@ -261,8 +257,35 @@ mod tests {
     fn inet_pton_calls_the_platform_parser() {
         assert!(assembly_for(Target::new(Platform::MacOS, Arch::AArch64)).contains("bl _inet_pton"));
         assert!(assembly_for(Target::new(Platform::Linux, Arch::AArch64)).contains("bl inet_pton"));
-        assert!(
-            assembly_for(Target::new(Platform::Linux, Arch::X86_64)).contains("call inet_pton")
-        );
+        assert!(assembly_for(Target::new(Platform::Linux, Arch::X86_64)).contains("call inet_pton"));
+    }
+
+    /// The destination is RESERVED, never taken straight from the scratch cursor.
+    ///
+    /// Writing at `_concat_buf + _concat_off` without asking runs sixteen bytes off the end of
+    /// the 64 KiB buffer once an earlier result has pushed the cursor near it, and silently
+    /// corrupts whatever follows. `__rt_concat_reserve` bounds the request and falls back to the
+    /// heap; `__rt_concat_publish` is what charges the scratch afterwards.
+    #[test]
+    fn inet_pton_reserves_and_publishes_its_destination() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = assembly_for(target);
+            assert!(
+                asm.contains("__rt_concat_reserve") && asm.contains("__rt_concat_publish"),
+                "{:?} must reserve and publish: {}",
+                target,
+                asm
+            );
+            assert!(
+                !asm.contains("_concat_off"),
+                "{:?} must not touch the scratch cursor directly: {}",
+                target,
+                asm
+            );
+        }
     }
 }

@@ -14,6 +14,10 @@
 //!   dotted quad -- and is where PHP's rendering comes from too (issue #692).
 //! - The family is the INPUT LENGTH, exactly as php-src decides it: 4 or 16, anything else is
 //!   `false`.
+//! - The IPv6 rendering lands in a stack buffer first and is then copied into storage from
+//!   `__rt_concat_reserve`, published with `__rt_concat_publish`. Writing its 45 bytes straight
+//!   at the scratch cursor would run off the end of the 64 KiB buffer once an earlier result
+//!   has pushed the cursor near it.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
@@ -58,36 +62,46 @@ pub fn emit_inet_ntop(emitter: &mut Emitter) {
     emitter.instruction("b __rt_long2ip");                                      // tail-call long2ip to format the address
 
     // Frame: [sp, #0..64) the presentation buffer `inet_ntop(3)` writes into,
-    // #64 the concat offset, #80 saved frame/link.
+    // #64 rendered length, #72 reserved destination, #80 saved frame/link.
     emitter.label("__rt_inet_ntop_v6");
     emitter.instruction("sub sp, sp, #96");                                     // allocate the presentation buffer and bookkeeping
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // establish the helper frame pointer
     emitter.instruction("mov x1, x0");                                          // the packed address is inet_ntop's second argument
-    emitter.instruction(&format!("mov w0, #{}", inet6));                        // AF_INET6 for this platform
+    emitter.instruction(&format!("mov x0, #{}", inet6));                        // AF_INET6 for this platform
     emitter.instruction("add x2, sp, #0");                                      // the stack buffer is its destination
     emitter.instruction("mov x3, #64");                                         // and its capacity
     emitter.bl_c("inet_ntop");                                                  // render the address
     emitter.instruction("cbz x0, __rt_inet_ntop_v6_false");                     // a null answer means the family was refused
 
-    // -- copy the C string into the concat buffer the caller's string contract expects --
+    // -- measure the rendering, then reserve exactly that much --
     emitter.instruction("mov x9, x0");                                          // presentation-string cursor
-    abi::emit_symbol_address(emitter, "x15", "_concat_off");
-    emitter.instruction("ldr x10, [x15]");                                      // current concat-buffer offset
-    abi::emit_symbol_address(emitter, "x15", "_concat_buf");
-    emitter.instruction("add x11, x15, x10");                                   // the result pointer
-    emitter.instruction("mov x12, x11");                                        // destination cursor
+    emitter.instruction("mov x10, xzr");                                        // rendered byte count
+    emitter.label("__rt_inet_ntop_v6_len");
+    emitter.instruction("ldrb w11, [x9, x10]");                                 // read one rendered byte
+    emitter.instruction("cbz w11, __rt_inet_ntop_v6_len_done");                 // the NUL terminates the rendering
+    emitter.instruction("add x10, x10, #1");                                    // count it
+    emitter.instruction("b __rt_inet_ntop_v6_len");                             // keep measuring
+    emitter.label("__rt_inet_ntop_v6_len_done");
+    emitter.instruction("str x10, [sp, #64]");                                  // save the rendered length across the reservation
+    emitter.instruction("mov x0, x10");                                         // ask for exactly that many bytes
+    abi::emit_call_label(emitter, "__rt_concat_reserve");                       // clobbers the caller-saved registers
+    emitter.instruction("str x0, [sp, #72]");                                   // save the reserved destination
+
+    // -- copy the rendering out of the stack buffer into it --
+    emitter.instruction("add x9, sp, #0");                                      // the presentation buffer is in this frame
+    emitter.instruction("ldr x10, [sp, #64]");                                  // reload the rendered length
+    emitter.instruction("mov x12, x0");                                         // destination cursor
     emitter.label("__rt_inet_ntop_v6_copy");
+    emitter.instruction("cbz x10, __rt_inet_ntop_v6_copied");                   // stop once every byte is copied
     emitter.instruction("ldrb w13, [x9], #1");                                  // read one rendered byte
-    emitter.instruction("cbz w13, __rt_inet_ntop_v6_copied");                   // the NUL terminates the rendering
-    emitter.instruction("strb w13, [x12], #1");                                 // write it into the concat buffer
+    emitter.instruction("strb w13, [x12], #1");                                 // write it into the reserved destination
+    emitter.instruction("sub x10, x10, #1");                                    // one fewer byte to copy
     emitter.instruction("b __rt_inet_ntop_v6_copy");                            // continue copying
     emitter.label("__rt_inet_ntop_v6_copied");
-    emitter.instruction("sub x2, x12, x11");                                    // the rendered byte count
-    emitter.instruction("add x10, x10, x2");                                    // reserve those bytes
-    abi::emit_symbol_address(emitter, "x15", "_concat_off");
-    emitter.instruction("str x10, [x15]");                                      // publish the updated concat-buffer offset
-    emitter.instruction("mov x1, x11");                                         // return the rendered pointer
+    emitter.instruction("ldr x1, [sp, #72]");                                   // the rendered pointer
+    emitter.instruction("ldr x2, [sp, #64]");                                   // the rendered length
+    abi::emit_call_label(emitter, "__rt_concat_publish");                       // charge the scratch and preserve x1/x2
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the frame
     emitter.instruction("ret");                                                 // return the presentation string
@@ -126,14 +140,16 @@ fn emit_inet_ntop_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl rdx, 8");                                          // octet 2 to the third byte
     emitter.instruction("or rax, rcx");                                         // merge octet 1
     emitter.instruction("or rax, rdx");                                         // merge octet 2
-    emitter.instruction("or rax, r8");                                          // merge octet 3 into the long2ip argument
+    emitter.instruction("or rax, r8");                                          // merge octet 3
+    emitter.instruction("mov rdi, rax");                                        // pass the packed address to long2ip
     emitter.instruction("jmp __rt_long2ip");                                    // tail-call long2ip to format the address
 
-    // Frame: [rbp-64 .. rbp) the presentation buffer `inet_ntop(3)` writes into.
+    // Frame: [rbp-64 .. rbp) the presentation buffer `inet_ntop(3)` writes into,
+    // [rbp-72] rendered length, [rbp-80] reserved destination.
     emitter.label("__rt_inet_ntop_v6_x86");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 80");                                         // allocate the presentation buffer
+    emitter.instruction("sub rsp, 96");                                         // allocate the presentation buffer and bookkeeping
     emitter.instruction("mov rsi, rdi");                                        // the packed address is inet_ntop's second argument
     emitter.instruction(&format!("mov edi, {}", inet6));                        // AF_INET6 for this platform
     emitter.instruction("lea rdx, [rbp - 64]");                                 // the stack buffer is its destination
@@ -143,26 +159,38 @@ fn emit_inet_ntop_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // a null answer means the family was refused
     emitter.instruction("jz __rt_inet_ntop_v6_false_x86");                      // report it as an invalid address
 
-    // -- copy the C string into the concat buffer the caller's string contract expects --
+    // -- measure the rendering, then reserve exactly that much --
     emitter.instruction("mov r8, rax");                                         // presentation-string cursor
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
-    emitter.instruction("lea r11, [r10 + r9]");                                 // the result pointer
-    emitter.instruction("mov r10, r11");                                        // destination cursor
-    emitter.label("__rt_inet_ntop_v6_copy_x86");
-    emitter.instruction("movzx ecx, BYTE PTR [r8]");                            // read one rendered byte
+    emitter.instruction("xor r9d, r9d");                                        // rendered byte count
+    emitter.label("__rt_inet_ntop_v6_len_x86");
+    emitter.instruction("movzx ecx, BYTE PTR [r8 + r9]");                       // read one rendered byte
     emitter.instruction("test ecx, ecx");                                       // the NUL terminates the rendering
+    emitter.instruction("jz __rt_inet_ntop_v6_len_done_x86");                   // stop measuring
+    emitter.instruction("add r9, 1");                                           // count it
+    emitter.instruction("jmp __rt_inet_ntop_v6_len_x86");                       // keep measuring
+    emitter.label("__rt_inet_ntop_v6_len_done_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // save the rendered length across the reservation
+    emitter.instruction("mov rax, r9");                                         // ask for exactly that many bytes
+    abi::emit_call_label(emitter, "__rt_concat_reserve");                       // clobbers the caller-saved registers
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save the reserved destination
+
+    // -- copy the rendering out of the stack buffer into it --
+    emitter.instruction("lea r8, [rbp - 64]");                                  // the presentation buffer is in this frame
+    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the rendered length
+    emitter.instruction("mov r10, rax");                                        // destination cursor
+    emitter.label("__rt_inet_ntop_v6_copy_x86");
+    emitter.instruction("test r9, r9");                                         // stop once every byte is copied
     emitter.instruction("jz __rt_inet_ntop_v6_copied_x86");                     // the copy is complete
-    emitter.instruction("mov BYTE PTR [r10], cl");                              // write it into the concat buffer
+    emitter.instruction("movzx ecx, BYTE PTR [r8]");                            // read one rendered byte
+    emitter.instruction("mov BYTE PTR [r10], cl");                              // write it into the reserved destination
     emitter.instruction("add r8, 1");                                           // advance the source cursor
     emitter.instruction("add r10, 1");                                          // advance the destination cursor
+    emitter.instruction("sub r9, 1");                                           // one fewer byte to copy
     emitter.instruction("jmp __rt_inet_ntop_v6_copy_x86");                      // continue copying
     emitter.label("__rt_inet_ntop_v6_copied_x86");
-    emitter.instruction("mov rdx, r10");                                        // the rendered end pointer
-    emitter.instruction("sub rdx, r11");                                        // the rendered byte count
-    emitter.instruction("add r9, rdx");                                         // reserve those bytes
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated offset
-    emitter.instruction("mov rax, r11");                                        // return the rendered pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // the rendered pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // the rendered length
+    abi::emit_call_label(emitter, "__rt_concat_publish");                       // charge the scratch and preserve rax/rdx
     emitter.instruction("mov rsp, rbp");                                        // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the presentation string
@@ -197,16 +225,16 @@ mod tests {
     #[test]
     fn inet_ntop_selects_the_targets_own_ipv6_family() {
         for (target, expected) in [
-            (Target::new(Platform::MacOS, Arch::AArch64), "mov w0, #30"),
+            (Target::new(Platform::MacOS, Arch::AArch64), "mov x0, #30"),
             (
                 Target::new_apple(Arch::AArch64, AppleVariant::IOS),
-                "mov w0, #30",
+                "mov x0, #30",
             ),
             (
                 Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
-                "mov w0, #30",
+                "mov x0, #30",
             ),
-            (Target::new(Platform::Linux, Arch::AArch64), "mov w0, #10"),
+            (Target::new(Platform::Linux, Arch::AArch64), "mov x0, #10"),
         ] {
             let asm = assembly_for(target);
             assert!(
@@ -220,11 +248,48 @@ mod tests {
     }
 
     /// IPv4 keeps its own rendering: no C call, a tail jump into `__rt_long2ip`.
+    ///
+    /// The x86_64 side additionally has to MOVE the assembled address into the first SysV
+    /// argument register. Dropping that move leaves `__rt_long2ip` reading the caller's packed
+    /// string pointer as an IPv4 integer, which renders an unrelated address -- the kind of
+    /// break only the other architecture's CI sees.
     #[test]
     fn inet_ntop_still_renders_ipv4_without_the_platform_formatter() {
-        assert!(assembly_for(Target::new(Platform::MacOS, Arch::AArch64)).contains("b __rt_long2ip"));
+        let arm = assembly_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(arm.contains("orr x0, x2, x5"));
+        assert!(arm.contains("b __rt_long2ip"));
+        let x86 = assembly_for(Target::new(Platform::Linux, Arch::X86_64));
         assert!(
-            assembly_for(Target::new(Platform::Linux, Arch::X86_64)).contains("jmp __rt_long2ip")
+            x86.contains("mov rdi, rax") && x86.contains("jmp __rt_long2ip"),
+            "the assembled IPv4 address must reach long2ip's argument register: {}",
+            x86
         );
+    }
+
+    /// The rendered text is copied into RESERVED storage, never written at the scratch cursor.
+    ///
+    /// See `inet_pton`'s twin: an unbounded write at `_concat_buf + _concat_off` runs past the
+    /// 64 KiB buffer once an earlier result has pushed the cursor near it.
+    #[test]
+    fn inet_ntop_reserves_and_publishes_its_destination() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = assembly_for(target);
+            assert!(
+                asm.contains("__rt_concat_reserve") && asm.contains("__rt_concat_publish"),
+                "{:?} must reserve and publish: {}",
+                target,
+                asm
+            );
+            assert!(
+                !asm.contains("_concat_off"),
+                "{:?} must not touch the scratch cursor directly: {}",
+                target,
+                asm
+            );
+        }
     }
 }

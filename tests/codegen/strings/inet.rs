@@ -8,7 +8,7 @@
 //! Key details:
 //! - The parsing and rendering are the platform's own `inet_pton(3)`/`inet_ntop(3)`, so these
 //!   fixtures are about the shapes PHP itself defines: `::` compression, the embedded-IPv4
-//!   form, zone identifiers, and the length that decides the family on the way back.
+//!   form, and the length that decides the family on the way back.
 //! - Every expectation is verbatim host PHP 8.5.10, including the canonical spelling
 //!   `inet_ntop()` chooses when several are possible (`2001:db8:85a3:0:0:8a2e:370:7334` renders
 //!   as `2001:db8:85a3::8a2e:370:7334`).
@@ -18,10 +18,14 @@
 
 use crate::support::*;
 
-/// Verifies `inet_pton()` packs IPv6 addresses, in every spelling PHP accepts.
+/// Verifies `inet_pton()` packs IPv6 addresses, in every spelling PHP accepts everywhere.
 ///
 /// The whole family answered `false` before: the helper was a dotted-quad IPv4 parser, so a
 /// program validating a proxy-provided client address rejected every IPv6 one.
+///
+/// A zone identifier (`fe80::1%eth0`) is deliberately absent: `inet_pton(3)` takes it on Darwin
+/// and refuses it on glibc, so PHP's own answer differs by platform and no portable expectation
+/// exists. elephc delegates, so it diverges exactly where PHP does.
 #[test]
 fn test_inet_pton_packs_ipv6() {
     let out = compile_and_run(
@@ -33,7 +37,6 @@ foreach ([
     '2001:db8:85a3:0:0:8a2e:370:7334',
     '2001:0db8:85a3:0000:0000:8a2e:0370:7334',
     '::ffff:192.0.2.128',
-    'fe80::1%eth0',
 ] as $address) {
     $packed = inet_pton($address);
     echo $packed === false ? "false" : strlen($packed) . ":" . bin2hex($packed), "\n";
@@ -49,7 +52,6 @@ foreach ([
             "16:20010db885a3000000008a2e03707334\n",
             "16:20010db885a3000000008a2e03707334\n",
             "16:00000000000000000000ffffc0000280\n",
-            "16:fe800000000000000000000000000001\n",
         )
     );
 }
@@ -166,31 +168,30 @@ echo $n;
         )
     );
 }
-
-/// Verifies a zone identifier is accepted up to the helper's documented input bound.
+/// Verifies oversized input is refused without reaching the parser, and a real address after it
+/// still packs.
 ///
-/// `inet_pton(3)` ignores everything past the `%`, so both platforms take a long one; the copy
-/// into the NUL-terminated buffer the C parser needs is what bounds it here. 255 bytes is an
-/// order of magnitude past `IF_NAMESIZE`, so the bound is reachable only by input that is not
-/// an address — but the boundary is pinned, because a shorter buffer would silently start
-/// refusing real addresses.
+/// The copy into the NUL-terminated buffer `inet_pton(3)` needs is bounded at 255 bytes, so
+/// anything longer is refused up front. That bound cannot be isolated portably — the only inputs
+/// longer than 255 bytes that any platform would otherwise parse carry a zone identifier, which
+/// glibc refuses anyway — so what is pinned here is the observable contract: long junk is
+/// `false`, and the refusal leaves nothing behind for the calls after it.
 #[test]
-fn test_inet_pton_accepts_a_zone_identifier_up_to_the_input_bound() {
+fn test_inet_pton_refuses_oversized_input_and_keeps_working_after_it() {
     let out = compile_and_run(
         r#"<?php
-$at_bound = '2001:db8::1%' . str_repeat('a', 243);
-$past_bound = '2001:db8::1%' . str_repeat('a', 244);
-echo strlen($at_bound), ":", inet_pton($at_bound) === false ? "false" : "ok", "\n";
-echo strlen($past_bound), ":", inet_pton($past_bound) === false ? "false" : "ok", "\n";
-echo inet_pton('fe80::1%eth0') === false ? "false" : bin2hex(inet_pton('fe80::1%eth0')), "\n";
+$oversized = '2001:db8::1' . str_repeat('a', 245);
+echo strlen($oversized), ":", inet_pton($oversized) === false ? "false" : "ok", "\n";
+echo bin2hex(inet_pton('2001:db8::1')), "\n";
+echo bin2hex(inet_pton('9.9.9.9')), "\n";
 "#,
     );
     assert_eq!(
         out,
         concat!(
-            "255:ok\n",
             "256:false\n",
-            "fe800000000000000000000000000001\n",
+            "20010db8000000000000000000000001\n",
+            "09090909\n",
         )
     );
 }
