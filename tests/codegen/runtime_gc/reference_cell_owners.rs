@@ -669,15 +669,13 @@ bindOmittedDefault();
     assert_eq!(compile_and_run_tagged(source), "seen|caught");
 }
 
-/// A reference relayed from an array element fails closed with a catchable Error.
+/// A reference relayed from a managed array element keeps the independent cell alive.
 ///
-/// The callee cannot see where its by-reference parameter came from, so the owner lookup answers
-/// zero at run time and the guard raises an `Error` rather than publishing an interior address
-/// the array would free underneath the caller. The element is `Mixed` so the relay's shared
-/// `mixed &` parameter contract holds and the program reaches that run-time guard. No boxed
-/// `array_walk()` borrow is active here, so the owner-zero path has no accepted exception.
+/// Element reference binding promotes the slot to a managed reference cell before the relay.
+/// The callee can therefore transfer a real owner rather than an interior array address, and a
+/// caller write through the returned alias remains visible in the original array.
 #[test]
-fn test_core_relayed_element_reference_return_fails_closed() {
+fn test_core_relayed_managed_element_reference_return_preserves_alias() {
     let source = r#"<?php
 function &relayReferenceParameter(mixed &$slot): mixed {
     return $slot;
@@ -687,7 +685,8 @@ function relayThroughElementAlias(): void {
     $borrowed = &$numbers[0];
     try {
         $alias = &relayReferenceParameter($borrowed);
-        echo 'bound|';
+        $alias = 9;
+        echo 'bound|', $numbers[0];
     } catch (Error $error) {
         echo 'caught|', $error->getMessage();
     }
@@ -698,7 +697,7 @@ relayThroughElementAlias();
     assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
     assert_eq!(
         out.stdout,
-        "caught|Cannot return a reference to storage that has no independent reference cell",
+        "bound|9",
         "{}\n{asm}",
         out.stderr
     );
