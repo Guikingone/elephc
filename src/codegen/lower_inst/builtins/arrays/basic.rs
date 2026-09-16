@@ -107,6 +107,7 @@ fn load_array_push_length_to_result(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
+        // -- a boxed receiver keeps its container behind a cell, so ask the generic counter --
         match ctx.emitter.target.arch {
             Arch::AArch64 => ctx.load_value_to_reg(array, "x0")?,
             Arch::X86_64 => ctx.load_value_to_reg(array, "rdi")?,
@@ -116,12 +117,14 @@ fn load_array_push_length_to_result(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- a typed indexed array keeps its logical length in the first payload word --
             ctx.load_value_to_reg(array, "x0")?;
-            ctx.emitter.instruction("ldr x0, [x0]");                            // read the indexed-array logical length as the int result
+            ctx.emitter.instruction("ldr x0, [x0]");                            // read the post-append element count as the int result
         }
         Arch::X86_64 => {
+            // -- a typed indexed array keeps its logical length in the first payload word --
             ctx.load_value_to_reg(array, "rax")?;
-            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // read the indexed-array logical length as the int result
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // read the post-append element count as the int result
         }
     }
     Ok(())

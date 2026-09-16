@@ -119,9 +119,6 @@ the array has to become a hash — and the caller's slot, still described as `ar
 the callee cannot retype. That case reports a named compile error instead; an associative array,
 or a local copy the function returns, is the workaround.
 
-> Removing an element from an array passed **by reference** (`function f(array &$a)`) is not yet
-> supported and reports a compile error.
-
 ## Array union
 
 `+` between arrays follows PHP union semantics: keys from the left operand win, and only keys that are missing from the left are copied from the right.

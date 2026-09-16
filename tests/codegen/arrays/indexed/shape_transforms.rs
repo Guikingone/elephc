@@ -374,3 +374,42 @@ echo count($g), "\n";
         out.stderr
     );
 }
+
+
+/// Verifies a variadic `array_push()` evaluates EVERY value before it appends any of them.
+///
+/// PHP evaluates a call's arguments and only then enters the function, so nothing an argument
+/// reads may observe an append the same call performs: `$a = [10]; array_push($a, 1, count($a));`
+/// appends `1`, leaving `[10, 1, 1]`.
+///
+/// The `ir_lower` fast path for a plain local originally interleaved the two — lower a value,
+/// append it, lower the next — which was invisible while the arity was pinned at one value and
+/// produced `[10, 1, 2]` as soon as it was not. The general runtime-call path (a property
+/// receiver, say) never had the bug, because `lower_builtin_call_args` lowers every operand
+/// first; both receiver kinds are covered here so they cannot drift apart again.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_push_evaluates_every_value_before_appending() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10]; array_push($a, 1, count($a)); echo implode(",", $a), "\n";
+$b = [10]; array_push($b, count($b), count($b), count($b)); echo implode(",", $b), "\n";
+$c = [1]; array_push($c, $c[0], 99); echo implode(",", $c), "\n";
+class PushOrderBox { public array $items = [10]; }
+$box = new PushOrderBox(); array_push($box->items, 1, count($box->items)); echo implode(",", $box->items), "\n";
+function pushViaRef(array &$r) { array_push($r, 1, count($r)); }
+$d = [10]; pushViaRef($d); echo implode(",", $d), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "10,1,1\n",
+            "10,1,1,1\n",
+            "1,1,99\n",
+            "10,1,1\n",
+            "10,1,1\n",
+        )
+    );
+}
