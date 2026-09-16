@@ -213,6 +213,11 @@ pub(super) fn lower_foreach(
     }
     if value_by_ref {
         let value_ty = foreach_ref_value_type(&source_ty);
+        // A name the body already bound keeps its earlier storage unless it is retyped here.
+        // `$value = "held"; foreach ($items as &$value)` then read the boxed entry cell through
+        // a `string` slot and echoed a pointer pair as a string.
+        ctx.declare_local(value_var, value_ty.clone());
+        ctx.set_local_type(value_var, value_ty.clone());
         if value_ty == PhpType::Mixed {
             initialize_foreach_mixed_local_if_needed(
                 ctx,
@@ -220,9 +225,6 @@ pub(super) fn lower_foreach(
                 value_needs_null_init,
                 array.span,
             );
-        } else {
-            ctx.declare_local(value_var, value_ty.clone());
-            ctx.set_local_type(value_var, value_ty);
         }
         if !value_needs_null_init {
             ctx.mark_local_initialized(value_var);
