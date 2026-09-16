@@ -146,6 +146,10 @@ fn lower_exact_php_array_place_key_sort(
 
     let place = super::stabilize_place(ctx, place);
     let source = lower_expr(ctx, &place);
+    // A place read borrows: the property, static slot or element keeps owning the cell. Take a
+    // reference of our own so the release inside the clone balances against it instead of
+    // retiring the storage the place still holds.
+    let source = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(place.span));
     let work_cell = clone_mixed_cell(ctx, source, expr);
     let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
     ctx.store_local(&temp, work_cell, PhpType::Mixed, Some(place.span));
@@ -306,6 +310,9 @@ fn lower_boxed_parent_element_key_sort(
 ) -> LoweredValue {
     let place = super::stabilize_place(ctx, place);
     let child = lower_expr(ctx, &place);
+    // The element read borrows its parent's cell; pair the clone's release with our own
+    // reference so the parent keeps the storage it still owns.
+    let child = crate::ir_lower::ownership::acquire_if_refcounted(ctx, child, Some(place.span));
     let child = clone_mixed_cell(ctx, child, expr);
     let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
     ctx.store_local(&temp, child, PhpType::Mixed, Some(place.span));
