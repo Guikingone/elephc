@@ -40,11 +40,7 @@ pub(super) fn publish_scoped_ref_receiver_alias(
     let Some(slot) = ctx.ref_cell_owner_slot(alias) else {
         return false;
     };
-    if !ctx
-        .call_argument_evaluation_scopes
-        .last()
-        .is_some_and(|scope| scope.expression_depth == ctx.expression_depth)
-    {
+    if ctx.call_argument_evaluation_scopes.is_empty() {
         return false;
     }
     register_owned_call_operand(ctx, slot, span);
@@ -80,9 +76,6 @@ pub(super) fn retire_scoped_ref_receiver_aliases(
     let Some(scope) = ctx.call_argument_evaluation_scopes.last() else {
         return;
     };
-    if scope.expression_depth != ctx.expression_depth {
-        return;
-    }
     let Some(final_alias) = aliases.last() else {
         return;
     };
@@ -322,10 +315,10 @@ pub(super) fn lease_managed_call_argument_ref_cell(
     cell_ptr: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    let has_evaluation_scope = ctx
-        .call_argument_evaluation_scopes
-        .last()
-        .is_some_and(|scope| scope.expression_depth == ctx.expression_depth);
+    // Ref-place preparation may lower synthetic receiver expressions below the depth at which
+    // the surrounding call opened its source-order ledger. The innermost active scope is still
+    // authoritative: a nested call pushes and retires its own scope before returning here.
+    let has_evaluation_scope = !ctx.call_argument_evaluation_scopes.is_empty();
     let (temp_name, owner) = ctx.predeclare_returned_ref_cell_staging();
     register_owned_call_operand(ctx, owner, span);
     let captured = ctx.emit_value(

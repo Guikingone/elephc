@@ -104,3 +104,36 @@ echo implode(",", array_keys($stringKeys)), implode(",", array_keys($snapshot));
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
 }
+
+/// A conditional write through a declared array reference mutates the caller's attached Mixed
+/// cell directly, for both packed and keyed payloads.
+#[test]
+fn conditional_php_array_reference_writes_keep_the_attached_cell() {
+    use crate::ir::Op;
+
+    let source = r#"<?php
+function conditionallyWriteArray(array &$items): bool { $items["added"] = 7; return true; }
+function checkConditionalArray(bool $write): void {
+    $packed = [1];
+    $hash = ["old" => 2];
+    $packedChanged = $write && conditionallyWriteArray($packed);
+    $hashChanged = $write && conditionallyWriteArray($hash);
+}
+checkConditionalArray($argc > 0);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let callee = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("conditionallyWriteArray"))
+            .unwrap();
+        assert!(callee.instructions.iter().any(|inst| inst.op == Op::RuntimeCall), "{name}");
+        assert!(
+            callee.instructions.iter().all(|inst| inst.op != Op::MixedClone),
+            "{name}: an attached by-reference parameter must not replace its caller cell",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}

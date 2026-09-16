@@ -18,7 +18,12 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 ) -> LoweredValue {
     let ty = ctx.local_type(name);
     let value = ctx.load_local(name, Some(span));
-    if ty.codegen_repr() != PhpType::Mixed {
+    // A by-reference parameter already names the caller's writable zval cell. Cloning that
+    // cell and publishing the clone back through the parameter is redundant, and it makes the
+    // conditional hash path depend on a second StoreRefCell before `__rt_hash_set` can publish
+    // its relocated table. Mutate the attached cell directly instead. The packed/hash runtime
+    // setters still perform payload-level COW and publish any replacement payload into that cell.
+    if ty.codegen_repr() != PhpType::Mixed || ctx.is_ref_bound_local(name) {
         return value;
     }
     let detached = ctx.emit_owned_value(

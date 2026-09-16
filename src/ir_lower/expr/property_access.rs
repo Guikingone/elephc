@@ -254,6 +254,7 @@ fn prepare_addressable_ref_array_receiver_impl(
             Some(Expr::new(ExprKind::Variable(alias), source.span))
         }
         ExprKind::ArrayAccess { array, index } => {
+            let call_scoped = scoped_aliases.is_some();
             let parent = prepare_addressable_ref_array_receiver_impl(
                 ctx,
                 array,
@@ -268,12 +269,14 @@ fn prepare_addressable_ref_array_receiver_impl(
             );
             let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
             lower_ref_assign_array_elem(ctx, &alias, &element, source.span);
-            // The managed entry cell owns a boxed child value, but that child can still be
-            // shared with an earlier by-value snapshot of the outer array. Detach the child
-            // through its new reference alias before a deeper reference binds one of its slots.
-            // Otherwise `$copy = C::$items; $x =& C::$items[1][0]; $x = 9` mutates the child box
-            // still reachable from `$copy`, bypassing PHP copy-on-write at the nested boundary.
-            crate::ir_lower::stmt::load_array_local_for_write(ctx, &alias, source.span);
+            // A persistent `=&` alias must detach a child still shared with a by-value snapshot
+            // before a deeper reference binds one of its slots. A call-scoped argument does not:
+            // the callee's mutating ref-cell path separates and republishes the payload, while a
+            // second argument naming the same element must retain that exact cell. Cloning here
+            // would replace the child between the two leases and split one PHP reference set.
+            if !call_scoped {
+                crate::ir_lower::stmt::load_array_local_for_write(ctx, &alias, source.span);
+            }
             if let Some(aliases) = scoped_aliases.as_deref_mut() {
                 if publish_scoped_ref_receiver_alias(ctx, &alias, source.span) {
                     aliases.push(alias.clone());
