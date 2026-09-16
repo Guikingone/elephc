@@ -61,3 +61,44 @@ echo "done";
     assert_eq!(out.stdout, "3:2:2|5|ooo:nnn:boolean:1.25:ttt|drop:ooo|done", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A prepended object is owned only by the rebuilt array after caller and callee temporaries retire.
+#[test]
+fn test_boxed_array_unshift_object_owner_retires_with_array() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class PrependedOnlyOwner {
+    public function __destruct() { echo "drop|"; }
+}
+function prependOnlyOwner(array &$values, PrependedOnlyOwner $object): void {
+    array_unshift($values, $object);
+}
+$object = new PrependedOnlyOwner();
+$values = [];
+prependOnlyOwner($values, $object);
+unset($object, $values);
+echo "done";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "drop|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Reading an object property from a boxed array does not retain the object past array teardown.
+#[test]
+fn test_boxed_array_object_property_read_does_not_extend_owner() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class BoxedPropertyOwner {
+    public string $name = "kept";
+    public function __destruct() { echo "drop|"; }
+}
+$object = new BoxedPropertyOwner();
+$values = ["seed" => str_repeat("t", 3), 0 => $object, 1 => false, 2 => 1.25];
+unset($object);
+echo $values[0]->name, "|";
+unset($values);
+echo "done";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "kept|drop|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
