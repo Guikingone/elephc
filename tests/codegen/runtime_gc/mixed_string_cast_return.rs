@@ -96,6 +96,34 @@ echo fromNullable($x), fromUnion($x);
     );
 }
 
+/// Verifies a cast over a LOCAL is a copy, whatever the local was built from.
+///
+/// Only a parameter declared `string` has a bare `Str` slot. A local is boxed Mixed even when
+/// everything written to it was a string -- `$c ? $a : $b` over two `string` parameters lowers
+/// through `mixed_box` -- so the cast allocates and the caller owns the result. Deciding this
+/// from the DECLARED type of the parameters a local's provenance names is the shape that looks
+/// right and leaks anyway.
+#[test]
+fn test_string_cast_over_a_local_is_a_copy_the_caller_owns() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function viaLocal(string $s) { $x = $s; return (string)$x; }
+function viaTwoStrings(string $a, string $b, bool $c) { $x = $c ? $a : $b; return (string)$x; }
+function viaMixedPair(string $s, int $i, bool $c) { $x = $c ? $s : $i; return (string)$x; }
+$p = str_repeat("p", 3);
+$q = str_repeat("q", 4);
+echo viaLocal($p), viaTwoStrings($p, $q, true), viaTwoStrings($p, $q, false),
+     viaMixedPair($p, 7, true), viaMixedPair($p, 7, false);
+"#,
+    );
+    assert_eq!(out.stdout, "ppppppqqqqppp7", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "a cast over a local must not be reported as borrowed: {}",
+        out.stderr
+    );
+}
+
 /// Guard: the one cast EIR lowering elides still hands back the caller's own storage.
 ///
 /// `(string)` over a `string` parameter compiles to nothing at all, so the returned pointer IS

@@ -11,8 +11,10 @@
 //!   allow cleanup that the previous type-only guard suppressed.
 //! - Local provenance is merged across branches and to a fixed point in loops.
 //! - A cast only passes storage through when EIR lowering elides it, which is why the
-//!   analysis carries which parameters are declared `string`: `(string)` over a `string`
-//!   is the one cast `lower_cast` removes entirely. Every other cast COPIES (issue #700).
+//!   analysis carries WHICH PARAMETERS are declared `string`: `(string)` over one of those is
+//!   the only cast `lower_cast` removes entirely, because only such a parameter has a bare
+//!   `Str` slot. Every other cast COPIES, including one over a local that merely holds a
+//!   `string` parameter's value -- locals are boxed Mixed (issue #700).
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -70,23 +72,23 @@ impl ReturnArgAlias {
 struct AliasState<'a> {
     /// Provenance of every live local name.
     locals: HashMap<String, ReturnArgAlias>,
-    /// Whether each visible parameter is declared exactly `string`, indexed as the summary
-    /// indexes parameters. That is the only declared type a `(string)` cast passes through.
-    string_parameters: &'a [bool],
+    /// The names of the visible parameters declared exactly `string`. Only those have a bare
+    /// `Str` slot, which is the one operand shape a `(string)` cast passes through.
+    string_parameters: &'a BTreeSet<String>,
 }
 
 impl<'a> AliasState<'a> {
-    /// Creates an empty state for a callable with these parameter declarations.
-    fn new(string_parameters: &'a [bool]) -> Self {
+    /// Creates an empty state for a callable with these `string`-declared parameters.
+    fn new(string_parameters: &'a BTreeSet<String>) -> Self {
         Self {
             locals: HashMap::new(),
             string_parameters,
         }
     }
 
-    /// Returns whether one visible parameter is declared exactly `string`.
-    fn parameter_is_string(&self, index: usize) -> bool {
-        self.string_parameters.get(index).copied().unwrap_or(false)
+    /// Returns whether `name` is a visible parameter declared exactly `string`.
+    fn is_string_parameter(&self, name: &str) -> bool {
+        self.string_parameters.contains(name)
     }
 }
 
@@ -198,14 +200,13 @@ fn summarize_callable<'a>(
         return ReturnArgAlias::Unknown;
     }
     let params: Vec<(&str, Option<&TypeExpr>)> = params.collect();
-    let mut string_parameters: Vec<bool> = params
+    // A variadic is deliberately absent: it collects its arguments into a fresh array, whose
+    // slot is never a bare `Str`.
+    let string_parameters: BTreeSet<String> = params
         .iter()
-        .map(|(_, hint)| matches!(hint, Some(TypeExpr::Str)))
+        .filter(|(_, hint)| matches!(hint, Some(TypeExpr::Str)))
+        .map(|(name, _)| (*name).to_string())
         .collect();
-    if variadic.is_some() {
-        // A variadic collects its arguments into a fresh array, which no cast passes through.
-        string_parameters.push(false);
-    }
     let mut state = AliasState::new(&string_parameters);
     for (index, (name, _)) in params.iter().enumerate() {
         state
@@ -515,10 +516,12 @@ fn analyze_loop(
 
 /// Merges local provenance across mutually exclusive control-flow paths.
 fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
+    static NO_PARAMETERS: std::sync::LazyLock<BTreeSet<String>> =
+        std::sync::LazyLock::new(BTreeSet::new);
     let string_parameters = states
         .first()
         .map(|state| state.string_parameters)
-        .unwrap_or(&[]);
+        .unwrap_or(&NO_PARAMETERS);
     let mut keys = BTreeSet::new();
     for state in &states {
         keys.extend(state.locals.keys().cloned());
@@ -641,31 +644,29 @@ fn builtin_result_is_proven_independent(name: &str) -> bool {
 /// `mixed` holding a string is copied into a fresh allocation, and an `(array)` cast allocates
 /// even when its operand is already an array.
 ///
-/// Calling those copies an alias of the parameter told the caller its result was borrowed, so
-/// the caller never released it and one block leaked per call (issue #700). A scalar target
-/// answers `None` for a second reason as well: an `int`, `float` or `bool` result has no
-/// refcounted storage to share with anything.
+/// The only operand with a bare `Str` slot is a parameter DECLARED `string`. A local is boxed
+/// Mixed even when everything written to it was a string -- `$x = $c ? $a : $b` over two
+/// `string` parameters lowers through `mixed_box` -- so a cast over one allocates. Asking about
+/// the declared type of the parameters a local's provenance names would be answering a
+/// different question, and the answer would be wrong for exactly those merged locals.
+///
+/// Calling a copy an alias of the parameter tells the caller its result is borrowed, so the
+/// caller never releases it and one block leaks per call (issue #700). Getting it wrong the
+/// other way frees the caller's string underneath it, which is why anything this cannot prove
+/// answers `None` rather than guessing: `None` costs a release the caller can always make.
 fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
     if !matches!(target, CastType::String) {
         return ReturnArgAlias::None;
     }
-    match expr_alias(inner, state) {
-        // An operand already independent of every argument stays independent either way.
-        ReturnArgAlias::None => ReturnArgAlias::None,
-        // An unprovable operand keeps the conservative answer: this may be the elided cast.
-        ReturnArgAlias::Unknown => ReturnArgAlias::Unknown,
-        ReturnArgAlias::Parameters(parameters) => {
-            let passed_through: BTreeSet<usize> = parameters
-                .into_iter()
-                .filter(|index| state.parameter_is_string(*index))
-                .collect();
-            if passed_through.is_empty() {
-                ReturnArgAlias::None
-            } else {
-                ReturnArgAlias::Parameters(passed_through)
-            }
-        }
+    let ExprKind::Variable(name) = &inner.kind else {
+        return ReturnArgAlias::None;
+    };
+    if !state.is_string_parameter(name) {
+        return ReturnArgAlias::None;
     }
+    // The parameter's own provenance, not its index: `function f(string $a, string $b)
+    // { $a = $b; return (string)$a; }` still has a `Str` slot, but it now holds $b's storage.
+    expr_alias(inner, state)
 }
 
 /// Conservatively invalidates locals that an expression can rewrite by reference.
