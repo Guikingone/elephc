@@ -297,6 +297,12 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
         if let Some(pin) = frame.source_pin {
             crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
         }
+        // Same reasoning for the receiver the borrowed property source was read through: the
+        // loop holds the object so its slot keeps owning the container being written, and an
+        // exit that skips the loop's own exit block has to drop it here (issue #690).
+        if let Some(pin) = frame.receiver_pin {
+            crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
+        }
     }
 }
 

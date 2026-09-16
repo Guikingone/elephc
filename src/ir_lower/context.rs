@@ -44,6 +44,10 @@ pub(crate) struct LoopFrame {
     /// (issues #580 and #642). Released on every exit that skips the loop's own exit block,
     /// exactly like `cleanup`.
     pub source_pin: Option<LoopCleanup>,
+    /// Reference a by-reference `foreach` holds on the OBJECT whose property slot owns the
+    /// borrowed container, when that object is a temporary the loop reached through -- an array
+    /// element, a call result (issue #690). Released on every exit, exactly like `source_pin`.
+    pub receiver_pin: Option<LoopCleanup>,
 }
 
 /// Cleanup that must run when control leaves a loop without visiting its exit block.
