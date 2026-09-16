@@ -480,7 +480,7 @@ pub(crate) fn propagate_args(
         .map(|(position, arg)| {
             let masked = match &arg.kind {
                 ExprKind::NamedArg { name, .. } => by_ref.is_some_and(|sig| {
-                    sig.iter().any(|(param, is_ref)| param == name && *is_ref)
+                    super::invalidation::named_arg_binds_by_ref(sig, name)
                 }),
                 ExprKind::Spread(_) => {
                     spread_seen = true;
