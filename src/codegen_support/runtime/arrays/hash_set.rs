@@ -197,10 +197,10 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x14, [x12, #24]");                                 // load the existing boxed Mixed payload
     emitter.instruction("cbz x14, __rt_hash_set_check_reference");              // a null Mixed handle is an ordinary overwrite
     emitter.instruction("ldr x15, [x14]");                                      // inspect the boxed Mixed runtime tag
-    emitter.instruction(&format!("cmp x15, #{}", INVOKER_ARG_REF_CELL_TAG));   // does this box alias caller storage for a ref argument?
-    emitter.instruction("b.eq __rt_hash_set_invoker_reference_write");           // preserve the marker and write through to its caller local
+    emitter.instruction(&format!("cmp x15, #{}", INVOKER_ARG_REF_CELL_TAG));    // does this box alias caller storage for a ref argument?
+    emitter.instruction("b.eq __rt_hash_set_invoker_reference_write");          // preserve the marker and write through to its caller local
     emitter.label("__rt_hash_set_check_reference");
-    emitter.instruction(&format!("cmp x13, #{}", INVOKER_ARG_REF_CELL_TAG));   // does the existing entry belong to a PHP reference set?
+    emitter.instruction(&format!("cmp x13, #{}", INVOKER_ARG_REF_CELL_TAG));    // does the existing entry belong to a PHP reference set?
     emitter.instruction("b.eq __rt_hash_set_reference_write");                  // reference entries are written through, never detached
     emitter.instruction("cmp x13, #8");                                         // is the overwritten value null?
     emitter.instruction("b.eq __rt_hash_set_write_value");                      // null has no heap pointer, skip release
@@ -235,10 +235,10 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_invoker_reference_write");
     emitter.instruction("ldr x15, [x14, #16]");                                 // load the caller storage's runtime representation tag
     emitter.instruction("cmp x15, #7");                                         // does the caller local hold a boxed Mixed handle?
-    emitter.instruction("b.ne __rt_hash_set_invoker_reference_raw");             // concrete caller slots receive their native payload words
+    emitter.instruction("b.ne __rt_hash_set_invoker_reference_raw");            // concrete caller slots receive their native payload words
     emitter.instruction("ldr x13, [sp, #40]");                                  // load the replacement runtime value tag
     emitter.instruction("cmp x13, #7");                                         // is the replacement already an owned boxed Mixed cell?
-    emitter.instruction("b.eq __rt_hash_set_invoker_reference_mixed_ready");     // owned Mixed values can transfer directly to caller storage
+    emitter.instruction("b.eq __rt_hash_set_invoker_reference_mixed_ready");    // owned Mixed values can transfer directly to caller storage
     emitter.instruction("mov x0, x13");                                         // pass the replacement runtime tag to the owned-box helper
     emitter.instruction("ldr x1, [sp, #24]");                                   // pass the replacement low payload word
     emitter.instruction("ldr x2, [sp, #32]");                                   // pass the replacement high payload word
@@ -515,13 +515,11 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // load the existing boxed Mixed payload
     emitter.instruction("test r14, r14");                                       // guard the boxed marker dereference
     emitter.instruction("jz __rt_hash_set_check_reference_x");                  // a null Mixed handle is an ordinary overwrite
-    emitter.instruction(&format!(
-        "cmp QWORD PTR [r14], {}",
-        INVOKER_ARG_REF_CELL_TAG
-    ));                                                                          // does this box alias caller storage for a ref argument?
-    emitter.instruction("je __rt_hash_set_invoker_reference_write_x");           // preserve the marker and write through to its caller local
+    let boxed_marker_compare = format!("cmp QWORD PTR [r14], {}", INVOKER_ARG_REF_CELL_TAG);
+    emitter.instruction(&boxed_marker_compare);                                 // does this box alias caller storage for a ref argument?
+    emitter.instruction("je __rt_hash_set_invoker_reference_write_x");          // preserve the marker and write through to its caller local
     emitter.label("__rt_hash_set_check_reference_x");
-    emitter.instruction(&format!("cmp r13, {}", INVOKER_ARG_REF_CELL_TAG));    // does the existing entry belong to a PHP reference set?
+    emitter.instruction(&format!("cmp r13, {}", INVOKER_ARG_REF_CELL_TAG));     // does the existing entry belong to a PHP reference set?
     emitter.instruction("je __rt_hash_set_reference_write_x");                  // reference entries are written through, never detached
     emitter.instruction("cmp r13, 8");                                          // check whether the overwritten value is PHP null
     emitter.instruction("je __rt_hash_set_write_value_x");                      // null owns no heap payload and can be overwritten directly
@@ -554,9 +552,9 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_invoker_reference_write_x");
     emitter.instruction("mov r13, QWORD PTR [r14 + 16]");                       // load the caller storage's runtime representation tag
     emitter.instruction("cmp r13, 7");                                          // does the caller local hold a boxed Mixed handle?
-    emitter.instruction("jne __rt_hash_set_invoker_reference_raw_x");            // concrete caller slots receive their native payload words
+    emitter.instruction("jne __rt_hash_set_invoker_reference_raw_x");           // concrete caller slots receive their native payload words
     emitter.instruction("cmp QWORD PTR [rbp - 48], 7");                         // is the replacement already an owned boxed Mixed cell?
-    emitter.instruction("je __rt_hash_set_invoker_reference_mixed_ready_x");     // owned Mixed values can transfer directly to caller storage
+    emitter.instruction("je __rt_hash_set_invoker_reference_mixed_ready_x");    // owned Mixed values can transfer directly to caller storage
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // pass the replacement runtime tag to the owned-box helper
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the replacement low payload word
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the replacement high payload word

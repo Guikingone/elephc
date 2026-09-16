@@ -1219,12 +1219,12 @@ fn push_invoker_ref_storage_address(
     let done_label = ctx.next_label("invoker_ref_storage_done");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #7", source_tag_reg));       // is caller storage a boxed Mixed handle?
-            emitter.instruction(&format!("b.ne {}", direct_label));            // concrete source storage already has the target ABI shape
+            emitter.instruction(&format!("cmp {}, #7", source_tag_reg));        // is caller storage a boxed Mixed handle?
+            emitter.instruction(&format!("b.ne {}", direct_label));             // concrete source storage already has the target ABI shape
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, 7", source_tag_reg));        // is caller storage a boxed Mixed handle?
-            emitter.instruction(&format!("jne {}", direct_label));             // concrete source storage already has the target ABI shape
+            emitter.instruction(&format!("cmp {}, 7", source_tag_reg));         // is caller storage a boxed Mixed handle?
+            emitter.instruction(&format!("jne {}", direct_label));              // concrete source storage already has the target ABI shape
         }
     }
     abi::emit_load_from_address(emitter, result_reg, storage_reg, 0);
