@@ -784,6 +784,20 @@ fn snapshot_array_splice_self_replacement(
     let Some(&replacement) = operands.get(3) else {
         return;
     };
+    // Both operands have to BE arrays for a clone to mean anything, and the check has to happen
+    // before the storage comparison rather than after it. A reference rebound to a scalar keeps
+    // its slot (`$b = &$a; $b = &$x;` where `$x` is an int), and the earlier alias instruction
+    // stays in the function, so the alias walk below still reports a possible match; cloning that
+    // integer emitted an `ArrayCloneShallow` the EIR validator rejects outright.
+    if !matches!(
+        ctx.builder.value_php_type(receiver).codegen_repr(),
+        PhpType::Array(_)
+    ) || !matches!(
+        ctx.builder.value_php_type(replacement).codegen_repr(),
+        PhpType::Array(_)
+    ) {
+        return;
+    }
     let Some(receiver_storage) = loaded_slot(ctx, receiver) else {
         return;
     };
@@ -817,8 +831,10 @@ fn snapshot_array_splice_self_replacement(
 /// `$b = &$a` puts all three on one cell.
 ///
 /// Deliberately an OVER-approximation: an alias inside a branch not taken at runtime still counts
-/// here. That is safe in the only direction that matters, because the sole consequence of a false
-/// positive is one extra array copy, while a false negative is the wrong answer.
+/// here, and so does one the source later rebound away. That is safe in the only direction that
+/// matters, because the sole consequence of a false positive is one extra array copy, while a
+/// false negative is the wrong answer — but it is only safe once the CALLER has established that
+/// both operands are arrays, since a rebound reference can leave a scalar behind the same slot.
 fn storages_may_be_the_same(
     ctx: &LoweringContext<'_, '_>,
     left: (Op, LocalSlotId),

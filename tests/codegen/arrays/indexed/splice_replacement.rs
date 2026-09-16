@@ -425,3 +425,38 @@ echo implode(",", $a), "\n";
         out.stderr
     );
 }
+
+
+/// Verifies a reference REBOUND away from the receiver does not drag the snapshot with it.
+///
+/// The self-alias decision follows `alias_local_ref_cell` instructions transitively, and those
+/// stay in the function after the source rebinds the reference: `$b = &$a; $b = &$x;` leaves the
+/// `$b`–`$a` edge behind while `$b`'s slot now holds whatever `$x` holds. The walk is an
+/// over-approximation on purpose — a redundant copy is the worst a false positive can cost — but
+/// that is only true once both operands are known to be ARRAYS. Without the type guard the
+/// rewrite emitted `ArrayCloneShallow` on an integer and the EIR validator rejected the program:
+/// `OperandTypeMismatch { expected: "Heap(Array)", actual: I64 }`.
+///
+/// The second and third rows keep the other two rebinding outcomes honest: a reference rebound to
+/// a DIFFERENT array must not be treated as the receiver, and one rebound BACK to the receiver
+/// must still be.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_splice_replacement_rebound_away_from_the_receiver_is_not_snapshotted() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1,2,3]; $b = &$a; $x = 9; $b = &$x; array_splice($a, 1, 1, $b); echo implode(",",$a), "\n";
+$c = [1,2,3]; $d = &$c; $other = [7,8]; $d = &$other; array_splice($c, 1, 1, $d); echo implode(",",$c), "|", implode(",",$other), "\n";
+$e = [1,2,3]; $f = &$e; $spare = [0]; $f = &$spare; $f = &$e; array_splice($e, 1, 1, $f); echo implode(",",$e), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "1,9,3\n",
+            "1,7,8,3|7,8\n",
+            "1,1,2,3,3\n",
+        )
+    );
+}
