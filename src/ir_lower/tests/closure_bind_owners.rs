@@ -83,6 +83,63 @@ echo $bound();
     }
 }
 
+/// A Closure value written by dynamic eval is rebound by Magician rather than interpreted as an
+/// AOT closure descriptor by the native binder.
+#[test]
+fn dynamic_eval_closure_bind_uses_eval_static_dispatch_on_every_target() {
+    let source = r#"<?php
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$peek = function() { return $this->code; };
+$source = '$peek = function() { return $this->label; };';
+try { eval($source); } catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#;
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let main = module
+            .functions
+            .iter()
+            .find(|function| function.flags.is_main)
+            .unwrap();
+        let bind = main
+            .instructions
+            .iter()
+            .find(|instruction| instruction.op == Op::EvalStaticMethodCall)
+            .unwrap_or_else(|| panic!("{name}: dynamic Closure::bind must use eval dispatch"));
+        let Some(Immediate::Data(target)) = bind.immediate else {
+            panic!("{name}: eval static bind must name its target");
+        };
+        assert_eq!(
+            module.data.strings[target.as_raw() as usize],
+            "Closure::bind",
+            "{name}: eval dispatch target",
+        );
+        assert!(
+            main.instructions
+                .iter()
+                .all(|instruction| instruction.op != Op::ClosureBind),
+            "{name}: the native binder must not consume a Magician Closure object",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// `Closure::call()` roots its freshly bound descriptor and retires it after the invocation.
 #[test]
 fn closure_call_roots_and_retires_its_bound_descriptor_on_every_target() {

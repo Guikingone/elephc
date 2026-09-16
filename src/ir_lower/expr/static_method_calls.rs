@@ -31,6 +31,29 @@ pub(super) fn lower_static_method_call(
                     );
                 }
             }
+            // A dynamic eval can replace the local with a Magician-owned Closure object. Its
+            // boxed payload is not an AOT closure descriptor, so feeding it to ClosureBind would
+            // make `__rt_closure_bind` interpret the object header as descriptor metadata. Route
+            // runtime-shaped bind targets through the eval bridge, which understands both eval
+            // Closure objects and native callable cells.
+            if ctx.has_eval_barrier()
+                && matches!(
+                    ctx.builder.value_php_type(closure.value).codegen_repr(),
+                    PhpType::Mixed | PhpType::Union(_)
+                )
+            {
+                let mut operands = vec![closure.value];
+                operands.extend(args.iter().skip(1).map(|arg| lower_expr(ctx, arg).value));
+                let data = ctx.intern_string("Closure::bind");
+                return ctx.emit_value(
+                    Op::EvalStaticMethodCall,
+                    operands,
+                    Some(Immediate::Data(data)),
+                    PhpType::Mixed,
+                    Op::EvalStaticMethodCall.default_effects(),
+                    Some(expr.span),
+                );
+            }
             // Callable identity invalidation widens an escaped closure local to boxed Mixed
             // storage. ClosureBind consumes the descriptor payload, not the Mixed-cell address,
             // so normalize it at the same boundary as bindTo() before publishing operand roots.

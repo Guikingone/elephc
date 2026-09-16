@@ -3974,6 +3974,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ) {
         self.invalidate_callable_ref_argument_locals(signature, operands);
         self.invalidate_ref_bound_callable_locals();
+        // A declared by-reference container parameter lets the callee replace an element owned
+        // by the caller. Releasing that element can run a destructor which writes program-global
+        // callable storage, including through another statically resolved wrapper. The ordinary
+        // global-name summary sees direct `global` declarations, but the destructor is reached
+        // through the argument's contents rather than through a direct call edge.
+        let ref_argument_cleanup_can_invoke_user_code = signature.is_some_and(|signature| {
+            operands.iter().enumerate().any(|(index, operand)| {
+                signature
+                    .ref_params
+                    .get(index)
+                    .copied()
+                    .unwrap_or(false)
+                    && php_type_cleanup_may_invoke_user_code(
+                        &self.builder.value_php_type(*operand),
+                    )
+            })
+        });
+        if ref_argument_cleanup_can_invoke_user_code {
+            self.invalidate_escaped_callable_locals();
+        }
         match self
             .function_global_names
             .get(&php_symbol_key(function.trim_start_matches('\\')))
