@@ -15,6 +15,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, RuntimeCallTarget, UnaryStringRuntime};
 use crate::types::PhpType;
 
+use super::receiver_place::ReceiverPlace;
 use super::{expect_operand, store_if_result};
 
 /// Lowers one typed runtime operation through its target-specific helper ABI.
@@ -28,9 +29,11 @@ pub(super) fn lower(
         RuntimeCallTarget::ArrayFetchForWrite => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
-        RuntimeCallTarget::MixedCellPromoteToHash(sort)
-        | RuntimeCallTarget::MixedCellPromoteAttachedToHash(sort) => {
-            lower_mixed_cell_promote_to_hash(ctx, inst, sort)
+        RuntimeCallTarget::MixedCellPromoteToHash(sort) => {
+            lower_mixed_cell_promote_to_hash(ctx, inst, sort, false)
+        }
+        RuntimeCallTarget::MixedCellPromoteAttachedToHash(sort) => {
+            lower_mixed_cell_promote_to_hash(ctx, inst, sort, true)
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
         RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
@@ -135,6 +138,7 @@ fn lower_mixed_cell_promote_to_hash(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     sort: crate::ir::ArrayKeySort,
+    attached: bool,
 ) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -149,6 +153,10 @@ fn lower_mixed_cell_promote_to_hash(
             "typed runtime array.mixed_cell_promote_to_hash expected Mixed, got {:?}",
             actual,
         )));
+    }
+    if attached {
+        separate_shared_attached_cell(ctx, cell)?;
+        ctx.load_value_to_result(cell)?;
     }
     if ctx.emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the boxed Mixed cell in the SysV first-argument register
@@ -173,6 +181,50 @@ fn lower_mixed_cell_promote_to_hash(
     );
     ctx.emitter.label(&valid);
     store_if_result(ctx, inst)
+}
+
+/// Copy-on-write separates an attached Mixed cell that another variable still shares.
+///
+/// The promotion mutates its cell in place: it republishes the unique, key-sorted hash into the
+/// cell's payload word. `$copy = $array;` shares the boxed zval itself, so an in-place promotion
+/// reordered the copy too — `k($m)` with `function k(array &$a) { ksort($a); }` sorted `$ma` as
+/// well. A sole owner keeps mutating in place, so an unshared sort still costs nothing.
+///
+/// Only a receiver resolvable to a writable slot can be separated; anything else keeps the
+/// existing in-place behaviour.
+fn separate_shared_attached_cell(ctx: &mut FunctionContext<'_>, cell: crate::ir::ValueId) -> Result<()> {
+    let receiver = ReceiverPlace::resolve(ctx, cell)?;
+    if matches!(receiver, ReceiverPlace::Opaque) {
+        return Ok(());
+    }
+    let done = ctx.next_label("mixed_cell_attached_separate_done");
+    ctx.load_value_to_result(cell)?;
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {done}"));                // an absent cell has nothing to separate
+            ctx.emitter.instruction("ldr w9, [x0, #-12]");                      // read the cell refcount from the uniform heap header
+            ctx.emitter.instruction("cmp w9, #1");                              // is this zval shared with another variable?
+            ctx.emitter.instruction(&format!("b.ls {done}"));                   // a sole owner may be promoted in place
+            ctx.emitter.instruction("ldr x2, [x0, #16]");                       // copy the shared cell high payload word
+            ctx.emitter.instruction("ldr x1, [x0, #8]");                        // copy the shared cell low payload word
+            ctx.emitter.instruction("ldr x0, [x0]");                            // copy the shared cell runtime value tag
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // an absent cell has nothing to separate
+            ctx.emitter.instruction(&format!("jz {done}"));                     // keep the promotion on its ordinary path
+            ctx.emitter.instruction("mov r10d, DWORD PTR [rax - 12]");          // read the cell refcount from the uniform heap header
+            ctx.emitter.instruction("cmp r10d, 1");                             // is this zval shared with another variable?
+            ctx.emitter.instruction(&format!("jbe {done}"));                    // a sole owner may be promoted in place
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rax + 16]");           // copy the shared cell high payload word
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // copy the shared cell low payload word
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // copy the shared cell runtime value tag
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    ctx.store_result_value(cell)?;
+    receiver.store_back_value(ctx, cell)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers a typed `Str -> Str` transform using the internal string result register pair.
