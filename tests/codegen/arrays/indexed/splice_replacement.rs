@@ -336,16 +336,27 @@ echo implode(",", $x);
     );
 }
 
-/// Pins `array_splice($a, …, $a)`: `$replacement` naming the receiver inserts what the receiver
-/// held BEFORE the removal, not what the removal left behind (issue #676).
+/// Pins `array_splice($a, …, $a)`: a `$replacement` that IS the receiver inserts what the
+/// receiver held BEFORE the removal, not what the removal left behind (issue #676).
 ///
 /// PHP evaluates `$replacement` into its own array first. elephc passed the receiver pointer
 /// twice, so the insertion re-read slots the removal had already overwritten and `[1,2,3]` came
-/// back as `1,1,1,3` instead of `1,1,2,3,3`. The matrix covers the receiver payloads the issue
-/// named — `int`, `string`, `float`, refcounted children — plus the shapes where the pointer
-/// reuse was easiest to miss: the returned removal window, a negative offset, a pure insertion,
-/// a single-element and an empty receiver, a by-reference parameter, and the named-argument
-/// spelling.
+/// back as `1,1,1,3` instead of `1,1,2,3,3`.
+///
+/// The matrix covers the receiver payloads the issue named — `int`, `string`, `float`,
+/// refcounted children — plus the shapes where the pointer reuse was easiest to miss: the
+/// returned removal window, a negative offset, a pure insertion, a single-element and an empty
+/// receiver.
+///
+/// It then walks the SPELLINGS, because the aliasing is decided on the lowered operands and each
+/// of these reaches them differently: named arguments in canonical order, named arguments
+/// REORDERED so `$replacement` is not the fourth source argument, a named `$replacement` with
+/// `$length` omitted entirely, and a mix of the two.
+///
+/// Finally the PLACES, because only the plain local writes back directly — a property, a static
+/// property and a container element are rewritten into hidden temporaries, a by-reference
+/// parameter reaches the caller's cell, and a `&$x` binding puts two differently-numbered slots
+/// on one cell.
 #[test]
 fn test_array_splice_self_replacement_inserts_the_pre_splice_contents() {
     let out = compile_and_run(
@@ -360,6 +371,16 @@ $e = []; array_splice($e, 0, 0, $e); echo count($e), "\n";
 function viaRef(array &$r): void { array_splice($r, 1, 1, $r); }
 $b = [10,20,30]; viaRef($b); echo implode(",",$b), "\n";
 $m = [1,2,3]; array_splice(array: $m, offset: 1, length: 1, replacement: $m); echo implode(",",$m), "\n";
+$p = [1,2,3]; array_splice(array: $p, replacement: $p, offset: 1, length: 1); echo implode(",",$p), "\n";
+$q = [1,2,3]; array_splice($q, 1, replacement: $q); echo implode(",",$q), "\n";
+$t = [1,2,3,4]; array_splice($t, 1, replacement: $t, length: 2); echo implode(",",$t), "\n";
+class Box { public array $items = [1,2,3]; }
+$box = new Box(); array_splice($box->items, 1, 1, $box->items); echo implode(",",$box->items), "\n";
+class Shelf { public static array $items = [1,2,3]; }
+array_splice(Shelf::$items, 1, 1, Shelf::$items); echo implode(",",Shelf::$items), "\n";
+$rows = [[1,2,3]]; array_splice($rows[0], 1, 1, $rows[0]); echo implode(",",$rows[0]), "\n";
+$bind = [1,2,3]; $alias = &$bind; array_splice($bind, 1, 1, $alias); echo implode(",",$bind), "\n";
+$unrelated = [1,2,3]; $other = [9,9]; array_splice($unrelated, 1, 1, $other); echo implode(",",$unrelated), "|", implode(",",$other), "\n";
 "#,
     );
     assert_eq!(
@@ -373,6 +394,14 @@ a,a,b,c,c
 0
 10,10,20,30,30
 1,1,2,3,3
+1,1,2,3,3
+1,1,2,3
+1,1,2,3,4,4
+1,1,2,3,3
+1,1,2,3,3
+1,1,2,3,3
+1,1,2,3,3
+1,9,9,3|9,9
 "#
     );
 }

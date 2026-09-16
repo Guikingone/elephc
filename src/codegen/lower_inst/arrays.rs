@@ -151,14 +151,18 @@ pub(super) fn lower_array_clone_shallow(
     let done = ctx.next_label("array_clone_shallow_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- reject the two pointers the clone helper cannot dereference --
             ctx.load_value_to_reg(array, "x0")?;
             ctx.emitter.instruction(&format!("cbz x0, {}", done));              // null containers have no header or slots to clone
             abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
             ctx.emitter.instruction("cmp x0, x9");                              // does the array carry the in-band null-container sentinel?
             ctx.emitter.instruction(&format!("b.eq {}", done));                 // missed-read sentinels pass through uncloned
+
+            // -- copy the array into an owner of its own --
             abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
         }
         Arch::X86_64 => {
+            // -- reject the two pointers the clone helper cannot dereference --
             ctx.load_value_to_reg(array, "rdi")?;
             ctx.emitter.instruction("mov rax, rdi");                            // default to passing null/sentinel containers through uncloned
             ctx.emitter.instruction("test rdi, rdi");                           // null containers have no header or slots to clone
@@ -166,6 +170,8 @@ pub(super) fn lower_array_clone_shallow(
             abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
             ctx.emitter.instruction("cmp rdi, r10");                            // does the array carry the in-band null-container sentinel?
             ctx.emitter.instruction(&format!("je {}", done));                   // missed-read sentinels pass through uncloned
+
+            // -- copy the array into an owner of its own --
             abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
         }
     }

@@ -747,69 +747,134 @@ fn lower_array_splice_args(
     } else {
         lower_positional_builtin_args_with_signature(ctx, sig, args)
     };
-    snapshot_array_splice_self_replacement(ctx, sig, args, &mut operands);
+    snapshot_array_splice_self_replacement(ctx, &mut operands);
     widen_array_splice_receiver_for_replacement(ctx, sig, args, &mut operands);
     operands
 }
 
-/// Copies `$replacement` before the splice runs when it names the receiver itself.
+/// Copies `$replacement` before the splice runs when it IS the receiver.
 ///
 /// PHP evaluates `$replacement` into its own array before touching the receiver, so
 /// `array_splice($a, 1, 1, $a)` inserts what `$a` held on the way in. elephc passed the receiver
 /// pointer twice and the insertion then read slots the removal had already overwritten:
 /// `[1, 2, 3]` came back as `[1, 1, 1, 3]` where PHP gives `[1, 1, 2, 3, 3]` (issue #676).
 ///
-/// Decided on the SOURCE, not on the lowered pointer: the two arguments spell the same variable,
-/// so no runtime compare is needed and a call that cannot alias pays nothing. It runs before
-/// `widen_array_splice_receiver_for_replacement` so the snapshot holds the receiver's original
-/// payload rather than a re-boxed copy of it, and unlike that pass it accepts every receiver
+/// Decided on the LOWERED OPERANDS, which are already in parameter order, so every spelling is
+/// covered by one test: positional, named in any order, and a named `$replacement` with
+/// `$length` left out. Matching the source arguments instead would have to redo the planner's
+/// parameter mapping, and getting it wrong is silent — the wrong answer simply comes back.
+///
+/// Two loads of the same local slot are the same array, so the comparison is exact and needs no
+/// runtime check; a call that cannot alias pays nothing. It runs before
+/// `widen_array_splice_receiver_for_replacement` so the copy holds the receiver's original
+/// payload rather than a re-boxed version of it, and unlike that pass it accepts every receiver
 /// shape — a by-ref parameter and a `&$x` binding alias just as hard, and neither needs the slot
 /// retyping that forces the other pass to turn them away.
 ///
-/// Only the same-variable shape is covered. A replacement reaching the same array another way —
-/// two references to one slot, or a property both arguments read — still aliases; deciding that
-/// needs the receiver's place rather than its spelling.
+/// A replacement reaching the same array WITHOUT loading a slot the receiver also loads — out of
+/// a container the receiver is also stored in, say — still aliases. Deciding that needs the
+/// heap pointers, which are not available until the call runs.
 fn snapshot_array_splice_self_replacement(
     ctx: &mut LoweringContext<'_, '_>,
-    sig: Option<&FunctionSig>,
-    args: &[Expr],
     operands: &mut [crate::ir::ValueId],
 ) {
-    let Some(sig) = sig else {
+    let Some(&receiver) = operands.first() else {
         return;
     };
-    let Some(replacement) = operands.get(3).copied() else {
+    let Some(&replacement) = operands.get(3) else {
         return;
     };
-    let Some(receiver) = array_splice_receiver_place(sig, args) else {
+    let Some(receiver_storage) = loaded_slot(ctx, receiver) else {
         return;
     };
-    let ExprKind::Variable(receiver_name) = &receiver.kind else {
+    let Some(replacement_storage) = loaded_slot(ctx, replacement) else {
         return;
     };
-    let Some(replacement_arg) = args.get(3) else {
-        return;
-    };
-    let replacement_place = match &replacement_arg.kind {
-        ExprKind::NamedArg { value, .. } => value.as_ref(),
-        _ => replacement_arg,
-    };
-    let ExprKind::Variable(replacement_name) = &replacement_place.kind else {
-        return;
-    };
-    if replacement_name != receiver_name {
+    if !storages_may_be_the_same(ctx, receiver_storage, replacement_storage) {
         return;
     }
     let replacement_ty = ctx.builder.value_php_type(replacement);
+    let span = ctx
+        .builder
+        .value_defining_instruction(replacement)
+        .and_then(|inst| inst.span);
     let snapshot = ctx.emit_value(
         Op::ArrayCloneShallow,
         vec![replacement],
         None,
         replacement_ty,
         Op::ArrayCloneShallow.default_effects(),
-        Some(replacement_place.span),
+        span,
     );
     operands[3] = snapshot.value;
+}
+
+/// Reports whether two loaded storages can be the same array.
+///
+/// Identical storage is the common case. Two DIFFERENT ref-cell slots still share one cell when
+/// a `&$x` binding aliased them (`$b = &$a` emits `alias_local_ref_cell slots[b, a]`), so the
+/// function's alias instructions are consulted before giving up, transitively — `$c = &$b` after
+/// `$b = &$a` puts all three on one cell.
+///
+/// Deliberately an OVER-approximation: an alias inside a branch not taken at runtime still counts
+/// here. That is safe in the only direction that matters, because the sole consequence of a false
+/// positive is one extra array copy, while a false negative is the wrong answer.
+fn storages_may_be_the_same(
+    ctx: &LoweringContext<'_, '_>,
+    left: (Op, LocalSlotId),
+    right: (Op, LocalSlotId),
+) -> bool {
+    if left == right {
+        return true;
+    }
+    let ((left_op, left_slot), (right_op, right_slot)) = (left, right);
+    if left_op != Op::LoadRefCell || right_op != Op::LoadRefCell {
+        return false;
+    }
+    let mut reachable = HashSet::from([left_slot]);
+    // One pass per edge is enough to close the relation: each pass adds at least one slot, or
+    // nothing is left to add.
+    for _ in 0..ctx.builder.function().instructions.len() {
+        let mut grew = false;
+        for inst in &ctx.builder.function().instructions {
+            if inst.op != Op::AliasLocalRefCell {
+                continue;
+            }
+            let Some(Immediate::LocalSlotPair { first, second }) = inst.immediate else {
+                continue;
+            };
+            if reachable.contains(&first) && reachable.insert(second) {
+                grew = true;
+            }
+            if reachable.contains(&second) && reachable.insert(first) {
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    reachable.contains(&right_slot)
+}
+
+/// Returns the storage a value was loaded from, as the `(load opcode, slot)` pair.
+///
+/// `LoadRefCell` counts beside `LoadLocal` so a by-reference parameter is covered: that is where
+/// the receiver reaches the CALLER's array, and two reads of one cell are as much the same array
+/// as two reads of one local. The opcode is part of the key rather than discarded, so two
+/// different kinds of storage can never compare equal on a shared slot number.
+///
+/// Anything else — a literal, a call result, a converted value — reports `None`, because only a
+/// load identifies storage two operands can share.
+fn loaded_slot(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> Option<(Op, LocalSlotId)> {
+    let inst = ctx.builder.value_defining_instruction(value)?;
+    if !matches!(inst.op, Op::LoadLocal | Op::LoadRefCell) {
+        return None;
+    }
+    match inst.immediate {
+        Some(Immediate::LocalSlot(slot)) => Some((inst.op, slot)),
+        _ => None,
+    }
 }
 
 /// Promotes an `array_splice()` receiver local to `array<mixed>` when `$replacement` retypes it.
