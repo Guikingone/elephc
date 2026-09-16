@@ -59,7 +59,29 @@ pub(super) fn instruction_for_value<'a>(
 pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
+    retire_raw_occupant_before_ref_store(ctx, slot)?;
     store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type)
+}
+
+/// Retires what a still-raw slot holds before a ref-cell store overwrites it.
+///
+/// `StoreRefCell` owns the retirement of the previous pointee, and the managed-cell write-back
+/// does that itself. A slot whose ref binding is only CONDITIONAL (`if ($bind) { $a =& $v; }`)
+/// still reaches the same op on the path that never promoted, where the raw store just
+/// overwrites the frame word and the old owner is never released. `emit_owned_local_cleanup`
+/// skips itself at run time whenever the slot does hold a cell, so the promoted path keeps its
+/// publish-then-retire order.
+fn retire_raw_occupant_before_ref_store(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    if ctx.local_ref_cell_representation_is_definite(slot) {
+        return Ok(());
+    }
+    let target_ty = ctx.local_php_type(slot)?;
+    let offset = ctx.local_offset(slot)?;
+    crate::codegen::frame::emit_owned_local_cleanup(ctx, slot, offset, &target_ty);
+    Ok(())
 }
 
 /// Writes `value` into a ref-cell slot, picking the slot's active storage representation.
