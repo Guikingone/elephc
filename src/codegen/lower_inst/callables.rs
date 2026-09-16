@@ -210,6 +210,13 @@ fn lower_mixed_callable_descriptor_invoke(
     let callable_label = ctx.next_label("mixed_callable_closure");
     let fatal_label = ctx.next_label("mixed_callable_not_callable");
     let done_label = ctx.next_label("mixed_callable_done");
+    let eval_fallback_slot = if crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(
+        ctx.module,
+    ) {
+        super::builtins::eval::eval_context_local_slot(ctx)
+    } else {
+        None
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(callable, "x0")?;
@@ -324,13 +331,35 @@ fn lower_mixed_callable_descriptor_invoke(
             abi::emit_jump(ctx.emitter, &object_done_label);
             ctx.emitter.label(&next_label);
         }
-        emit_mixed_callable_not_callable_fatal(ctx, op_name);
+        if eval_fallback_slot.is_some() {
+            abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
+            abi::emit_jump(ctx.emitter, &fatal_label);
+        } else {
+            emit_mixed_callable_not_callable_fatal(ctx, op_name);
+        }
         ctx.emitter.label(&object_done_label);
         abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
     ctx.emitter.label(&fatal_label);
+    if let Some(slot) = eval_fallback_slot {
+        // An eval closure object matched no native shape. Wrap it into an owned adapter
+        // descriptor and invoke that; the invoker releases the descriptor afterwards.
+        let miss = ctx.next_label("mixed_callable_eval_miss");
+        emit_eval_closure_descriptor_or_branch(ctx, callable, slot, &miss)?;
+        abi::emit_reg_move(ctx.emitter, descriptor_reg, abi::int_result_reg(ctx.emitter));
+        emit_descriptor_reg_invoker_call_with_mixed_arg(
+            ctx,
+            inst,
+            descriptor_reg,
+            arg_mixed,
+            op_name,
+            true,
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&miss);
+    }
     emit_mixed_callable_not_callable_fatal(ctx, op_name);
     ctx.emitter.label(&done_label);
     Ok(())
@@ -411,6 +440,15 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     let string_label = ctx.next_label("mixed_callable_value_string");
     let fatal_label = ctx.next_label("mixed_callable_value_not_callable");
     let done_label = ctx.next_label("mixed_callable_value_done");
+    // Only an owned result can carry a freshly built adapter descriptor back to the caller.
+    let eval_fallback_slot = if retain_existing_descriptor
+        && crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(
+            ctx.module,
+        ) {
+        super::builtins::eval::eval_context_local_slot(ctx)
+    } else {
+        None
+    };
 
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -534,6 +572,9 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         }
         if let Some(message) = invalid_type_error {
             super::exceptions::emit_type_error(ctx, message);
+        } else if eval_fallback_slot.is_some() {
+            abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
+            abi::emit_jump(ctx.emitter, &fatal_label);
         } else {
             emit_mixed_callable_not_callable_fatal(ctx, op_name);
         }
@@ -543,12 +584,66 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     }
 
     ctx.emitter.label(&fatal_label);
+    if let Some(slot) = eval_fallback_slot {
+        emit_eval_closure_descriptor_fallback(ctx, callable, slot, &done_label)?;
+    }
     if let Some(message) = invalid_type_error {
         super::exceptions::emit_type_error(ctx, message);
     } else {
         emit_mixed_callable_not_callable_fatal(ctx, op_name);
     }
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Hands a boxed value no native shape matched to Magician before calling it not callable.
+///
+/// A closure created by `eval()` is an eval `Closure` object: runtime tag 6 with no generated
+/// class behind it, so every native arm misses. When this function owns an eval context,
+/// `__elephc_eval_is_callable` recognises the object and the adapter wrapper turns it into the
+/// descriptor `__elephc_eval_dynamic_callable_invoker` dispatches. A context that was never
+/// created (the slot is still zero) cannot own such an object, so that case keeps the fatal.
+fn emit_eval_closure_descriptor_fallback(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    context_slot: crate::ir::LocalSlotId,
+    done_label: &str,
+) -> Result<()> {
+    let miss = ctx.next_label("mixed_callable_eval_miss");
+    emit_eval_closure_descriptor_or_branch(ctx, callable, context_slot, &miss)?;
+    abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&miss);
+    Ok(())
+}
+
+/// Leaves an owned adapter descriptor for an eval callback in the result register, or branches.
+///
+/// Branches to `miss` when this function never created an eval context or when Magician does
+/// not recognise the boxed value as callable; both leave the registers as the caller's fatal
+/// path expects. Shared by the descriptor-value and the direct-invoke ladders.
+fn emit_eval_closure_descriptor_or_branch(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    context_slot: crate::ir::LocalSlotId,
+    miss: &str,
+) -> Result<()> {
+    let target = ctx.emitter.target;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let (arg0, arg1) = (abi::int_arg_reg_name(target, 0), abi::int_arg_reg_name(target, 1));
+    let offset = ctx.local_offset(context_slot)?;
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, miss);
+    abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+    ctx.load_value_to_reg(callable, arg1)?;
+    let is_callable = target.extern_symbol("__elephc_eval_is_callable");
+    abi::emit_call_label(ctx.emitter, &is_callable);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, miss);
+    abi::load_at_offset(ctx.emitter, arg0, offset);
+    ctx.load_value_to_reg(callable, arg1)?;
+    abi::emit_call_label(
+        ctx.emitter,
+        crate::codegen::eval_callable_helpers::EVAL_CALLBACK_WRAPPER_LABEL,
+    );
     Ok(())
 }
 

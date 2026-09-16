@@ -265,6 +265,23 @@ pub(super) fn eval_closure_target_arg(
         .ok_or(EvalStatus::RuntimeFatal)
 }
 
+/// Rebinds `$this` on an eval `Closure` object for the generated `Closure::bind` runtime.
+///
+/// The generated code knows the closure only as a callback-adapter descriptor, so it hands the
+/// boxed `Closure` object back here. The scope stays the closure's own: the runtime has no
+/// class-scope operand to forward yet, which is the same limit its native `$this`-only rebinding
+/// has. The receiver is an OWNED boxed object the bound closure takes over.
+pub(in crate::interpreter) fn eval_closure_bind_this_for_ffi(
+    closure: RuntimeCellHandle,
+    new_this: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let target = eval_closure_target_arg(closure, context, values)?;
+    let bound_this = eval_closure_bind_receiver_arg(new_this, values)?;
+    eval_closure_bind_target(target, bound_this, None, false, context, values)
+}
+
 /// Converts the `newThis` binding argument to an optional object receiver.
 pub(super) fn eval_closure_bind_receiver_arg(
     new_this: RuntimeCellHandle,

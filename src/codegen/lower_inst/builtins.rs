@@ -41,7 +41,7 @@ pub(crate) mod clone_with;
 pub(crate) mod ctype;
 pub(crate) mod curl;
 pub(crate) mod debug;
-mod eval;
+pub(super) mod eval;
 mod eval_facade;
 pub(crate) mod iconv;
 pub(crate) mod io;

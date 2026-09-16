@@ -82,6 +82,8 @@ pub(crate) use statements::eval_dynamic_destructor_for_object_cell;
 #[cfg(not(test))]
 pub(crate) use statements::eval_object_clone_with_properties_for_ffi;
 #[cfg(not(test))]
+pub(crate) use statements::eval_property_set_for_ffi;
+#[cfg(not(test))]
 pub(crate) use output_handlers::eval_ob_handler_callback;
 use statements::*;
 use throwables::*;
@@ -245,6 +247,16 @@ pub fn execute_context_callable_call_array_outcome(
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
     }
+}
+
+/// Rebinds `$this` on an eval `Closure` object on behalf of generated `Closure::bind` code.
+pub fn execute_context_closure_bind_this(
+    context: &mut ElephcEvalContext,
+    closure: RuntimeCellHandle,
+    new_this: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_closure_bind_this_for_ffi(closure, new_this, context, values)
 }
 
 /// Probes whether a callback value is callable in the shared eval context.

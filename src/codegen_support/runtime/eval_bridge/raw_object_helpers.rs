@@ -35,6 +35,7 @@ pub(super) fn emit_aarch64_install_dynamic_object_destructor_hook(emitter: &mut 
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
     emit_install_object_owner_hooks(emitter);
     emit_install_object_clone_hook(emitter);
+    emit_install_closure_bind_hook(emitter);
 }
 
 /// Emits the x86_64 wrapper that boxes a borrowed raw object pointer for Rust eval.
@@ -60,6 +61,23 @@ pub(super) fn emit_x86_64_install_dynamic_object_destructor_hook(emitter: &mut E
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
     emit_install_object_owner_hooks(emitter);
     emit_install_object_clone_hook(emitter);
+    emit_install_closure_bind_hook(emitter);
+}
+
+/// Installs the C callback `__rt_closure_bind` rebinds an eval closure's `$this` through.
+fn emit_install_closure_bind_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_closure_bind_hook_v1");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_elephc_eval_closure_bind_fn");
+            emitter.instruction("str x0, [x9]");                                // store the eval closure rebinding callback
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r10", "_elephc_eval_closure_bind_fn");
+            emitter.instruction("mov QWORD PTR [r10], rdi");                    // store the eval closure rebinding callback
+        }
+    }
+    emitter.instruction("ret");                                                 // return after installing the optional eval bind hook
 }
 
 /// Installs C callbacks whose final-release hook returns an owned Throwable box or null.

@@ -43,6 +43,8 @@ const MIXED_TAG_STRING: i64 = 1;
 const MIXED_TAG_OBJECT: i64 = 6;
 const EVAL_DYNAMIC_CALLABLE_INVOKER_LABEL: &str = "__elephc_eval_dynamic_callable_invoker";
 const EVAL_DYNAMIC_CALLABLE_ENTRY_LABEL: &str = "__elephc_eval_dynamic_callable_entry";
+/// Global wrapper that turns `(context, boxed callback)` into an owned adapter descriptor.
+pub(crate) const EVAL_CALLBACK_WRAPPER_LABEL: &str = "__elephc_eval_wrap_callback";
 const EVAL_DYNAMIC_CONTEXT_CAPTURE: usize = 0;
 const EVAL_DYNAMIC_CALLBACK_CAPTURE: usize = 1;
 const EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES: usize = 32;
@@ -180,6 +182,9 @@ pub(super) fn emit_eval_callable_descriptor_support(
     let object_cases = eval_invokable_object_callable_cases(module, emitter, data, &mut state);
     let dynamic_descriptor_label = Some(eval_dynamic_callable_descriptor(data));
     emit_eval_dynamic_callable_invoker(module, emitter, data);
+    if let Some(label) = dynamic_descriptor_label.as_deref() {
+        emit_eval_callback_wrapper(module, emitter, label);
+    }
     EvalCallableDescriptorSupport {
         argument_normalizer_needed: state.argument_normalizer_needed,
         string_cases,
@@ -215,6 +220,61 @@ fn eval_dynamic_callable_descriptor(data: &mut DataSection) -> String {
         CallableDescriptorInvocation::new(CallableDescriptorShape::CallbackAdapter),
         Some(EVAL_DYNAMIC_CALLABLE_INVOKER_LABEL),
     )
+}
+
+/// Emits `__elephc_eval_wrap_callback(context, boxed callback) -> owned adapter descriptor`.
+///
+/// The one place the adapter template label is known, so both the boxed-callable ladder (an
+/// eval closure object reaching a native call site) and `__rt_closure_bind` (through the
+/// `_elephc_eval_wrap_callback_fn` slot the first eval context fills) turn an eval callback into
+/// the descriptor `__elephc_eval_dynamic_callable_invoker` dispatches. The callback capture is
+/// retained here; the descriptor's release retires it like any Mixed capture.
+fn emit_eval_callback_wrapper(module: &Module, emitter: &mut Emitter, descriptor_label: &str) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: callback adapter wrapper ---");
+    emitter.label_global(EVAL_CALLBACK_WRAPPER_LABEL);
+    let size = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET
+        + EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES;
+    match module.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #32");                             // reserve the context, callback and frame slots
+            emitter.instruction("stp x29, x30, [sp, #16]");                     // preserve the caller frame around the runtime calls
+            emitter.instruction("add x29, sp, #16");                            // establish a stable wrapper frame pointer
+            emitter.instruction("str x0, [sp, #0]");                            // save the eval context capture
+            emitter.instruction("str x1, [sp, #8]");                            // save the boxed callback capture
+            emitter.instruction("mov x0, x1");                                  // retain the callback owned by the descriptor capture
+            emitter.instruction("bl __rt_incref");                              // the descriptor's release retires this owner
+            emitter.instruction(&format!("mov x0, #{size}"));                   // allocate the fixed descriptor plus two capture slots
+            emitter.instruction("bl __rt_heap_alloc");                          // create the runtime descriptor block
+            callable_descriptor::emit_copy_static_descriptor_to_runtime(emitter, "x0", descriptor_label);
+            emitter.instruction("ldr x9, [sp, #0]");                            // reload the eval context capture
+            abi::emit_store_to_address(emitter, "x9", "x0", dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE));
+            emitter.instruction("ldr x9, [sp, #8]");                            // reload the retained boxed callback capture
+            abi::emit_store_to_address(emitter, "x9", "x0", dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE));
+            emitter.instruction("ldp x29, x30, [sp, #16]");                     // restore the caller frame
+            emitter.instruction("add sp, sp, #32");                             // release the wrapper slots
+            emitter.instruction("ret");                                         // return the owned adapter descriptor
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish a stable wrapper frame pointer
+            emitter.instruction("sub rsp, 16");                                 // reserve the context and callback slots
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // save the eval context capture
+            emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // save the boxed callback capture
+            emitter.instruction("mov rax, rsi");                                // retain the callback owned by the descriptor capture
+            emitter.instruction("call __rt_incref");                            // the descriptor's release retires this owner
+            emitter.instruction(&format!("mov rax, {size}"));                   // allocate the fixed descriptor plus two capture slots
+            emitter.instruction("call __rt_heap_alloc");                        // create the runtime descriptor block
+            callable_descriptor::emit_copy_static_descriptor_to_runtime(emitter, "rax", descriptor_label);
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the eval context capture
+            abi::emit_store_to_address(emitter, "r10", "rax", dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE));
+            emitter.instruction("mov r10, QWORD PTR [rbp - 16]");               // reload the retained boxed callback capture
+            abi::emit_store_to_address(emitter, "r10", "rax", dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE));
+            emitter.instruction("mov rsp, rbp");                                // release the wrapper slots
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.instruction("ret");                                         // return the owned adapter descriptor
+        }
+    }
 }
 
 /// Emits the uniform invoker for descriptors that capture an eval callback value.

@@ -49,6 +49,41 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the source descriptor pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the new $this receiver
 
+    // -- an eval callback adapter is rebound by Magician, then wrapped again --
+    // Its two captures are the eval context and the boxed callback, never `$this`, so the
+    // native shape check below would abort. Both hooks are installed only when eval support is
+    // linked; without them the descriptor stays unsupported exactly as before.
+    emitter.instruction("ldr x9, [x0]");                                        // x9 = descriptor kind word
+    emitter.instruction(&format!(                                               // is this an eval callback adapter?
+        "cmp x9, #{}",
+        crate::codegen_support::callable_descriptor::CALLABLE_DESC_KIND_CALLBACK_ADAPTER
+    ));
+    emitter.instruction("b.ne __rt_closure_bind_native");                       // native descriptors keep the capture-shape path
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_elephc_eval_closure_bind_fn");
+    emitter.instruction("ldr x10, [x10]");                                      // x10 = Magician's rebinding callback, or null
+    emitter.instruction("cbz x10, __rt_closure_bind_unsupported");              // no eval support linked: keep the fatal answer
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the adapter descriptor
+    emitter.instruction("ldr x0, [x9, #64]");                                   // pass the captured eval context
+    emitter.instruction("ldr x1, [x9, #80]");                                   // pass the captured boxed callback
+    emitter.instruction("ldr x2, [sp, #8]");                                    // pass the raw new $this receiver
+    emitter.instruction("add x3, sp, #16");                                     // pass the bound-closure output slot
+    emitter.instruction("blr x10");                                             // ask Magician to rebind $this on the eval closure
+    emitter.instruction("cbz x0, __rt_closure_bind_unsupported");               // a rejected rebinding keeps the fatal answer
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_elephc_eval_wrap_callback_fn");
+    emitter.instruction("ldr x10, [x10]");                                      // x10 = generated adapter wrapper, installed with the eval context
+    emitter.instruction("cbz x10, __rt_closure_bind_unsupported");              // no wrapper means no eval context ever existed
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the adapter descriptor
+    emitter.instruction("ldr x0, [x9, #64]");                                   // pass the eval context to the wrapper
+    emitter.instruction("ldr x1, [sp, #16]");                                   // pass the owned bound closure cell
+    emitter.instruction("blr x10");                                             // x0 = adapter descriptor for the bound closure
+    emitter.instruction("str x0, [sp, #24]");                                   // park the descriptor while Magician's owner is retired
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the wrapper retained its own capture owner
+    emitter.instruction("bl __rt_decref_mixed");                                // so drop the owner Magician handed back
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the adapter descriptor
+    emitter.instruction("str x0, [sp, #16]");                                   // publish it as the bind result
+    emitter.instruction("b __rt_closure_bind_return");                          // return through the shared epilogue
+    emitter.label("__rt_closure_bind_native");
+
     // -- validate capture shape: $this, optionally followed by called-class id --
     emitter.instruction("ldr x9, [x0, #40]");                                   // x9 = descriptor environment record pointer
     emitter.instruction("cbz x9, __rt_closure_bind_unsupported");               // no captures means there is no $this to rebind
@@ -181,6 +216,41 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve spill slots (16-byte aligned)
     emitter.instruction("mov [rsp+0], rdi");                                    // save the source descriptor pointer
     emitter.instruction("mov [rsp+8], rsi");                                    // save the new $this receiver
+
+    // -- an eval callback adapter is rebound by Magician, then wrapped again (see AArch64) --
+    emitter.instruction("mov r10, [rdi]");                                      // r10 = descriptor kind word
+    emitter.instruction(&format!(                                               // is this an eval callback adapter?
+        "cmp r10, {}",
+        crate::codegen_support::callable_descriptor::CALLABLE_DESC_KIND_CALLBACK_ADAPTER
+    ));
+    emitter.instruction("jne __rt_closure_bind_native");                        // native descriptors keep the capture-shape path
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_elephc_eval_closure_bind_fn");
+    emitter.instruction("mov r11, [r11]");                                      // r11 = Magician's rebinding callback, or null
+    emitter.instruction("test r11, r11");                                       // is eval support linked at all?
+    emitter.instruction("jz __rt_closure_bind_unsupported");                    // no: keep the fatal answer
+    emitter.instruction("mov r10, [rsp+0]");                                    // reload the adapter descriptor
+    emitter.instruction("mov rdi, [r10+64]");                                   // pass the captured eval context
+    emitter.instruction("mov rsi, [r10+80]");                                   // pass the captured boxed callback
+    emitter.instruction("mov rdx, [rsp+8]");                                    // pass the raw new $this receiver
+    emitter.instruction("lea rcx, [rsp+16]");                                   // pass the bound-closure output slot
+    emitter.instruction("call r11");                                            // ask Magician to rebind $this on the eval closure
+    emitter.instruction("test rax, rax");                                       // was the rebinding accepted?
+    emitter.instruction("jz __rt_closure_bind_unsupported");                    // no: keep the fatal answer
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_elephc_eval_wrap_callback_fn");
+    emitter.instruction("mov r11, [r11]");                                      // r11 = generated adapter wrapper, installed with the eval context
+    emitter.instruction("test r11, r11");                                       // did an eval context ever install it?
+    emitter.instruction("jz __rt_closure_bind_unsupported");                    // no wrapper: keep the fatal answer
+    emitter.instruction("mov r10, [rsp+0]");                                    // reload the adapter descriptor
+    emitter.instruction("mov rdi, [r10+64]");                                   // pass the eval context to the wrapper
+    emitter.instruction("mov rsi, [rsp+16]");                                   // pass the owned bound closure cell
+    emitter.instruction("call r11");                                            // rax = adapter descriptor for the bound closure
+    emitter.instruction("mov [rsp+24], rax");                                   // park the descriptor while Magician's owner is retired
+    emitter.instruction("mov rax, [rsp+16]");                                   // the wrapper retained its own capture owner
+    emitter.instruction("call __rt_decref_mixed");                              // so drop the owner Magician handed back
+    emitter.instruction("mov rax, [rsp+24]");                                   // reload the adapter descriptor
+    emitter.instruction("mov [rsp+16], rax");                                   // publish it as the bind result
+    emitter.instruction("jmp __rt_closure_bind_return");                        // return through the shared epilogue
+    emitter.label("__rt_closure_bind_native");
 
     // -- validate capture shape: $this, optionally followed by called-class id --
     emitter.instruction("mov r8, [rdi+40]");                                    // r8 = descriptor environment record pointer

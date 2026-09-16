@@ -31,6 +31,16 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     register_eval_native_user_constants(ctx, offset);
     register_eval_native_functions(ctx, offset)?;
     register_eval_native_method_signatures(ctx, offset);
+    // The runtime's `__rt_closure_bind` is shared by eval-free programs, so it reaches the
+    // generated adapter wrapper through a slot the first eval context fills. Stored last: the
+    // registration helpers above still expect the fresh context handle in the result register.
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        scratch,
+        crate::codegen::eval_callable_helpers::EVAL_CALLBACK_WRAPPER_LABEL,
+    );
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_elephc_eval_wrap_callback_fn", 0);
     ctx.emitter.label(&ready);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);

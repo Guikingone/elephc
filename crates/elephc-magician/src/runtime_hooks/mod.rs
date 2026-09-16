@@ -30,7 +30,7 @@ use crate::abi::ElephcEvalContext;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 #[cfg(not(test))]
 use externs::{
-    __elephc_eval_install_dynamic_object_clone_hook,
+    __elephc_eval_install_closure_bind_hook, __elephc_eval_install_dynamic_object_clone_hook,
     __elephc_eval_install_dynamic_object_destructor_hook, __elephc_eval_value_array_new,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
 };
@@ -116,6 +116,17 @@ pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
             object_owners::release_object_children as *const () as usize,
             crate::ffi::array_references::retire_array_reference_cell_callback as *const () as usize,
         );
+    }
+}
+
+/// Installs the eval closure `$this` rebinding callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of a function with the `__elephc_eval_closure_bind_this` ABI.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_closure_bind_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_closure_bind_hook(callback);
     }
 }
 

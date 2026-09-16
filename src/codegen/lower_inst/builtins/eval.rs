@@ -274,6 +274,16 @@ use symbol_queries::*;
 use argument_results::*;
 #[allow(unused_imports)]
 use context_registration::*;
+
+/// Returns the hidden eval-context local of this function, when it has one.
+///
+/// A function only carries the slot when it can run eval itself; the boxed-callable ladder uses
+/// it to hand an eval closure object to Magician instead of reporting it not callable.
+pub(in crate::codegen::lower_inst) fn eval_context_local_slot(
+    ctx: &FunctionContext<'_>,
+) -> Option<crate::ir::LocalSlotId> {
+    context_registration::eval_context_slot(ctx).ok()
+}
 #[allow(unused_imports)]
 use registration_collection::*;
 #[allow(unused_imports)]

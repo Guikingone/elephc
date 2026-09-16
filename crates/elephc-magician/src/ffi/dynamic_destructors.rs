@@ -60,6 +60,9 @@ pub(crate) fn install_dynamic_object_destructor_hook() {
         runtime_hooks::install_dynamic_object_clone_hook(
             __elephc_eval_dynamic_object_clone as *const () as usize,
         );
+        runtime_hooks::install_closure_bind_hook(
+            crate::ffi::callables::__elephc_eval_closure_bind_this as *const () as usize,
+        );
     }
 }
 
@@ -229,6 +232,114 @@ unsafe fn dynamic_object_destruct_inner(
         return Ok(2);
     }
     destruct_result.map(u64::from)
+}
+
+/// Writes a property on an eval-declared object under eval's visibility and `__set` rules.
+///
+/// The generated stdClass write arm is where a boxed receiver lands when no declared slot
+/// matched, and an eval-declared class instance is backed by exactly that layout. Writing
+/// straight into its hash bypassed the class's private slots and its `__set` guard, so a
+/// `mixed $object` parameter could create `$object->hidden` where php raises
+/// `Cannot access private property`. Returns zero when Magician does not own `object` (the
+/// generated path continues untouched), one when the write completed, or two with an owned
+/// Throwable in `throwable_out`.
+///
+/// The write runs under the CALLER's lexical class scope, `scope_ptr`/`scope_len` (empty for a
+/// free function or the top level), not under whatever eval method happens to be on the class
+/// stack: an eval `__set` that hands `$this` to a generated free function must see that function
+/// refused, exactly as php refuses it.
+///
+/// `value_block` is one writable three-word stack block: word 0 receives an owned Throwable on
+/// status two (it is cleared first), word 2 holds the boxed value cell the caller keeps owning —
+/// the write retains its own reference. Packing them keeps the call inside the six integer
+/// argument registers both supported ABIs share.
+///
+/// # Safety
+/// `object` must be null or a live elephc runtime object pointer that stays borrowed for the
+/// call. `name_ptr` must be readable for `name_len` bytes and `scope_ptr` for `scope_len` bytes.
+/// `value_block` must point at three writable native words as described above; a Throwable is
+/// transferred through word 0 only after Rust has returned, so native unwinding never crosses
+/// a Rust frame.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_object_property_set(
+    object: *mut RuntimeCell,
+    name_ptr: *const u8,
+    name_len: u64,
+    value_block: *mut *mut RuntimeCell,
+    scope_ptr: *const u8,
+    scope_len: u64,
+) -> u64 {
+    let written = std::panic::catch_unwind(|| unsafe {
+        dynamic_object_property_set_inner(
+            object, name_ptr, name_len, value_block, scope_ptr, scope_len,
+        )
+    });
+    match written {
+        Ok(Ok(status)) => status,
+        Ok(Err(_)) | Err(_) => {
+            let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
+            let _ = values.fatal("Fatal error: eval() property write failed\n");
+            std::process::abort()
+        }
+    }
+}
+
+/// Executes the property write after the exported ABI shim has installed a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_dynamic_object_property_set`.
+#[cfg(not(test))]
+unsafe fn dynamic_object_property_set_inner(
+    object: *mut RuntimeCell,
+    name_ptr: *const u8,
+    name_len: u64,
+    value_block: *mut *mut RuntimeCell,
+    scope_ptr: *const u8,
+    scope_len: u64,
+) -> Result<u64, EvalStatus> {
+    if value_block.is_null() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let throwable_out = value_block;
+    let value = unsafe { *value_block.add(2) };
+    unsafe { *throwable_out = std::ptr::null_mut(); }
+    if object.is_null() || value.is_null() {
+        return Ok(0);
+    }
+    let identity = object as u64;
+    let Some(context) = dynamic_object_owner_context(identity) else {
+        return Ok(0);
+    };
+    let Some(context) = (unsafe { context.as_mut() }) else {
+        return Ok(0);
+    };
+    if context.abi_version() != ABI_VERSION || context.dynamic_object_class(identity).is_none() {
+        return Ok(0);
+    }
+    let name = crate::ffi::util::abi_name_to_string(name_ptr, name_len)?;
+    let scope = crate::ffi::util::abi_name_to_string(scope_ptr, scope_len)?;
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let object_cell = ElephcRuntimeOps::object_from_raw(object)?;
+    let previous_throw = context.take_pending_throw();
+    // An empty name reads back as "no class scope", which is the free-function answer.
+    context.push_class_scope(scope);
+    let written = crate::interpreter::eval_property_set_for_ffi(
+        object_cell,
+        &name,
+        RuntimeCellHandle::from_raw(value).borrowed(),
+        context,
+        &mut values,
+    );
+    context.pop_class_scope();
+    let escaped = take_escaping_throwable(&written, context, &mut values);
+    let escaped =
+        finish_bridge_ownership(escaped, previous_throw, object_cell, context, &mut values)?;
+    if let Some(thrown) = escaped {
+        unsafe { *throwable_out = thrown.as_ptr(); }
+        return Ok(2);
+    }
+    written.map(|()| 1)
 }
 
 /// Clones an eval-owned object, returning zero for a miss, one for success, or two with an owned Throwable.

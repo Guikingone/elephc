@@ -1250,7 +1250,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
 
     ctx.emitter.label(&stdclass_label);
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
-    emit_runtime_stdclass_set_for_stacked_name(ctx, value, &value_ty, 16, 0)?;
+    emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(ctx, value, &value_ty, 16, 0, 32)?;
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -1406,6 +1406,112 @@ pub(super) fn emit_runtime_stdclass_get_for_stacked_name(
     }
     abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
+}
+
+/// Same write, but an eval-declared receiver is handed to Magician's setter first.
+///
+/// A boxed receiver reaches the stdClass arm when no declared slot matched, and an eval-declared
+/// class instance is backed by exactly that layout: writing into its hash here skipped the eval
+/// class's private slots and its `__set` guard. `__elephc_eval_dynamic_object_property_set`
+/// answers zero for an ordinary receiver, so the plain `__rt_stdclass_set` path stays the fast
+/// one, one when it completed the write, and two with an owned Throwable that is raised here
+/// after every temporary block — this probe's, the value's and the enclosing ladder's
+/// `enclosing_stack_bytes` — has been released, which is what the unwinder expects.
+///
+/// Emitted only when the module can run eval at all: an eval-free program links no Magician.
+fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+    object_stack_offset: usize,
+    name_stack_offset: usize,
+    enclosing_stack_bytes: usize,
+) -> Result<()> {
+    if !crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(
+        ctx.module,
+    ) {
+        return emit_runtime_stdclass_set_for_stacked_name(
+            ctx, value, value_ty, object_stack_offset, name_stack_offset,
+        );
+    }
+    let plain = ctx.next_label("eval_prop_set_plain");
+    let handled = ctx.next_label("eval_prop_set_handled");
+    let raise = ctx.next_label("eval_prop_set_raise");
+    let done = ctx.next_label("eval_prop_set_done");
+    materialize_dynamic_property_mixed_value(ctx, value, value_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    // Frame from here: [sp] Throwable out slot, [sp+16] value cell, then the caller's block.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    let target = ctx.emitter.target;
+    let (arg0, arg1, arg2, arg3, arg4, arg5) = (
+        abi::int_arg_reg_name(target, 0),
+        abi::int_arg_reg_name(target, 1),
+        abi::int_arg_reg_name(target, 2),
+        abi::int_arg_reg_name(target, 3),
+        abi::int_arg_reg_name(target, 4),
+        abi::int_arg_reg_name(target, 5),
+    );
+    // php decides visibility from the WRITING function's lexical class; a free function has none.
+    let scope = ctx.function.lexical_class.clone().unwrap_or_default();
+    let (scope_label, scope_len) = ctx.data.add_string(scope.as_bytes());
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, object_stack_offset + 32);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, name_stack_offset + 32);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg2, name_stack_offset + 40);
+    // One block carries both: word 0 is the Throwable slot, word 2 the value cell pushed above.
+    abi::emit_temporary_stack_address(ctx.emitter, arg3, 0);
+    abi::emit_symbol_address(ctx.emitter, arg4, &scope_label);
+    abi::emit_load_int_immediate(ctx.emitter, arg5, scope_len as i64);
+    let symbol = target.extern_symbol("__elephc_eval_dynamic_object_property_set");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &plain);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, #2"));          // did Magician hand back a Throwable instead of writing?
+            ctx.emitter.instruction(&format!("b.eq {raise}"));                  // raise it after unwinding every temporary block
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, 2"));           // did Magician hand back a Throwable instead of writing?
+            ctx.emitter.instruction(&format!("je {raise}"));                    // raise it after unwinding every temporary block
+        }
+    }
+    ctx.emitter.label(&handled);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&raise);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match target.arch {
+        Arch::AArch64 => abi::emit_store_reg_to_symbol(ctx.emitter, "x1", "_exc_value", 0),
+        Arch::X86_64 => abi::emit_store_reg_to_symbol(ctx.emitter, "rdi", "_exc_value", 0),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 32 + enclosing_stack_bytes);
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+
+    ctx.emitter.label(&plain);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    match target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", object_stack_offset + 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", name_stack_offset + 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", name_stack_offset + 24);
+            abi::emit_pop_reg(ctx.emitter, "x3");
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", object_stack_offset + 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", name_stack_offset + 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", name_stack_offset + 24);
+            abi::emit_pop_reg(ctx.emitter, "rcx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_set");
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Calls `__rt_stdclass_set` using a stacked object pointer and runtime name pair.

@@ -333,6 +333,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_stack_limit", 8, target));
     out.push_str(&comm_directive("_stack_limit_main", 8, target));
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_eval_closure_bind_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_eval_wrap_callback_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_object_gc_child_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_object_release_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_array_reference_retire_fn", 8, target));

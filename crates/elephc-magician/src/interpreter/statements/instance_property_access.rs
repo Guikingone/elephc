@@ -163,7 +163,7 @@ pub(in crate::interpreter) fn eval_property_get_result(
 }
 
 /// Writes one object property while enforcing eval-declared member visibility.
-pub(in crate::interpreter) fn eval_property_set_result(
+pub(crate) fn eval_property_set_result(
     object: RuntimeCellHandle,
     property_name: &str,
     value: RuntimeCellHandle,
