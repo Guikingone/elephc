@@ -881,7 +881,9 @@ fn merge_local_assignment_type(
     // Everything above still runs (the retype-site re-decision, and the callable/reflection
     // metadata updates `check_assign` performed before calling in), so only the type merge is
     // short-circuited.
-    if checker.mixed_storage_locals.contains(name) {
+    if checker.mixed_storage_locals.contains(name)
+        || checker.boxed_ref_aliased_locals.contains(name)
+    {
         // A marked name still needs its binding depth on its FIRST store, for the same reason the
         // fresh-insert branch below records one: it is the name's single authority on whether a
         // later decision is judged against a binding this body definitely created.

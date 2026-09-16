@@ -755,6 +755,11 @@ impl Checker {
             let ExprKind::Variable(name) = &value.kind else {
                 continue;
             };
+            // The call-site promotion below changes this local to a rebindable Mixed cell.
+            // Keep the checker environment aligned with that storage after the call so a
+            // later assignment writes through the cell instead of being rejected as a change
+            // from the pre-call concrete type. `unset()` clears this provenance normally.
+            self.boxed_ref_aliased_locals.insert(name.clone());
             if value.span.identifies_a_node() {
                 self.boxed_reference_promotion_sites
                     .entry((self.current_loop_storage_scope.clone(), value.span))
