@@ -147,6 +147,39 @@ echo $x, $y, strlen($x), strlen($y);
     );
 }
 
+/// Guard: a wrapper around the operand must not turn an elided cast into a copy.
+///
+/// `lower_cast` elides on the operand's IR type, and `@$s` and `(string)$s` both leave a
+/// `Str`. Deciding otherwise is worse than a leak: the caller releases the argument's own
+/// string, and the caller's variable reads back empty afterwards. These print the ORIGINAL
+/// after the call for exactly that reason -- a fixture that only checked the return value
+/// would pass while `$p` was being freed underneath it.
+#[test]
+fn test_wrapped_string_cast_over_a_string_parameter_stays_a_borrow() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function suppressed(string $s) { return (string)@$s; }
+function nested(string $s) { return (string)(string)$s; }
+function both(string $s) { return (string)@(string)$s; }
+$p = str_repeat("p", 3);
+echo suppressed($p), "|", $p, "|";
+echo nested($p), "|", $p, "|";
+echo both($p), "|", $p, "|";
+echo $p === "ppp" ? "intact" : "CORRUPT";
+"#,
+    );
+    assert_eq!(
+        out.stdout, "ppp|ppp|ppp|ppp|ppp|ppp|intact",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "a wrapped elided cast must stay a borrow, and stay balanced: {}",
+        out.stderr
+    );
+}
+
 /// Guard: the sibling paths that were already clean stay clean.
 ///
 /// Concatenating, echoing or discarding the same cast all release the temporary inside the

@@ -658,15 +658,36 @@ fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> Return
     if !matches!(target, CastType::String) {
         return ReturnArgAlias::None;
     }
-    let ExprKind::Variable(name) = &inner.kind else {
-        return ReturnArgAlias::None;
-    };
-    if !state.is_string_parameter(name) {
+    if !operand_keeps_a_string_parameter_slot(inner, state) {
         return ReturnArgAlias::None;
     }
     // The parameter's own provenance, not its index: `function f(string $a, string $b)
     // { $a = $b; return (string)$a; }` still has a `Str` slot, but it now holds $b's storage.
     expr_alias(inner, state)
+}
+
+/// Reports whether a `(string)` cast's operand still has the bare `Str` slot that makes
+/// `lower_cast` elide the cast.
+///
+/// It has to see through exactly what `expr_alias` sees through, or the two disagree about
+/// which expression "the operand" is, and the disagreement is a use-after-free rather than a
+/// leak: `return (string)@$s` over a `string` parameter is elided just as `return (string)$s`
+/// is, so calling its result independent has the caller release the argument's own string.
+/// An already-elided inner `(string)` cast leaves a `Str` behind too, so `(string)(string)$s`
+/// nests the same way.
+fn operand_keeps_a_string_parameter_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
+    match &inner.kind {
+        ExprKind::Variable(name) => state.is_string_parameter(name),
+        // The wrappers `expr_alias` treats as transparent, which produce no value of their own.
+        ExprKind::ErrorSuppress(inner)
+        | ExprKind::NamedArg { value: inner, .. }
+        | ExprKind::Spread(inner) => operand_keeps_a_string_parameter_slot(inner, state),
+        ExprKind::Cast {
+            target: CastType::String,
+            expr: inner,
+        } => operand_keeps_a_string_parameter_slot(inner, state),
+        _ => false,
+    }
 }
 
 /// Conservatively invalidates locals that an expression can rewrite by reference.
