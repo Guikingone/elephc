@@ -48,6 +48,14 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_heap_alloc_start");                          // skip if already >= 8
     emitter.instruction("mov x0, #8");                                          // round up to minimum 8 bytes
     emitter.label("__rt_heap_alloc_start");
+    // -- keep every payload 8-byte aligned --
+    // The bump path adds the payload size and the 16-byte header straight onto the offset, so a
+    // request that is not a multiple of 8 — a persisted string of any odd length — misaligns
+    // EVERY block carved after it. Generated code reads those with plain word loads and never
+    // notices, but the eval interpreter dereferences the same blocks as `*mut RuntimeCell` and
+    // aborts on the alignment check.
+    emitter.instruction("add x0, x0, #7");                                      // round the payload up to the next 8-byte boundary
+    emitter.instruction("and x0, x0, #0xfffffffffffffff8");                     // clear the low bits so the following block stays aligned
     emitter.instruction("lsr x9, x0, #32");                                     // inspect bits the 32-bit block-size header cannot represent
     emitter.instruction("cbnz x9, __rt_heap_alloc_size_overflow");              // reject unrepresentable payload sizes before truncating metadata
 
@@ -310,6 +318,14 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_heap_alloc_start");                           // keep the original request when it already satisfies the minimum payload size
     emitter.instruction("mov rax, 8");                                          // round tiny allocations up so free blocks can still carry a next pointer
     emitter.label("__rt_heap_alloc_start");
+    // -- keep every payload 8-byte aligned --
+    // The bump path adds the payload size and the 16-byte header straight onto the offset, so a
+    // request that is not a multiple of 8 — a persisted string of any odd length — misaligns
+    // EVERY block carved after it. Generated code reads those with plain word loads and never
+    // notices, but the eval interpreter dereferences the same blocks as `*mut RuntimeCell` and
+    // aborts on the alignment check.
+    emitter.instruction("add rax, 7");                                          // round the payload up to the next 8-byte boundary
+    emitter.instruction("and rax, -8");                                         // clear the low bits so the following block stays aligned
     emitter.instruction("mov r10d, 0xffffffff");                                // materialize u32::MAX with zero-extension to a 64-bit comparison operand
     emitter.instruction("cmp rax, r10");                                        // verify the request fits the 32-bit block-size header
     emitter.instruction("ja __rt_heap_alloc_size_overflow");                    // reject before a narrowing metadata store can truncate the size
