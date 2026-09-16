@@ -34,8 +34,11 @@ const ARGUMENTS: usize = 56;
 const CALLBACK_RESULT: usize = 64;
 const BORROW_HEAD: usize = 72;
 const INVOCATION_SCOPE: usize = 80;
-const ARGUMENT_OWNER_OFFSET: usize = 0;
-const CALLBACK_RESULT_OFFSET: usize = CALLBACK_RESULT - ARGUMENTS;
+// The visitor receives a pointer to the lower-address callback-result slot. Positive offsets from
+// that address move toward the argument slot because native frame offsets are measured downward
+// from the frame pointer.
+const ARGUMENT_OWNER_OFFSET: usize = CALLBACK_RESULT - ARGUMENTS;
+const CALLBACK_RESULT_OFFSET: usize = 0;
 
 const VISIT_FRAME: usize = 144;
 const VISIT_CALLBACK: usize = 8;
@@ -92,7 +95,7 @@ fn emit_entry(emitter: &mut Emitter) {
     abi::emit_frame_slot_address(
         emitter,
         abi::int_arg_reg_name(emitter.target, 3),
-        ARGUMENTS,
+        CALLBACK_RESULT,
     );
     abi::load_at_offset(
         emitter,
@@ -634,24 +637,24 @@ mod tests {
                 assert!(!asm.contains("sub x10, x10, #4"), "{name}: {asm}");
             }
             let owner_pair = if target.arch == Arch::X86_64 {
-                "lea rcx, [rbp - 56]"
+                "lea rcx, [rbp - 64]"
             } else {
-                "sub x3, x29, #56"
+                "sub x3, x29, #64"
             };
             assert!(asm.contains(owner_pair), "{name}: {asm}");
             let argument_load = if target.arch == Arch::X86_64 {
-                "mov rsi, QWORD PTR [rsi + 0]"
+                "mov rsi, QWORD PTR [rsi + 8]"
             } else {
-                "ldr x1, [x1, #0]"
+                "ldr x1, [x1, #8]"
             };
             let invoke_path = asm.split_once("__rt_array_walk_boxed_visit_invoke:").unwrap().1;
             let loaded = invoke_path.find(argument_load).expect("load the argument owner, not the result slot");
             let invoked = invoke_path.find("__rt_callable_invoke_owned_args").unwrap();
             assert!(loaded < invoked, "{name}: {asm}");
             let result_store = if target.arch == Arch::X86_64 {
-                "mov QWORD PTR [r10 + 8], rax"
+                "mov QWORD PTR [r10 + 0], rax"
             } else {
-                "str x0, [x9, #8]"
+                "str x0, [x9, #0]"
             };
             assert!(
                 invoke_path[invoked..].contains(result_store),
