@@ -27,6 +27,8 @@ use crate::codegen::{CodegenIrError, Result};
 
 #[cfg(test)]
 mod element_address_tests;
+#[cfg(test)]
+mod promotion_owner_tests;
 
 /// Lowers indexed-array allocation through the shared runtime constructor.
 pub(super) fn lower_array_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -141,6 +143,13 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
     let array = expect_operand(inst, 0)?;
     require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
     let result_value_ty = require_array_to_hash_result(&inst.result_php_type.codegen_repr(), inst)?;
+    if let Some(slot) = source_load_local_slot(ctx, array)? {
+        // A late whole-frame widening can make this concrete LoadLocal unbox an owned child from
+        // Mixed storage even though lowering emitted no ReleaseLocalSlot before the conversion.
+        // Retire that outer box now, while the retained child keeps the source alive. Raw array
+        // slots take the no-op branch, so ArrayToHash remains the sole consumer of their owner.
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let already_hash = ctx.next_label("array_to_hash_already_hash");
