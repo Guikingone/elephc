@@ -1805,6 +1805,10 @@ impl RuntimeFnId {
         if matches!(
             self,
             RuntimeFnId::IntvalBase
+                // Both array mutators answer the resulting element count. The returned
+                // machine integer cannot keep any variadic value operand alive.
+                | RuntimeFnId::ArrayPush
+                | RuntimeFnId::ArrayUnshift
                 | RuntimeFnId::ArrayAny
                 | RuntimeFnId::ArrayAll
                 | RuntimeFnId::BcComp
