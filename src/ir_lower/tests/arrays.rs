@@ -1129,10 +1129,16 @@ echo $scalars[0];
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
+        // Both element arguments reach the callee through the parent's boxed slots. A nested
+        // array slot exposes its interior address; a scalar slot is promoted to a managed
+        // reference cell first, which is the same guarantee with an owner attached.
         let mut addresses = 0;
         for function in &module.functions {
             for instruction in &function.instructions {
-                if instruction.op == Op::ArrayElemAddr {
+                if matches!(
+                    instruction.op,
+                    Op::ArrayElemAddr | Op::LoadArrayElemRefCell | Op::LoadArrayElemRefCellExisting
+                ) {
                     addresses += 1;
                     assert_eq!(instruction.result_php_type, PhpType::Pointer(None), "{name}");
                     assert_eq!(instruction.result_type, IrType::I64, "{name}");
@@ -1437,7 +1443,12 @@ echo count($hashLeft), count($arrayLeft);
                 _ => unreachable!(),
             };
             assert_eq!(main.value(temporary).unwrap().ownership, Ownership::Owned, "{target}: {op:?}");
-            let release = &main.instructions[index + 1];
+            // An optimization pass can leave a `Nop` in place of an instruction it removed, so
+            // the release is the next instruction that still does something.
+            let release = main.instructions[index + 1..]
+                .iter()
+                .find(|instruction| instruction.op != Op::Nop)
+                .unwrap_or_else(|| panic!("{target}: {op:?} has no following instruction"));
             assert_eq!(release.op, Op::Release, "{target}: {op:?}");
             assert_eq!(release.operands, [temporary], "{target}: {op:?}");
         }
