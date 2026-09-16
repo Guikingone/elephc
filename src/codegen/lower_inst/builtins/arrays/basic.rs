@@ -58,24 +58,73 @@ pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruct
     )
 }
 
-/// Lowers `array_push()` by appending one value and publishing the mutated array.
+/// Lowers `array_push()` by appending every value and publishing the mutated array.
+///
+/// The operand list is `[array, value…]` with any number of trailing values, matching PHP's
+/// `array_push(array &$array, mixed ...$values)`. `array_push($a)` with no values is legal PHP
+/// too and just reads the current length back.
+///
+/// Values are appended one at a time in source order. Each append can reach `__rt_array_grow`
+/// and relocate the array, so the per-value helper republishes the receiver between steps rather
+/// than once at the end.
 pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_push", 2)?;
+    if inst.operands.is_empty() {
+        return Err(CodegenIrError::invalid_module(
+            "array_push expected at least 1 arg, got 0".to_string(),
+        ));
+    }
     let array = expect_operand(inst, 0)?;
+    let boxed_receiver = matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    );
+    for index in 1..inst.operands.len() {
+        let value = expect_operand(inst, index)?;
+        if boxed_receiver {
+            super::super::super::arrays::lower_mixed_array_append_value(ctx, array, value)?;
+        } else {
+            super::super::super::arrays::lower_array_push_value(ctx, inst, array, value)?;
+        }
+    }
+    load_array_push_length_to_result(ctx, array)?;
+    store_if_result(ctx, inst)
+}
+
+/// Materializes the receiver's post-append element count into the int result register.
+///
+/// PHP's `array_push()` returns the new number of elements. Reading it back from the array
+/// rather than from the last append's return register covers the value-less form, which never
+/// calls a helper at all, and survives the write-backs each append performs.
+///
+/// A boxed `Mixed` receiver holds the container behind a cell, so the count comes from the
+/// generic length helper; a typed indexed array keeps its logical length in the first payload
+/// word and is read directly.
+fn load_array_push_length_to_result(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+) -> Result<()> {
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        super::super::super::arrays::lower_mixed_array_append(ctx, inst)?;
-    } else {
-        super::super::super::arrays::lower_array_push(ctx, inst)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.load_value_to_reg(array, "x0")?,
+            Arch::X86_64 => ctx.load_value_to_reg(array, "rdi")?,
+        };
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+        return Ok(());
     }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction("ldr x0, [x0]");                            // read the indexed-array logical length as the int result
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rax")?;
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // read the indexed-array logical length as the int result
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.

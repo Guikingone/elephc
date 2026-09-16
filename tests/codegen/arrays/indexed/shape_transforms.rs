@@ -8,6 +8,7 @@
 //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
 
 use super::*;
+use crate::support::compile_and_run_with_heap_debug;
 
 /// Tests `array_fill(start_index, num, value)` — creates a 3-element array indexed from 0,
 /// all initialized to 42, then accesses elements via integer index.
@@ -291,4 +292,85 @@ echo "|", count($r);
 "#,
     );
     assert_eq!(out, "n0=2;z=1;|2");
+}
+
+
+/// Pins PHP's real `array_push()` signature: `array_push(array &$array, mixed ...$values)`
+/// (issue #677).
+///
+/// The arity was pinned to exactly two arguments, so `array_push($a, 3, 4)` — ordinary PHP —
+/// was rejected with `array_push() takes exactly 2 arguments`, and the value-less
+/// `array_push($a)` with it. The return type was `Void`, so `$n = array_push($a, 1)` read `NULL`
+/// where PHP gives the new element count.
+///
+/// The matrix walks the value counts, the growth that a multi-value push forces (each append can
+/// reach `__rt_array_grow` and relocate the array, so the receiver is republished BETWEEN values
+/// rather than once at the end), a bool payload, all five receiver places, and left-to-right
+/// argument evaluation.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_push_accepts_phps_full_variadic_signature() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2]; $n = array_push($a, 3, 4); echo implode(",", $a), "|", $n, "\n";
+$b = [1];    $n = array_push($b, 2);    echo implode(",", $b), "|", $n, "\n";
+$c = [1, 2]; $n = array_push($c);       echo implode(",", $c), "|", $n, "\n";
+$d = [];     $n = array_push($d, 1, 2, 3, 4, 5); echo implode(",", $d), "|", $n, "\n";
+$g = [1]; array_push($g, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13); echo implode(",", $g), "|", count($g), "\n";
+$bo = [true]; $n = array_push($bo, false, true); echo count($bo), ",", ($bo[1] ? 1 : 0), ",", ($bo[2] ? 1 : 0), "|", $n, "\n";
+function viaRef(array &$r) { return array_push($r, 8, 9); }
+$p = [1]; $n = viaRef($p); echo implode(",", $p), "|", $n, "\n";
+class PushBox { public array $items = [1]; }
+$box = new PushBox(); $n = array_push($box->items, 2, 3); echo implode(",", $box->items), "|", $n, "\n";
+class PushShelf { public static array $items = [1]; }
+$n = array_push(PushShelf::$items, 2, 3); echo implode(",", PushShelf::$items), "|", $n, "\n";
+$rows = [[1]]; $n = array_push($rows[0], 2, 3); echo implode(",", $rows[0]), "|", $n, "\n";
+function sideEffect(int $v): int { echo "eval", $v, " "; return $v; }
+$s = []; array_push($s, sideEffect(1), sideEffect(2), sideEffect(3)); echo "| ", implode(",", $s), "\n";
+$r = [1]; array_push($r, 2, 3, 4); echo $r[0], $r[1], $r[2], $r[3], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "1,2,3,4|4\n",
+            "1,2|2\n",
+            "1,2|2\n",
+            "1,2,3,4,5|5\n",
+            "1,2,3,4,5,6,7,8,9,10,11,12,13|13\n",
+            "3,0,1|3\n",
+            "1,8,9|3\n",
+            "1,2,3|3\n",
+            "1,2,3|3\n",
+            "1,2,3|3\n",
+            "eval1 eval2 eval3 | 1,2,3\n",
+            "1234\n",
+        )
+    );
+}
+
+/// Verifies a multi-value `array_push()` neither leaks the appended values nor double releases
+/// the storage its own growth relocated.
+///
+/// Thirteen appends into a one-element array force several `__rt_array_grow` calls, each of which
+/// frees the previous buffer after republishing the new pointer, so an imbalance on either side
+/// shows up here rather than in a single-iteration total.
+#[test]
+fn test_array_push_variadic_growth_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 32; $i++) {
+    $g = [1];
+    array_push($g, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
+}
+echo count($g), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "13\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "variadic array_push leaked: {}",
+        out.stderr
+    );
 }

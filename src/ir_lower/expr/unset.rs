@@ -58,9 +58,17 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
 /// EIR backend can remove.
 ///
 /// Associative arrays remove the element directly; packed indexed arrays are converted to a hash at
-/// the unset site (PHP `unset()` leaves a sparse array). By-reference locals are excluded: their
-/// storage is aliased to a caller whose static type would no longer match after a representation
-/// change.
+/// the unset site (PHP `unset()` leaves a sparse array).
+///
+/// A by-reference local — a `&$param` or a `&$x` binding — is accepted for the ASSOCIATIVE case
+/// only. The removal happens in place there, and `lower_hash_unset` publishes the copy-on-write
+/// split back through the receiver's ref cell, so the caller sees it and its slot still describes
+/// the same representation. It was refused outright until issue #677, which made
+/// `function u(array &$a) { unset($a["b"]); }` a backend error although every other write through a
+/// by-reference array (`$a["c"] = 3`, `array_unshift`, `sort`) already worked.
+///
+/// The INDEXED case keeps the refusal: `unset()` leaves a key hole, so the local must become a
+/// hash, and the caller's slot — still typed `array<T>` — is storage this callee cannot retype.
 pub(super) fn unset_array_access_has_local_array_receiver(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
@@ -68,13 +76,11 @@ pub(super) fn unset_array_access_has_local_array_receiver(
     let ExprKind::Variable(name) = &array.kind else {
         return false;
     };
-    if ctx.is_ref_bound_local(name) {
-        return false;
+    match ctx.local_type(name).codegen_repr() {
+        PhpType::AssocArray { .. } => true,
+        PhpType::Array(_) => !ctx.is_ref_bound_local(name),
+        _ => false,
     }
-    matches!(
-        ctx.local_type(name).codegen_repr(),
-        PhpType::AssocArray { .. } | PhpType::Array(_)
-    )
 }
 
 /// Returns true when an array-access unset receiver is a static ArrayAccess object.
@@ -95,10 +101,13 @@ pub(super) fn unset_array_access_has_object_receiver(
 
 /// Lowers `unset($array[$key])`, dispatching on the receiver kind.
 ///
-/// An associative-array local removes the element in place through `Op::HashUnset`. A packed
-/// indexed-array local is first converted to a hash (PHP keeps the surviving keys without
-/// renumbering) and then removed. An `ArrayAccess` object dispatches to its `offsetUnset($key)`
-/// method like before. By-reference array locals fall through to the object path.
+/// An associative-array local removes the element in place through `Op::HashUnset`, whether or not
+/// it is by-reference: the backend publishes the copy-on-write split through the receiver's place,
+/// so a `&$param` reaches the caller's table. A packed indexed-array local is first converted to a
+/// hash (PHP keeps the surviving keys without renumbering) and then removed, which is a
+/// representation change and therefore stays limited to a local this function owns. An
+/// `ArrayAccess` object dispatches to its `offsetUnset($key)` method like before, and a
+/// by-reference INDEXED local falls through to that path.
 pub(super) fn lower_unset_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
@@ -106,23 +115,21 @@ pub(super) fn lower_unset_array_access(
     expr: &Expr,
 ) {
     if let ExprKind::Variable(name) = &array.kind {
-        if !ctx.is_ref_bound_local(name) {
-            match ctx.local_type(name).codegen_repr() {
-                PhpType::AssocArray { .. } => {
-                    lower_unset_hash_element(ctx, name, array.span, index, expr);
-                    return;
-                }
-                PhpType::Array(elem_ty) => {
-                    let elem_ty = if *elem_ty == PhpType::Never {
-                        PhpType::Mixed
-                    } else {
-                        *elem_ty
-                    };
-                    lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
-                    return;
-                }
-                _ => {}
+        match ctx.local_type(name).codegen_repr() {
+            PhpType::AssocArray { .. } => {
+                lower_unset_hash_element(ctx, name, array.span, index, expr);
+                return;
             }
+            PhpType::Array(elem_ty) if !ctx.is_ref_bound_local(name) => {
+                let elem_ty = if *elem_ty == PhpType::Never {
+                    PhpType::Mixed
+                } else {
+                    *elem_ty
+                };
+                lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
+                return;
+            }
+            _ => {}
         }
     }
     let synthetic = Expr::new(

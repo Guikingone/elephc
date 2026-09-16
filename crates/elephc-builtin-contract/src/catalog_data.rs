@@ -4532,10 +4532,10 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         ],
         variadic: Some("values"),
         variadic_by_ref: false,
-        min_args: Some(2),
-        max_args: Some(2),
+        min_args: Some(1),
+        max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Int,
         by_ref_return: false,
         summary: "Pushes one or more elements onto the end of array.",
         examples: &[

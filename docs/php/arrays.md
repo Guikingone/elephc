@@ -100,6 +100,25 @@ echo count($a); // 2 — original is untouched
 echo count($b); // 1
 ```
 
+Removing a key through a **by-reference parameter** or a `&$x` binding reaches the caller's array,
+like every other write through one:
+
+```php
+<?php
+function drop(array &$a) { unset($a["b"]); }
+$x = ["a" => 1, "b" => 2];
+$snapshot = $x;
+drop($x);
+echo count($x);        // 1
+echo count($snapshot); // 2 — the copy taken before the call is untouched
+```
+
+The one shape this does not cover is an **indexed** array reached by reference
+(`function f(array &$a) { unset($a[1]); }`). Removing a key from a packed list leaves a hole, so
+the array has to become a hash — and the caller's slot, still described as `array<T>`, is storage
+the callee cannot retype. That case reports a named compile error instead; an associative array,
+or a local copy the function returns, is the workaround.
+
 > Removing an element from an array passed **by reference** (`function f(array &$a)`) is not yet
 > supported and reports a compile error.
 
@@ -250,7 +269,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 |---|---|---|
 | `count()` | `count($value [, $mode]): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()`. A value that is not countable — `false`, an `int`, `float`, `string`, `null`, or resource arriving through a `mixed` — raises PHP 8's `TypeError` (`count(): Argument #1 ($value) must be of type Countable\|array, X given`) instead of answering `0`. `$mode` accepts `COUNT_NORMAL` (default) and `COUNT_RECURSIVE`; anything else throws `\ValueError`. `COUNT_RECURSIVE` is currently supported only where the receiver cannot hold a nested array — a nested receiver is a compile error rather than a wrong count |
 | `array_count_values()` | `array_count_values($array): array` | Maps each distinct `int`/`string` value to its number of occurrences; other values are skipped with a warning |
-| `array_push()` | `array_push($arr, $val): void` | Add element to end |
+| `array_push()` | `array_push($arr, ...$values): int` | Append any number of elements and return the new count. `array_push($a, 3, 4)` appends both in source order, and `array_push($a)` with no values just reads the count back. |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
 | `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |

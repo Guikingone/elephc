@@ -721,6 +721,21 @@ fn lower_array_set_mixed_key_x86_64(
 pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    lower_array_push_value(ctx, inst, array, value)
+}
+
+/// Appends ONE already-selected value to an indexed array.
+///
+/// Split out of `lower_array_push` so a variadic `array_push($a, v1, v2, …)` can run it once per
+/// value: the append may relocate the array through `__rt_array_grow`, and every step of the
+/// write-back — result value, source local, global source — has to happen between appends rather
+/// than once at the end.
+pub(super) fn lower_array_push_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    value: ValueId,
+) -> Result<()> {
     let array_ty = ctx.value_php_type(array)?;
     require_indexed_array(array_ty.clone(), inst)?;
     let elem_ty = indexed_array_element_type(&array_ty, inst)?;
@@ -744,6 +759,19 @@ pub(super) fn lower_mixed_array_append(
 ) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    lower_mixed_array_append_value(ctx, receiver, value)
+}
+
+/// Appends ONE already-selected value through a boxed Mixed array cell.
+///
+/// The counterpart to `lower_array_push_value`: a variadic push over a `Mixed` receiver runs it
+/// once per value. `__rt_mixed_array_append` republishes the container inside the Mixed cell
+/// itself, so unlike the typed path there is no pointer for this side to write back.
+pub(super) fn lower_mixed_array_append_value(
+    ctx: &mut FunctionContext<'_>,
+    receiver: ValueId,
+    value: ValueId,
+) -> Result<()> {
     match ctx.value_php_type(receiver)?.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {}
         other => {
