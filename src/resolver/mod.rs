@@ -23,7 +23,6 @@ mod exprs;
 mod files;
 mod function_variants;
 /// Read by the checker, which must compare a CALL SITE name against a variant declaration.
-pub(crate) use function_variants::include_variant_local_name;
 mod include_once;
 mod include_path;
 mod state;

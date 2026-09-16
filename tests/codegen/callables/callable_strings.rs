@@ -248,3 +248,39 @@ var_dump(call_user_func($fo, "probe"));
         )
     );
 }
+
+
+/// A user function NAMED like a generated include variant is not one, and does not inherit
+/// another function's call sites.
+///
+/// `function_was_called_directly` has to see past the resolver's `__elephc_include_variant_
+/// {hash}_{local}` decoration, because a variant's declaration is registered under that symbol
+/// while the call site names the function the way the source wrote it. Recovering `{local}` by
+/// SPLITTING the symbol would hand any function whose name happens to start that way the call
+/// sites of whatever `{local}` names: here `foo(7)` would suppress the imitator's widening and
+/// `array_map` would print `int(0)` for a returned string. Reading the real mapping out of
+/// `function_variant_groups` cannot make that mistake — a name nobody generated is in no group.
+///
+/// PHP accepts the name (a leading `__` is legal), and the expectation is host PHP 8.5.10's.
+#[test]
+fn test_a_function_named_like_an_include_variant_keeps_its_own_call_sites() {
+    let out = compile_and_run(
+        r#"<?php
+function foo($x) { return $x; }
+function __elephc_include_variant_0123456789abcdef_foo($x) { return $x; }
+
+echo foo(7), "\n";
+var_dump(array_map(__elephc_include_variant_0123456789abcdef_foo(...), ["fcc"]));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "7\n",
+            "array(1) {\n",
+            "  [0]=>\n",
+            "  string(3) \"fcc\"\n",
+            "}\n",
+        )
+    );
+}

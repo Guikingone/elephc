@@ -244,22 +244,10 @@ fn is_supported_include_loaded_function_group(occurrences: &[FunctionOccurrence]
 
 /// Prefix every generated include-variant symbol carries.
 ///
-/// Read back by `include_variant_local_name`, so the writer and the reader cannot drift.
-pub(crate) const INCLUDE_VARIANT_PREFIX: &str = "__elephc_include_variant_";
-
-/// Recovers the PHP-visible local name from a generated include-variant symbol.
-///
-/// `__elephc_include_variant_{hash}_{local}` -> `Some("{local}")`; any other name -> `None`.
-/// The hash is hex and carries no underscore, so the first `_` after it starts the local name.
-///
-/// Callers need this because a CALL SITE names the function as the source wrote it while the
-/// declaration is registered under the decorated symbol, so the two cannot be compared directly.
-pub(crate) fn include_variant_local_name(symbol: &str) -> Option<&str> {
-    symbol
-        .strip_prefix(INCLUDE_VARIANT_PREFIX)?
-        .split_once('_')
-        .map(|(_hash, local)| local)
-}
+/// A symbol is never parsed back apart: a consumer that needs the public PHP name behind a
+/// variant reads `FunctionVariantGroup`/`FunctionVariantRegistry`, which record the real mapping,
+/// because a user function may legitimately be NAMED like a generated variant.
+const INCLUDE_VARIANT_PREFIX: &str = "__elephc_include_variant_";
 
 /// Generates a stable, unique local name for a function variant.
 ///
