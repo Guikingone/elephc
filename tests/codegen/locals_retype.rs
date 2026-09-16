@@ -1838,7 +1838,9 @@ echo $a, "|";"#,
         marked, unmarked,
         "marking must not change what a closure-declared `global` does to a top-level local"
     );
-    assert_eq!(marked, "hello|hello|");
+    // The closure's write reaches main's storage now that the shared walk sees closure bodies:
+    // both programs print PHP's answer.
+    assert_eq!(marked, "hello|42|");
 }
 
 /// A loop-carried marked local whose every iteration allocates a fresh heap string: the
@@ -2226,22 +2228,26 @@ fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
 /// `--strict-locals`). A compile error beats a silent wrong answer, so this shape stays an error
 /// until the global-in-closure write loss (tracked upstream) is closed — at which point the
 /// program should print `5` and this fixture should say so.
+///
+/// That hole is closed: the shared walk now descends into closure bodies and enum methods, so
+/// the veto keeps the binding, lowering keeps the shared symbol, and the program prints PHP's
+/// `5` exactly like the statement-body fixtures above.
 #[test]
-fn test_unset_then_read_of_a_closure_declared_global_is_a_compile_error() {
-    let error = compile_expect_type_error(
-        "<?php $a = 1; unset($a); $f = function() { global $a; $a = 5; }; $f(); echo $a;",
-    );
-    assert!(
-        error.contains("Undefined variable: $a"),
-        "expected the honest undefined-variable error, got: {error}"
+fn test_unset_then_read_of_a_closure_declared_global_prints_php_answer() {
+    assert_eq!(
+        compile_and_run(
+            "<?php $a = 1; unset($a); $f = function() { global $a; $a = 5; }; $f(); echo $a;",
+        ),
+        "5"
     );
 }
 
-/// The same for an ENUM method body, the other declaration the shared walk does not descend into.
+/// The same for an ENUM method body, the other declaration the shared walk now descends into.
 #[test]
-fn test_unset_then_read_of_an_enum_declared_global_is_a_compile_error() {
-    let error = compile_expect_type_error(
-        r#"<?php
+fn test_unset_then_read_of_an_enum_declared_global_prints_php_answer() {
+    assert_eq!(
+        compile_and_run(
+            r#"<?php
 enum E: int {
     case A = 1;
     public function go(): int { global $a; $a = 5; return 1; }
@@ -2250,10 +2256,8 @@ $a = 1;
 unset($a);
 E::A->go();
 echo $a;"#,
-    );
-    assert!(
-        error.contains("Undefined variable: $a"),
-        "expected the honest undefined-variable error, got: {error}"
+        ),
+        "5"
     );
 }
 
@@ -2586,17 +2590,16 @@ fn test_closure_in_an_assignment_expression_leaves_a_top_level_array_alone() {
     assert_eq!(out, "3,1,2|1");
 }
 
-/// An `unset` followed by a reassignment stays eligible when the only `global` naming that local
-/// sits in a NESTED body — a closure literal or an enum method.
+/// An `unset` followed by a reassignment is vetoed when the only `global` naming that local sits
+/// in a NESTED body — a closure literal or an enum method — exactly as it is for a function body.
 ///
-/// The counter-pin to the two `keeps_the_binding` fixtures above. Vetoing the kill for every name
-/// a nested body declares `global` costs this program its kill: `$a` never leaves the environment,
-/// so `$a = "s"` becomes an incompatible reassignment — a permissive warning, and a hard
-/// `cannot reassign $a from int to string` under `--strict-locals`, on a program base ACCEPTS in
-/// both modes and PHP runs. That is why the veto reads the same statement-only collector lowering
-/// does: a wider answer buys nothing here and takes acceptance away.
+/// The counter-pin to the two `keeps_the_binding` fixtures above, and the consistency pin for the
+/// shared walk: `$a` never leaves the environment, so `$a = "s"` is an incompatible reassignment —
+/// a permissive `changes type from` warning, and a hard `cannot reassign $a from int to string`
+/// under `--strict-locals` — the same diagnostics `$a = $argc; function f() { global $a; }
+/// unset($a); $a = "s";` gets. The permissive program still builds and prints PHP's `s`.
 #[test]
-fn test_nested_body_global_does_not_veto_an_unrelated_kill() {
+fn test_nested_body_global_vetoes_a_kill_like_a_function_body_global() {
     const CLOSURE: &str =
         "<?php $a = $argc; unset($a); $f = function () { global $a; }; $a = \"s\"; echo $a;";
     const ENUM: &str = r#"<?php
@@ -2608,26 +2611,29 @@ $a = $argc;
 unset($a);
 $a = "s";
 echo $a;"#;
+    const FUNCTION: &str =
+        "<?php $a = $argc; function f() { global $a; } unset($a); $a = \"s\"; echo $a;";
 
-    for source in [CLOSURE, ENUM] {
-        let strict = check_files_diagnostics(&[("main.php", source)], "main.php", true);
+    for source in [CLOSURE, ENUM, FUNCTION] {
+        let strict = check_files_diagnostics(&[("main.php", source)], "main.php", true)
+            .expect_err("the vetoed kill leaves an incompatible reassignment under --strict-locals");
         assert!(
-            strict.is_ok(),
-            "the kill must stay eligible under --strict-locals, got: {:?}",
-            strict.err()
+            strict.contains("cannot reassign $a from int to string"),
+            "source: {source}, got: {strict}"
         );
         let permissive = check_files_diagnostics(&[("main.php", source)], "main.php", false)
             .expect("the same program must type-check permissively");
         assert!(
-            !permissive
+            permissive
                 .iter()
-                .any(|warning| warning.contains("changes type from")),
-            "an eligible kill emits no retype warning, got: {permissive:?}"
+                .any(|warning| warning.contains("$a changes type from int to string")),
+            "a vetoed kill retypes with a warning, source: {source}, got: {permissive:?}"
         );
     }
 
     assert_eq!(compile_and_run(CLOSURE), "s");
     assert_eq!(compile_and_run(ENUM), "s");
+    assert_eq!(compile_and_run(FUNCTION), "s");
 }
 
 /// A branch-divergent local piped into a known BY-VALUE target is MARKED, lowers, and runs — the

@@ -71,8 +71,12 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     // destructor again; freeing it here left that owner holding dead storage, and the next
     // release of the same block ran `__destruct` a second time. Drop the in-progress guard,
     // remember completion in kind bit 17 exactly like the collector does, and leave.
+    // Only a destructor run by THIS call can resurrect, and its guard bit 31 is the witness:
+    // the collector's sweep frees cycle members that still count their peers as owners after
+    // it ran their destructors itself, and those must be freed, not kept.
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer after the destructor returned
     emitter.instruction("ldr w9, [x0, #-12]");                                  // reload the refcount word carrying the in-progress guard
+    emitter.instruction("tbz w9, #31, __rt_object_free_deep_not_resurrected");  // no destructor ran here (collector sweep, completed mark): free
     emitter.instruction("and w10, w9, #0x7fffffff");                            // isolate the real owners the destructor body left behind
     emitter.instruction("cbz w10, __rt_object_free_deep_not_resurrected");      // no surviving owner: release the storage as before
     emitter.instruction("str w10, [x0, #-12]");                                 // clear the guard so those owners release normally later
@@ -359,6 +363,8 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     // new owner keeps the object alive; the completion mark stops a second `__destruct` later.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after the destructor returned
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // reload the refcount word carrying the in-progress guard
+    emitter.instruction("test r10d, 0x80000000");                               // did a destructor actually run in this call?
+    emitter.instruction("jz __rt_object_free_deep_not_resurrected_x");          // no (collector sweep, completed mark): free as before
     emitter.instruction("and r10d, 0x7fffffff");                                // isolate the real owners the destructor body left behind
     emitter.instruction("jz __rt_object_free_deep_not_resurrected_x");          // no surviving owner: release the storage as before
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // clear the guard so those owners release normally later

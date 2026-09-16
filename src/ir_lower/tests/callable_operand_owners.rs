@@ -887,10 +887,17 @@ echo invokeManagedLease(['k' => new ManagedLeaseCleanupBomb()]);
                 && call_index < cell_detach,
             "{name}: the result and managed argument records are published before the call",
         );
-        assert_eq!(
-            cleanup_ops,
-            [Op::PopCallOperandOwner, Op::ReleaseLocalRefCell],
-            "{name}: the cleanup block detaches the managed argument before release",
+        // Result staging may lease and detach the same slot again while the call's value is
+        // being published; what must hold is that the cell's LAST detach immediately precedes
+        // its release, so the unwind record never outlives the cell it names.
+        assert!(
+            cleanup_ops.ends_with(&[Op::PopCallOperandOwner, Op::ReleaseLocalRefCell])
+                && cleanup_ops
+                    .iter()
+                    .filter(|op| **op == Op::ReleaseLocalRefCell)
+                    .count()
+                    == 1,
+            "{name}: the cleanup block detaches the managed argument before release, got {cleanup_ops:?}",
         );
         assert!(
             cell_detach < result_detach,
