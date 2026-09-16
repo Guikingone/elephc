@@ -260,3 +260,74 @@ echo $bound();
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
 }
+
+/// A receiver loaded from global Mixed storage is detached before the runtime binder sees it.
+#[test]
+fn suspended_generator_bind_unboxes_global_receiver_on_every_target() {
+    let source = r#"<?php
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+function suspended_bind(): Generator {
+    global $peek, $vault;
+    $peek = function() { return $this->code; };
+    try { yield 1; } catch (Error $error) {}
+    $bound = Closure::bind($peek, $vault, Vault::class);
+    echo $bound();
+}
+$vault = new Vault();
+$generator = suspended_bind();
+$generator->current();
+$peek = function() { return $this->label; };
+$generator->next();
+"#;
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let generator = module
+            .functions
+            .iter()
+            .find(|function| function.name == "suspended_bind")
+            .unwrap_or_else(|| panic!("{name}: generator body was lowered"));
+        let bind = generator
+            .instructions
+            .iter()
+            .find(|instruction| instruction.op == Op::ClosureBind)
+            .unwrap_or_else(|| panic!("{name}: runtime closure bind was emitted"));
+        let mut receiver = bind.operands[1];
+        while let Some(producer) = generator.instructions.iter().find(|instruction| {
+            instruction.result == Some(receiver)
+                && matches!(instruction.op, Op::Acquire | Op::Borrow)
+        }) {
+            receiver = producer.operands[0];
+        }
+        let extraction = generator
+            .instructions
+            .iter()
+            .find(|instruction| instruction.result == Some(receiver))
+            .unwrap_or_else(|| panic!("{name}: bound receiver has a producer"));
+        assert_eq!(
+            extraction.op,
+            Op::MixedUnbox,
+            "{name}: the binder receives the object payload, not its Mixed cell",
+        );
+        assert_eq!(
+            extraction.result_php_type,
+            PhpType::Object("Vault".to_string()),
+            "{name}: explicit scope supplies the detached receiver representation",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}

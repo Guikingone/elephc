@@ -48,6 +48,39 @@ pub(super) fn lower_static_method_call(
                 Some(arg) => lower_expr(ctx, arg),
                 None => lower_null(ctx, expr),
             };
+            // A suspension or other opaque writer can widen a global receiver to Mixed even
+            // though the explicit scope still proves the object representation expected by
+            // `__rt_closure_bind`. Passing the Mixed-cell address as `$this` would box that cell
+            // as an object pointer, so detach its object payload before rooting the operand.
+            let new_this = match args.get(2).and_then(|scope| {
+                static_callable_class_name(ctx, scope).and_then(|requested| {
+                    lookup_folded_name(ctx.classes.keys(), requested.trim_start_matches('\\'))
+                })
+            }) {
+                Some(scope)
+                    if matches!(
+                        ctx.builder.value_php_type(new_this.value).codegen_repr(),
+                        PhpType::Mixed | PhpType::Union(_)
+                    ) =>
+                {
+                    let receiver_type = PhpType::Object(scope);
+                    let unboxed = ctx.emit_owned_value(
+                        Op::MixedUnbox,
+                        vec![new_this.value],
+                        None,
+                        receiver_type.clone(),
+                        Op::mixed_unbox_effects(&receiver_type),
+                        args.get(1).map(|arg| arg.span).or(Some(expr.span)),
+                    );
+                    release_coerced_source_if_owned(
+                        ctx,
+                        new_this,
+                        args.get(1).map(|arg| arg.span).or(Some(expr.span)),
+                    );
+                    unboxed
+                }
+                _ => new_this,
+            };
             let (new_this, receiver_owner) = root_owned_call_operand(
                 ctx,
                 new_this,
