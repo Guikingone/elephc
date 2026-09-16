@@ -1,25 +1,18 @@
 //! Purpose:
-//! Pins that the individually guarded compiler phases survive `MAX_COMPILER_NESTING` on a SMALL
-//! thread stack, with no `compiler_stack::with_compiler_stack` wrapper anywhere above them.
+//! Regression tests for issue #686: each recursive compiler phase, called on its own, walks
+//! `MAX_COMPILER_NESTING` levels on a small thread.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - This is the embedder that calls one phase at a time, and only these fixtures can tell
-//!   whether that still works: every other in-process test drives the WHOLE pipeline through a
-//!   harness that wraps itself in `with_compiler_stack`, so it passes whether or not the phases
-//!   carry their own budget (issue #686).
-//! - The stack size is set HERE rather than inherited, so `RUST_MIN_STACK` — which the codegen
-//!   suite raises to 32 MiB — cannot hide a missing guard. 256 KiB is far below what 1024
-//!   nesting levels need from the passes below the parser.
-//! - Each fixture reports a small summary rather than the value it built, so every deep value
-//!   is DROPPED on the small thread too. A phase's result is as deeply nested as its input, and
-//!   recursive `Drop` is a walk like any other; handing it back through `join()` would destroy
-//!   it on libtest's much larger stack instead.
-//! - A regression aborts the test PROCESS with `has overflowed its stack` rather than failing an
-//!   assertion. That is the failure mode worth pinning, and the reason these live in their own
-//!   binary: an abort takes the whole test process with it.
+//! - Every fixture sets its own 256 KiB thread rather than inheriting one, so the codegen
+//!   suite's 32 MiB `RUST_MIN_STACK` cannot mask a phase that lost its budget.
+//! - Each fixture reports a small summary, so the deep values are dropped inside that thread
+//!   too rather than on the parent's larger stack.
+//! - A regression aborts the test PROCESS rather than failing an assertion, which is why these
+//!   live in their own binary.
+//! - The phase-level budget itself is described in `docs/internals/the-parser.md`.
 
 use std::collections::HashSet;
 

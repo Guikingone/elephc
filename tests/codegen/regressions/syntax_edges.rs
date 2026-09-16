@@ -140,9 +140,11 @@ fn test_class_used_only_in_multi_value_echo_is_emitted() {
 /// Verifies the whole IN-PROCESS pipeline survives deep nesting, not only the binary
 /// (issue #686).
 ///
-/// The compiler binary runs on a thread sized for `MAX_COMPILER_NESTING`, but an embedder
-/// calling the crate — and this harness — gets whatever stack its own thread has. The recursive
-/// passes therefore also grow their own stack through `parser::grow_stack_for_recursion`.
+/// Every recursive phase carries its own stack budget through
+/// `compiler_stack::with_compiler_stack`, so an embedder calling one of them is safe on its own
+/// thread. This harness additionally wraps the whole run, for the AST handling BETWEEN the
+/// phases: moving, cloning and dropping a tree this deep recurses through derived code no guard
+/// can be placed inside.
 ///
 /// This goes through `compile_and_run` rather than a type-check helper ON PURPOSE. Checking stops
 /// at the front end, and the passes after it recurse just as deep: constant propagation, control

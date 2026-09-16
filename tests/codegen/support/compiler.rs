@@ -232,7 +232,7 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
 ///
 /// Each PHASE carries its own budget, so this wrapper is not what makes the phases survive
 /// `MAX_COMPILER_NESTING`; `tests/embedder_stack_tests.rs` proves that separately by calling
-/// them one at a time on a 512 KiB thread. What it covers is everything a driver does BETWEEN
+/// them one at a time on a 256 KiB thread. What it covers is everything a driver does BETWEEN
 /// the phases with an AST that deep -- moving it, cloning it, dropping it -- which recurses
 /// through derived `Clone` and `Drop` code no guard can be put inside. Removing this wrapper
 /// aborts the 1024-level fixture in `ExprKind::clone` (issue #686).
