@@ -19,6 +19,13 @@ use super::Pass;
 /// Returns a new `Expr` with transformed `MagicConstant` and `StringLiteral` nodes, and all
 /// child expressions recursively processed. Other leaf variants are returned unchanged.
 pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
+    // As deep as the source nests, so it needs the same stack headroom the parser, the folder
+    // and the checker take. See `parser::grow_stack_for_recursion` (issue #686).
+    crate::parser::grow_stack_for_recursion(|| walk_expr_inner(expr, pass))
+}
+
+/// The expression walker behind the stack-growth guard of [`walk_expr`].
+fn walk_expr_inner<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {
         ExprKind::MagicConstant(mc) => pass.transform_magic(span, mc),

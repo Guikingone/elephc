@@ -98,6 +98,48 @@ mod web_prelude;
 ///   ([`emit_ini_override_warnings`]) for compile commands.
 /// - May create temporary files during assembly and linking.
 fn main() {
+    run_on_compiler_stack(main_inner)
+}
+
+/// The stack every compiler thread gets.
+///
+/// Sized against the limit the compiler ALREADY diagnoses. `MAX_COMPILER_NESTING` lets source
+/// nest 1024 levels deep, and each level costs one frame in every recursive AST pass -- the
+/// parser, the constant folder, the magic-constant walker, the checker, the optimizer's
+/// rewriters, EIR lowering. The default 8 MiB main stack runs out around 140 levels, so
+/// `$a = [[[…1…]]]` at 200 aborted the process with `has overflowed its stack` instead of
+/// reporting the diagnostic written for exactly that input (issue #686).
+///
+/// A thread rather than a per-pass guard because the passes are many and the list grows: one
+/// place to size, and a pass added later inherits it. PHP itself compiles these depths, so a
+/// diagnostic below 1024 would reject valid PHP rather than protect anything.
+const COMPILER_STACK_BYTES: usize = 256 * 1024 * 1024;
+
+/// Runs `body` on a thread with [`COMPILER_STACK_BYTES`] of stack, propagating its panic.
+///
+/// A stack this size is RESERVED, not committed: the pages are only faulted in as the recursion
+/// actually reaches them, so an ordinary compile pays for the depth it uses and nothing more.
+fn run_on_compiler_stack(body: fn()) {
+    let worker = std::thread::Builder::new()
+        .name("elephc-compiler".to_string())
+        .stack_size(COMPILER_STACK_BYTES)
+        .spawn(body);
+    match worker {
+        Ok(handle) => {
+            if let Err(panic) = handle.join() {
+                // The thread already printed the panic message; resume it here so the process
+                // exits the way it would have without the extra thread.
+                std::panic::resume_unwind(panic);
+            }
+        }
+        // A machine that cannot spawn the thread still has its own stack; running inline keeps
+        // the compiler usable there instead of failing before it starts.
+        Err(_) => body(),
+    }
+}
+
+/// The real entry point, running on the compiler stack established by [`run_on_compiler_stack`].
+fn main_inner() {
     let args: Vec<String> = std::env::args().collect();
     if cli::wants_mascotte(&args) {
         cli::print_mascotte();

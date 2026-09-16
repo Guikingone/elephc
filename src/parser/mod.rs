@@ -174,6 +174,20 @@ fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<Com
     }
 }
 
+/// Runs `body` on a stack segment guaranteed to have room for another recursion step.
+///
+/// Every recursive walk over a PHP expression tree shares one problem: the tree is as deep as
+/// the source nests, and `MAX_COMPILER_NESTING` allows 1024 levels. A thread stack does not hold
+/// 1024 frames of the parser or the checker, so without this the process aborts on a guard page
+/// long before the diagnostic that exists for exactly this input can fire (issue #686).
+///
+/// The budget is the parser's original one: keep 64 KiB of headroom, and allocate a fresh 4 MiB
+/// segment when less than that remains. Deeply nested expressions -- builtin preludes, generated
+/// code, hostile input -- otherwise abort 2 MiB test-thread stacks.
+pub(crate) fn grow_stack_for_recursion<R>(body: impl FnOnce() -> R) -> R {
+    stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, body)
+}
+
 /// Rejects syntactically nested delimiters before recursive parser routines
 /// can overflow the compiler stack on hostile source input.
 fn reject_excessive_nesting(tokens: &[SpannedToken]) -> Result<(), Vec<CompileError>> {

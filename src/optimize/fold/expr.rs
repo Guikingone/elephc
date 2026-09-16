@@ -103,6 +103,15 @@ pub(in crate::optimize) fn fold_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
 /// runtime decisions — this function only folds when the result is an
 /// unambiguous PHP equivalent.
 pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
+    // Folding recurses once per nesting level, so it is as deep as the source nests. The
+    // parser's `MAX_COMPILER_NESTING` allows 1024 levels, which is more frames than a thread
+    // stack holds: `$a = [[[…1…]]]` at 200 levels aborted with `has overflowed its stack` long
+    // before the diagnostic that exists for it could fire (issue #686).
+    crate::parser::grow_stack_for_recursion(|| fold_expr_inner(expr))
+}
+
+/// The folding dispatcher behind the stack-growth guard of [`fold_expr`].
+fn fold_expr_inner(expr: Expr) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;

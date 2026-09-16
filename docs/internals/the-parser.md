@@ -205,6 +205,7 @@ Current recovery behavior is intentionally simple:
 - block parsing (`{ ... }`) can resynchronize on `;`, `}`, and `EOF`
 - the parser still prefers correctness over aggressive recovery, so heavily malformed input may still collapse into fewer diagnostics than an IDE-style parser would produce
 - before recursive parsing starts, `reject_excessive_nesting()` scans the token stream against a hard cap (`MAX_COMPILER_NESTING = 1024` bracket depth) and rejects deeper input with "maximum compiler nesting depth exceeded", so pathological nesting cannot overflow the parser's stack
+- that cap only works if the compiler can actually WALK 1024 levels. Every recursive AST pass costs a frame per level — the parser, `optimize::fold::fold_expr`, the magic-constant walker, `Checker::infer_type`, the optimizer's rewriters, EIR lowering — and the default main-thread stack ran out around 140, so `$a = [[[…1…]]]` at 200 levels aborted the process instead of reaching the diagnostic (issue #686). The binary now runs the whole compile on a thread with `COMPILER_STACK_BYTES` (256 MiB, reserved rather than committed), and the deepest passes additionally grow their own stack through `parser::grow_stack_for_recursion` so an in-process embedder gets the same reach
 
 ### Binary operators (`BinOp`)
 
