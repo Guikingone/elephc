@@ -350,6 +350,9 @@ pub(super) fn lower_unset_dynamic_property_access(
 ) {
     let object = lower_expr(ctx, object);
     let property = lower_expr(ctx, property);
+    let property = crate::ir_lower::expr::property_access::coerce_runtime_property_name(
+        ctx, property, expr.span,
+    );
     // The removal CAN THROW: a name this scope may not reach raises php's catchable access
     // `Error`. Retiring the owning temporaries only afterwards meant a caught refusal skipped
     // both releases and leaked the receiver and the key. Pinning parks them for the window the

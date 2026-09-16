@@ -255,6 +255,9 @@ pub(super) fn lower_dynamic_property_assign(
 ) {
     let object = lower_expr(ctx, object);
     let property = lower_expr(ctx, property);
+    let property = crate::ir_lower::expr::property_access::coerce_runtime_property_name(
+        ctx, property, span,
+    );
     let value = lower_expr(ctx, value);
     // The NAME is only known at run time, so a statically known receiver can still land this
     // value on any slot in its runtime-class subtree. Typed or representation-incompatible

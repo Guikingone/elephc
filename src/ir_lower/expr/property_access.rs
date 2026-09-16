@@ -837,6 +837,34 @@ pub(super) fn class_extends_class(
     false
 }
 
+/// Casts a runtime property name to the `Str` pair the backend property ladders index by.
+///
+/// PHP resolves `$o->{$e}` through a string cast of `$e`, so any scalar name is legal source.
+/// The checker cannot always hand the backend a narrowed one: an `eval()` anywhere in a scope
+/// widens every local there to `Mixed`, which is how `$o->{$name}` after `eval('...')` reached
+/// codegen boxed and was refused outright. Casting here keeps one string-name contract for the
+/// get, set and unset ladders, and leaves an already-`Str` name untouched so its producer stays
+/// visible to the owned-temporary cleanup.
+pub(super) fn coerce_runtime_property_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    property: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.builder.value_php_type(property.value).codegen_repr() == PhpType::Str {
+        return property;
+    }
+    let name = ctx.emit_value(
+        Op::Cast,
+        vec![property.value],
+        Some(Immediate::CastTarget(IrType::Str)),
+        PhpType::Str,
+        Op::Cast.default_effects(),
+        Some(span),
+    );
+    release_coerced_source_if_owned(ctx, property, Some(span));
+    name
+}
+
 /// Lowers a dynamic property read.
 pub(super) fn lower_dynamic_property_get(ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &Expr, expr: &Expr) -> LoweredValue {
     lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Read, expr)
@@ -874,6 +902,7 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
 ) -> LoweredValue {
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
     let property = lower_expr(ctx, property);
+    let property = coerce_runtime_property_name(ctx, property, expr.span);
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
