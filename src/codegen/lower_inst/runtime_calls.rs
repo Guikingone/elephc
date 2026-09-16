@@ -194,9 +194,13 @@ fn lower_mixed_cell_promote_to_hash(
 /// existing in-place behaviour.
 fn separate_shared_attached_cell(ctx: &mut FunctionContext<'_>, cell: crate::ir::ValueId) -> Result<()> {
     let receiver = ReceiverPlace::resolve(ctx, cell)?;
-    if matches!(receiver, ReceiverPlace::Opaque) {
-        return Ok(());
-    }
+    // A raw local slot publishes without retiring what it held, so this has to release the
+    // replaced cell itself; the ref-cell write-back already retires its previous occupant.
+    let retires_replaced_cell = match receiver {
+        ReceiverPlace::RefCell(_) => true,
+        ReceiverPlace::Local(_) => false,
+        ReceiverPlace::Opaque | ReceiverPlace::Property { .. } => return Ok(()),
+    };
     let done = ctx.next_label("mixed_cell_attached_separate_done");
     ctx.load_value_to_result(cell)?;
     match ctx.emitter.target.arch {
@@ -205,6 +209,7 @@ fn separate_shared_attached_cell(ctx: &mut FunctionContext<'_>, cell: crate::ir:
             ctx.emitter.instruction("ldr w9, [x0, #-12]");                      // read the cell refcount from the uniform heap header
             ctx.emitter.instruction("cmp w9, #1");                              // is this zval shared with another variable?
             ctx.emitter.instruction(&format!("b.ls {done}"));                   // a sole owner may be promoted in place
+            abi::emit_push_reg(ctx.emitter, "x0");                              // keep the replaced cell addressable for its release
             ctx.emitter.instruction("ldr x2, [x0, #16]");                       // copy the shared cell high payload word
             ctx.emitter.instruction("ldr x1, [x0, #8]");                        // copy the shared cell low payload word
             ctx.emitter.instruction("ldr x0, [x0]");                            // copy the shared cell runtime value tag
@@ -215,6 +220,7 @@ fn separate_shared_attached_cell(ctx: &mut FunctionContext<'_>, cell: crate::ir:
             ctx.emitter.instruction("mov r10d, DWORD PTR [rax - 12]");          // read the cell refcount from the uniform heap header
             ctx.emitter.instruction("cmp r10d, 1");                             // is this zval shared with another variable?
             ctx.emitter.instruction(&format!("jbe {done}"));                    // a sole owner may be promoted in place
+            abi::emit_push_reg(ctx.emitter, "rax");                             // keep the replaced cell addressable for its release
             ctx.emitter.instruction("mov rsi, QWORD PTR [rax + 16]");           // copy the shared cell high payload word
             ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // copy the shared cell low payload word
             ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // copy the shared cell runtime value tag
@@ -223,6 +229,12 @@ fn separate_shared_attached_cell(ctx: &mut FunctionContext<'_>, cell: crate::ir:
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
     ctx.store_result_value(cell)?;
     receiver.store_back_value(ctx, cell)?;
+    if !retires_replaced_cell {
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    } else {
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    }
     ctx.emitter.label(&done);
     Ok(())
 }

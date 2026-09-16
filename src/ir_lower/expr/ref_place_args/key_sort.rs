@@ -146,10 +146,10 @@ fn lower_exact_php_array_place_key_sort(
 
     let place = super::stabilize_place(ctx, place);
     let source = lower_expr(ctx, &place);
-    // A place read borrows: the property, static slot or element keeps owning the cell. Take a
-    // reference of our own so the release inside the clone balances against it instead of
-    // retiring the storage the place still holds.
-    let source = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(place.span));
+    // A property or static-slot read borrows: the place keeps owning the cell, so the release
+    // inside the clone needs a reference of its own to balance against. An element read already
+    // hands over an owning temporary and must not be retained twice.
+    let source = acquire_place_read_owner(ctx, source, place.span);
     let work_cell = clone_mixed_cell(ctx, source, expr);
     let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
     ctx.store_local(&temp, work_cell, PhpType::Mixed, Some(place.span));
@@ -310,9 +310,7 @@ fn lower_boxed_parent_element_key_sort(
 ) -> LoweredValue {
     let place = super::stabilize_place(ctx, place);
     let child = lower_expr(ctx, &place);
-    // The element read borrows its parent's cell; pair the clone's release with our own
-    // reference so the parent keeps the storage it still owns.
-    let child = crate::ir_lower::ownership::acquire_if_refcounted(ctx, child, Some(place.span));
+    let child = acquire_place_read_owner(ctx, child, place.span);
     let child = clone_mixed_cell(ctx, child, expr);
     let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
     ctx.store_local(&temp, child, PhpType::Mixed, Some(place.span));
@@ -561,6 +559,22 @@ fn lower_shared_mixed_array_element_key_sort(
     );
     crate::ir_lower::ownership::release_if_owned(ctx, cloned, Some(expr.span));
     Some(result)
+}
+
+/// Gives a borrowed place read an owner the clone's release can balance against.
+///
+/// A property or static-slot read is a borrow — the place keeps owning the cell — while an
+/// element read already hands over an owning temporary. Retaining the second would leave one
+/// reference behind per sort.
+fn acquire_place_read_owner(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: crate::span::Span,
+) -> LoweredValue {
+    if ctx.value_is_owning_temporary(value) {
+        return value;
+    }
+    crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
 }
 
 /// Clones a stored Mixed cell and releases the borrowed/owned source handle.

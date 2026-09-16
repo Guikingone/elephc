@@ -711,6 +711,36 @@ fn store_value_to_raw_ref_cell_as(
         ),
     }
     if retires_previous {
+        // A mutating container write-back republishes whatever its helper returned, which is the
+        // SAME pointer whenever copy-on-write found a sole owner and growth did not relocate.
+        // Retiring then takes the storage the cell still points at: two `$items[$i] = …` writes
+        // through one by-reference variadic were enough to free the collector out from under the
+        // next read. Skip the retirement when nothing was actually replaced.
+        let published = ctx.next_label("ref_cell_store_same_pointer");
+        abi::emit_load_from_address(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            pointer_reg,
+            0,
+        );
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!(                               // did this store replace the cell's occupant at all?
+                    "cmp {}, {}",
+                    abi::int_result_reg(ctx.emitter),
+                    old_reg
+                ));
+                ctx.emitter.instruction(&format!("b.eq {published}"));          // the same object stays owned by the cell
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!(                               // did this store replace the cell's occupant at all?
+                    "cmp {}, {}",
+                    abi::int_result_reg(ctx.emitter),
+                    old_reg
+                ));
+                ctx.emitter.instruction(&format!("je {published}"));            // the same object stays owned by the cell
+            }
+        }
         // Publish before retirement because object/callable cleanup can execute PHP code.
         // Both raw Mixed aliases and descriptor-7 managed cells store the same boxed pointer.
         abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), old_reg);
@@ -720,6 +750,7 @@ fn store_value_to_raw_ref_cell_as(
             abi::emit_decref_preserving_exception(ctx.emitter, &target_ty);
             abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
         }
+        ctx.emitter.label(&published);
     }
     Ok(())
 }
