@@ -414,8 +414,15 @@ fn prepare_addressable_by_ref_foreach_source(
             crate::ir_lower::expr::lower_ref_assign_property(ctx, &alias, source, source.span);
             Some(Expr::new(ExprKind::Variable(alias), source.span))
         }
-        ExprKind::StaticPropertyAccess { .. } => {
-            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            // The alias must be declared with the payload the static slot actually holds. An
+            // untyped `public static $rows = [...]` keeps concrete hash storage, and declaring
+            // the alias Mixed made the loop's write-back box that hash into a Mixed cell and
+            // publish it through the symbol, so the next read walked a cell as a table.
+            let value_type = crate::ir_lower::expr::static_property_result_type(
+                ctx, receiver, property, source,
+            );
+            let alias = ctx.declare_synthetic_php_local(value_type);
             crate::ir_lower::expr::lower_ref_assign_static_property(
                 ctx,
                 &alias,

@@ -1093,7 +1093,7 @@ pub(super) fn lower_static_property_get(ctx: &mut LoweringContext<'_, '_>, recei
 }
 
 /// Returns precise PHP metadata for a static property read when class metadata is available.
-pub(super) fn static_property_result_type(
+pub(crate) fn static_property_result_type(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,
