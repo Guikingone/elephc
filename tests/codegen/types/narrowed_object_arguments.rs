@@ -14,6 +14,8 @@
 //!   which is why these fixtures assert the value rather than merely that the program compiles.
 //! - `test_narrowed_union_argument_is_unboxed_at_the_call_site` pins the mechanism, so the shape
 //!   cannot regress into "accidentally right" if the property ever moves to offset zero.
+//! - One fixture runs again with the EIR optimizer off, because the boxes and copies it folds
+//!   away change which value the call site has to unbox.
 
 use super::*;
 
@@ -33,14 +35,12 @@ echo readnum($r), "|", $r->num_rows;
     assert_eq!(out, "2|2");
 }
 
-/// Verifies every union flavour that boxes its local reaches the parameter as the object.
+/// The four union flavours that box their local, each one narrowed in its own typed variable.
 ///
-/// `?Box`, `Box|bool`, a three-member union and a two-class union all share one runtime
-/// representation, and each one used to hand the callee a different heap address.
-#[test]
-fn test_every_boxed_union_flavour_reaches_the_parameter_as_an_object() {
-    let out = compile_and_run(
-        r#"<?php
+/// Each local has to keep its own declared type all the way to the call. Collecting the four
+/// results into one array first would type the element `mixed`, and the four call sites would
+/// collapse into a single `mixed`-to-object coercion repeated four times.
+const EVERY_BOXED_UNION_FLAVOUR: &str = r#"<?php
 class Box { public int $n = 0; }
 class Other { public int $n = 0; }
 function readnum(Box $b): int { return $b->n; }
@@ -50,11 +50,36 @@ function mkNull(): ?Box { $b = new Box(); $b->n = 3; return $b; }
 function mkWide(): Box|bool|int { $b = new Box(); $b->n = 4; return $b; }
 function mkTwoClass(): Box|Other { $b = new Box(); $b->n = 5; return $b; }
 
-foreach ([mkBool(), mkNull(), mkWide(), mkTwoClass()] as $v) {
-    if ($v instanceof Box) { echo readnum($v); }
+$fromBool = mkBool();
+if ($fromBool instanceof Box) { echo readnum($fromBool); }
+
+$fromNull = mkNull();
+if ($fromNull instanceof Box) { echo readnum($fromNull); }
+
+$fromWide = mkWide();
+if ($fromWide instanceof Box) { echo readnum($fromWide); }
+
+$fromTwoClass = mkTwoClass();
+if ($fromTwoClass instanceof Box) { echo readnum($fromTwoClass); }
+"#;
+
+/// Verifies every union flavour that boxes its local reaches the parameter as the object.
+///
+/// `?Box`, `Box|bool`, a three-member union and a two-class union all share one runtime
+/// representation, and each one used to hand the callee a different heap address.
+#[test]
+fn test_every_boxed_union_flavour_reaches_the_parameter_as_an_object() {
+    assert_eq!(compile_and_run(EVERY_BOXED_UNION_FLAVOUR), "2345");
 }
-"#,
-    );
+
+/// Verifies the unbox survives with the EIR optimizer off.
+///
+/// Every other fixture here compiles with the optimizer on, which is the default. With it off
+/// the boxes and copies it folds away stay in the instruction stream, so the call site the
+/// backend has to unbox is a different one; the four values still have to arrive as objects.
+#[test]
+fn test_every_boxed_union_flavour_reaches_the_parameter_without_ir_opt() {
+    let out = without_ir_opt(|| compile_and_run(EVERY_BOXED_UNION_FLAVOUR));
     assert_eq!(out, "2345");
 }
 
