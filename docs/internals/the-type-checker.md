@@ -366,6 +366,22 @@ pub struct FunctionSig {
 - `param_attributes` carries PHP 8 attribute groups attached to each parameter, for Reflection metadata.
 - `by_ref_return` records `function &f()` / `fn &()` declarations — the function returns a reference (alias) to the returned lvalue rather than a copy.
 - `ref_params` tracks which parameters use `&` (pass by reference). The codegen passes the stack address of the argument instead of its value.
+
+#### Storage rules for a declared by-reference argument
+
+Because codegen passes the stack address, a declared by-reference parameter is checked against the caller's **storage**, not just against the incoming value. `Checker::require_by_ref_argument_storage` (`src/types/checker/type_compat/declarations.rs`) is the one place that decides it, and it is the reason a by-reference position is stricter than the by-value position next to it:
+
+| declared parameter | caller's variable | verdict |
+|---|---|---|
+| needs boxed storage (`mixed`, `?int`, a union) | a concrete non-boxed slot | rejected — the callee can write values the slot cannot represent |
+| does not accept null (`int`, `float`, `bool`, `string`) | holds `null` (`PhpType::Void`) | rejected — nothing coerces the slot on the way in |
+| anything else | matching representation | accepted |
+
+The second row is the one that is easy to get backwards, and it was: `types_compatible` deliberately accepts `Void` for `Int`, `Float` and `Bool`, which is **correct by value** (PHP coerces `null` to `0`/`0.0`/`false` for an internal function's by-value parameter) and wrong by reference. That acceptance short-circuited every later by-reference check, so the argument was admitted with the caller's local still typed `Void` while the callee wrote an int through the reference; the first thing the caller then did with the local reached EIR lowering as an operation on a null and produced a positionless `unsupported EIR backend feature: icmp for PHP type Void` (issue #892, reported through `curl_multi_exec()`'s `$still_running`).
+
+php-src draws the same line for a **userland** function — `function out(int &$s) {} $x = null; out($x);` is a `TypeError` there too. It is laxer only for its own **internal** functions, which is why a `curl_*` wrapper written in elephc-PHP rejects a `null` seed that php.net's examples use; `docs/php/curl.md` says so where the multi loop is documented.
+
+`Checker::declared_type_accepts_null` answers "does this declared type admit `null`" for both this rule and the return position, as one predicate, so the two cannot drift.
 - `declared_params` lets later phases distinguish explicit PHP type hints from inferred/defaulted parameter types.
 - `declared_return` lets later phases distinguish explicit PHP return hints from inferred return types.
 - `variadic` holds the name of the variadic parameter (e.g., `$args` in `function foo(...$args)`). Extra arguments beyond the regular parameters are collected into an array.
@@ -566,6 +582,45 @@ pub struct ClassInfo {
 ```
 
 `vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, its properties, and its constants so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy, and `property_set_visibilities` records PHP 8.4 asymmetric write visibility (e.g. `public private(set)`) for properties whose write visibility differs from their read visibility. The per-slot vectors (`property_declared_slots`, `property_reference_slots`) follow the physical `properties` layout by index so hidden private parent slots keep their metadata when a child declares a same-named property.
+
+### Constructor ownership
+
+A PRIVATE method is not inherited, so `ClassInfo::methods` deliberately carries no
+`__construct` entry on a descendant of a class that declares one. PHP still instantiates
+that descendant through the ancestor's constructor, and still NAMES the ancestor wherever a
+constructor is reported. `types::constructor_owner(classes, class_name)` models both halves:
+it walks the parent chain to the nearest class whose own `methods` map has the entry, and
+returns the instantiated class itself whenever that map already has one — so an inherited
+public or protected constructor (which IS copied into the descendant's map) resolves exactly
+as it did before.
+
+**Every consumer that asks "does this class have a constructor, and whose?" must go through
+it**, never `class_info.methods.get("__construct")` directly. Reading the map is right only
+when the question is about the class's own MEMBER LIST, which is a different question: PHP
+reports `method_exists('Child', '__construct')` as `false` and `get_class_methods('Child')`
+as empty for exactly this shape, while `ReflectionClass::getConstructor()` still finds the
+ancestor's. The two must not be conflated in either direction.
+
+The consumers are spread across the pipeline, and each one that read the map directly was a
+distinct user-visible defect:
+
+| Consumer | Question it asks |
+|---|---|
+| `checker::inference::objects::constructors` | visibility, arity, and the class NAMED in both diagnostics |
+| `ir_lower::expr::reflection_constructors` | which class's `__construct` a `ReflectionMethod` on the descendant resolves to |
+| `codegen::lower_inst::objects::fixed_new` / `dynamic_factory` | the constructor the allocation calls |
+| `codegen::lower_inst::objects::reflection::names_constants` | the synthetic member `getConstructor()` returns when the descendant's own map has none |
+| `codegen::lower_inst::objects::reflection::class_metadata` | `getConstructor()`'s member and `isInstantiable()` |
+| `codegen_support::runtime::data::user` | the eval ReflectionMethod lookup row, keyed by the descendant and carrying the OWNER as its declaring class |
+
+`ir_lower::expr::object_construction` and `ir_lower::expr::reflection_new_instance` ask the
+same question for a different purpose — the signature whose defaults pad a `new Child()` or
+`ReflectionClass::newInstance()` call — and both still read `class_info.methods` directly.
+That is the defect issue #868 tracks; they join the table when it lands.
+
+A descendant that declares its OWN constructor hides the ancestor's, private or not: the walk
+stops at the descendant, which is what makes `new static()` from the ancestor's scope report
+the DESCENDANT's visibility.
 
 ### Typed class constants (PHP 8.3)
 
