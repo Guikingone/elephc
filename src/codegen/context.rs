@@ -30,6 +30,7 @@ use crate::types::PhpType;
 use super::callable_reachability::CallableReachabilityAnalysis;
 use super::frame::FrameLayout;
 use super::local_analysis::LocalSlotAnalysis;
+use super::lower_inst::local_stores::RefCellStorePrevious;
 use super::shared_state::SharedCodegenState;
 use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
@@ -853,9 +854,34 @@ impl<'a> FunctionContext<'a> {
 
     /// Stores an SSA value into an addressable local slot.
     pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Retire)
+    }
+
+    /// Republishes a container a mutating runtime helper may have relocated.
+    ///
+    /// Same storage rules as `store_value_to_local`, minus the retirement of the slot's previous
+    /// occupant: a copy-on-write split already dropped this mutator's owner and a growth path
+    /// already freed the block it replaced, so the write-back only publishes the new pointer.
+    pub(super) fn store_container_writeback_to_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep)
+    }
+
+    /// Shared body of the two local stores, parameterized by the previous-occupant rule.
+    fn store_value_to_local_as(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+        previous: RefCellStorePrevious,
+    ) -> Result<()> {
         match self.local_slot_representation(slot) {
             LocalSlotRepresentation::Raw => self.store_value_to_raw_local(slot, value),
-            LocalSlotRepresentation::RefCell => self.store_value_to_ref_cell_local(slot, value),
+            LocalSlotRepresentation::RefCell => {
+                self.store_value_to_ref_cell_local(slot, value, previous)
+            }
             LocalSlotRepresentation::Dynamic => {
                 let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
                 let ref_cell = self.next_label("dynamic_local_store_ref_cell");
@@ -879,7 +905,7 @@ impl<'a> FunctionContext<'a> {
                 self.store_value_to_raw_local(slot, value)?;
                 self.emit_branch(&done);
                 self.emitter.label(&ref_cell);
-                self.store_value_to_ref_cell_local(slot, value)?;
+                self.store_value_to_ref_cell_local(slot, value, previous)?;
                 self.emitter.label(&done);
                 Ok(())
             }
@@ -1121,13 +1147,19 @@ impl<'a> FunctionContext<'a> {
     }
 
     /// Stores an SSA value through a local ref-cell pointer slot.
-    fn store_value_to_ref_cell_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+    fn store_value_to_ref_cell_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+        previous: RefCellStorePrevious,
+    ) -> Result<()> {
         let payload_ty = self.ref_cell_payload_type(slot)?;
         super::lower_inst::local_stores::store_value_to_ref_cell_as(
             self,
             slot,
             value,
             &payload_ty,
+            previous,
         )
     }
 

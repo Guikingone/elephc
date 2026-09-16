@@ -197,7 +197,8 @@ fn separate_shared_attached_cell(ctx: &mut FunctionContext<'_>, cell: crate::ir:
     // A raw local slot publishes without retiring what it held, so this has to release the
     // replaced cell itself; the ref-cell write-back already retires its previous occupant.
     let retires_replaced_cell = match receiver {
-        ReceiverPlace::RefCell(_) => true,
+        // A global-backed receiver's write-back retires the symbol's previous cell itself.
+        ReceiverPlace::RefCell(_) | ReceiverPlace::Global { .. } => true,
         ReceiverPlace::Local(_) => false,
         ReceiverPlace::Opaque | ReceiverPlace::Property { .. } => return Ok(()),
     };

@@ -56,11 +56,37 @@ pub(super) fn instruction_for_value<'a>(
 }
 
 /// Lowers an explicit local ref-cell store through the pointer held in the slot.
+/// Says whether a ref-cell store is responsible for retiring what the cell held before it.
+///
+/// A PHP assignment through the reference (`$ref = $v`) replaces a payload the cell owns and must
+/// release it. A write-back that republishes what `__rt_array_ensure_unique` / `__rt_hash_ensure_unique`
+/// returned must NOT: that helper already drops the mutator's own owner slot when a copy-on-write
+/// split relocates the container, so a second release frees storage the caller still points at.
+/// The mutating builtins (`array_unshift`, `array_shift`, `sort`, `array_splice`, …) split under
+/// the opposite convention and leave that release to their write-back, so they keep `Retire`.
+///
+/// Getting this wrong is silent until the container is aliased: an eval by-reference variadic
+/// hands the callee an argument hash the eval frame still owns, and the second `$items[$i] = …`
+/// then read entries that the first write's write-back had already freed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::codegen) enum RefCellStorePrevious {
+    /// A PHP assignment through the reference: release the payload being replaced.
+    Retire,
+    /// A container write-back: the mutating helper already owns that transition.
+    Keep,
+}
+
 pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
     retire_raw_occupant_before_ref_store(ctx, slot)?;
-    store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type)
+    store_value_through_ref_cell_slot(
+        ctx,
+        slot,
+        value,
+        &inst.result_php_type,
+        RefCellStorePrevious::Retire,
+    )
 }
 
 /// Retires what a still-raw slot holds before a ref-cell store overwrites it.
@@ -95,9 +121,10 @@ pub(super) fn store_value_through_ref_cell_slot(
     slot: LocalSlotId,
     value: ValueId,
     value_php_type: &PhpType,
+    previous: RefCellStorePrevious,
 ) -> Result<()> {
     if ctx.local_ref_cell_representation_is_definite(slot) {
-        return store_value_to_ref_cell_as(ctx, slot, value, value_php_type);
+        return store_value_to_ref_cell_as(ctx, slot, value, value_php_type, previous);
     }
     if !ctx.local_ref_cell_representation_is_dynamic(slot) {
         return ctx.store_value_to_raw_local(slot, value);
@@ -135,7 +162,7 @@ pub(super) fn store_value_through_ref_cell_slot(
         }
     }
     ctx.emitter.label(&ref_cell);
-    store_value_to_ref_cell_as(ctx, slot, value, value_php_type)?;
+    store_value_to_ref_cell_as(ctx, slot, value, value_php_type, previous)?;
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -632,8 +659,9 @@ pub(in crate::codegen) fn store_value_to_ref_cell_as(
     slot: LocalSlotId,
     value: ValueId,
     target_ty: &PhpType,
+    previous: RefCellStorePrevious,
 ) -> Result<()> {
-    store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty)
+    store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty, previous)
 }
 
 /// Writes through a borrowed address or a managed cell whose payload uses the declared shape.
@@ -642,6 +670,7 @@ fn store_value_to_raw_ref_cell_as(
     slot: LocalSlotId,
     value: ValueId,
     target_ty: &PhpType,
+    previous: RefCellStorePrevious,
 ) -> Result<()> {
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = target_ty.codegen_repr();
@@ -656,8 +685,8 @@ fn store_value_to_raw_ref_cell_as(
     } else {
         coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
     }
-    let retires_previous = matches!(target_ty, PhpType::Str | PhpType::Callable)
-        || target_ty.is_refcounted();
+    let retires_previous = previous == RefCellStorePrevious::Retire
+        && (matches!(target_ty, PhpType::Str | PhpType::Callable) || target_ty.is_refcounted());
     if retires_previous {
         abi::emit_push_result_value(ctx.emitter, &target_ty);
     }

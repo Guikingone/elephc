@@ -39,6 +39,15 @@ pub(super) enum ReceiverPlace {
         object: ValueId,
         slot: super::objects::PropertySlot,
     },
+    /// Program-global storage a `global $x` somewhere gave this name: the `_eir_global_*` symbol.
+    ///
+    /// The symbol holds one boxed `Mixed` cell and owns it. A mutating builtin works on that
+    /// cell in place, so the write-back only has to republish when a helper handed back a
+    /// DIFFERENT cell, and then it retires the one the symbol held.
+    Global {
+        symbol: String,
+        php_type: PhpType,
+    },
 }
 
 impl ReceiverPlace {
@@ -64,6 +73,15 @@ impl ReceiverPlace {
                 _ => Ok(Self::Opaque),
             };
         }
+        if inst_ref.op == Op::LoadGlobal {
+            if let Some(Immediate::GlobalName(data)) = inst_ref.immediate {
+                let name = ctx.global_name_data(data)?.to_string();
+                return Ok(Self::Global {
+                    symbol: crate::names::ir_global_symbol(&name),
+                    php_type: ctx.value_php_type(value)?,
+                });
+            }
+        }
         match direct_property_receiver(ctx, value)? {
             Some((object, slot)) => Ok(Self::Property { object, slot }),
             None => Ok(Self::Opaque),
@@ -78,7 +96,7 @@ impl ReceiverPlace {
         match self {
             Self::Opaque => None,
             Self::Local(slot) | Self::RefCell(slot) => Some(*slot),
-            Self::Property { .. } => None,
+            Self::Property { .. } | Self::Global { .. } => None,
         }
     }
 
@@ -120,7 +138,9 @@ impl ReceiverPlace {
                 abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
                 Ok(())
             }
-            Self::Opaque | Self::Property { .. } => Ok(()),
+            // The symbol keeps its own owner of the cell and the helpers mutate the cell in
+            // place, so there is no separate owner to hand over here.
+            Self::Opaque | Self::Property { .. } | Self::Global { .. } => Ok(()),
         }
     }
 
@@ -138,6 +158,10 @@ impl ReceiverPlace {
     ) -> Result<()> {
         let slot = match self {
             Self::Local(slot) | Self::RefCell(slot) => *slot,
+            Self::Global { symbol, php_type } => {
+                abi::emit_load_symbol_to_result(ctx.emitter, symbol, php_type);
+                return ctx.store_result_value(value);
+            }
             Self::Opaque | Self::Property { .. } => return Ok(()),
         };
         let source_ty = ctx.load_local_to_result(slot)?;
@@ -161,9 +185,13 @@ impl ReceiverPlace {
                 *slot,
                 value,
                 value_php_type,
+                crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Retire,
             ),
             Self::Property { object, slot } => {
                 super::objects::store_mutated_container_property_owner(ctx, *object, slot, value)
+            }
+            Self::Global { symbol, php_type } => {
+                emit_global_receiver_store_back(ctx, symbol, php_type, value)
             }
         }
     }
@@ -184,6 +212,40 @@ impl ReceiverPlace {
         let value_ty = ctx.value_php_type(value)?;
         self.store_back(ctx, value, &value_ty)
     }
+}
+
+/// Republishes a global-backed receiver only when a helper handed back a different cell.
+///
+/// The symbol already owns the cell the builtin mutated in place; storing the same pointer again
+/// would change nothing, and retiring the "previous" occupant would free the very cell being
+/// published. A replacement cell takes the symbol's owner slot and the old cell is released.
+fn emit_global_receiver_store_back(
+    ctx: &mut FunctionContext<'_>,
+    symbol: &str,
+    php_type: &PhpType,
+    value: ValueId,
+) -> Result<()> {
+    let unchanged = ctx.next_label("global_receiver_unchanged");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let old_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let new_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(value, new_reg)?;
+    abi::emit_load_symbol_to_reg(ctx.emitter, old_reg, symbol, 0);
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {new_reg}, {old_reg}"));      // did the helper hand back the cell the symbol already owns?
+            ctx.emitter.instruction(&format!("b.eq {unchanged}"));              // same cell: nothing to republish or retire
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {new_reg}, {old_reg}"));      // did the helper hand back the cell the symbol already owns?
+            ctx.emitter.instruction(&format!("je {unchanged}"));                // same cell: nothing to republish or retire
+        }
+    }
+    abi::emit_store_reg_to_symbol(ctx.emitter, new_reg, symbol, 0);
+    abi::emit_reg_move(ctx.emitter, result_reg, old_reg);
+    abi::emit_decref_if_refcounted(ctx.emitter, &php_type.codegen_repr());
+    ctx.emitter.label(&unchanged);
+    Ok(())
 }
 
 /// Finds a declared property behind the direct sort path's transparent value transitions.

@@ -841,6 +841,17 @@ impl RuntimeFnId {
     ) -> bool {
         use crate::types::PhpType;
         match self {
+            // Reversing a boxed source answers with a boxed hash, so a concrete checked shape only
+            // fits a concrete source. A local that a `global` somewhere binds to program storage
+            // is checked by its concrete assignments but LOADED as a boxed `Mixed` cell, and the
+            // checker's `array<int>` there refused the boxed reversal outright.
+            RuntimeFnId::ArrayReverse => !(matches!(
+                arg_types.first().map(PhpType::codegen_repr),
+                Some(PhpType::Mixed | PhpType::Union(_))
+            ) && matches!(
+                checked.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            )),
             RuntimeFnId::ArraySlice | RuntimeFnId::ArraySplice => {
                 let PhpType::Array(result_element) = checked.codegen_repr() else {
                     return true;

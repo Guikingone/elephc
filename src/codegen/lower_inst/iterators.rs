@@ -989,7 +989,7 @@ fn ensure_unique_static_iter_source(
             convert_loaded_indexed_source_to_hash(ctx);
             ctx.store_result_value(source)?;
             if let Some(slot) = source_local {
-                ctx.store_value_to_local(slot, source)?;
+                ctx.store_container_writeback_to_local(slot, source)?;
             }
             return Ok(());
         }
@@ -1010,7 +1010,7 @@ fn ensure_unique_static_iter_source(
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(source)?;
     if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, source)?;
+        ctx.store_container_writeback_to_local(slot, source)?;
     }
     Ok(())
 }
@@ -1089,7 +1089,7 @@ fn store_iter_source_to_origin_if_local(
         }
     }
     ctx.store_result_value(source)?;
-    ctx.store_value_to_local(slot, source)
+    ctx.store_container_writeback_to_local(slot, source)
 }
 
 /// Resolves a source SSA value back to its direct or reference-bound local origin.

@@ -348,7 +348,7 @@ pub(super) fn separate_get_for_write_receiver(
     ctx.load_value_to_reg(array, arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(array)?;
-    ctx.store_value_to_local(slot, array)?;
+    ctx.store_container_writeback_to_local(slot, array)?;
     ctx.writeback_global_array_source(array)
 }
 
@@ -915,7 +915,7 @@ pub(super) fn lower_array_elem_addr(
     }
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
+        ctx.store_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     match ctx.emitter.target.arch {
@@ -950,7 +950,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     stamp_scalar_array_write_result(ctx, &value_ty);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
+        ctx.store_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     Ok(())
@@ -1205,7 +1205,7 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type)?;
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
+        ctx.store_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     Ok(())
@@ -3410,7 +3410,7 @@ pub(super) fn lower_slot_detach(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     ctx.store_result_value(container)?;
     if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, container)?;
+        ctx.store_container_writeback_to_local(slot, container)?;
     }
     ctx.writeback_global_array_source(container)?;
     Ok(())
