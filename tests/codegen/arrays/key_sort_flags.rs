@@ -13,7 +13,7 @@
 //! - PHP resolves the comparison from `$flags & ~SORT_FLAG_CASE` and silently ignores every
 //!   other value, so `999`, `3`, `4` and a bare `SORT_FLAG_CASE` all mean `SORT_REGULAR`.
 //! - `SORT_NATURAL | SORT_FLAG_CASE` folds ASCII case only. php-src folds with libc
-//!   `toupper()` there, which maps Latin-1 under Darwin's C locale and not under glibc's;
+//!   `toupper()` under the process `LC_CTYPE`, which maps Latin-1 on Darwin and not on glibc;
 //!   elephc gives the same answer on every target and one fixture pins that.
 
 use crate::support::*;
@@ -175,10 +175,11 @@ foreach ($b as $k => $v) { echo \"[\", strlen($k), \"]\"; }\n",
 
 /// Verifies natural-order case folding is bounded to ASCII on every target.
 ///
-/// php-src folds with libc `toupper()`, which maps Latin-1 under Darwin's C locale and not
-/// under glibc's, so PHP itself answers differently on macOS and Linux for a byte above 127.
-/// Elephc folds `a`..`z` and nothing else, which is php-src's answer under glibc and the same
-/// answer on every target elephc compiles for.
+/// php-src folds with libc `toupper()` under the process `LC_CTYPE`, so PHP itself answers
+/// differently on macOS and Linux for a byte above 127: the CLI forces `C.UTF-8` at startup,
+/// where Darwin's single-byte table maps Latin-1 and glibc's does not. Under `LC_CTYPE=C` PHP
+/// prints exactly what this fixture asserts on both. Elephc folds `a`..`z` and nothing else,
+/// which is that `C` answer on every target it compiles for.
 #[test]
 fn natural_key_sort_folds_ascii_case_only() {
     let out = compile_and_run(

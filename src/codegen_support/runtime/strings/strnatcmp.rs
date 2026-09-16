@@ -16,6 +16,12 @@
 //! - PHP reads the NUL byte its strings always carry when a whitespace run walks off the end.
 //!   Elephc strings are pointer/length pairs with no terminator, so the skip synthesizes that
 //!   `0` at the boundary instead of reading past it.
+//! - Case folding covers ASCII `a`-`z` and stops there. php-src folds through the process's
+//!   `LC_CTYPE` table, so its own answer above `0x7F` follows the host C library: under
+//!   `LC_CTYPE=C` it folds ASCII only, which is what this emits, and under the `C.UTF-8` the
+//!   CLI forces at startup Darwin's single-byte table also folds `0xE0..0xFE` while glibc's
+//!   does not. Folding through a table would mean the emitted binary answering for the machine
+//!   that compiled it, so this bakes the `C` answer on every target instead.
 //! - Only the SIGN of the result is contractual, as in php-src.
 
 use crate::codegen_support::emit::Emitter;

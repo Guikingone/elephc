@@ -410,10 +410,13 @@ Two boundaries are worth stating:
 - `SORT_LOCALE_STRING` observes the process locale, and elephc has no PHP-visible
   `setlocale()`, so the locale is always `C` — where collation is byte order. The one place it
   differs from `SORT_STRING` is a key with an embedded NUL, which a C string ends at.
-- `SORT_NATURAL | SORT_FLAG_CASE` folds ASCII `a`–`z` and nothing else. php-src folds with the
-  platform's `toupper()` there, which maps Latin-1 under macOS's C locale but not under
-  glibc's, so PHP itself answers differently on the two; elephc gives glibc's answer
-  everywhere. ASCII keys are unaffected.
+- `SORT_NATURAL | SORT_FLAG_CASE` folds ASCII `a`–`z` and nothing else. php-src folds each
+  byte through the process's `LC_CTYPE` table, so its answer above `0x7F` follows the host C
+  library. Under `LC_CTYPE=C` PHP folds ASCII only and agrees with elephc byte for byte; the
+  CLI forces `C.UTF-8` at startup, where glibc still folds ASCII only but Darwin's single-byte
+  table also maps Latin-1, so PHP on macOS sorts `"\xFF"` before `"\x80"` and PHP on Linux
+  after it. Elephc gives the `C` answer on every target rather than the answer of whichever
+  machine compiled the program. ASCII keys are unaffected either way.
 
 The sort flags are not accepted by `sort()`, `rsort()`, `asort()` or `arsort()` yet.
 
