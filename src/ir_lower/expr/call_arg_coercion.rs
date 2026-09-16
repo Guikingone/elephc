@@ -439,6 +439,23 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
         );
         return Some(lease_managed_call_argument_ref_cell(ctx, cell, arg.span).value);
     }
+    if matches!(local_ty, PhpType::Mixed | PhpType::Union(_)) {
+        // A declared PHP array reads back as one boxed value, so neither concrete branch above
+        // matches even though the element is a managed cell just the same. Leasing it here is
+        // what puts the cell in the call's unwind ledger: without that, a later argument whose
+        // evaluation throws left the cell unreleased.
+        let array_value = ctx.load_local(array_name, Some(array.span));
+        let element_index = lower_expr(ctx, element_index);
+        let cell = ctx.emit_value(
+            Op::LoadArrayElemRefCell,
+            vec![array_value.value, element_index.value],
+            None,
+            PhpType::Pointer(None),
+            Op::LoadArrayElemRefCell.default_effects(),
+            Some(arg.span),
+        );
+        return Some(lease_managed_call_argument_ref_cell(ctx, cell, arg.span).value);
+    }
     let PhpType::Array(elem_ty) = local_ty else {
         return None;
     };
