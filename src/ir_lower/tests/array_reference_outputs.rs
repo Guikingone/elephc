@@ -105,8 +105,8 @@ echo implode(",", array_keys($stringKeys)), implode(",", array_keys($snapshot));
     }
 }
 
-/// A conditional write through a declared array reference mutates the caller's attached Mixed
-/// cell directly, for both packed and keyed payloads.
+/// A conditional write through a declared array reference republishes a detached Mixed cell for
+/// both packed and keyed payloads.
 #[test]
 fn conditional_php_array_reference_writes_keep_the_attached_cell() {
     use crate::ir::Op;
@@ -128,10 +128,13 @@ checkConditionalArray($argc > 0);
         let callee = module.functions.iter()
             .find(|function| function.name.eq_ignore_ascii_case("conditionallyWriteArray"))
             .unwrap();
-        assert!(callee.instructions.iter().any(|inst| inst.op == Op::RuntimeCall), "{name}");
+        let clone = callee.instructions.iter().position(|inst| inst.op == Op::MixedClone)
+            .unwrap_or_else(|| panic!("{name}: the shared caller value must detach before mutation"));
+        let setter = callee.instructions.iter().position(|inst| inst.op == Op::RuntimeCall)
+            .unwrap_or_else(|| panic!("{name}: missing boxed array setter"));
         assert!(
-            callee.instructions.iter().all(|inst| inst.op != Op::MixedClone),
-            "{name}: an attached by-reference parameter must not replace its caller cell",
+            clone < setter,
+            "{name}: the detached cell must be published before the conditional write",
         );
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
