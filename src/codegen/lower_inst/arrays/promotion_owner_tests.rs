@@ -27,10 +27,10 @@ fn array_to_hash_retires_late_widened_mixed_source_on_every_target() {
         let module = late_widened_array_to_hash_module(target);
         let asm = generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        let conversion = asm
-            .split("op=array_to_hash")
-            .nth(1)
-            .unwrap_or_else(|| panic!("{name}: missing ArrayToHash lowering\n{asm}"));
+        // User assembly does not enable EIR annotation comments. This fixture contains one
+        // conversion only, so ordering the two unique helper calls across the function is the
+        // stable backend contract.
+        let conversion = asm.as_str();
         let release = conversion
             .find("__rt_decref_mixed")
             .unwrap_or_else(|| panic!("{name}: the superseded Mixed owner was not retired\n{asm}"));
