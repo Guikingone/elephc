@@ -14,8 +14,8 @@ use std::path::Path;
 
 /// Optimized managed element arguments keep EIR ledger cleanup authoritative.
 ///
-/// Identity folding may erase the `Borrow` around `AcquireRefCell`. The backend must still
-/// recognize the explicit owner-slot release and avoid adding a second ABI pop/release pair.
+/// The `Borrow` around `AcquireRefCell` is the explicit EIR-ledger marker. Identity folding must
+/// preserve it so the backend does not add a second ABI pop/release pair.
 #[test]
 fn folded_managed_element_argument_has_one_cleanup_owner_on_every_target() {
     let source = r#"<?php
@@ -43,7 +43,7 @@ echo $items["key"];
             .split_once("main:\n")
             .expect("main assembly")
             .1
-            .split_once("# @endfn name=main")
+            .split_once("@endfn name=main")
             .expect("main end marker")
             .0;
         assert_eq!(
