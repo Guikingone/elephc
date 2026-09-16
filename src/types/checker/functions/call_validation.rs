@@ -244,7 +244,8 @@ impl Checker {
         receiver: &Expr,
         env: &TypeEnv,
     ) -> Result<bool, CompileError> {
-        let receiver_ty = self.infer_type(receiver, env)?.codegen_repr();
+        let inferred_ty = self.infer_type(receiver, env)?;
+        let receiver_ty = inferred_ty.codegen_repr();
         let array_like = matches!(
             &receiver_ty,
             PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
@@ -252,14 +253,17 @@ impl Checker {
         if !array_like {
             return Ok(false);
         }
+        // A declared `array` property carries the canonical PHP-array union, whose codegen
+        // repr collapses to `Mixed`; ask the inferred type so both spellings of array storage
+        // reach the property path instead of only the single-layout ones.
+        let holds_array_storage = inferred_ty.is_php_array()
+            || matches!(&receiver_ty, PhpType::Array(_) | PhpType::AssocArray { .. });
         match &receiver.kind {
             ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => Ok(true),
             ExprKind::ArrayAccess { array, .. } => {
                 self.is_addressable_ref_array_receiver(array, env)
             }
-            ExprKind::PropertyAccess { object, property }
-                if matches!(&receiver_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) =>
-            {
+            ExprKind::PropertyAccess { object, property } if holds_array_storage => {
                 self.is_addressable_ref_property(object, property, env)
             }
             _ => Ok(false),
