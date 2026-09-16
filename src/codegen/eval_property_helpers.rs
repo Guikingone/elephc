@@ -52,6 +52,26 @@ struct EvalPropertySlot {
     is_hidden_shadow: bool,
 }
 
+impl EvalPropertySlot {
+    /// Returns whether a failed scope check leaves the name to dynamic-property storage.
+    ///
+    /// php mangles a private property into its declaring class's own table entry, so a name the
+    /// layout carries only as a STRICT ancestor's private slot is unreachable by name from every
+    /// other scope — and php resolves it to a DYNAMIC property there, exactly as
+    /// `crate::types::property_name_shadows_ancestor_private_slot` decides for generated code.
+    /// Refusing instead turned `$o->hidden = …` in eval into a fatal on a child that merely
+    /// INHERITS `private $hidden`, where php creates the child's own property.
+    ///
+    /// A private the receiver's OWN class declares keeps failing closed: that is php's
+    /// `Cannot access private property` path, and it is the case the eval-child probe covers.
+    fn scope_miss_is_dynamic(&self) -> bool {
+        self.is_hidden_shadow
+            || (self.visibility == Visibility::Private
+                && self.declaring_class.trim_start_matches('\\')
+                    != self.class_name.trim_start_matches('\\'))
+    }
+}
+
 /// Returns whether the fixed slot can carry the untyped-property removed marker.
 fn slot_supports_untyped_unset_marker(slot: &EvalPropertySlot) -> bool {
     !slot.is_declared && !slot.is_reference && slot.ty.codegen_repr() == PhpType::Mixed
@@ -688,7 +708,7 @@ fn emit_aarch64_property_name_compare(
     emitter.instruction(&format!("cbz x0, {}", miss_label));                    // continue property dispatch when names differ
     let scope_ok_label = slot_scope_ok_label(module, slot, mode);
     let private_shadow_label = format!("{scope_ok_label}_eval_shadow");
-    let scope_fail_label = if slot.is_hidden_shadow {
+    let scope_fail_label = if slot.scope_miss_is_dynamic() {
         miss_label.as_str()
     } else if slot.visibility == Visibility::Private {
         private_shadow_label.as_str()
@@ -698,7 +718,7 @@ fn emit_aarch64_property_name_compare(
     emit_aarch64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, scope_fail_label);
     emitter.label(&scope_ok_label);
     emitter.instruction(&format!("b {}", target_label));                        // dispatch after scoped visibility is satisfied
-    if slot.visibility == Visibility::Private && !slot.is_hidden_shadow {
+    if slot.visibility == Visibility::Private && !slot.scope_miss_is_dynamic() {
         emitter.label(&private_shadow_label);
         private_shadow::emit_separate_property_probe(module, emitter, &miss_label, fail_label);
     }
@@ -730,7 +750,7 @@ fn emit_x86_64_property_name_compare(
     emitter.instruction(&format!("je {}", miss_label));                         // continue property dispatch when names differ
     let scope_ok_label = slot_scope_ok_label(module, slot, mode);
     let private_shadow_label = format!("{scope_ok_label}_eval_shadow");
-    let scope_fail_label = if slot.is_hidden_shadow {
+    let scope_fail_label = if slot.scope_miss_is_dynamic() {
         miss_label.as_str()
     } else if slot.visibility == Visibility::Private {
         private_shadow_label.as_str()
@@ -740,7 +760,7 @@ fn emit_x86_64_property_name_compare(
     emit_x86_64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, scope_fail_label);
     emitter.label(&scope_ok_label);
     emitter.instruction(&format!("jmp {}", target_label));                      // dispatch after scoped visibility is satisfied
-    if slot.visibility == Visibility::Private && !slot.is_hidden_shadow {
+    if slot.visibility == Visibility::Private && !slot.scope_miss_is_dynamic() {
         emitter.label(&private_shadow_label);
         private_shadow::emit_separate_property_probe(module, emitter, &miss_label, fail_label);
     }

@@ -711,6 +711,70 @@ pub(super) fn emit_scope_dynamic_property_hash_probe(
     Ok(())
 }
 
+/// Emits a `Refuse` read arm that first lets an eval-declared child answer from its own storage.
+///
+/// A class an opaque `eval()` subclasses shares its class id with that child, so the ladder's arm
+/// for `Base` also runs for a runtime `EvalChild extends Base`. When `Base` declares `private $p`,
+/// php answers `$child->p` from the CHILD's own property table outside `Base`'s scope — the
+/// private slot is mangled away and the plain name is a dynamic property there — while an actual
+/// `Base` instance still raises `Cannot access private property Base::$p`. The eval bridge already
+/// separates the two through `__elephc_eval_dynamic_object_has_separate_property`; this arm asks
+/// it the same question before raising, and reads the eval-reserved hash the bridge writes.
+///
+/// Only a PRIVATE refusal is separable: an ancestor's `protected` stays refused on the child too.
+/// Every other case raises exactly as before.
+pub(super) fn emit_refused_read_or_eval_child_property(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    message: &str,
+    object_reg: &str,
+    mode: PropertyFetchMode,
+    done_label: &str,
+) -> Result<()> {
+    let class_name = slot.class_name.trim_start_matches('\\');
+    let separable = matches!(
+        resolve_property_name_in_current_scope(ctx, class_name, &slot.property),
+        crate::types::PropertyNameResolution::Inaccessible(Visibility::Private)
+    );
+    let hash_offset = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .filter(|class_info| class_info.eval_property_storage)
+        .map(|class_info| dynamic_property_hash_offset(class_info.properties.len()));
+    let (Some(hash_offset), true) = (hash_offset, separable) else {
+        super::super::exceptions::emit_error(ctx, message);
+        return Ok(());
+    };
+    let target = ctx.emitter.target;
+    let refuse_label = ctx.next_label("refused_prop_native_receiver");
+    let (name_label, name_len) = ctx.data.add_string(slot.property.as_bytes());
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(target, 0), object_reg);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &name_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), name_len as i64);
+    let callback = target.extern_symbol("__elephc_eval_dynamic_object_has_separate_property");
+    abi::emit_call_label(ctx.emitter, &callback);
+    // The receiver comes back into a scratch first: `object_reg` is the result register on both
+    // targets, and popping straight into it would overwrite the callback's answer before the test.
+    let receiver_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, receiver_reg);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &refuse_label);
+    abi::emit_reg_move(ctx.emitter, object_reg, receiver_reg);
+    emit_scope_dynamic_property_hash_probe(
+        ctx,
+        class_name,
+        &slot.property,
+        object_reg,
+        hash_offset,
+        mode.is_read(),
+    )?;
+    abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&refuse_label);
+    super::super::exceptions::emit_error(ctx, message);
+    Ok(())
+}
+
 /// Emits one runtime-class arm of a read whose name php answers dynamically on the static class.
 ///
 /// Every arm publishes the instruction's own result representation and stores it, so the arms

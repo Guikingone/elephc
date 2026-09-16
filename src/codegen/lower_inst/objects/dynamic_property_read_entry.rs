@@ -312,7 +312,9 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
             // php refuses the read from this scope.
             MixedPropertyReadKind::Refuse(message) => {
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
-                super::super::exceptions::emit_error(ctx, message);
+                emit_refused_read_or_eval_child_property(
+                    ctx, slot, message, base_reg, mode, &done_label,
+                )?;
                 continue;
             }
             // php makes this name invisible on this class, so it answers from the per-instance

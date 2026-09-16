@@ -121,7 +121,10 @@ pub(super) fn lower_declared_mixed_prop_get(
         // slot stays unread. Only a value read raises: the probes answer null in silence.
         match &candidate.kind {
             MixedPropertyReadKind::Refuse(message) => {
-                super::super::exceptions::emit_error(ctx, message);
+                let base_reg = abi::int_result_reg(ctx.emitter);
+                emit_refused_read_or_eval_child_property(
+                    ctx, &candidate.candidate.slot, message, base_reg, mode, &done_label,
+                )?;
                 continue;
             }
             // php makes this name invisible on this class, so it answers from the per-instance
