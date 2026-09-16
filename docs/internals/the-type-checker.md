@@ -513,6 +513,22 @@ operand is already an array. The pass therefore carries which parameters are dec
 cast as transparent is what made `function f($v) { return (string)$v; }` leak a full copy of
 the string on every call (issue #700).
 
+The declaration is the start of the answer, not all of it. A `string` parameter can be assigned
+a wider value, and the slot widens with it, so the pass also checks the provenance the operand
+actually carries:
+
+```php
+function f(string $a, string $b): string { $a = $b; return (string)$a; }  // borrowed from $b
+function g(string $a, mixed  $b): string { $a = $b; return (string)$a; }  // a fresh copy
+```
+
+Both operands name a parameter declared `string`. In `f` the storage now in `$a` came from
+another bare `Str` slot, the cast is still elided, and the result is `$b`'s storage. In `g` the
+assignment boxed `$a` into a Mixed, so `lower_cast` emits `Op::Cast` and the caller owns the
+copy. Only a provenance whose every parameter was declared `string` keeps the passthrough;
+anything else answers `None`, and an `Unknown` provenance stays `Unknown`, because that is the
+one case where claiming independence would be a use-after-free rather than a leak.
+
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 
 **File:** `src/types/checker/stmt_check/narrowing.rs`

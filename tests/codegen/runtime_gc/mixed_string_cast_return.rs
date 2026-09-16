@@ -147,6 +147,61 @@ echo $x, $y, strlen($x), strlen($y);
     );
 }
 
+/// Verifies a `string` parameter assigned from a wider one no longer passes the cast through.
+///
+/// The declaration is not the whole answer: `$a` starts with a bare `Str` slot, but `$a = $b`
+/// over a `mixed` parameter widens it to a boxed Mixed, so `lower_cast` stops eliding and the
+/// cast allocates. Reading the provenance and stopping there says "borrowed from parameter 1",
+/// the caller skips its release, and the copy leaks once per call. The sibling below keeps the
+/// case that must stay a borrow, so a fix cannot simply answer `None` everywhere.
+#[test]
+fn test_string_cast_over_a_widened_parameter_is_a_copy_the_caller_owns() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function widened(string $a, mixed $b): string { $a = $b; return (string)$a; }
+$n = 0;
+for ($i = 0; $i < 40; $i++) {
+    $x = str_repeat("a", 3);
+    $y = str_repeat("b", 3);
+    $n += strlen(widened($x, $y));
+}
+echo $n;
+"#,
+    );
+    assert_eq!(out.stdout, "120", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "a cast over a widened parameter slot must be owned by the caller: {}",
+        out.stderr
+    );
+}
+
+/// Guard: a parameter reassigned from ANOTHER `string` parameter still passes storage through.
+///
+/// Both slots are bare `Str`, so the cast is still elided and the result really is `$b`'s
+/// storage -- the provenance moves to parameter 1 rather than becoming independent. Narrowing
+/// the passthrough must not reach this shape and answer `None`, which would have the caller
+/// release a string it only borrowed.
+///
+/// It reads back `$b` and the result, never `$a`. Assigning to a by-value `string` parameter
+/// is separately visible to the CALLER here -- this prints `bbb` for the caller's first
+/// argument where PHP prints `aaa` -- and that defect needs no cast at all to reproduce
+/// (`function f(string $a, string $b): string { $a = $b; return $a; }` does it), so pinning it
+/// in a fixture about casts would tie two unrelated behaviours together.
+#[test]
+fn test_string_cast_over_a_reassigned_string_parameter_stays_a_borrow() {
+    let out = compile_and_run(
+        r#"<?php
+function swap(string $a, string $b): string { $a = $b; return (string)$a; }
+$x = str_repeat("a", 3);
+$y = str_repeat("b", 3);
+$z = swap($x, $y);
+echo $z, "|", $y, "|", strlen($z), strlen($y);
+"#,
+    );
+    assert_eq!(out, "bbb|bbb|33");
+}
+
 /// Guard: a wrapper around the operand must not turn an elided cast into a copy.
 ///
 /// `lower_cast` elides on the operand's IR type, and `@$s` and `(string)$s` both leave a

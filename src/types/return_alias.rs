@@ -75,20 +75,32 @@ struct AliasState<'a> {
     /// The names of the visible parameters declared exactly `string`. Only those have a bare
     /// `Str` slot, which is the one operand shape a `(string)` cast passes through.
     string_parameters: &'a BTreeSet<String>,
+    /// The same parameters by position, to ask the question of a provenance rather than of a
+    /// name: a `string` parameter assigned from a wider one no longer has a bare `Str` slot.
+    string_parameter_indices: &'a BTreeSet<usize>,
 }
 
 impl<'a> AliasState<'a> {
     /// Creates an empty state for a callable with these `string`-declared parameters.
-    fn new(string_parameters: &'a BTreeSet<String>) -> Self {
+    fn new(
+        string_parameters: &'a BTreeSet<String>,
+        string_parameter_indices: &'a BTreeSet<usize>,
+    ) -> Self {
         Self {
             locals: HashMap::new(),
             string_parameters,
+            string_parameter_indices,
         }
     }
 
     /// Returns whether `name` is a visible parameter declared exactly `string`.
     fn is_string_parameter(&self, name: &str) -> bool {
         self.string_parameters.contains(name)
+    }
+
+    /// Returns whether the parameter at `index` was declared exactly `string`.
+    fn is_string_parameter_index(&self, index: usize) -> bool {
+        self.string_parameter_indices.contains(&index)
     }
 }
 
@@ -207,7 +219,13 @@ fn summarize_callable<'a>(
         .filter(|(_, hint)| matches!(hint, Some(TypeExpr::Str)))
         .map(|(name, _)| (*name).to_string())
         .collect();
-    let mut state = AliasState::new(&string_parameters);
+    let string_parameter_indices: BTreeSet<usize> = params
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, hint))| matches!(hint, Some(TypeExpr::Str)))
+        .map(|(index, _)| index)
+        .collect();
+    let mut state = AliasState::new(&string_parameters, &string_parameter_indices);
     for (index, (name, _)) in params.iter().enumerate() {
         state
             .locals
@@ -518,10 +536,16 @@ fn analyze_loop(
 fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
     static NO_PARAMETERS: std::sync::LazyLock<BTreeSet<String>> =
         std::sync::LazyLock::new(BTreeSet::new);
+    static NO_PARAMETER_INDICES: std::sync::LazyLock<BTreeSet<usize>> =
+        std::sync::LazyLock::new(BTreeSet::new);
     let string_parameters = states
         .first()
         .map(|state| state.string_parameters)
         .unwrap_or(&NO_PARAMETERS);
+    let string_parameter_indices = states
+        .first()
+        .map(|state| state.string_parameter_indices)
+        .unwrap_or(&NO_PARAMETER_INDICES);
     let mut keys = BTreeSet::new();
     for state in &states {
         keys.extend(state.locals.keys().cloned());
@@ -548,6 +572,7 @@ fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
     AliasState {
         locals,
         string_parameters,
+        string_parameter_indices,
     }
 }
 
@@ -663,7 +688,24 @@ fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> Return
     }
     // The parameter's own provenance, not its index: `function f(string $a, string $b)
     // { $a = $b; return (string)$a; }` still has a `Str` slot, but it now holds $b's storage.
-    expr_alias(inner, state)
+    let alias = expr_alias(inner, state);
+    match alias {
+        // ...and that storage has to be another `Str` slot, or the assignment widened the one
+        // the declaration promised and the cast allocates after all. `function f(string $a,
+        // mixed $b) { $a = $b; return (string)$a; }` boxes `$a`, so `lower_cast` emits
+        // `Op::Cast` and the caller owns the copy; calling it borrowed leaks it per call.
+        ReturnArgAlias::Parameters(ref parameters)
+            if parameters
+                .iter()
+                .all(|index| state.is_string_parameter_index(*index)) =>
+        {
+            alias
+        }
+        ReturnArgAlias::Parameters(_) => ReturnArgAlias::None,
+        // `Unknown` stays unknown: a provenance nobody could follow is the one case where
+        // claiming independence would be a use-after-free rather than a leak.
+        other => other,
+    }
 }
 
 /// Reports whether a `(string)` cast's operand still has the bare `Str` slot that makes
