@@ -1379,6 +1379,8 @@ jobs:
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
+          EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
@@ -1423,6 +1425,8 @@ jobs:
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
+          EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
@@ -1467,6 +1471,8 @@ jobs:
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
+          EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
