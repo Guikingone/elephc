@@ -129,12 +129,24 @@ if ($v instanceof Box) { echo readnum($v); }
         false,
     );
 
-    // One spelling per target, and the leading indent matters on all of them: the directive
-    // `.globl _fn_readnum` contains "bl _fn_readnum" as a substring.
-    let call = ["\n    bl _fn_readnum", "\n    bl fn_readnum", "\n    call fn_readnum"]
+    // The mnemonic and the symbol prefix vary INDEPENDENTLY across targets, so every
+    // combination has to be tried rather than one spelling per target: linux-x86_64 emits
+    // `call _fn_readnum`, underscore included, which a hand-written list of three missed.
+    //
+    // The leading indent matters on all of them: the directive `.globl _fn_readnum` contains
+    // "bl _fn_readnum" as a substring, and only the indent keeps it from matching.
+    let call = ["bl", "call"]
         .iter()
-        .find_map(|marker| user_asm.split_once(*marker))
-        .map(|(before, _)| before)
+        .flat_map(|mnemonic| {
+            ["_fn_readnum", "fn_readnum"]
+                .iter()
+                .map(move |symbol| format!("\n    {mnemonic} {symbol}"))
+        })
+        .find_map(|marker| {
+            user_asm
+                .split_once(marker.as_str())
+                .map(|(before, _)| before.to_string())
+        })
         .expect("the fixture must call readnum");
     assert!(
         call.contains("__rt_mixed_unbox"),
