@@ -64,7 +64,7 @@ pub fn emit_str_to_int(emitter: &mut Emitter) {
     emitter.instruction("lsl x9, x9, #1");                                      // drop the sign bit: NaN and both infinities compare alike
     abi::emit_load_int_immediate(emitter, "x10", 0xffe0_0000_0000_0000u64 as i64); // twice the exponent-all-ones pattern
     emitter.instruction("cmp x9, x10");                                         // is the magnitude infinite or NaN?
-    emitter.instruction("b.hs __rt_str_to_int_zero");                           // yes: PHP casts it to 0
+    emitter.instruction("b.hs __rt_str_to_int_zero");                           // yes: PHP casts it to 0, whichever form the string took
 
     // -- choose the integer value unless strtod consumed more bytes (a float part) --
     emitter.instruction("ldr x9, [sp, #8]");                                    // load the end pointer returned by strtod
@@ -76,10 +76,11 @@ pub fn emit_str_to_int(emitter: &mut Emitter) {
 
     emitter.label("__rt_str_to_int_float");
     // PHP CAPS a numeric string's value; it does not wrap it the way a float VALUE is wrapped,
-    // so `__rt_php_float_to_int` is deliberately not used here -- its modulo-2^64 reduction
-    // turned `(int)"1e19"` into -8446744073709551616. `fcvtzs` saturates to PHP_INT_MAX/MIN,
-    // which is exactly PHP's cap for every finite double.
-    emitter.instruction("fcvtzs x0, d0");                                       // truncate toward zero, saturating on overflow
+    // so the sibling `__rt_php_float_to_int` is deliberately NOT used here -- its modulo-2^64
+    // reduction turned `(int)"1e19"` into -8446744073709551616. Both rules live in
+    // `runtime::numeric` so neither is open-coded at a call site.
+    emitter.instruction("bl __rt_php_float_to_int_cap");                        // apply PHP's numeric-string cap
+    emitter.instruction("mov x0, x9");                                          // move the capped value into the result register
     emitter.instruction("b __rt_str_to_int_done");                              // share the epilogue
 
     emitter.label("__rt_str_to_int_zero");
@@ -132,7 +133,7 @@ fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r9, r9");                                          // drop the sign bit: NaN and both infinities compare alike
     emitter.instruction("mov r10, 0xffe0000000000000");                         // twice the exponent-all-ones pattern
     emitter.instruction("cmp r9, r10");                                         // is the magnitude infinite or NaN?
-    emitter.instruction("jae __rt_str_to_int_zero_linux_x86_64");               // yes: PHP casts it to 0
+    emitter.instruction("jae __rt_str_to_int_zero_linux_x86_64");               // yes: PHP casts it to 0, whichever form the string took
 
     // -- choose the integer value unless strtod consumed more bytes (a float part) --
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // load the end pointer returned by strtod
@@ -142,19 +143,12 @@ fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_str_to_int_done_linux_x86_64");               // skip the float path
 
     emitter.label("__rt_str_to_int_float_linux_x86_64");
-    // PHP CAPS a numeric string's value rather than wrapping it, so `__rt_php_float_to_int` is
-    // deliberately not used here -- its modulo-2^64 reduction turned `(int)"1e19"` into
-    // -8446744073709551616. `cvttsd2si` answers with the "integer indefinite" pattern
-    // (0x8000000000000000) when the value does not fit, which is already the right answer for a
-    // negative overflow; a positive one has to become PHP_INT_MAX instead.
-    emitter.instruction("cvttsd2si rax, xmm0");                                 // truncate toward zero
-    emitter.instruction("mov r10, 0x8000000000000000");                         // the indefinite pattern cvttsd2si reports on overflow
-    emitter.instruction("cmp rax, r10");                                        // did the conversion overflow?
-    emitter.instruction("jne __rt_str_to_int_done_linux_x86_64");               // no: the truncated value stands
-    emitter.instruction("movq r9, xmm0");                                       // reload the bit pattern to read its sign
-    emitter.instruction("test r9, r9");                                         // was the source negative?
-    emitter.instruction("js __rt_str_to_int_done_linux_x86_64");                // yes: PHP_INT_MIN is already in rax
-    emitter.instruction("mov rax, 0x7fffffffffffffff");                         // positive overflow caps at PHP_INT_MAX
+    // PHP CAPS a numeric string's value rather than wrapping it, so the sibling
+    // `__rt_php_float_to_int` is deliberately NOT used here -- its modulo-2^64 reduction turned
+    // `(int)"1e19"` into -8446744073709551616. Both rules live in `runtime::numeric` so neither
+    // is open-coded at a call site.
+    emitter.instruction("call __rt_php_float_to_int_cap");                      // apply PHP's numeric-string cap
+    emitter.instruction("mov rax, r11");                                        // move the capped value into the result register
     emitter.instruction("jmp __rt_str_to_int_done_linux_x86_64");               // share the epilogue
 
     emitter.label("__rt_str_to_int_zero_linux_x86_64");
