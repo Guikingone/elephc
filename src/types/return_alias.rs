@@ -16,7 +16,7 @@
 //!   `Str` slot. Every other cast COPIES, including one over a local that merely holds a
 //!   `string` parameter's value -- locals are boxed Mixed (issue #700).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
@@ -78,6 +78,10 @@ struct AliasState<'a> {
     /// The same parameters by position, to ask the question of a provenance rather than of a
     /// name: a `string` parameter assigned from a wider one no longer has a bare `Str` slot.
     string_parameter_indices: &'a BTreeSet<usize>,
+    /// The locals whose slot is still a bare `Str` RIGHT HERE, which is the only operand shape
+    /// `lower_cast` elides. It starts as the `string` parameters and shrinks as they are
+    /// assigned: a declaration says what a slot began as, not what it holds now.
+    str_slot_locals: HashSet<String>,
 }
 
 impl<'a> AliasState<'a> {
@@ -90,10 +94,15 @@ impl<'a> AliasState<'a> {
             locals: HashMap::new(),
             string_parameters,
             string_parameter_indices,
+            str_slot_locals: string_parameters.iter().cloned().collect(),
         }
     }
 
     /// Returns whether `name` is a visible parameter declared exactly `string`.
+    ///
+    /// Only such a parameter is ever given a bare `Str` slot; a local is boxed regardless of
+    /// what is written into it, which is why an assignment can preserve the slot but never
+    /// create one.
     fn is_string_parameter(&self, name: &str) -> bool {
         self.string_parameters.contains(name)
     }
@@ -101,6 +110,11 @@ impl<'a> AliasState<'a> {
     /// Returns whether the parameter at `index` was declared exactly `string`.
     fn is_string_parameter_index(&self, index: usize) -> bool {
         self.string_parameter_indices.contains(&index)
+    }
+
+    /// Returns whether `name`'s slot is still a bare `Str` at this point in the body.
+    fn has_str_slot(&self, name: &str) -> bool {
+        self.str_slot_locals.contains(name)
     }
 }
 
@@ -261,12 +275,29 @@ fn analyze_stmt(
     match &stmt.kind {
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
             let alias = expr_alias(value, state);
+            // A bare `Str` slot can only be KEPT by a parameter that was declared `string`;
+            // it is never gained. A local is boxed Mixed even when everything written to it was
+            // a string -- `$x = $s` over a `string` parameter still lowers through `mixed_box`
+            // -- so assigning into one never makes it a passthrough operand.
+            //
+            // For a `string` parameter the slot survives only while what is written into it is
+            // itself bare-`Str`: from a `mixed` parameter, or from a boxed local such as
+            // `$c ? $p : $q`, it widens and `lower_cast` stops eliding. Reading the declaration
+            // alone leaked one copy per call for both of those.
+            let keeps_str_slot =
+                state.is_string_parameter(name) && expr_keeps_str_slot(value, state);
             apply_expr_effects(value, state);
             state.locals.insert(name.clone(), alias);
+            if keeps_str_slot {
+                state.str_slot_locals.insert(name.clone());
+            } else {
+                state.str_slot_locals.remove(name);
+            }
         }
         StmtKind::RefAssign { target, source } => {
             apply_expr_effects(source, state);
             state.locals.insert(target.clone(), ReturnArgAlias::Unknown);
+            state.str_slot_locals.remove(target);
             // The new ref cell can connect either name to storage whose later
             // writes are not represented by ordinary assignment statements.
             invalidate_all_aliases(state);
@@ -569,10 +600,17 @@ fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
             )
         })
         .collect();
+    // A slot is only still a bare `Str` if it is one on every path into here.
+    let str_slot_locals = states
+        .iter()
+        .map(|state| state.str_slot_locals.clone())
+        .reduce(|acc, next| acc.intersection(&next).cloned().collect())
+        .unwrap_or_default();
     AliasState {
         locals,
         string_parameters,
         string_parameter_indices,
+        str_slot_locals,
     }
 }
 
@@ -683,7 +721,7 @@ fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> Return
     if !matches!(target, CastType::String) {
         return ReturnArgAlias::None;
     }
-    if !operand_keeps_a_string_parameter_slot(inner, state) {
+    if !expr_keeps_str_slot(inner, state) {
         return ReturnArgAlias::None;
     }
     // The parameter's own provenance, not its index: `function f(string $a, string $b)
@@ -708,8 +746,14 @@ fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> Return
     }
 }
 
-/// Reports whether a `(string)` cast's operand still has the bare `Str` slot that makes
-/// `lower_cast` elide the cast.
+/// Reports whether `expr` still has the bare `Str` slot that makes `lower_cast` elide a
+/// `(string)` cast over it.
+///
+/// This asks about the slot as it stands HERE, not about how the variable was declared. A
+/// `string` parameter starts with a bare `Str`, and keeps it only while everything written into
+/// it is itself bare-`Str`: assigned from a `mixed` parameter, or from a boxed local such as
+/// `$c ? $p : $q`, the slot widens and the cast starts allocating. Reading the declaration alone
+/// leaked one copy per call for both of those shapes.
 ///
 /// It has to see through exactly what `expr_alias` sees through, or the two disagree about
 /// which expression "the operand" is, and the disagreement is a use-after-free rather than a
@@ -717,17 +761,17 @@ fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> Return
 /// is, so calling its result independent has the caller release the argument's own string.
 /// An already-elided inner `(string)` cast leaves a `Str` behind too, so `(string)(string)$s`
 /// nests the same way.
-fn operand_keeps_a_string_parameter_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
+fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
     match &inner.kind {
-        ExprKind::Variable(name) => state.is_string_parameter(name),
+        ExprKind::Variable(name) => state.has_str_slot(name),
         // The wrappers `expr_alias` treats as transparent, which produce no value of their own.
         ExprKind::ErrorSuppress(inner)
         | ExprKind::NamedArg { value: inner, .. }
-        | ExprKind::Spread(inner) => operand_keeps_a_string_parameter_slot(inner, state),
+        | ExprKind::Spread(inner) => expr_keeps_str_slot(inner, state),
         ExprKind::Cast {
             target: CastType::String,
             expr: inner,
-        } => operand_keeps_a_string_parameter_slot(inner, state),
+        } => expr_keeps_str_slot(inner, state),
         _ => false,
     }
 }

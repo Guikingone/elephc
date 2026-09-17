@@ -202,6 +202,40 @@ echo $z, "|", $y, "|", strlen($z), strlen($y);
     assert_eq!(out, "bbb|bbb|33");
 }
 
+/// Verifies a `string` parameter reassigned from a BOXED LOCAL is a copy, not a borrow.
+///
+/// The provenance here names only `string` parameters -- `$x` merges `$p` and `$q`, both
+/// declared `string` -- so a guard that checks which parameters the value came from says
+/// "borrowed" and the caller skips its release. But provenance records WHICH parameters, not
+/// HOW the value travelled: `$c ? $p : $q` boxes, so `$a`'s slot is Mixed by the time the cast
+/// runs and `lower_cast` allocates. One leaked copy per call, measured at 200.
+///
+/// This is the transitive form of the widened-parameter case above, and it is why the analysis
+/// tracks whether a slot is STILL a bare `Str` rather than what it was declared as.
+#[test]
+fn test_string_cast_over_a_parameter_fed_by_a_boxed_local_is_a_copy() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function f(string $a, string $p, string $q, bool $flag): string {
+    $x = $flag ? $p : $q;
+    $a = $x;
+    return (string)$a;
+}
+$out = "";
+for ($i = 0; $i < 200; $i++) {
+    $out = f("seed", "left", "right", $i % 2 === 0);
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out.stdout, "right", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "a cast over a parameter fed by a boxed local must be owned by the caller: {}",
+        out.stderr
+    );
+}
+
 /// Guard: a wrapper around the operand must not turn an elided cast into a copy.
 ///
 /// `lower_cast` elides on the operand's IR type, and `@$s` and `(string)$s` both leave a
