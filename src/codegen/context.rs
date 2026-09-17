@@ -986,6 +986,59 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Republishes a mutating builtin's receiver into its slot.
+    ///
+    /// `store_value_to_raw_local` moves a consumed value's owner into the Mixed box it stores
+    /// (`value_can_own_mixed_box_source`). That is the contract of an EIR store: nothing releases
+    /// the value afterwards, and it holds for receivers lowering does not retire either
+    /// (`array_multisort` binds its arguments by reference and emits no `release`). A receiver
+    /// that lowering DOES retire after the call — `sort($x)` is `runtime_call v; release v` — is
+    /// different: `ReceiverPlace::prepare_consuming_storeback` already dropped the slot's previous
+    /// box so the load is the container's sole owner during the in-place mutation, and moving
+    /// that owner into the new box left the container one owner short. `sort($names)` on a
+    /// Mixed-widened local freed the sorted array under the box the slot kept, and an `eval()`
+    /// escape walk later iterated the reused block until the heap ran out (#1031's shape on
+    /// linux). So the box RETAINS exactly when a later instruction releases the value, and the
+    /// EIR release balances it.
+    ///
+    /// A ref-cell slot keeps the ordinary store: `prepare_consuming_storeback` gave the helper a
+    /// separate owner there, and `StoreRefCell` retirement is the release that matches it.
+    pub(super) fn store_receiver_value_to_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        if self.local_slot_representation(slot) != LocalSlotRepresentation::Raw
+            || !self.value_is_released_later(value)
+        {
+            return self.store_value_to_local(slot, value);
+        }
+        let source_ty = self.load_value_to_result(value)?;
+        let target_ty = self.local_php_type(slot)?;
+        if target_ty.codegen_repr() == PhpType::Mixed
+            && source_ty.codegen_repr() != PhpType::Mixed
+        {
+            emit_box_current_value_as_mixed(self.emitter, &source_ty);
+        }
+        coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
+        let offset = self.local_offset(slot)?;
+        self.store_current_result_at_offset(&target_ty, offset);
+        Ok(())
+    }
+
+    /// Returns whether an instruction after the current one releases exactly `value`.
+    fn value_is_released_later(&self, value: ValueId) -> bool {
+        let start = self
+            .current_inst
+            .map(|inst| inst.as_raw() as usize + 1)
+            .unwrap_or(0);
+        self.function
+            .instructions
+            .iter()
+            .skip(start)
+            .any(|inst| inst.op == Op::Release && inst.operands == [value])
+    }
+
     /// Stores the current result register(s) directly into an addressable local slot.
     pub(super) fn store_current_result_to_local(&mut self, slot: LocalSlotId) -> Result<()> {
         let target_ty = self.local_php_type(slot)?;

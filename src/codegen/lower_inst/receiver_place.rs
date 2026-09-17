@@ -179,7 +179,7 @@ impl ReceiverPlace {
     ) -> Result<()> {
         match self {
             Self::Opaque => Ok(()),
-            Self::Local(slot) => ctx.store_value_to_local(*slot, value),
+            Self::Local(slot) => ctx.store_receiver_value_to_local(*slot, value),
             Self::RefCell(slot) => super::store_value_through_ref_cell_slot(
                 ctx,
                 *slot,
