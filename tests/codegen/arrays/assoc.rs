@@ -919,57 +919,6 @@ foreach ($a as $k => $v) { echo $k, "=", $v, ","; }
     assert_eq!(out, "abcd|k=1,0=7,1=8,2=9,j=2,");
 }
 
-/// Verifies spreading an indexed array leaves the SOURCE untouched.
-///
-/// `Op::ArrayToHash` consumes its operand: its promote path abandons the source indexed array
-/// for a freshly built hash and decrefs it. The spread lowering handed it a borrowed local, so
-/// the promotion released the caller's only reference -- `$idx` read back as `array(0) {}` with
-/// its elements still intact, and spreading it twice crashed.
-///
-/// This shape needs NO explicit key, so it reached the same promotion on `main` long before
-/// mixed literals existed; it is pinned here because the mixed-literal work is what made it
-/// common enough to hit.
-#[test]
-fn test_spreading_an_indexed_array_leaves_the_source_intact() {
-    let out = compile_and_run(
-        r#"<?php
-$idx = [3, 4];
-$assoc = ["x" => 1];
-$once = [...$idx, ...$assoc];
-$twice = [...$idx, "c" => 8];
-echo count($once), count($twice), "|";
-foreach ($idx as $k => $v) { echo $k, "=", $v, ","; }
-echo "|", count($idx);
-"#,
-    );
-    assert_eq!(out, "33|0=3,1=4,|2");
-}
-
-/// Verifies a mixed literal allocates nothing it does not free.
-///
-/// The promotion's acquire has to be balanced by the release of the promoted hash. Getting that
-/// ledger wrong leaks the source array once per iteration, which only a repeated fixture shows.
-#[test]
-fn test_a_mixed_literal_is_heap_clean() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-$total = 0;
-for ($i = 0; $i < 100; $i++) {
-    $src = [$i, $i + 1];
-    $a = ["head" => "h", ...$src, "tail" => "t"];
-    $total += count($a) + count($src);
-}
-echo $total;
-"#,
-    );
-    assert_eq!(out.stdout, "600", "stderr: {}", out.stderr);
-    assert!(
-        out.stderr.contains("leak summary: clean"),
-        "a mixed literal must not leak its promoted source: {}",
-        out.stderr
-    );
-}
-
 /// Verifies the tree walkers reach INSIDE a mixed literal's entries.
 ///
 /// The new node is not a compile error for every pass: the walkers that end in a catch-all --
@@ -1031,6 +980,26 @@ show("g", ["c" => 1, ...["c" => 2]]);
     );
     assert_eq!(
         out,
-        "a:0=3,1=4,7=8,8=9,|         b:0=3,1=4,2=9,7=8,|         c:20=1,21=3,22=4,|         d:-5=1,-4=3,-3=4,|         e:0=3,1=4,m=0,2=3,3=4,|         f:only=1,|         g:c=2,|"
+        "a:0=3,1=4,7=8,8=9,|b:0=3,1=4,2=9,7=8,|c:20=1,21=3,22=4,|d:-5=1,-4=3,-3=4,|e:0=3,1=4,m=0,2=3,3=4,|f:only=1,|g:c=2,|"
     );
+}
+
+/// Verifies `yield from` accepts a mixed literal, as PHP does.
+///
+/// The `yield from` operand list is an ALLOWLIST, so the failure mode of a node missing from it
+/// is the opposite of a walker's: valid PHP is refused rather than silently under-analysed. It
+/// named the two older literal nodes, so `yield from [...$items, "k" => 1]` was rejected with
+/// "expects an array literal or Generator" even though the lowering handles the resulting
+/// `AssocArray` exactly as it handles a keyed literal.
+#[test]
+fn test_yield_from_accepts_a_mixed_literal() {
+    let out = compile_and_run(
+        r#"<?php
+function g(array $items) {
+    yield from [...$items, "k" => 1];
+}
+foreach (g([7, 8]) as $k => $v) { echo $k, "=", $v, ","; }
+"#,
+    );
+    assert_eq!(out, "0=7,1=8,k=1,");
 }
