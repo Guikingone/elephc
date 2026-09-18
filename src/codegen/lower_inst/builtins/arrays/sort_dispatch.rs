@@ -122,11 +122,14 @@ pub(super) fn lower_hash_reindexing_sort(
 
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable(name)?;
-    // Same opening as the key-preserving hash sorts: drop the slot's ownership, split a shared
-    // table so a copy taken before the call keeps its order, and publish the split pointer.
+    // Same opening as the key-preserving hash sorts: drop the slot's ownership and split a shared
+    // table so a copy taken before the call keeps its order. Unlike those sorts, the split table
+    // is NOT published: it is only the source the values are copied out of, and the receiver is
+    // published exactly once, with the rebuilt table below. Publishing it here as well left a
+    // Mixed-widened local holding a retaining box for the split table that the second publish
+    // never retired — the box, the table and its entries leaked once per `sort()`.
     receiver.prepare_consuming_storeback(ctx, array)?;
     ensure_unique_hash_sort_source(ctx, array)?;
-    receiver.store_back_value(ctx, array)?;
 
     let result_reg = abi::int_result_reg(ctx.emitter);
     let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
