@@ -126,3 +126,16 @@ foreach ($scores as $name => $points) {
     echo $name . "=" . $points . " ";
 }
 echo "\nAs entered: " . implode(", ", array_keys($asEntered)) . "\n";
+
+// unset() reaches the caller's array through a by-reference parameter, like every other write
+// through one -- and copy-on-write still protects a copy taken before the call.
+function drop_field(array &$record, string $field): void
+{
+    unset($record[$field]);
+}
+
+$profile = ["name" => "Ada", "age" => 36, "city" => "London"];
+$before = $profile;
+drop_field($profile, "age");
+echo "\nAfter drop_field: " . implode(", ", array_keys($profile)) . "\n";
+echo "Copy taken first: " . implode(", ", array_keys($before)) . "\n";
