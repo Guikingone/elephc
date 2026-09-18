@@ -1885,6 +1885,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// `prune_untracked_release_local_slot_ops` erases the op when the slot never widens
     /// (issue #534: without this, the previous outer iteration's Mixed box leaked on every
     /// re-initialization).
+    ///
+    /// The deferred op also covers issue #479, which main fixed by deferring only inside loops
+    /// for storage that can still widen: a slot typed `Object("Shape")` widened to `Mixed` by a
+    /// later store of a different class (`$s = make(); $s = new Sq();`, or a `catch (\Throwable
+    /// $e)` reassigned to a `TypeError`) made the eager, concretely typed load an
+    /// `__rt_mixed_unbox` + retain whose release cancelled only that retain and never freed the
+    /// BOX. Retiring the slot at its final storage type frees the box and the payload it pins,
+    /// in and out of loops alike, which is why no loop or widenability guard is needed here.
     fn release_stored_local_value_before_overwrite(
         &mut self,
         name: &str,
