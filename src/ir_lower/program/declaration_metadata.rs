@@ -185,7 +185,7 @@ pub(super) fn collect_declared_trait_methods(
                         .map(|(declaration_order, method)| {
                             let method_key = php_symbol_key(&method.name);
                             let info = TraitMethodInfo {
-                                name: method.name.clone(),
+                                declared_name: method.name.clone(),
                                 declaration_order,
                                 signature: function::method_signature_from_ast(method),
                                 visibility: method.visibility.clone(),

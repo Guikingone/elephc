@@ -39,8 +39,12 @@ impl DataId {
 /// Method metadata retained for standalone trait reflection.
 #[derive(Debug, Clone)]
 pub struct TraitMethodInfo {
-    /// PHP-visible source spelling retained alongside the case-insensitive map key.
-    pub name: String,
+    /// The method's spelling as declared in the trait, for reflected metadata.
+    ///
+    /// Lookup is keyed case-insensitively, but `ReflectionMethod::getName()` must report the
+    /// declaration rather than the lookup key (issue #571), and a trait's declarations are not
+    /// reachable from the using class's `method_decls`.
+    pub declared_name: String,
     /// Position in the trait's declaration, independent of hash-map iteration order.
     pub declaration_order: usize,
     pub signature: FunctionSig,

@@ -423,9 +423,9 @@ fn visible_class_method_names(
         methods.into_iter()
             .filter(|method| property_visible(ctx, class_name, &method.visibility))
             .filter(|method| !ctx.declared_trait_properties.get(class_name).is_some_and(|properties| {
-                properties.iter().any(|property| property.hooks.matches_accessor(&property.name, &method.name))
+                properties.iter().any(|property| property.hooks.matches_accessor(&property.name, &method.declared_name))
             }))
-            .map(|method| method.name.clone())
+            .map(|method| method.declared_name.clone())
             .collect::<Vec<_>>()
     } else {
         Vec::new()
