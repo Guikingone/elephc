@@ -91,8 +91,17 @@ pass1_pid_file=$log_dir/pass1.pid
     if wait $!; then echo 0 > "$pass1_status_file"; else echo $? > "$pass1_status_file"; fi
 } | tee "$pass1_log" &
 tee_pid=$!
-sleep 1
-test_pid=$(cat "$pass1_pid_file" 2>/dev/null || true)
+# The libtest pid is what the watchdog kills; wait for the subshell to record it rather than
+# hoping a fixed sleep was long enough on a loaded runner.
+test_pid=""
+for ((attempt = 0; attempt < 100; attempt++)); do
+    test_pid=$(cat "$pass1_pid_file" 2>/dev/null || true)
+    [[ -n $test_pid ]] && break
+    sleep 0.1
+done
+if [[ -z $test_pid ]]; then
+    echo "eval shard: the single-process pass did not record its pid" >&2
+fi
 
 completed_count() {
     grep -cE '^test [^ ]+ \.\.\. (ok|FAILED|ignored)' "$pass1_log" 2>/dev/null || true
@@ -133,8 +142,17 @@ if [[ -n $watchdog_reason ]]; then
     pass1_status=124
 fi
 
-if [[ $pass1_status -eq 0 ]]; then
+# libtest's --skip filters are substring matches; the prefix grouping above keeps the known
+# shapes together, but a green pass 1 is only trusted when every selected test was reported.
+# Anything missing (a name skipped by a shorter sibling's filter) is rerun in pass 2 instead
+# of silently running in no shard at all.
+reported_count=$(grep -cE '^test [^ ]+ \.\.\. (ok|ignored)$' "$pass1_log" 2>/dev/null || true)
+if [[ $pass1_status -eq 0 && $reported_count -eq ${#selected[@]} ]]; then
     exit 0
+fi
+if [[ $pass1_status -eq 0 ]]; then
+    echo "eval shard: pass 1 reported $reported_count of ${#selected[@]} selected tests; rerunning the rest" >&2
+    pass1_status=1
 fi
 
 # --- pass 2: nextest for everything pass 1 did not pass -----------------------
