@@ -252,9 +252,15 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 - **The buffer can safely reset** without invalidating stored values
 - **Hash table keys** are also persisted to heap (via `str_persist`)
 
+### Outgrowing the buffer
+
+64KB is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.
+
+This is a bounds check, not an optimization. A producer that skips it writes straight past `_concat_buf` into the adjacent BSS globals, which corrupts data silently in a CLI program and faults in a `--web` worker, at a size no `--heap-size` can change — `_concat_buf` is a fixed array. `implode()` was the last one still doing that (issue #515).
+
 ### Implications
 
-- **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in 64KB — plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). For ordinary code this is comfortably within 64KB.
+- **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in 64KB — plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). For ordinary code this is comfortably within 64KB, and a result that does not fit takes the heap fallback above rather than overflowing.
 - **No mutation.** You can't modify a string in place — you always create a new one.
 - **Scratch only.** The buffer is strictly temporary. Anything that needs to survive goes to the heap.
 
@@ -326,7 +332,7 @@ When one of these checks trips, the program exits with a fatal heap-debug error 
 
 ### When memory is freed
 
-- **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects). When a store inside a loop is lowered before a later store has widened the slot to boxed storage (e.g. an inner `for` counter re-initialized by the outer body but widened Int→Mixed by its `++` update), lowering emits a deferred `release_local_slot` and the backend decides against the slot's final widened storage type, so the previous iteration's box is still released
+- **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects). When a store inside a loop is lowered before a later store has widened the slot to boxed storage, lowering emits a deferred `release_local_slot` and the backend decides against the slot's FINAL widened storage type. This covers two shapes. The slot may look untracked at the earlier store — an inner `for` counter re-initialized by the outer body but widened Int→Mixed by its `++` update (issue #534) — or it may already be tracked and still not final: a local typed `Object("Shape")` is widened to `Mixed` by a later store of a different class, since `widened_local_storage_type` has no arm for a pair of object types (issue #479). The second one is the more dangerous of the two, because the eager release it replaces is not a no-op but an unbox WITH RETAIN: typed at the concrete slot against boxed storage, it hands back the inner pointer holding a fresh reference, the release cancels exactly that reference, and the box is never freed — leaking the box and the value it pins, once per iteration. `Mixed`/`Union` storage keeps the eager path because it is terminal, and `Str` keeps it deliberately: its eager release runs through the ownership analysis, which knows a `.rodata` literal pointer must not be freed, and the slot-typed cleanup does not model that
 - **`unset()`**: releases the current heap-backed value before nulling the slot
 - **Targeted cycle collection**: when decref reaches a container/object graph that may only be keeping itself alive, `__rt_gc_collect_cycles` counts heap-only incoming edges, marks externally reachable blocks, and deep-frees the remaining unreachable array/hash/object island
 - **Generator frame release**: Generator frames are object-kind heap blocks, but their custom Mixed slots and active `yield from` delegate are released by a Generator-specific branch in object deep-free

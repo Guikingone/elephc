@@ -805,6 +805,36 @@ Rules:
 
 Enum constants are readable both inside the enum (`self::CONST`) and from outside it (`EnumName::CONST`). Enum method bodies are type-checked like class method bodies, so a mismatched return type or an undefined variable inside an enum method is reported.
 
+### Enum cases as defaults
+
+An enum case is a constant expression, so it may be the default of a property, a static property, a promoted constructor property, or a parameter:
+
+```php
+<?php
+enum Level {
+    case Low;
+    case High;
+}
+
+class Config {
+    public static Level $shared = Level::High;   // static property
+    public Level $level = Level::Low;            // declared property
+
+    public function __construct(
+        public Level $promoted = Level::High,    // promoted property
+    ) {}
+}
+
+function log(string $message, Level $at = Level::Low): void {}   // parameter
+
+$config = new Config();
+var_dump($config->level === Level::Low);         // bool(true)
+```
+
+Every form stores the case's **canonical singleton**, so `===` against the case holds, exactly as it does for a case read anywhere else. Cases are materialized lazily, and a default is resolved through that same materialization rather than by copying the slot, so a default written before the case's first use elsewhere in the program is still the singleton and not `null`.
+
+A default naming a case that does not exist is a compile error (`Undefined enum case: Level::Missing`), and a scoped constant that resolves to a scalar is still rejected for an enum-typed slot.
+
 ### Built-in `SortDirection`
 
 PHP 8.6's global unit enum is available without a user declaration:
@@ -1302,7 +1332,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionFunction::isVariadic()` | `new ReflectionFunction($function_name)` | Return whether the reflected function declares a variadic parameter |
 | `ReflectionFunction::getClosureUsedVariables()` | `new ReflectionFunction($function_name)` | Return an empty array for supported non-closure function reflectors |
 | `ReflectionFunction::invoke()` / `invokeArgs()` | `new ReflectionFunction($function_name)` | Invoke eval-declared reflected functions with forwarded named/default/variadic arguments; inline/tracked generated/AOT functions with declared or inferred/untyped parameter contracts and supported callable builtins are also lowered |
-| `ReflectionMethod::getName()` | `new ReflectionMethod($class_name, $method_name)` or deprecated `new ReflectionMethod("ClassName::method")` | Return the reflected method name |
+| `ReflectionMethod::getName()` | `new ReflectionMethod($class_name, $method_name)` or deprecated `new ReflectionMethod("ClassName::method")` | Return the reflected method name, as DECLARED: lookup is case-insensitive, so `new ReflectionMethod(Box::class, "mAtCh")` finds a method written `Match` and reports `Match`, not the lookup text. Every path agrees — the constructor, `ReflectionClass::getMethod()`/`getMethods()`, `getPrototype()`, a parameter's `getDeclaringFunction()`, `get_class_methods()`, and the same reflection inside `eval()` |
 | `ReflectionMethod::getShortName()` / `getNamespaceName()` / `inNamespace()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return PHP method-name metadata; methods report an empty namespace and `false` for `inNamespace()` |
 | `ReflectionMethod::isInternal()` / `isUserDefined()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return origin predicates for supported reflected methods |
 | `ReflectionMethod::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained method predicates; AOT reflection reports `false` for closures and return-by-reference, uses `#[Deprecated]` metadata, and reports generator methods from lowered generator flags |

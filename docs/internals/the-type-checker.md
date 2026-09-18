@@ -183,6 +183,56 @@ also record the target depth at entry: `break` or `continue` may target
 loops/switches created inside that `finally`, but jumping out of a `finally`
 block is rejected to match PHP.
 
+### Loop-carried storage contracts
+
+**File:** `src/types/checker/loop_storage.rs`
+
+A loop body is checked **once**, with the environment as it stands at loop
+entry. That is fine for a local the body only reads, and wrong for one the body
+rebinds: the back edge carries the new value back to the top, so the second
+iteration starts holding something the first iteration's types never described.
+
+`loop_carried_storage_types()` runs before the body is checked and closes that
+gap. It collects every value assignment and every array write in the body (plus
+the `for` update clause), then replays them against a copy of the entry
+environment until the types stop changing — a fixed point, so a promotion can
+cascade through intermediate locals and through later iterations. The result is
+a list of *storage contracts*: the representation each affected local must have
+for the whole loop. `stabilize_loop_storage()` installs them into the
+environment, and EIR lowering consumes the recorded contract instead of
+re-inferring, which keeps non-literal right-hand sides aligned across the two
+layers.
+
+Only locals that need an up-front representation are reported. Two entry shapes
+qualify:
+
+- **Array locals** whose stable form needs boxed payloads (`array<int>` that
+  also receives a string becomes `array<mixed>`), or a boxed whole value when
+  the container kind itself varies across the body.
+- **Null locals** — a local that enters holding `null` and is assigned something
+  else inside the body becomes boxed `Mixed`.
+
+The null contract is boxed `Mixed` rather than the fixed point's own join. The
+join of `null` and `int` is already `Mixed`, but the join of `null` and `array`
+is `array` — right for an array-typed entry that is merely growing, wrong here,
+because the **first** read still happens before the assignment and still sees
+null. `Mixed` is the one representation that holds both on every path, and it is
+what keeps a `=== null` guard a real runtime tag test instead of a constant the
+optimizer folds:
+
+```php
+$n = null;
+for ($i = 0; $i < 3; $i++) {
+    if ($n === null) { $n = 0; }   // without the contract: folded always-true
+    $n++;
+    echo $n;                       // ...so this printed 111, not 123
+}
+```
+
+The widening is driven by evidence, not by the entry type alone: a loop that
+never assigns the local leaves it `null`, so a null local a loop only reads is
+untouched (issue #562).
+
 ## Expression type inference
 
 The type checker computes the type of every expression:
@@ -393,6 +443,8 @@ Parameters without a type hint start from an `Int` fallback and are specialized 
 
 The same accumulation applies to instance-method and static-method parameters. Closure parameters specialize to the first observed argument type but do not widen to a union, so a closure invoked with incompatible argument types is rejected rather than coerced.
 
+Because that specialization is final, a `null` argument is excluded from it (`specialize_callable_var_sig_from_args`). `Void` is the one type no later call could satisfy, so adopting it would close the parameter to null alone — `$f(null); $f(5);` was rejected with *"parameter $v expects Void, got Int"* where PHP prints `nx` (issue #567). Skipping it also makes the two spellings of the same call agree: for `function ($v = null)`, `$f()` and `$f(null)` pass the same value, and only the second one used to close the parameter.
+
 This information is then used when checking calls to that function.
 
 #### When no direct call site exists
@@ -444,6 +496,48 @@ $arr = grow($arr);        // recording mixed makes the LOCAL mixed…
 
 A function with a direct call site already learns its real parameter types from it and needs
 nothing here (issue #576).
+
+### Hint-less return inference
+
+A function with no return hint gets its signature from folding the types of its `return`
+statements pairwise through `Checker::wider_type`
+(`src/types/checker/functions/returns.rs`). The rule that matters there is **what may absorb
+what**, and it is ordered deliberately:
+
+| pair | result | why |
+|---|---|---|
+| `T`, `never` | `T` | a diverging path contributes nothing |
+| `T`, `null` | `T\|null` | `null` is a value, not a width |
+| `T`, `false` / `bool` | `T\|false` / `T\|bool` | same — a sentinel is not a width |
+| anything with `mixed` | `mixed` | `mixed` admits everything |
+| a union with anything | the normalized union | a union already carries its members |
+| `string`, other scalar | `string` | PHP's coercion order |
+| `float`, other scalar | `float` | PHP's coercion order |
+| otherwise | `mixed` | no honest narrower answer |
+
+**Sentinels are never absorbed by a width.** `string` swallowing `false` inferred plain
+`string`, so a function returning `false` on failure lowered that arm as a string and the
+caller saw `""` — `$r === false` was simply wrong. `float` did the same with `0.0` and `bool`
+was stringified to `"1"`. `int|false` escaped only because it fell through to `mixed`, which
+carries the value distinctly; that accident is why the defect first looked specific to the
+image builtins that reported it (issue #398).
+
+**A union is never absorbed either**, which is what makes the fold survive a *third* return.
+The fold is pairwise, so `false`, `"." . $ext`, `$ext` builds `string|false` from the first
+pair and then has to keep it against the third — before this, `string` ate it and the union
+held only for exactly two returns. The same flaw was live on the `null` arm.
+
+Unions are built through `normalize_union_members`
+(`src/types/checker/type_compat/unions.rs`), the same normalizer declared types use: it
+flattens nesting, lets `mixed` absorb, dedupes, and applies PHP's `bool`/`false` subtype rule
+so the two never coexist as separate members. Sharing it matters beyond tidiness —
+`PhpType` and `FunctionSig` compare structurally, and callable-return metadata is keyed on
+that equality, so a hand-rolled `string|false|bool` would stop matching the `string|bool` a
+declared spelling produces.
+
+The result is that a hint-less union return is byte-identical to writing the hint out, and
+`codegen_repr()` maps it to the boxed representation that carries the sentinel rather than
+coercing it into the other arm's zero value.
 
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 

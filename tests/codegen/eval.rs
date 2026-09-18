@@ -16482,7 +16482,7 @@ echo ":";
     );
     assert_eq!(
         out.stdout,
-        "basepublic,basestaticpublic,childpublic,childview,parentview:baseprotected,basepublic,basestaticpublic,childprivate,childprotectedstatic,childpublic,childview,parentview:baseprivate,baseprotected,basepublic,basestaticpublic,childprotectedstatic,childpublic,childview,parentview"
+        "basePublic,baseStaticPublic,childPublic,childView,parentView:baseProtected,basePublic,baseStaticPublic,childPrivate,childProtectedStatic,childPublic,childView,parentView:basePrivate,baseProtected,basePublic,baseStaticPublic,childProtectedStatic,childPublic,childView,parentView"
     );
 }
 
@@ -19618,7 +19618,7 @@ echo count($r->getMethods()); echo ":";
 echo get_class_methods("EvalAotOnlyReflectableContract")[0] ?? "none";');
 "#,
     );
-    assert_eq!(out, "H:1:aotlabel");
+    assert_eq!(out, "H:1:aotLabel");
 }
 
 /// Verifies eval interface `#[Override]` can target a generated/AOT parent interface.
@@ -23871,7 +23871,7 @@ echo $aotOwn->getDeclaringClass()->getName();');
     );
     assert_eq!(
         out.stdout,
-        "MiXeDCase:EvalReflectMethodObjectBase:base:childCase:EvalReflectMethodObjectChild:child|aotbase:EvalAotReflectMethodObjectBase:aotchild:EvalAotReflectMethodObjectChild"
+        "MiXeDCase:EvalReflectMethodObjectBase:base:childCase:EvalReflectMethodObjectChild:child|aotBase:EvalAotReflectMethodObjectBase:aotChild:EvalAotReflectMethodObjectChild"
     );
 }
 
@@ -23903,7 +23903,7 @@ echo $aot->invoke(new EvalAotReflectCreateMethodTarget());');
     );
     assert_eq!(
         out.stdout,
-        "EvalReflectCreateMethodTarget:MiXeDCase:ok|EvalAotReflectCreateMethodTarget:aotrun:aot"
+        "EvalReflectCreateMethodTarget:MiXeDCase:ok|EvalAotReflectCreateMethodTarget:aotRun:aot"
     );
 }
 
@@ -23935,7 +23935,7 @@ echo $ref->invoke(new EvalReflectCtorMethodTarget());');
     );
     assert_eq!(
         out.stdout,
-        "EvalAotReflectCtorMethodTarget:aotrun:aot|EvalReflectCtorMethodTarget:MiXeDCase:ok"
+        "EvalAotReflectCtorMethodTarget:aotRun:aot|EvalReflectCtorMethodTarget:MiXeDCase:ok"
     );
 }
 
@@ -29460,4 +29460,51 @@ return ":" . ($quiet ?? "fallback");');
         out.stderr
     );
     assert!(!out.stderr.contains("$quiet"), "{}", out.stderr);
+}
+
+/// Issue #506, raised in review: the eval backend must answer what the compiled one does for
+/// `mkdir()`'s `$permissions`/`$recursive` and `file_put_contents()`'s `$flags`.
+///
+/// Four separate divergences are pinned here, each of which the eval path got wrong:
+///
+/// - `mkdir()` on an EXISTING directory returns `false`. `create_dir_all` succeeds there, so
+///   the first implementation answered `true` and re-chmodded a directory it did not create.
+/// - `$permissions` reaches `mkdir(2)` rather than a follow-up `set_permissions`, so the
+///   process umask applies exactly as in PHP — and the parents get the mode too.
+/// - `LOCK_EX` actually locks. The first implementation looked only at `FILE_APPEND`.
+/// - `LOCK_EX` without `FILE_APPEND` truncates AFTER taking the lock, which is php-src's
+///   `'c'` mode. Writing a short line over a longer one is what catches a missing truncate:
+///   the file would keep the tail.
+///
+/// The octal literals are load-bearing in their own right — the eval lexer used to read
+/// `0700` as the decimal SEVEN HUNDRED, which `mkdir(2)` masked into the nonsense mode 0254.
+///
+/// Every expectation is the host PHP 8.5.10 value for the same fragment.
+#[test]
+fn test_eval_mkdir_and_file_put_contents_optional_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+$root = sys_get_temp_dir() . "/elephc_eval_i506";
+eval('$r = $root; if (is_dir($r . "/deep")) { rmdir($r . "/deep"); } if (is_dir($r)) { rmdir($r); }');
+
+echo eval('return mkdir("' . $root . '/deep", 0700, true);') ? "1" : "0";
+echo eval('return mkdir("' . $root . '/deep", 0700, true);') ? "1" : "0";
+printf(":%o:%o", fileperms($root . "/deep") & 0777, fileperms($root) & 0777);
+
+$f = $root . "/deep/log.txt";
+echo ":" . eval('return file_put_contents("' . $f . '", "one\n");');
+echo ":" . eval('return file_put_contents("' . $f . '", "two\n", FILE_APPEND);');
+echo ":" . eval('return file_put_contents("' . $f . '", "three\n", FILE_APPEND | LOCK_EX);');
+echo ":" . str_replace("\n", ",", file_get_contents($f));
+
+eval('return file_put_contents("' . $f . '", "a much longer previous line\n");');
+echo ":" . eval('return file_put_contents("' . $f . '", "short\n", LOCK_EX);');
+echo ":" . str_replace("\n", ",", file_get_contents($f));
+
+unlink($f);
+rmdir($root . "/deep");
+rmdir($root);
+"#,
+    );
+    assert_eq!(out, "10:700:700:4:4:6:one,two,three,:6:short,");
 }
