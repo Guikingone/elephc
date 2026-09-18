@@ -2360,6 +2360,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.prepare_mutated_local_owner_impl(name, source, replacement_type, span, false);
     }
 
+    /// Shared body of the two consuming-mutation preludes above.
+    ///
+    /// Declares (or re-declares) the local at `replacement_type`, widens its frame storage so
+    /// the final Mixed representation is visible, and — only when `release_box` is set — drops
+    /// the previous Mixed box so the source load becomes the container's sole owner for the
+    /// mutation. Program-global names return early: their storage is the `_eir_global_*`
+    /// symbol, not a frame slot. A ref-bound local never releases here either; its cell alias
+    /// is retired by the `StoreRefCell` that publishes the replacement.
     fn prepare_mutated_local_owner_impl(
         &mut self,
         name: &str,
