@@ -955,6 +955,18 @@ plausible but wrong tree.
 `opcache.file_cache_read_only` reads entries without ever creating one, which is
 what makes a shared read-only cache directory usable.
 
+**The three checks above authenticate the SOURCE, not the writer — so the cache
+directory has to be trusted.** They prove an entry describes the file being
+included, at the size and mtime it has now, in this build's format. They cannot
+prove who wrote it, because a file cache has no secret to authenticate with.
+Anyone who can create files in the cache directory can therefore place an entry
+under a script's path hash with matching header fields, and its parsed form runs
+in place of that script's. Treat the directory exactly as you would a directory
+of executable PHP: owned by the user running the process, not group- or
+world-writable, and never shared with a less-trusted account. A shared directory
+is safe to READ from (`opcache.file_cache_read_only`) only insofar as everyone
+who can write to it is already trusted to run code as you.
+
 Reference PHP also **validates the directory at startup and refuses to run** if it
 is unusable, and elephc reproduces that refusal exactly.
 
