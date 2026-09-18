@@ -124,6 +124,7 @@ mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
 mod hash_flip;
+mod hash_slice;
 mod hash_insert_owned;
 mod hash_map;
 mod hash_iter;
@@ -243,6 +244,7 @@ pub use array_flip::emit_array_flip;
 pub use array_flip_string::emit_array_flip_string;
 /// Emit string-only array flip helper.
 pub use hash_flip::{emit_hash_flip, ARRAY_FLIP_SKIPPED_MESSAGES};
+pub use hash_slice::emit_hash_slice;
 /// Emit associative (hash) array flip helper and its skipped-entry warning table.
 pub use hash_map::{emit_hash_map, HashMapResultKind};
 /// Emit associative (hash) array map helper and its callback result-kind selector.

@@ -139,3 +139,16 @@ $before = $profile;
 drop_field($profile, "age");
 echo "\nAfter drop_field: " . implode(", ", array_keys($profile)) . "\n";
 echo "Copy taken first: " . implode(", ", array_keys($before)) . "\n";
+
+// array_slice() takes a window of an associative array by POSITION, not by key, and
+// $preserve_keys only decides what happens to INTEGER keys -- a string key survives either way.
+$roster = ["ada" => 9, "bruno" => 7, "carl" => 7, "dina" => 4];
+echo "\nSlice by position: " . implode(", ", array_keys(array_slice($roster, 1, 2))) . "\n";
+
+$numbered = [5 => "ada", 9 => "bruno", 12 => "carl"];
+echo "Renumbered: " . implode(", ", array_keys(array_slice($numbered, 1, 2))) . "\n";
+echo "Kept:       " . implode(", ", array_keys(array_slice($numbered, 1, 2, true))) . "\n";
+
+// A mixed-key array shows the rule directly: only the integer entries move.
+$mixed = [5 => "a", "k" => "b", 9 => "c"];
+echo "Mixed keys: " . implode(", ", array_keys(array_slice($mixed, 0, 3))) . "\n";
