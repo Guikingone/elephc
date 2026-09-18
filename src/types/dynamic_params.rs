@@ -2,8 +2,9 @@
 //! Decides whether an un-hinted declaration hands one of its untyped parameters straight back.
 //!
 //! Called from:
-//! - `crate::types::checker::functions::resolution::signature` when it records a function's
-//!   inferred return type.
+//! - `Checker::widen_dynamic_only_passthrough_returns` in
+//!   `crate::types::checker::driver::functions` when it records `mixed` for a function no
+//!   direct call site ever passed arguments to.
 //! - `crate::ir_lower::program::metadata` when it normalizes method ABIs for EIR.
 //!
 //! Key details:
