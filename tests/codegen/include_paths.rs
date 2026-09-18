@@ -386,3 +386,37 @@ fn test_for_clause_allows_a_deferred_include_inside_a_closure() {
     );
     assert_eq!(out, "body 0\ncompiled\ninc|called\n");
 }
+
+
+/// An include-variant declaration is not "never called" just because its generated symbol is not
+/// the name the call site wrote.
+///
+/// A function declared in an included file is registered under
+/// `__elephc_include_variant_{hash}_{local}`, while the call site names it as the source wrote
+/// it. `widen_dynamic_only_passthrough_returns` compares those two, so a variant whose body
+/// returns one of its parameters looked like a function no caller had ever touched — its return
+/// was widened to `mixed` while the caller still expected the specialized type, and
+/// `count($items)` printed a raw pointer instead of `3`.
+///
+/// `append_item` is the shape that matters: an untyped parameter returned straight back, with a
+/// real call site that passes it an array. `load_items` sits beside it as the control — it takes
+/// no parameters at all, so the rule must not reach it for a different reason.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_include_variant_returning_its_parameter_keeps_the_call_site_type() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\n$items = load_items();\n$items = append_item($items, \"c\");\necho count($items) . ':' . $items[2];\n",
+            ),
+            (
+                "lib.php",
+                "<?php\nfunction load_items() {\n    return [\"a\", \"b\"];\n}\n\nfunction append_item($items, $value) {\n    if (count($items) > 0) {\n        $items[] = $value;\n    }\n    return $items;\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "3:c");
+}
