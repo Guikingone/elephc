@@ -98,6 +98,52 @@ echo $f(2), "|", count($g(5)), $g(5)[1];
     assert_eq!(out, "2.5|26");
 }
 
+/// A CONTAINER return is normalized the way ordinary call lowering normalizes it.
+///
+/// Raised in review. The callee's untyped by-value parameter arrives as a boxed Mixed, so a
+/// container built out of it has Mixed elements whatever the signature's inferred element type
+/// says — which is exactly what `eir_user_function_return_type` encodes. Copying the raw
+/// signature type instead stamped a narrower element type on the closure's contract, and the
+/// caller then read the boxed element with the wrong layout: `$b[0]` came back as its own
+/// pointer printed as an integer (`int(4363925416)`) instead of the string.
+///
+/// Worth pinning precisely because the pre-fix behaviour was a hard compile error rather than a
+/// wrong answer, so the first version of this change traded a refusal for a silent miscompile.
+#[test]
+fn test_closure_call_returning_a_container_normalizes_its_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+function values($v) { return [$v]; }
+function assoc($v) { return ["k" => $v]; }
+$fs = function ($v) { return values($v); };
+$ha = function ($v) { return assoc($v); };
+$b = $fs("hello");
+$e = $ha("zz");
+$seen = "";
+foreach ($b as $x) { $seen .= $x; }
+echo count($b), $b[0], "|", $seen, "|", count($e), $e["k"];
+"#,
+    );
+    assert_eq!(out, "1hello|hello|1zz");
+}
+
+/// The same normalization keeps a FLOAT element readable as a float, not as a pointer.
+///
+/// `var_dump` is the discriminating consumer here: the value printed through `echo` can look
+/// plausible while the runtime tag is wrong, and the pre-fix output was `int(4363925608)`.
+#[test]
+fn test_closure_call_container_keeps_a_float_elements_runtime_tag() {
+    let out = compile_and_run(
+        r#"<?php
+function values($v) { return [$v]; }
+$ff = function ($v) { return values($v); };
+$c = $ff(2.5);
+var_dump($c[0]);
+"#,
+    );
+    assert_eq!(out, "float(2.5)\n");
+}
+
 /// An object return survives, and its method can be called through the closure's result.
 #[test]
 fn test_closure_call_carries_an_object_return_type() {

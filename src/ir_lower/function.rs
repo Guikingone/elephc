@@ -1845,8 +1845,15 @@ fn direct_closure_return_expr_type(
         // recognize. `$f = function ($v) { return tag($v); }` therefore returned a declared
         // `: string` through an int slot and printed 0, with no diagnostic (issue #1028). The
         // checker gets this right; only this re-derivation did not.
+        // Through `eir_user_function_return_type`, NOT the raw signature type, because that is
+        // what ordinary call lowering hands back and the two have to agree. A callee with an
+        // untyped by-value parameter receives it as a boxed Mixed, so a container it builds out
+        // of that parameter has Mixed elements whatever the signature's inferred element type
+        // says. Copying the raw type here stamped `array<string>` on a call that really produces
+        // `array<mixed>`, and the caller then read the boxed element with the wrong layout: the
+        // element came back as its own pointer printed as an integer. Raised in review.
         if let Some(sig) = functions.get(name.as_str()) {
-            return sig.return_type.clone();
+            return crate::ir_lower::expr::eir_user_function_return_type(sig);
         }
     }
     // An array literal returned directly is stamped with this inferred type and its elements
