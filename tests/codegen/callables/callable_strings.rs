@@ -204,6 +204,30 @@ var_dump(call_user_func(fcc(...), "cuf"));
 }
 
 
+/// Regression for #576 on methods: a method reachable only through a dynamic callable must
+/// return what it was given, not an int cast of it.
+///
+/// Functions get the checker widening in `widen_dynamic_only_passthrough_returns`. Methods keep
+/// the same pass-through rule through `normalize_method_map_for_eir`, via
+/// `src/types/dynamic_params.rs`. A method-only `call_user_func` path has no function-shaped
+/// caller to teach the parameter type, so it is the shape that would silently regress if the
+/// two callers of that predicate drifted apart.
+///
+/// The expectation is host PHP 8.5.10 `var_dump` of the same fixture.
+#[test]
+fn test_dynamic_only_method_returns_its_argument_not_an_int_cast() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    function h($b, $p) { return $b; }
+}
+var_dump(call_user_func([new C(), 'h'], "probe", 9));
+"#,
+    );
+    assert_eq!(out, "string(5) \"probe\"\n");
+}
+
+
 /// A signature PROBE and an argument-less call are not call sites, so neither suppresses the
 /// pass-through return widening.
 ///
