@@ -67,6 +67,12 @@ foreach ($slice as $value) {
 }
 echo "\n";
 
+// array_push() takes any number of values and returns the new element count, so a growing
+// list needs one call rather than one per element.
+$stack = [1];
+$size = array_push($stack, 2, 3, 4);
+echo "Pushed: " . implode(", ", $stack) . " (now " . $size . " elements)\n";
+
 // array_splice() removes a window IN PLACE and returns what it removed; the optional
 // fourth argument is spliced in where the removed window was, so the array can grow.
 $queue = [10, 20, 30, 40, 50];

@@ -8,7 +8,7 @@ sidebar:
 ## array_push()
 
 ```php
-function array_push(array $array, ...$values): void
+function array_push(array $array, ...$values): int
 ```
 
 Pushes one or more elements onto the end of array.
@@ -17,7 +17,7 @@ Pushes one or more elements onto the end of array.
 - `$array` (`array`), passed by reference
 - `...$values` — variadic: collects excess arguments into `$values`.
 
-**Returns**: `void`
+**Returns**: `int`
 
 ## Availability
 

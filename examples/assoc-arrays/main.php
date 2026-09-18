@@ -127,6 +127,19 @@ foreach ($scores as $name => $points) {
 }
 echo "\nAs entered: " . implode(", ", array_keys($asEntered)) . "\n";
 
+// unset() reaches the caller's array through a by-reference parameter, like every other write
+// through one -- and copy-on-write still protects a copy taken before the call.
+function drop_field(array &$record, string $field): void
+{
+    unset($record[$field]);
+}
+
+$profile = ["name" => "Ada", "age" => 36, "city" => "London"];
+$before = $profile;
+drop_field($profile, "age");
+echo "\nAfter drop_field: " . implode(", ", array_keys($profile)) . "\n";
+echo "Copy taken first: " . implode(", ", array_keys($before)) . "\n";
+
 // array_slice() takes a window of an associative array by POSITION, not by key, and
 // $preserve_keys only decides what happens to INTEGER keys -- a string key survives either way.
 $roster = ["ada" => 9, "bruno" => 7, "carl" => 7, "dina" => 4];
