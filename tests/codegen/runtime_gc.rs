@@ -33,6 +33,8 @@ mod assoc_rebind_release;
 mod by_ref_foreach_reference_cells;
 #[path = "runtime_gc/compound_assign_stores.rs"]
 mod compound_assign_stores;
+#[path = "runtime_gc/assoc_chunk.rs"]
+mod assoc_chunk;
 #[path = "runtime_gc/object_supertype_rebind.rs"]
 mod object_supertype_rebind;
 #[path = "runtime_gc/boxed_property_defaults.rs"]
