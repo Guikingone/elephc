@@ -41,9 +41,12 @@ pub(super) enum ReceiverPlace {
     },
     /// Program-global storage a `global $x` somewhere gave this name: the `_eir_global_*` symbol.
     ///
-    /// The symbol holds one boxed `Mixed` cell and owns it. A mutating builtin works on that
-    /// cell in place, so the write-back only has to republish when a helper handed back a
-    /// DIFFERENT cell, and then it retires the one the symbol held.
+    /// The symbol's word holds the container pointer itself, at `php_type`, and owns that
+    /// container (element writes reject a Mixed receiver before reaching this place). A mutating
+    /// builtin works on the container in place, so the write-back only has to republish when a
+    /// helper handed back a DIFFERENT pointer — a growth or a copy-on-write split — and whether
+    /// the previous pointer is then retired depends on the helper's convention
+    /// (`RefCellStorePrevious`).
     Global {
         symbol: String,
         php_type: PhpType,
@@ -142,6 +145,41 @@ impl ReceiverPlace {
             // place, so there is no separate owner to hand over here.
             Self::Opaque | Self::Property { .. } | Self::Global { .. } => Ok(()),
         }
+    }
+
+    /// Re-prepares a receiver for a second consuming helper after a publish.
+    ///
+    /// A raw Mixed-widened local's publish moved the load's owner into the slot's new box, so a
+    /// plain second `prepare_consuming_storeback` would drop the container with the box; see
+    /// `FunctionContext::retake_mutated_source_local_owner`. Every other receiver kind's prepare
+    /// is balanced per publish and repeats unchanged.
+    pub(super) fn reprepare_consuming_storeback(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        value: ValueId,
+    ) -> Result<()> {
+        if let Self::Local(slot) = self {
+            return ctx.retake_mutated_source_local_owner(*slot, value);
+        }
+        self.prepare_consuming_storeback(ctx, value)
+    }
+
+    /// Publishes a receiver a helper will hand to user code, deferring a raw local's retain.
+    ///
+    /// Same as `store_back_value`, except that a raw Mixed-widened local takes the value's owner
+    /// instead of retaining, and the retain is owed after the helper returns — see
+    /// `FunctionContext::store_receiver_value_to_local_before_callback`. Returns whether the
+    /// caller must emit `retain_receiver_after_callback` once the helper is back.
+    pub(super) fn store_back_value_before_callback(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        value: ValueId,
+    ) -> Result<bool> {
+        if let Self::Local(slot) = self {
+            return ctx.store_receiver_value_to_local_before_callback(*slot, value);
+        }
+        self.store_back_value(ctx, value)?;
+        Ok(false)
     }
 
     /// Reloads a local-backed receiver from the place that owns its current value.

@@ -511,7 +511,7 @@ fn lower_hash_elem_ref_cell_aarch64(
     ctx.emitter.instruction(&format!("cbnz x4, {found}"));                      // skip insertion when the requested key already exists
 
     if create_missing {
-        receiver.prepare_consuming_storeback(ctx, hash)?;
+        receiver.reprepare_consuming_storeback(ctx, hash)?;
         crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
         abi::emit_push_reg(ctx.emitter, "x0");
         super::hashes::materialize_hash_key_aarch64(ctx, key)?;
@@ -562,7 +562,7 @@ fn lower_hash_elem_ref_cell_x86_64(
     ctx.emitter.instruction(&format!("jnz {found}"));                           // preserve an existing entry without overwriting its value
 
     if create_missing {
-        receiver.prepare_consuming_storeback(ctx, hash)?;
+        receiver.reprepare_consuming_storeback(ctx, hash)?;
         crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
         abi::emit_push_reg(ctx.emitter, "rax");
         super::hashes::materialize_hash_key_x86_64(ctx, key)?;

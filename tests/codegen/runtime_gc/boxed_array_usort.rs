@@ -213,3 +213,41 @@ fn assert_clean_sort(source: &str, expected: &str) {
         "{}\nGenerated user assembly:\n{}", out.stderr, asm);
     assert_eq!(compile_and_run_tagged(source), expected);
 }
+
+/// A throwing comparator leaves no retained receiver behind on a Mixed-widened local.
+///
+/// `$u` lives in a function whose locals are Mixed-widened by `eval()`, so the sort's receiver
+/// is an unboxed load that lowering releases after the call, and the comparator is a static
+/// first-class callable, which is the `lower_user_sort_static_callback` path. That path used to
+/// republish the receiver with a RETAINING box before the helper ran the comparator: when the
+/// comparator threw, the unwind skipped the EIR release and one container leaked per throw.
+/// The box now takes the load's owner (balanced on the unwind path) and the retain is emitted
+/// only once the helper has returned. Reviewed on #893.
+#[test]
+fn test_boxed_array_usort_throwing_static_comparator_leaks_nothing_on_a_mixed_widened_local() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function cmpThrows(int $x, int $y): int { throw new RuntimeException("cmp"); }
+function cmpOk(int $x, int $y): int { return $x <=> $y; }
+function sortWidened(string $source): string {
+    $u = [];
+    eval($source);
+    $u = [3, 1, 2];
+    $caught = 0;
+    try {
+        usort($u, cmpThrows(...));
+    } catch (RuntimeException $e) {
+        $caught++;
+    }
+    usort($u, cmpOk(...));
+    return $caught . ":" . implode(",", $u);
+}
+$source = 'return null; // ' . $argc;
+$t = "";
+for ($i = 0; $i < 5; $i++) { $t = sortWidened($source); }
+echo $t;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:1,2,3", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+

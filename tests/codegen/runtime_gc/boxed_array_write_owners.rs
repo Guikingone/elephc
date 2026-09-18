@@ -77,3 +77,33 @@ for ($i = 0; $i < 3; $i++) { catchBoxedWrite(); }
     assert_eq!(out.stdout, "0|0|0|", "{}\n{assembly}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
 }
+
+/// Taking a reference to a MISSING key of a Mixed-widened local inserts the entry instead of
+/// writing into freed storage.
+///
+/// `$a` is promoted to a hash by its first string-key write, so its slot is boxed Mixed. The
+/// missing-key path of `LoadArrayElemRefCell` publishes the receiver after `__rt_hash_to_mixed`
+/// and then prepared it a second time before `__rt_hash_set`; on this slot the publish had moved
+/// the load's owner into the new box, so the second prepare freed the table under the insert
+/// (`requested array size exceeds the maximum allowed array size`). The second prepare now takes
+/// the owner back before dropping the box. Output only: the element-reference path on this slot
+/// shape still leaks its table (tracked separately), so the heap is not asserted clean here.
+/// Reviewed on #893.
+#[test]
+fn test_boxed_hash_missing_key_reference_on_a_mixed_widened_local_inserts_the_entry() {
+    let out = compile_and_run(r#"<?php
+$t = "";
+for ($i = 0; $i < 20; $i++) {
+    $a = [];
+    $a["x"] = 1;
+    $r = &$a["k"];
+    $r = 5;
+    $t = ($a["k"] + count($a)) . ":" . implode(",", array_keys($a));
+    unset($r);
+}
+echo $t, "|";
+eval('echo "e";');
+"#);
+    assert_eq!(out, "7:x,k|e");
+}
+

@@ -1026,6 +1026,59 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Republishes a receiver that a helper hands to USER CODE, deferring the retain.
+    ///
+    /// `store_receiver_value_to_local` retains when EIR releases the load later. That is the
+    /// wrong moment when the helper runs a PHP callback before that release can execute: a
+    /// throwing `usort()` comparator unwinds past the EIR release, and the retained reference
+    /// is never dropped — one container per throw. So the box takes the value's owner here,
+    /// exactly like an EIR store, which is balanced on the unwind path, and the caller emits the
+    /// retain itself right after the helper returns (`retain_receiver_after_callback`), the
+    /// point the EIR release then balances. Returns whether that retain is owed.
+    pub(super) fn store_receiver_value_to_local_before_callback(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<bool> {
+        let owed = self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
+            && self.value_is_released_later(value)
+            && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
+            && self.value_php_type(value)?.codegen_repr() != PhpType::Mixed;
+        self.store_value_to_local(slot, value)?;
+        Ok(owed)
+    }
+
+    /// Emits the retain that `store_receiver_value_to_local_before_callback` deferred.
+    pub(super) fn retain_receiver_after_callback(&mut self, value: ValueId) -> Result<()> {
+        let ty = self.load_value_to_result(value)?;
+        abi::emit_incref_if_refcounted(self.emitter, &ty);
+        Ok(())
+    }
+
+    /// Takes a mutated container's owner back from the box a publish moved it into.
+    ///
+    /// `release_mutated_source_local_owner` assumes the load already owns an unboxed reference
+    /// and only drops the slot's box. After a publish that box IS the owner, so dropping it
+    /// again freed the container under the next helper: `$r = &$a["k"]` with the key absent, on
+    /// a Mixed-widened `$a`, wrote the new entry into a freed table. Retain the container first,
+    /// then drop the box, and the load owns it again exactly as after the first prepare.
+    pub(super) fn retake_mutated_source_local_owner(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        let source_ty = self.value_php_type(value)?;
+        let target_ty = self.local_php_type(slot)?;
+        if self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
+            && matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
+            && !matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let ty = self.load_value_to_result(value)?;
+            abi::emit_incref_if_refcounted(self.emitter, &ty);
+        }
+        self.release_mutated_source_local_owner(slot, value)
+    }
+
     /// Returns whether an instruction after the current one releases exactly `value`.
     fn value_is_released_later(&self, value: ValueId) -> bool {
         let start = self

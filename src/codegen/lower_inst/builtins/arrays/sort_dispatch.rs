@@ -280,7 +280,9 @@ pub(super) fn lower_user_sort_static_callback(
     receiver.require_writable(name)?;
     receiver.prepare_consuming_storeback(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
-    receiver.store_back_value(ctx, array)?;
+    // The comparator is user code: publish with the retain deferred until the helper is back,
+    // so a throwing comparator leaves no retained reference behind.
+    let retain_owed = receiver.store_back_value_before_callback(ctx, array)?;
     let callback_ty = ctx.value_php_type(callback)?.codegen_repr();
     let callback_owner = format!("{} callback", name);
     if callback_ty == PhpType::Callable && static_callback_operand_is_recoverable(ctx, callback) {
@@ -296,6 +298,7 @@ pub(super) fn lower_user_sort_static_callback(
             array,
             callback_binding,
             sort_helper,
+            retain_owed,
         );
     }
     match callback_ty {
@@ -313,6 +316,9 @@ pub(super) fn lower_user_sort_static_callback(
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
                     abi::emit_call_label(ctx.emitter, sort_helper);
+                    if retain_owed {
+                        ctx.retain_receiver_after_callback(array)?;
+                    }
                     Ok(())
                 },
             )?;
@@ -341,6 +347,9 @@ pub(super) fn lower_user_sort_static_callback(
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
                     abi::emit_call_label(ctx.emitter, sort_helper);
+                    if retain_owed {
+                        ctx.retain_receiver_after_callback(array)?;
+                    }
                     Ok(())
                 },
             )?;
@@ -360,20 +369,30 @@ pub(super) fn lower_user_sort_static_callback(
         &callback_owner,
         Some(&callback_arg_types),
     )?;
-    lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding, sort_helper)
+    lower_user_sort_with_static_callback_binding(
+        ctx,
+        inst,
+        array,
+        callback_binding,
+        sort_helper,
+        retain_owed,
+    )
 }
 
 /// Calls the user-sort runtime with a statically recovered callback binding.
 ///
 /// `sort_helper` selects the slot permuter matching the receiver's element
 /// width: `__rt_usort` for 8-byte payload slots, `__rt_usort_str` for the
-/// 16-byte `[ptr][len]` string descriptors.
+/// 16-byte `[ptr][len]` string descriptors. `retain_owed` is the deferred retain of
+/// `ReceiverPlace::store_back_value_before_callback`, emitted once the helper — and so the
+/// comparator — has returned.
 pub(super) fn lower_user_sort_with_static_callback_binding(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     array: ValueId,
     callback_binding: StaticSortCallbackBinding,
     sort_helper: &str,
+    retain_owed: bool,
 ) -> Result<()> {
     let callback_label = sort_callback_label_returning_int(ctx, &callback_binding)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
@@ -384,6 +403,9 @@ pub(super) fn lower_user_sort_with_static_callback_binding(
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
     abi::emit_call_label(ctx.emitter, sort_helper);
+    if retain_owed {
+        ctx.retain_receiver_after_callback(array)?;
+    }
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
