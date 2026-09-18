@@ -107,3 +107,30 @@ eval('echo "e";');
     assert_eq!(out, "7:x,k|e");
 }
 
+/// Repeated string-key promotion of a Mixed-widened local drops the slot's box exactly once.
+///
+/// `$a = []; $a["x"] = 1;` inside a loop of a program that also calls `eval()`: from the second
+/// iteration on, the slot holds a Mixed box and the first write promotes the list to a hash.
+/// Lowering used to release that box before `array_to_hash` while the backend releases it again
+/// (`release_mutated_source_local_owner`, which also covers a slot that only widens later). The
+/// second release freed the box a second time — silently on x86_64, whose heap-debug Mixed
+/// release does not check liveness, and as `heap debug detected bad refcount` on aarch64, which
+/// is where CI caught it. Lowering now leaves the drop to the backend for that conversion.
+#[test]
+fn test_boxed_string_key_promotion_in_a_loop_drops_the_previous_box_once() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$t = 0;
+for ($i = 0; $i < 3; $i++) {
+    $a = [];
+    $a["x"] = 1;
+    $a["y"] = 2;
+    $t = count($a);
+}
+echo $t, "|";
+eval('echo "e";');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2|e", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+

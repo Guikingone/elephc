@@ -194,7 +194,7 @@ pub(super) fn lower_local_parent_fetch_for_write(
                     // is stored back exactly once at the end.
                     let array_value = ctx.load_local(name, Some(span));
                     let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
-                    ctx.prepare_mutated_local_owner(name, array_value, assoc_ty.clone(), Some(span));
+                    ctx.prepare_mutated_local_owner_for_backend_retire(name, array_value, assoc_ty.clone(), Some(span));
                     let hash = ctx.emit_value(
                         Op::ArrayToHash,
                         vec![array_value.value],

@@ -239,7 +239,7 @@ pub(super) fn lower_string_key_array_promotion(
     let current_ty = ctx.builder.value_php_type(array_value.value);
     let value_ty = ctx.builder.value_php_type(value.value);
     let assoc_ty = promoted_assoc_array_type(current_ty, value_ty);
-    ctx.prepare_mutated_local_owner(array, array_value, assoc_ty.clone(), Some(span));
+    ctx.prepare_mutated_local_owner_for_backend_retire(array, array_value, assoc_ty.clone(), Some(span));
     let hash = ctx.emit_value(
         Op::ArrayToHash,
         vec![array_value.value],

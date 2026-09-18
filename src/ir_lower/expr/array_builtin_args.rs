@@ -425,7 +425,7 @@ fn lower_indexed_array_ref_arg_to_hash(
         value: elem_ty,
     };
     let array = ctx.load_local(name, Some(arg.span));
-    ctx.prepare_mutated_local_owner(name, array, assoc_ty.clone(), Some(arg.span));
+    ctx.prepare_mutated_local_owner_for_backend_retire(name, array, assoc_ty.clone(), Some(arg.span));
     let hash = ctx.emit_value(
         Op::ArrayToHash,
         vec![array.value],

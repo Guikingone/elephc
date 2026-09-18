@@ -2328,6 +2328,38 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         replacement_type: PhpType,
         span: Option<Span>,
     ) {
+        self.prepare_mutated_local_owner_impl(name, source, replacement_type, span, true);
+    }
+
+    /// Widens the destination for a consuming mutation whose BACKEND retires the boxed owner.
+    ///
+    /// `Op::ArrayToHash` lowering drops the slot's Mixed box itself
+    /// (`FunctionContext::release_mutated_source_local_owner`), because the slot can still widen
+    /// after this point and only the backend sees the final storage. Emitting the release here as
+    /// well dropped the same box twice whenever the storage was already Mixed at lowering time:
+    /// `$a = []; $a["x"] = 1;` in a loop of a program that also calls `eval()` freed the box on
+    /// the first write of every iteration after the first, silently on x86_64 (its heap-debug
+    /// Mixed release never checks liveness) and as a bad refcount on aarch64. Use this for the
+    /// conversions the backend retires for; `prepare_mutated_local_owner` stays for the ones it
+    /// does not (`ArrayToMixed`, `HashToMixed`, the ensure-unique runtime calls).
+    pub(crate) fn prepare_mutated_local_owner_for_backend_retire(
+        &mut self,
+        name: &str,
+        source: LoweredValue,
+        replacement_type: PhpType,
+        span: Option<Span>,
+    ) {
+        self.prepare_mutated_local_owner_impl(name, source, replacement_type, span, false);
+    }
+
+    fn prepare_mutated_local_owner_impl(
+        &mut self,
+        name: &str,
+        source: LoweredValue,
+        replacement_type: PhpType,
+        span: Option<Span>,
+        release_box: bool,
+    ) {
         let previous_kind = self
             .local_kinds
             .get(name)
@@ -2343,7 +2375,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.builder
             .widen_local_storage_type(slot, replacement_type);
         let storage_type = self.builder.local_php_type(slot).codegen_repr();
-        if !is_ref_bound
+        if release_box
+            && !is_ref_bound
             && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
             && !matches!(source_type, PhpType::Mixed | PhpType::Union(_))
         {
