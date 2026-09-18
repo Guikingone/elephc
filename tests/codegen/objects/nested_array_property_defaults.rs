@@ -106,6 +106,30 @@ echo count(S::$s), "|", S::$s[1][0];
     assert_eq!(out, "2|2");
 }
 
+/// A STATIC property with a KEYED default on a boxed slot takes the `BoxedAssocArray` path.
+///
+/// Raised in review: the static fixture above uses a positional default on a plain `array`
+/// slot, which never reaches the keyed boxing emitter in `block_emit`. That emitter is separate
+/// from the instance one in `property_defaults`, and separate again from the positional
+/// `BoxedArray` arm beside it, so nothing here covered it. The flat keyed spelling is included
+/// because it was refused on its own before this change, independently of any nesting.
+#[test]
+fn test_static_keyed_defaults_on_boxed_slots() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    public static ?array $flat = ["k" => 1];
+    public static mixed $nested = ["k" => [1, 2]];
+    public static ?array $deep = ["a" => ["b" => "c"]];
+}
+echo S::$flat["k"], "|",
+     count(S::$nested["k"]), S::$nested["k"][1], "|",
+     S::$deep["a"]["b"];
+"#,
+    );
+    assert_eq!(out, "1|22|c");
+}
+
 /// Two instances hold separate storage, and a copy outlives the object it came from.
 ///
 /// Each nested container is allocated per object, so a write through one instance's default
