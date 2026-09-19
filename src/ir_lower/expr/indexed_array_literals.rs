@@ -335,6 +335,11 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
         // elements were still intact, and reusing it crashed. Acquiring first is the same ledger
         // `lower_array_set_mixed_key` documents: the promote path consumes the `+1`, and the
         // local keeps the reference it started with.
+        //
+        // The acquire stays unconditional; an OWNING TEMPORARY source is balanced by releasing it
+        // after the spread instead (below). Skipping the acquire for a temporary is the wrong half
+        // of the ledger -- the promotion's decref then consumes the only reference a BORROWED
+        // local has, which segfaults -- so the two cases are separated at the release, not here.
         let owned_source = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
         let promoted = ctx.emit_value(
             Op::ArrayToHash,
@@ -361,6 +366,15 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     );
     if ctx.value_is_owning_temporary(spread_source) {
         crate::ir_lower::ownership::release_if_owned(ctx, spread_source, Some(span));
+    }
+    // The promoted hash is a DIFFERENT value from the one the caller handed us, so releasing it
+    // above says nothing about the original array. An owning temporary source -- a call result, a
+    // nested literal -- has no other owner once the promotion has consumed the reference the
+    // acquire added, so it is released here, exactly as the indexed sibling releases its own
+    // source. Without this, `[...f(), "k" => 1]` leaked one array per evaluation while the
+    // borrowed-local form stayed clean.
+    if spread_source.value != source.value && ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
 }
 
