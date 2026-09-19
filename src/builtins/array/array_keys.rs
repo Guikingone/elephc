@@ -6,7 +6,9 @@
 //!
 //! Key details:
 //! - `check` reproduces the legacy return-type rule: an indexed array yields
-//!   `Array<Int>` (positional keys) while an associative array yields `Array<key>`.
+//!   `Array<Int>` (positional keys) while an associative array yields `Array<key>` --
+//!   except a STRING-keyed hash, which yields `Array<Mixed>` because a reindexing sort can
+//!   leave it holding integer keys that the declared type no longer describes (issue #1072).
 //!   A check hook is required because the return type depends on the inferred
 //!   argument type, which the `builtin!` `returns:` field cannot express.
 //! - A `Mixed` argument (an array read out of a `mixed`-typed value: a builtin/prelude return,
@@ -42,6 +44,16 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match ty {
         PhpType::Array(_) => Ok(PhpType::Array(Box::new(PhpType::Int))),
+        // A STRING-keyed hash answers `Array<Mixed>`, not `Array<Str>`. `sort()`/`rsort()`
+        // reindex a hash to `0..n-1`, and the receiver keeps its declared key type across the
+        // by-reference call -- the checker pins a reference alias root there rather than
+        // retyping it -- so the keys can be integers while the static type still says string.
+        // `Array<Str>` has nowhere to put an integer key, and the materializer persisted the
+        // int-key sentinel as a string length instead (issue #1072). An `Array<Int>` hash needs
+        // no widening: reindexing an int-keyed hash still yields int keys.
+        PhpType::AssocArray { key, .. } if matches!(*key, PhpType::Str) => {
+            Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+        }
         PhpType::AssocArray { key, .. } => Ok(PhpType::Array(key)),
         PhpType::Mixed => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
         _ => Err(CompileError::new(

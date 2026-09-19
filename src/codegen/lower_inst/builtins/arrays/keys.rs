@@ -521,12 +521,15 @@ fn emit_assoc_mixed_key_append_aarch64(ctx: &mut FunctionContext<'_>, key_ty: &P
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             emit_append_word_key_aarch64(ctx, "x0");
         }
-        PhpType::Str => {
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
-            emit_append_word_key_aarch64(ctx, "x0");
-        }
-        PhpType::Mixed => {
+        // A hash's key is int-or-string at RUN TIME whatever the declared key type says, so a
+        // `Str` key type gets the same sentinel dispatch as `Mixed` rather than an unconditional
+        // persist. `sort()`/`rsort()` reindex a string-keyed hash to `0..n-1`, and the receiver
+        // keeps its `AssocArray { key: Str }` type through the by-reference call (the checker
+        // pins a reference alias root rather than retyping it), so the keys arriving here are
+        // integers while the static type still says string. Persisting one read
+        // `__rt_hash_iter_next`'s `key_hi == -1` integer sentinel as a string length and took
+        // the process down (issue #1072).
+        PhpType::Str | PhpType::Mixed => {
             let key_string = ctx.next_label("akeys_assoc_key_string");
             let key_boxed = ctx.next_label("akeys_assoc_key_boxed");
             ctx.emitter.instruction("cmn x2, #1");                              // check whether this normalized hash key is an integer
@@ -560,13 +563,9 @@ fn emit_assoc_mixed_key_append_x86_64(ctx: &mut FunctionContext<'_>, key_ty: &Ph
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             emit_append_word_key_x86_64(ctx, "rax");
         }
-        PhpType::Str => {
-            ctx.emitter.instruction("mov rax, rdi");                            // pass the borrowed hash key pointer to the persistence helper
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
-            emit_append_word_key_x86_64(ctx, "rax");
-        }
-        PhpType::Mixed => {
+        // See the AArch64 twin: a hash key is int-or-string at run time, so `Str` shares the
+        // sentinel dispatch (issue #1072).
+        PhpType::Str | PhpType::Mixed => {
             let key_string = ctx.next_label("akeys_assoc_key_string");
             let key_boxed = ctx.next_label("akeys_assoc_key_boxed");
             ctx.emitter.instruction("cmp rdx, -1");                             // check whether this normalized hash key is an integer
