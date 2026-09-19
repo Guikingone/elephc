@@ -6,9 +6,11 @@
 //!
 //! Key details:
 //! - `check` reproduces the legacy return-type rule: an indexed array yields
-//!   `Array<Int>` (positional keys) while an associative array yields `Array<key>` --
-//!   except a STRING-keyed hash, which yields `Array<Mixed>` because a reindexing sort can
-//!   leave it holding integer keys that the declared type no longer describes (issue #1072).
+//!   `Array<Int>` (positional keys) while an associative array yields `Array<key>` -- with two
+//!   exceptions, both because the declared type does not describe the runtime key form: a
+//!   STRING-keyed hash yields `Array<Mixed>` because a reindexing sort can leave it holding
+//!   integer keys, and an `array<mixed>` receiver yields `Array<Mixed>` because it can be
+//!   hash-backed at run time and hold string keys (issue #1072).
 //!   A check hook is required because the return type depends on the inferred
 //!   argument type, which the `builtin!` `returns:` field cannot express.
 //! - A `Mixed` argument (an array read out of a `mixed`-typed value: a builtin/prelude return,
@@ -43,6 +45,13 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match ty {
+        // An `array<mixed>` value can be HASH-backed at run time -- `lower_dynamic_mixed_array_keys`
+        // exists precisely to branch on that at run time -- so its keys can be strings, and
+        // `Array<Int>` has nowhere to put them. The backend refused the pair outright, which made
+        // `array_keys([1, "b", 2.5])` a compile error on an ordinary heterogeneous literal.
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+        }
         PhpType::Array(_) => Ok(PhpType::Array(Box::new(PhpType::Int))),
         // A STRING-keyed hash answers `Array<Mixed>`, not `Array<Str>`. `sort()`/`rsort()`
         // reindex a hash to `0..n-1`, and the receiver keeps its declared key type across the

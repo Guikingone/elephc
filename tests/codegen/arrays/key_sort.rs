@@ -428,3 +428,26 @@ echo $n;
         out.stderr
     );
 }
+
+/// Review follow-up: `array_keys()` on a statically `array<mixed>` receiver was a hard codegen
+/// error, not a working program.
+///
+/// Same root cause as the sorts above, one step earlier: an `array<mixed>` value can be
+/// HASH-backed at run time -- `lower_dynamic_mixed_array_keys` exists to branch on that -- so
+/// its keys can be strings and an `Array<Int>` result has nowhere to put them. The backend
+/// refused the pair outright, which made `array_keys()` over an ordinary heterogeneous literal
+/// fail to compile with "array_keys associative key PHP type Mixed into result PHP type Int".
+#[test]
+fn test_array_keys_on_a_heterogeneous_indexed_literal() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, "b", 2.5];
+var_dump(array_keys($a));
+echo implode(",", array_keys($a)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n  [2]=>\n  int(2)\n}\n0,1,2\n"
+    );
+}
