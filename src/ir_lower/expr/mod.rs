@@ -62,7 +62,7 @@ mod positional_spreads;
 mod named_args;
 mod named_spreads;
 mod variadic_args;
-mod call_return_types;
+pub(in crate::ir_lower) mod call_return_types;
 mod indexed_array_literals;
 mod assoc_array_literals;
 mod match_expr;
@@ -89,7 +89,7 @@ mod static_method_calls;
 mod scoped_values;
 mod generators;
 mod instanceof_coercions;
-mod merge_temps;
+pub(in crate::ir_lower) mod merge_temps;
 
 use scalar_literals::*;
 use numeric_binary::*;

@@ -374,7 +374,7 @@ pub(super) fn fallback_expr_type(expr: &Expr) -> PhpType {
 }
 
 /// Normalizes non-materializable expression types to the EIR null sentinel.
-pub(super) fn normalize_value_php_type(php_type: PhpType) -> PhpType {
+pub(in crate::ir_lower) fn normalize_value_php_type(php_type: PhpType) -> PhpType {
     if matches!(php_type, PhpType::Never) {
         PhpType::Void
     } else {

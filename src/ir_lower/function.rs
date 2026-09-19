@@ -1065,7 +1065,11 @@ pub(crate) fn lower_closure_function(
         body,
         captures,
         parent.classes,
-        parent.builtin_call_types,
+        ClosureReturnCallees {
+            functions: parent.functions,
+            extern_functions: parent.extern_functions,
+            builtin_call_types: parent.builtin_call_types,
+        },
     );
     signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
@@ -1102,7 +1106,11 @@ pub(crate) fn lower_closure_function_with_context(
         body,
         captures,
         parent.classes,
-        parent.builtin_call_types,
+        ClosureReturnCallees {
+            functions: parent.functions,
+            extern_functions: parent.extern_functions,
+            builtin_call_types: parent.builtin_call_types,
+        },
     );
     signature.by_ref_return = by_ref_return;
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
@@ -1755,6 +1763,17 @@ fn signature_from_ast(params: &AstParams, return_type: Option<&TypeExpr>) -> Fun
 }
 
 /// Builds an EIR closure signature and infers fallthrough-only closures as `void`.
+/// The callee tables a call returned directly from a closure is resolved against.
+///
+/// Grouped rather than passed one by one because the whole closure-signature subtree forwards
+/// them together and reads them only at the leaf.
+#[derive(Clone, Copy)]
+struct ClosureReturnCallees<'a> {
+    functions: &'a std::collections::HashMap<String, FunctionSig>,
+    extern_functions: &'a std::collections::HashMap<String, crate::types::ExternFunctionSig>,
+    builtin_call_types: &'a std::collections::HashMap<Span, PhpType>,
+}
+
 fn closure_signature_from_ast(
     params: &AstParams,
     variadic: Option<&str>,
@@ -1763,7 +1782,7 @@ fn closure_signature_from_ast(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    callees: ClosureReturnCallees<'_>,
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
@@ -1778,7 +1797,7 @@ fn closure_signature_from_ast(
                 captures,
                 &signature.params,
                 classes,
-                builtin_call_types,
+                callees,
             )
         {
             signature.return_type = return_ty;
@@ -1795,7 +1814,7 @@ fn direct_closure_return_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    callees: ClosureReturnCallees<'_>,
 ) -> Option<PhpType> {
     let [stmt] = body else {
         return None;
@@ -1808,7 +1827,7 @@ fn direct_closure_return_type(
         captures,
         params,
         classes,
-        builtin_call_types,
+        callees,
     ))
 }
 
@@ -1826,11 +1845,42 @@ fn direct_closure_return_expr_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    callees: ClosureReturnCallees<'_>,
 ) -> PhpType {
-    if matches!(expr.kind, ExprKind::FunctionCall { .. }) {
-        if let Some(ty) = builtin_call_types.get(&expr.span) {
+    if let ExprKind::FunctionCall { name, .. } = &expr.kind {
+        if let Some(ty) = callees.builtin_call_types.get(&expr.span) {
             return ty.clone();
+        }
+        // A USER or EXTERN callee is in neither the builtin map nor the syntactic allowlist, so
+        // without this the fallback at the bottom answered `Int` for every one of them and the
+        // closure's EIR signature said `int`. `lower_return_expr` then coerced the callee's real
+        // result into that signature: `function tag(int $n): string` returned through
+        // `$a = function ($v) { return tag($v); }` printed `0` (issue #1028). The checker had it
+        // right -- `resolve_closure_return_type` infers `string` here -- so this is lowering's own
+        // inference disagreeing with it, not a checker gap.
+        //
+        // Through the SAME two helpers a direct call's result goes through, which is what makes
+        // "the closure agrees with its body" true rather than merely intended.
+        //
+        // `eir_user_function_return_type` is the load-bearing one. A callee with an UNTYPED
+        // parameter receives it under the boxed-Mixed ABI whatever the checker specialized, so a
+        // container it returns carries Mixed elements; the checker's signature can still say
+        // `array<int>`, and `dynamic_param_container_return_type` is what widens that for every
+        // consumer. Taking `sig.return_type` raw stamped the closure `array<int>` over a value
+        // whose slots hold boxed cells, and the return boundary passes it through silently --
+        // `IrType::from_php` maps every `Array(_)` to one heap kind, so nothing there can notice:
+        //
+        //     function f($x) { return [$x]; }
+        //     $g = function (int $v) { return f($v); };
+        //     echo $g(5)[0];      // 4368664304, a cell pointer read as an int
+        let canonical = name.as_str();
+        if let Some(sig) = callees.functions.get(canonical) {
+            return crate::ir_lower::expr::merge_temps::normalize_value_php_type(
+                crate::ir_lower::expr::call_return_types::eir_user_function_return_type(sig),
+            );
+        }
+        if let Some(sig) = callees.extern_functions.get(canonical) {
+            return crate::ir_lower::expr::merge_temps::normalize_value_php_type(sig.return_type.clone());
         }
     }
     // An array literal returned directly is stamped with this inferred type and its elements
@@ -1843,7 +1893,7 @@ fn direct_closure_return_expr_type(
                 captures,
                 params,
                 classes,
-                builtin_call_types,
+                callees,
             )));
         }
     }
@@ -1854,7 +1904,7 @@ fn direct_closure_return_expr_type(
                 captures,
                 params,
                 classes,
-                builtin_call_types,
+                callees,
             );
         }
     }
@@ -1929,7 +1979,7 @@ fn direct_closure_return_array_element_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    callees: ClosureReturnCallees<'_>,
 ) -> PhpType {
     let mut elem_ty = PhpType::Never;
     for item in items {
@@ -1940,7 +1990,7 @@ fn direct_closure_return_array_element_type(
                 captures,
                 params,
                 classes,
-                builtin_call_types,
+                callees,
             ),
         );
     }
@@ -1957,7 +2007,7 @@ fn direct_closure_return_array_item_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    callees: ClosureReturnCallees<'_>,
 ) -> PhpType {
     if let ExprKind::Spread(inner) = &item.kind {
         let source = direct_closure_return_array_item_type(
@@ -1965,7 +2015,7 @@ fn direct_closure_return_array_item_type(
             captures,
             params,
             classes,
-            builtin_call_types,
+            callees,
         );
         return match source.codegen_repr() {
             PhpType::Array(elem) => match elem.codegen_repr() {
@@ -1985,7 +2035,7 @@ fn direct_closure_return_array_item_type(
         captures,
         params,
         classes,
-        builtin_call_types,
+        callees,
     ))
 }
 
@@ -2001,7 +2051,7 @@ fn direct_closure_return_assoc_literal_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    callees: ClosureReturnCallees<'_>,
 ) -> PhpType {
     let mut key_ty = PhpType::Never;
     let mut value_ty = PhpType::Never;
@@ -2022,7 +2072,7 @@ fn direct_closure_return_assoc_literal_type(
                 captures,
                 params,
                 classes,
-                builtin_call_types,
+                callees,
             ),
         );
     }

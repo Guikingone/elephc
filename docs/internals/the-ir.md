@@ -157,6 +157,51 @@ pub struct Value {
 `Callable`, `Str`, and refcounted heap values can be owned even when their
 storage type is not `Heap(...)`. Ownership is a separate value property.
 
+### Closure Return Types Inferred by Lowering
+
+A closure with no declared return type gets one from `closure_signature_from_ast`, and
+`lower_return_expr` then coerces the body's value into it — so a wrong answer here is a
+conversion, not a diagnostic, exactly as with an array literal's element stamp.
+
+The checker infers this type too (`resolve_closure_return_type`), and the two are
+independent. Where they disagree the backend wins, because the signature is what the call
+site lowers against.
+
+`direct_closure_return_expr_type` handles the single-statement `return <expr>;` shape and
+resolves it in this order:
+
+| return expression | source of the type |
+|---|---|
+| a parameter or capture | the closure signature's declared type |
+| a property read off a parameter/capture of a known class | the property's declared type |
+| a class constant | the resolved constant metadata |
+| an array literal | recursively, per element (`direct_closure_return_array_element_type`) |
+| a call to a **builtin** | `callees.builtin_call_types`, keyed by the call's span |
+| a call to a **user or extern function** | `callees.functions` / `callees.extern_functions` |
+| anything else | `infer_expr_type_syntactic` |
+
+The user/extern row was missing until issue #1028. A user callee is in neither the builtin
+map nor the syntactic allowlist, so it took the allowlist's `_ => Int` fallback, the closure's
+signature said `int`, and the coercion turned the callee's real result into one:
+`function tag(int $n): string` returned through `$a = function ($v) { return tag($v); }`
+printed `0`. The checker had it right — the disagreement was lowering's alone. A `float`
+callee printed `int(1)`, an `array` callee refused to compile with `count for PHP type Int`,
+and `strlen()` of the result panicked the backend.
+
+The answer goes through the same two helpers a DIRECT call's result goes through,
+`eir_user_function_return_type` and `normalize_value_php_type`, which is what makes "the
+closure agrees with the call in its own body" true rather than intended.
+
+`eir_user_function_return_type` is the load-bearing one. A callee with an untyped parameter
+receives it under the boxed-Mixed ABI whatever the checker specialized, so a container it
+returns carries boxed elements while the checker's signature can still say `array<int>` —
+`dynamic_param_container_return_type` is what widens that for every other consumer. Taking
+the raw signature type stamped the closure `array<int>` over boxed storage, and nothing at
+the return boundary can notice: `IrType::from_php` maps every `Array(_)` to one heap kind,
+and `coerce_container_to_return_type` only ever widens *toward* `Mixed`. `function f($x)
+{ return [$x]; }` returned through `$g = function (int $v) { return f($v); }` printed a cell
+pointer where PHP prints the element.
+
 ### Parsed Type Expressions
 
 `TypeExpr` maps into `PhpType` during type checking before EIR lowering. EIR
