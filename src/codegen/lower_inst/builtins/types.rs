@@ -126,10 +126,18 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Reaching this lowering means `crate::ir_lower::expr` could not turn the target
 /// into a slot clear, a hash/array removal, an `offsetUnset()` call, a `__unset()`
 /// call or a dynamic-property removal, so the message lists the shapes that do lower
-/// directly. Fixed untyped slots selected by reachable property `unset()` operations
-/// are widened to boxed `Mixed` and lowered through `PropUnset`, so they do not reach
-/// this fallback. Packed fields, by-reference slots, and dynamic shapes whose magic
-/// behavior depends on runtime state remain deliberately unsupported.
+/// directly and then names the one shape users hit most.
+///
+/// Fixed untyped slots selected by reachable property `unset()` operations are widened to
+/// boxed `Mixed` and lowered through `PropUnset`, so they do not reach this fallback. Packed
+/// fields, by-reference property slots, and dynamic shapes whose magic behavior depends on
+/// runtime state remain deliberately unsupported.
+///
+/// A BY-REFERENCE INDEXED ARRAY is the shape named here. `unset()` removes a key without
+/// renumbering, so a packed list has to become a hash — and a callee cannot retype the
+/// caller's slot, which still reads `array<T>`. The associative form has no such problem
+/// and lowers directly (issue #677), so the message names the difference rather than
+/// leaving "array/hash elements" looking like a blanket promise.
 pub(super) fn lower_unset_builtin(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -139,7 +147,10 @@ pub(super) fn lower_unset_builtin(
          array/hash elements, ArrayAccess offsets, __unset()-backed properties, \
          declared fixed object properties, and dynamic object properties). \
          Packed fields, by-reference property slots, and runtime-dependent magic \
-         property shapes are not supported",
+         property shapes are not supported. An element of a by-reference INDEXED array \
+         (`function f(array &$a) {{ unset($a[1]); }}`) would leave a key hole, so the \
+         local must become a hash, and the caller's slot still says `array<T>`; the \
+         associative form (`unset($a[\"k\"])`) is supported",
         inst.operands.len()
     )))
 }

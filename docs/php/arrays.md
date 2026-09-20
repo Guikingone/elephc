@@ -100,8 +100,24 @@ echo count($a); // 2 — original is untouched
 echo count($b); // 1
 ```
 
-> Removing an element from an array passed **by reference** (`function f(array &$a)`) is not yet
-> supported and reports a compile error.
+Removing a key through a **by-reference parameter** or a `&$x` binding reaches the caller's array,
+like every other write through one:
+
+```php
+<?php
+function drop(array &$a) { unset($a["b"]); }
+$x = ["a" => 1, "b" => 2];
+$snapshot = $x;
+drop($x);
+echo count($x);        // 1
+echo count($snapshot); // 2 — the copy taken before the call is untouched
+```
+
+The one shape this does not cover is an **indexed** array reached by reference
+(`function f(array &$a) { unset($a[1]); }`). Removing a key from a packed list leaves a hole, so
+the array has to become a hash — and the caller's slot, still described as `array<T>`, is storage
+the callee cannot retype. That case reports a named compile error instead; an associative array,
+or a local copy the function returns, is the workaround.
 
 ## Array union
 
@@ -250,14 +266,14 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 |---|---|---|
 | `count()` | `count($value [, $mode]): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()`. A value that is not countable — `false`, an `int`, `float`, `string`, `null`, or resource arriving through a `mixed` — raises PHP 8's `TypeError` (`count(): Argument #1 ($value) must be of type Countable\|array, X given`) instead of answering `0`. `$mode` accepts `COUNT_NORMAL` (default) and `COUNT_RECURSIVE`; anything else throws `\ValueError`. `COUNT_RECURSIVE` is currently supported only where the receiver cannot hold a nested array — a nested receiver is a compile error rather than a wrong count |
 | `array_count_values()` | `array_count_values($array): array` | Maps each distinct `int`/`string` value to its number of occurrences; other values are skipped with a warning |
-| `array_push()` | `array_push($arr, $val): void` | Add element to end |
+| `array_push()` | `array_push($arr, ...$values): int` | Append any number of elements and return the new count. `array_push($a, 3, 4)` appends both in source order, and `array_push($a)` with no values just reads the count back. |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
 | `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $haystack, $strict = false): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found. `$strict` compares with `===` |
-| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice. `$preserve_keys` keeps the source integer keys and must be a literal `true`/`false`. |
+| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice from an indexed OR associative array. `$offset` and `$length` count positions in insertion order, not keys, and must be literal only for `$preserve_keys`, which must be a literal `true`/`false`. `$preserve_keys` keeps the source INTEGER keys; string keys survive either way, so `array_slice(["x"=>1,"y"=>2], 1, 1)` is `["y"=>2]` with or without it, while `array_slice([5=>1,9=>2], 1, 1)` is `[0=>2]` without and `[9=>2]` with. |
 | `array_splice()` | `array_splice($arr, $offset [, $length [, $replacement]]): array` | Remove a slice in place and return the removed elements. `$replacement` is inserted where the removed slice was: an array contributes its values, a bare scalar is treated as a one-element array, and `null` or `[]` inserts nothing. A replacement whose element type differs from the receiver's promotes the receiver to a heterogeneous array exactly as PHP does (`$a = [1,2,3]; array_splice($a, 1, 1, ["x"]);` leaves `[1, "x", 3]`). That promotion needs a receiver whose storage this call can retype, so it does not apply when the receiver is a by-reference parameter, a `&$x` binding, or an object/static property — those keep a named compile error instead of a mistyped insertion. |
 | `array_chunk()` | `array_chunk($arr, $size [, $preserve_keys]): array` | Split into chunks. A `$size` of `0` or less throws `\ValueError`. `$preserve_keys` keeps each chunk's source integer keys and must be a literal `true`/`false`. |
 | `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |

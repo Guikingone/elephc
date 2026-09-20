@@ -137,3 +137,122 @@ $w = [3,1,2]; $wa = $w; s($w); echo implode(",", $w), "|", implode(",", $wa), "\
         out.stderr
     );
 }
+
+
+/// Verifies `unset($a["k"])` on a by-reference parameter reaches the caller's table (issue #677).
+///
+/// Every other write through a by-reference array already worked — `$a["c"] = 3`,
+/// `array_unshift()`, `sort()` — because each routes its receiver through `ReceiverPlace`.
+/// `unset` never did: `ir_lower` refused a ref-bound receiver outright, so the call reached the
+/// backend as a bare target shape and died with `unsupported EIR backend feature: unset target
+/// shape with 1 lowered operands`.
+///
+/// The refusal was written for the INDEXED case, where removing a key leaves a hole and the local
+/// has to become a hash — a representation the caller's `array<T>` slot cannot describe. An
+/// ASSOCIATIVE receiver has no such problem: the removal is in place and `lower_hash_unset`
+/// already publishes the copy-on-write split through the receiver's ref cell.
+///
+/// `$snapshot` is load-bearing. It makes the caller's table shared, so the runtime separates a
+/// private copy inside the callee; without the write-back the callee would mutate that copy and
+/// throw it away, and without copy-on-write the snapshot would lose the key too.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_unset_element_on_by_ref_parameter_reaches_the_caller() {
+    let out = compile_and_run(
+        r#"<?php
+function drop(array &$a) { unset($a["b"]); }
+$x = ["a" => 1, "b" => 2, "c" => 3];
+$snapshot = $x;
+drop($x);
+echo implode(",", array_keys($x)), "|", count($snapshot), "\n";
+
+function dropMany(array &$a) { unset($a["b"]); unset($a["c"]); unset($a["missing"]); }
+$y = ["a" => 1, "b" => 2, "c" => 3, "d" => 4];
+dropMany($y);
+echo implode(",", array_keys($y)), "|", count($y), "\n";
+
+function dropInt(array &$a) { unset($a[2]); }
+$z = [1 => "one", 2 => "two", 3 => "three"];
+dropInt($z);
+echo implode(",", array_keys($z)), "\n";
+
+function inner(array &$a) { unset($a["c"]); }
+function outer(array &$a) { unset($a["b"]); inner($a); }
+$n = ["a" => 1, "b" => 2, "c" => 3];
+outer($n);
+echo implode(",", array_keys($n)), "\n";
+
+$m = ["a" => 1, "b" => 2];
+$alias = &$m;
+unset($alias["b"]);
+echo implode(",", array_keys($m)), "\n";
+
+function dropAll(array &$a) { unset($a["a"]); unset($a["b"]); }
+$e = ["a" => 1, "b" => 2];
+dropAll($e);
+var_dump($e);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "a,c|3\n",
+            "a,d|2\n",
+            "1,3\n",
+            "a\n",
+            "a\n",
+            "array(0) {\n}\n",
+        )
+    );
+}
+
+/// Verifies the by-reference `unset()` write-back does not leak or double release.
+///
+/// The removal copy-on-write splits the caller's table and publishes the split through the ref
+/// cell, so both the released key/value payloads and the replaced table have to be accounted for
+/// once each. The loop makes an imbalance visible instead of hiding it in a single-iteration
+/// total.
+#[test]
+fn test_unset_element_on_by_ref_parameter_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function drop(array &$a) { unset($a["b"]); }
+for ($i = 0; $i < 32; $i++) {
+    $x = ["a" => 1, "b" => 2, "c" => 3];
+    $snapshot = $x;
+    drop($x);
+}
+echo count($x), count($snapshot), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "23\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "by-reference unset leaked: {}",
+        out.stderr
+    );
+}
+
+/// `unset($a[1])` through a by-reference INDEXED parameter has to reach the caller as a key
+/// hole, not a renumbered list. A declared `array` parameter keeps a boxed packed-or-hash
+/// representation, so the callee can turn the packed list sparse in place and the caller's slot
+/// still describes the same storage; a later append continues after the highest surviving key.
+#[test]
+fn test_unset_indexed_element_on_by_ref_parameter_reaches_the_caller() {
+    let out = compile_and_run(
+        r#"<?php
+function drop(array &$a) { unset($a[1]); }
+$x = [1, 2, 3];
+drop($x);
+echo implode(",", array_keys($x)), "|", implode(",", $x), "
+";
+$x[] = 4;
+echo implode(",", array_keys($x)), "|", count($x), "
+";
+"#,
+    );
+    assert_eq!(out, "0,2|1,3
+0,2,3|3
+");
+}

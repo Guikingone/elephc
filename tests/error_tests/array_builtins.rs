@@ -260,12 +260,17 @@ fn test_error_array_fill_wrong_args() {
     );
 }
 
-/// Verifies that error array push wrong args.
+/// Verifies `array_push()` still requires its receiver.
+///
+/// The MAXIMUM went away with issue #677 — PHP's signature is
+/// `array_push(array &$array, mixed ...$values)`, so `array_push($a, 3, 4)` is ordinary code —
+/// but the receiver is still mandatory, and host PHP agrees: `array_push() expects at least 1
+/// argument, 0 given`.
 #[test]
 fn test_error_array_push_wrong_args() {
     expect_error(
         "<?php array_push();",
-        "array_push() takes exactly 2 arguments",
+        "array_push() takes at least 1 argument",
     );
 }
 

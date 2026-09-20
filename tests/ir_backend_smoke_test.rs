@@ -4301,9 +4301,18 @@ fn ir_backend_handles_basic_indexed_arrays() {
             "2 20",
         ),
         (
-            "array_push_builtin_return_is_legacy_null",
+            // PHP's `array_push()` returns the new element count. This used to read `null`,
+            // because the builtin was declared `Void` (issue #677).
+            "array_push_builtin_returns_the_new_count",
             "<?php $a = [10]; $n = array_push($a, 20); echo $n; echo ':'; echo $a[1];",
-            ":20",
+            "2:20",
+        ),
+        (
+            // Every value is evaluated before the first append, so `count($a)` sees the
+            // pre-call length.
+            "array_push_builtin_takes_several_values",
+            "<?php $a = [10]; $n = array_push($a, 20, count($a)); echo $n; echo ':'; echo $a[1]; echo $a[2];",
+            "3:201",
         ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);

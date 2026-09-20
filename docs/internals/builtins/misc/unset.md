@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:133](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L133) (`lower_unset_builtin`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:141](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L141) (`lower_unset_builtin`)
 - **Function symbol**: `lower_unset_builtin()`
 
 
@@ -20,10 +20,16 @@ sidebar:
 - Reaching this lowering means `crate::ir_lower::expr` could not turn the target
 - into a slot clear, a hash/array removal, an `offsetUnset()` call, a `__unset()`
 - call or a dynamic-property removal, so the message lists the shapes that do lower
-- directly. Fixed untyped slots selected by reachable property `unset()` operations
-- are widened to boxed `Mixed` and lowered through `PropUnset`, so they do not reach
-- this fallback. Packed fields, by-reference slots, and dynamic shapes whose magic
-- behavior depends on runtime state remain deliberately unsupported.
+- directly and then names the one shape users hit most.
+- Fixed untyped slots selected by reachable property `unset()` operations are widened to
+- boxed `Mixed` and lowered through `PropUnset`, so they do not reach this fallback. Packed
+- fields, by-reference property slots, and dynamic shapes whose magic behavior depends on
+- runtime state remain deliberately unsupported.
+- A BY-REFERENCE INDEXED ARRAY is the shape named here. `unset()` removes a key without
+- renumbering, so a packed list has to become a hash — and a callee cannot retype the
+- caller's slot, which still reads `array<T>`. The associative form has no such problem
+- and lowers directly (issue #677), so the message names the difference rather than
+- leaving "array/hash elements" looking like a blanket promise.
 
 ## Semantic descriptor
 

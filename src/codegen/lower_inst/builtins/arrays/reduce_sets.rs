@@ -183,7 +183,14 @@ pub(crate) fn lower_array_intersect_key(
 pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_slice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
-    if slice_like_preserve_keys(ctx, inst, "array_slice")? {
+    let preserve_keys = slice_like_preserve_keys(ctx, inst, "array_slice")?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        return lower_hash_slice(ctx, inst, array, preserve_keys);
+    }
+    if preserve_keys {
         return lower_array_slice_preserve_keys(ctx, inst, array);
     }
     if matches!(
@@ -200,6 +207,48 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
     require_array_slice_result_type(&source_elem_ty, &result_elem_ty)?;
     lower_array_slice_call(ctx, array, offset, length, &source_elem_ty)?;
     normalize_indexed_array_result(ctx, "array_slice", &source_elem_ty, &result_elem_ty)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_slice()` over an ASSOCIATIVE receiver, in either `preserve_keys` mode.
+///
+/// `$offset`/`$length` count positions in insertion order, so the window cannot be addressed by
+/// key and `__rt_hash_slice` walks the source instead. One helper serves both modes because they
+/// differ by a single per-entry decision: php-src renumbers INTEGER keys when `preserve_keys` is
+/// false and leaves string keys alone either way, so the result's key type is the source's in
+/// both modes — which is exactly what the checker records.
+///
+/// Both modes were an explicit `unsupported` diagnostic until issue #683, one from this
+/// function's key-preserving sibling and one from `array_slice_source_element_type`.
+fn lower_hash_slice(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    preserve_keys: bool,
+) -> Result<()> {
+    let PhpType::AssocArray { .. } = inst.result_php_type.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_slice of an associative array into result PHP type {:?}",
+            inst.result_php_type
+        )));
+    };
+    let offset = expect_operand(inst, 1)?;
+    let length = slice_like_length_operand(inst)?;
+    lower_slice_like_args(ctx, array, offset, length, "array_slice")?;
+    // The window arguments occupy the first four registers; the mode flag rides in the fifth.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_load_int_immediate(
+            ctx.emitter,
+            "x4",
+            i64::from(preserve_keys),
+        ),
+        Arch::X86_64 => abi::emit_load_int_immediate(
+            ctx.emitter,
+            "r8",
+            i64::from(preserve_keys),
+        ),
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_slice");
     store_if_result(ctx, inst)
 }
 
