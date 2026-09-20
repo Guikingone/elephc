@@ -55,3 +55,5 @@ mod reflection_methods;
 mod reflection_construction;
 #[path = "oop/class_relation_names.rs"]
 mod class_relation_names;
+#[path = "oop/reflection_to_string.rs"]
+mod reflection_to_string;
