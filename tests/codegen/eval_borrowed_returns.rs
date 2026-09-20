@@ -16,6 +16,13 @@
 //! - Fixtures cover `self`, `static`, an undeclared return type, a plain class name,
 //!   a function returning its parameter, and the values that were already correct
 //!   (a callee-created object, a property read) as controls.
+//! - A `return` is not needed to reach it. `$a = $this;` stored the borrowed handle as
+//!   `ScopeCellOwnership::Owned`, so reassigning or unsetting `$a` released the receiver's
+//!   own reference from inside the method.
+//! - The retain is decided on two axes at once, and the last two fixtures pin both. The
+//!   syntactic filter keeps it off expressions that already materialize an owner, which is
+//!   why `return $this->me;` may hand back the same handle without double-retaining; the
+//!   handle check keeps it off the conditional branch that did not run.
 
 use crate::support::compile_and_run;
 
@@ -126,4 +133,62 @@ echo count($c->log), "|", implode(",", $c->log), "|";
     );
 
     assert_eq!(out, "hello|5|3|y|42|3|a,b,c|");
+}
+
+/// Verifies the retain survives every expression that hands a scope read back unchanged:
+/// a ternary, `?:`, `??`, a `match` arm, and an alias bound to a local first.
+#[test]
+fn test_eval_discarded_borrowed_return_through_a_passthrough_expression() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class EvalPassBag {
+    public array $i = [];
+    public function tern(): EvalPassBag { return true ? $this : $this; }
+    public function coalesce(): EvalPassBag { return $this ?? $this; }
+    public function elvis(): EvalPassBag { return $this ?: $this; }
+    public function arm(): EvalPassBag { return match (true) { default => $this }; }
+    public function alias(): EvalPassBag { $a = $this; return $a; }
+    public function n(): int { return count($this->i); }
+}
+
+$o = new EvalPassBag();
+$o->tern();
+$o->coalesce();
+$o->elvis();
+$o->arm();
+$o->alias();
+echo ($o instanceof EvalPassBag) ? "yes" : "no", "|", $o->n(), "|";
+');
+"#,
+    );
+
+    assert_eq!(out, "yes|0|");
+}
+
+/// Verifies aliasing a borrowed cell into a local and then REPLACING that local does not
+/// destroy the receiver — the store site needs the retain even with no `return` involved.
+#[test]
+fn test_eval_aliased_borrowed_cell_survives_the_local_being_replaced() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class EvalAliasBag {
+    public int $k = 3;
+    public function reassign(): int { $a = $this; $a = 1; return $this->k; }
+}
+
+function evalAliasReassign(EvalAliasBag $b): int { $a = $b; $a = 1; return 9; }
+function evalAliasUnset(EvalAliasBag $b): int { $a = $b; unset($a); return 9; }
+
+$o = new EvalAliasBag();
+echo $o->reassign(), "|";
+echo evalAliasReassign($o), "|";
+echo evalAliasUnset($o), "|";
+echo ($o instanceof EvalAliasBag) ? "yes" : "no", "|", $o->k, "|";
+');
+"#,
+    );
+
+    assert_eq!(out, "3|9|9|yes|3|");
 }

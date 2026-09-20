@@ -148,7 +148,7 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::Return(Some(expr)) => {
             let value = eval_expr(expr, context, scope, values)?;
-            Ok(EvalControl::Return(retain_borrowed_scope_return(
+            Ok(EvalControl::Return(retain_unretained_scope_borrow(
                 expr, value, context, scope, values,
             )?))
         }
@@ -197,8 +197,9 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_static_var_stmt(name, init, context, scope, values)?;
             Ok(EvalControl::None)
         }
-        EvalStmt::StoreVar { name, value } => {
-            let value = eval_expr(value, context, scope, values)?;
+        EvalStmt::StoreVar { name, value: value_expr } => {
+            let value = eval_expr(value_expr, context, scope, values)?;
+            let value = retain_unretained_scope_borrow(value_expr, value, context, scope, values)?;
             for replaced in set_scope_cell(
                 context,
                 scope,
@@ -258,33 +259,94 @@ pub(in crate::interpreter) fn execute_stmt(
     }
 }
 
-/// Retains a returned value that was read out of a BORROWED scope cell.
+/// Collects the variable names an expression can hand back *unchanged*.
+///
+/// These are the shapes that return a subexpression's own value rather than materializing a
+/// new one, so whatever ownership that subexpression had is the ownership the caller gets.
+/// Everything else — a property read, an array read, a call, an arithmetic result — produces
+/// an independent owner and must not be retained again.
+fn scope_read_passthrough_names<'a>(expr: &'a EvalExpr, names: &mut Vec<&'a str>) {
+    match expr {
+        EvalExpr::LoadVar(name) => names.push(name),
+        EvalExpr::Ternary {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            // `?:` with no middle operand hands back the condition's own value when truthy.
+            if then_branch.is_none() {
+                scope_read_passthrough_names(condition, names);
+            }
+            if let Some(then_branch) = then_branch {
+                scope_read_passthrough_names(then_branch, names);
+            }
+            scope_read_passthrough_names(else_branch, names);
+        }
+        EvalExpr::NullCoalesce { value, default } => {
+            scope_read_passthrough_names(value, names);
+            scope_read_passthrough_names(default, names);
+        }
+        EvalExpr::Match { arms, default, .. } => {
+            for arm in arms {
+                scope_read_passthrough_names(&arm.value, names);
+            }
+            if let Some(default) = default {
+                scope_read_passthrough_names(default, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Retains a value a pass-through read surfaced out of a BORROWED scope cell.
 ///
 /// `$this` and every by-value parameter are bound into the callee's scope as
 /// `ScopeCellOwnership::Borrowed` — the caller keeps the only reference, and `drain_owned_cells`
-/// deliberately skips them at teardown. Reading one with `LoadVar` hands back that same handle,
-/// so a `return $this;` or `return $param;` gave the CALLER a reference it did not own. When the
-/// caller then discarded the result — an expression statement, the fluent-interface idiom —
-/// `eval_release_value` dropped the receiver's own reference and destroyed a live object:
-/// `$o->add("a"); var_dump($o instanceof Bag);` answered `bool(false)` where PHP answers `true`,
-/// and the next method call on `$o` failed the whole fragment (#982).
+/// deliberately skips them at teardown. `EvalExpr::LoadVar` hands that same handle straight back
+/// with no retain, so any site that then takes ownership of the value is taking ownership of a
+/// reference nobody gave it (#982):
 ///
-/// Only a borrowed read needs this. A value the callee created owns itself, and a property or
-/// element read already materializes an independent owner — both measured correct before this.
-fn retain_borrowed_scope_return(
+/// - `return $this;` handed the CALLER the receiver's own reference. Discarding the result — an
+///   expression statement, which is how the fluent-interface idiom `$o->add("a");` reads — had
+///   `eval_release_value` destroy a live object, so `$o instanceof Bag` answered `bool(false)`
+///   where PHP answers `true`.
+/// - `$a = $this;` stored it as `ScopeCellOwnership::Owned`. Reassigning or unsetting `$a`
+///   releases the cell it replaces, which destroyed the receiver with no `return` involved at
+///   all — measured from inside the method (`$a = $this; $a = 1;`) and across a call boundary
+///   with a by-value parameter.
+///
+/// The decision is made on BOTH axes, because either alone is wrong. The syntactic filter keeps
+/// out expressions that already materialize an independent owner: `return $this->self;` reads a
+/// property that retains, and it can hand back the very same handle `$this` holds, so a check on
+/// the handle alone would retain twice and leak. The handle check keeps out the pass-through
+/// branch that did not run: in `$c ? $this : new Bag()` only one arm produces the value, and
+/// retaining because the *other* arm names a borrowed cell would leak just as badly.
+fn value_is_an_unretained_scope_borrow(
+    expr: &EvalExpr,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    scope: &ElephcEvalScope,
+) -> bool {
+    let mut names = Vec::new();
+    scope_read_passthrough_names(expr, &mut names);
+    names.into_iter().any(|name| {
+        scope_entry(context, scope, name).is_some_and(|entry| {
+            entry.flags().is_visible()
+                && entry.flags().ownership == ScopeCellOwnership::Borrowed
+                && entry.cell() == value
+        })
+    })
+}
+
+/// Takes a reference for a caller that is about to own a value it only borrowed.
+fn retain_unretained_scope_borrow(
     expr: &EvalExpr,
     value: RuntimeCellHandle,
     context: &ElephcEvalContext,
     scope: &ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let EvalExpr::LoadVar(name) = expr else {
-        return Ok(value);
-    };
-    let borrowed = scope_entry(context, scope, name).is_some_and(|entry| {
-        entry.flags().is_visible() && entry.flags().ownership == ScopeCellOwnership::Borrowed
-    });
-    if borrowed {
+    if value_is_an_unretained_scope_borrow(expr, value, context, scope) {
         values.retain(value)
     } else {
         Ok(value)

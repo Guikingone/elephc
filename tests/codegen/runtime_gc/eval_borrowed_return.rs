@@ -121,3 +121,106 @@ echo $total;
         live_blocks(&control.stderr)
     );
 }
+
+/// Verifies the retain is NOT taken for the conditional branch that did not run. Only the
+/// borrowed arm of `$c ? $b : new NArm()` may be retained; retaining because the other arm
+/// names a borrowed cell would leak one object per call.
+#[test]
+fn test_eval_conditional_return_retains_only_the_branch_that_ran() {
+    /// `take_borrowed` chooses which arm of the ternary the loop exercises.
+    fn conditional_return_loop(take_borrowed: bool) -> String {
+        let arg = if take_borrowed { "true" } else { "false" };
+
+        format!(
+            r#"<?php
+eval('
+class NArm {{ public int $k = 1; }}
+function npick(NArm $b, bool $c): NArm {{ return $c ? $b : new NArm(); }}
+$t = 0;
+for ($i = 0; $i < 200; $i++) {{ $o = new NArm(); npick($o, {arg}); $t = $t + $o->k; }}
+echo $t;
+');
+"#
+        )
+    }
+
+    let fresh_arm = compile_and_run_with_heap_debug(&conditional_return_loop(false));
+    let borrowed_arm = compile_and_run_with_heap_debug(&conditional_return_loop(true));
+    // No ternary at all: the floor both arms must meet.
+    let control = compile_and_run_with_heap_debug(
+        r#"<?php
+eval('
+class NArm { public int $k = 1; }
+function npick(NArm $b, bool $c): NArm { return new NArm(); }
+$t = 0;
+for ($i = 0; $i < 200; $i++) { $o = new NArm(); npick($o, false); $t = $t + $o->k; }
+echo $t;
+');
+"#,
+    );
+
+    assert!(fresh_arm.success, "the fresh-arm program failed: {}", fresh_arm.stderr);
+    assert!(borrowed_arm.success, "the borrowed-arm program failed: {}", borrowed_arm.stderr);
+    assert!(control.success, "the control program failed: {}", control.stderr);
+    assert_eq!(fresh_arm.stdout, "200");
+    assert_eq!(borrowed_arm.stdout, "200");
+    assert_eq!(control.stdout, "200");
+    assert_eq!(
+        live_blocks(&fresh_arm.stderr),
+        live_blocks(&control.stderr),
+        "the unexecuted borrowed arm was retained anyway"
+    );
+    assert_eq!(
+        live_blocks(&borrowed_arm.stderr),
+        live_blocks(&control.stderr),
+        "returning the borrowed arm held more than returning a fresh object"
+    );
+}
+
+/// Verifies aliasing a borrowed parameter into a local and replacing it holds no more than
+/// the same function without the alias — the store-site retain is balanced by the release
+/// `set_scope_cell` already performs on the cell it replaces.
+#[test]
+fn test_eval_aliased_borrowed_cell_adds_no_residue() {
+    /// `$alias` chooses between aliasing the borrowed parameter and touching only an int.
+    fn alias_loop(alias: bool) -> String {
+        let body = if alias {
+            "function gcAlias(GcBag $b): int { $a = $b; $a = 1; return 7; }"
+        } else {
+            "function gcAlias(GcBag $b): int { $a = 1; $a = 1; return 7; }"
+        };
+
+        format!(
+            r#"<?php
+eval('
+class GcBag {{
+    private array $items = [];
+    public function count(): int {{ return count($this->items); }}
+}}
+{body}
+
+$total = 0;
+for ($i = 0; $i < 200; $i++) {{
+    $o = new GcBag();
+    gcAlias($o);
+    $total = $total + $o->count();
+}}
+echo $total;
+');
+"#
+        )
+    }
+
+    let aliased = compile_and_run_with_heap_debug(&alias_loop(true));
+    let plain = compile_and_run_with_heap_debug(&alias_loop(false));
+
+    assert!(aliased.success, "the aliasing program failed: {}", aliased.stderr);
+    assert!(plain.success, "the control program failed: {}", plain.stderr);
+    assert_eq!(aliased.stdout, "0");
+    assert_eq!(plain.stdout, "0");
+    assert_eq!(
+        live_blocks(&aliased.stderr),
+        live_blocks(&plain.stderr),
+        "aliasing a borrowed parameter into a local held storage the control releases"
+    );
+}

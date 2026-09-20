@@ -183,24 +183,51 @@ Not every scope cell is owned by the scope that names it. `$this` and every
 by-value parameter are bound `ScopeCellOwnership::Borrowed`
 (`dynamic_method_execution.rs`, `reference_writeback.rs`): the caller holds the
 only reference, and `drain_owned_cells` deliberately skips them when the frame
-unwinds. That makes the return statement a boundary the interpreter has to
-handle explicitly. `EvalExpr::LoadVar` hands back the stored handle with no
-retain, so `return $this;` or `return $param;` gave the caller a reference it
-never owned; when the caller then discarded the result — an expression
-statement, which is how the fluent-interface idiom `$o->add("a");` reads —
-`eval_release_value` dropped the receiver's own reference and destroyed a live
-object. `EvalStmt::Return` therefore retains when, and only when, the returned
-expression is a bare read of a borrowed scope cell (issue #982). A value the
-callee created owns itself, and a property or element read already materializes
-an independent owner, so retaining those would leak instead.
+unwinds. `EvalExpr::LoadVar` hands that stored handle straight back with no
+retain, so **any site that takes ownership of an expression result is taking
+ownership of a reference nobody gave it** (issue #982). Two statements do:
 
-The symptom this produced is worth recording because it misreads so easily as a
-refusal: the call itself always succeeded, and only the *next* use of the
-receiver failed. `$o->add("a"); var_dump($o instanceof Bag);` answered
-`bool(false)` where PHP answers `true` — the object was gone, not the method.
-The declared return type never mattered; `self`, `static`, a plain class name
-and no return type at all failed identically, and a plain function returning its
-own parameter destroyed the caller's object the same way.
+- `EvalStmt::Return` transfers the value to the caller. `return $this;` handed
+  over the receiver's own reference, and discarding the result — an expression
+  statement, which is how the fluent-interface idiom `$o->add("a");` reads — had
+  `eval_release_value` destroy a live object.
+- `EvalStmt::StoreVar` stores the value as `ScopeCellOwnership::Owned`. `$a =
+  $this;` therefore claimed ownership it did not hold, and because
+  `set_scope_cell` releases the cell it replaces, reassigning or unsetting `$a`
+  destroyed the receiver with no `return` involved at all.
+
+Both now route the value through the same retain, which is decided on two axes
+at once. Either alone is wrong:
+
+- a **syntactic** filter selects only expressions that hand a subexpression's
+  value back unchanged — `LoadVar`, both `Ternary` shapes including `?:`,
+  `NullCoalesce`, and `Match` arms. Everything else materializes an independent
+  owner; `return $this->me;` reads a property that retains, and it can hand back
+  the very same handle `$this` holds, so deciding on the handle alone would
+  retain twice and leak.
+- a **handle** check then requires the value to be the exact cell a visible
+  borrowed entry holds. In `$c ? $this : new Bag()` only one arm produces the
+  value, so retaining because the *other* arm names a borrowed cell would leak
+  just as badly.
+
+A third site has the same shape and is **not** fixed: a property write stores
+what it is handed without retaining, so `$this->me = $this;` in an eval-declared
+constructor fails `--heap-debug` with `bad refcount`. That reproduces with none
+of the above applied.
+
+The symptom is worth recording because it misreads so easily as a refusal: the
+call itself always succeeded, and only the *next* use of the receiver failed.
+`$o->add("a"); var_dump($o instanceof Bag);` answered `bool(false)` where PHP
+answers `true` — the object was gone, not the method. The declared return type
+never mattered; `self`, `static`, a plain class name and no return type at all
+failed identically, and a plain function returning its own parameter destroyed
+the caller's object the same way.
+
+None of this ends on a clean heap, and the fixtures measure differences rather
+than `leak summary: clean` for that reason: a method scope's owned cells are not
+drained when the frame unwinds, which leaves roughly a dozen blocks per call
+whatever the callee returns. That residue is a separate pre-existing gap; what
+these retains must not do is add to it, and measured they do not.
 
 Builtin lookup is also shared at the contract boundary. Magician joins its
 implementation hooks to the same `BuiltinId` used by the compiler. For compatible
