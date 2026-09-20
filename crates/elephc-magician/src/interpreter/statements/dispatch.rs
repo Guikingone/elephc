@@ -146,9 +146,12 @@ pub(in crate::interpreter) fn execute_stmt(
                 execute_statements(else_branch, context, scope, values)
             }
         }
-        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(eval_expr(
-            expr, context, scope, values,
-        )?)),
+        EvalStmt::Return(Some(expr)) => {
+            let value = eval_expr(expr, context, scope, values)?;
+            Ok(EvalControl::Return(retain_borrowed_scope_return(
+                expr, value, context, scope, values,
+            )?))
+        }
         EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
         EvalStmt::ReferenceAssign { target, source } => {
             for replaced in set_reference_alias(context, scope, target, source, values)? {
@@ -252,5 +255,38 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_release_value(context, values, result)?;
             Ok(EvalControl::None)
         }
+    }
+}
+
+/// Retains a returned value that was read out of a BORROWED scope cell.
+///
+/// `$this` and every by-value parameter are bound into the callee's scope as
+/// `ScopeCellOwnership::Borrowed` — the caller keeps the only reference, and `drain_owned_cells`
+/// deliberately skips them at teardown. Reading one with `LoadVar` hands back that same handle,
+/// so a `return $this;` or `return $param;` gave the CALLER a reference it did not own. When the
+/// caller then discarded the result — an expression statement, the fluent-interface idiom —
+/// `eval_release_value` dropped the receiver's own reference and destroyed a live object:
+/// `$o->add("a"); var_dump($o instanceof Bag);` answered `bool(false)` where PHP answers `true`,
+/// and the next method call on `$o` failed the whole fragment (#982).
+///
+/// Only a borrowed read needs this. A value the callee created owns itself, and a property or
+/// element read already materializes an independent owner — both measured correct before this.
+fn retain_borrowed_scope_return(
+    expr: &EvalExpr,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    scope: &ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let EvalExpr::LoadVar(name) = expr else {
+        return Ok(value);
+    };
+    let borrowed = scope_entry(context, scope, name).is_some_and(|entry| {
+        entry.flags().is_visible() && entry.flags().ownership == ScopeCellOwnership::Borrowed
+    });
+    if borrowed {
+        values.retain(value)
+    } else {
+        Ok(value)
     }
 }

@@ -179,6 +179,29 @@ fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.
 
+Not every scope cell is owned by the scope that names it. `$this` and every
+by-value parameter are bound `ScopeCellOwnership::Borrowed`
+(`dynamic_method_execution.rs`, `reference_writeback.rs`): the caller holds the
+only reference, and `drain_owned_cells` deliberately skips them when the frame
+unwinds. That makes the return statement a boundary the interpreter has to
+handle explicitly. `EvalExpr::LoadVar` hands back the stored handle with no
+retain, so `return $this;` or `return $param;` gave the caller a reference it
+never owned; when the caller then discarded the result — an expression
+statement, which is how the fluent-interface idiom `$o->add("a");` reads —
+`eval_release_value` dropped the receiver's own reference and destroyed a live
+object. `EvalStmt::Return` therefore retains when, and only when, the returned
+expression is a bare read of a borrowed scope cell (issue #982). A value the
+callee created owns itself, and a property or element read already materializes
+an independent owner, so retaining those would leak instead.
+
+The symptom this produced is worth recording because it misreads so easily as a
+refusal: the call itself always succeeded, and only the *next* use of the
+receiver failed. `$o->add("a"); var_dump($o instanceof Bag);` answered
+`bool(false)` where PHP answers `true` — the object was gone, not the method.
+The declared return type never mattered; `self`, `static`, a plain class name
+and no return type at all failed identically, and a plain function returning its
+own parameter destroyed the caller's object the same way.
+
 Builtin lookup is also shared at the contract boundary. Magician joins its
 implementation hooks to the same `BuiltinId` used by the compiler. For compatible
 boxed-cell operations it dispatches a typed `RuntimeBuiltinId` through
