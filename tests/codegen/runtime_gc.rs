@@ -39,6 +39,8 @@ mod compound_assign_stores;
 mod assoc_chunk;
 #[path = "runtime_gc/literal_builtin_elements.rs"]
 mod literal_builtin_elements;
+#[path = "runtime_gc/assoc_literal_spreads.rs"]
+mod assoc_literal_spreads;
 #[path = "runtime_gc/object_supertype_rebind.rs"]
 mod object_supertype_rebind;
 #[path = "runtime_gc/boxed_property_defaults.rs"]
