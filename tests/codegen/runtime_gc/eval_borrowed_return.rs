@@ -177,12 +177,66 @@ echo $t;
     );
 }
 
-/// Verifies aliasing a borrowed parameter into a local and replacing it holds no more than
-/// the same function without the alias — the store-site retain is balanced by the release
-/// `set_scope_cell` already performs on the cell it replaces.
+/// Verifies aliasing a borrowed parameter into a local holds no more than the same function
+/// without the alias, in the shape that has nothing to balance it: the alias is stored once
+/// and never replaced, so the frame unwinds still holding it.
+///
+/// This is the shape that decided the implementation. Making the store retain — so that its
+/// `ScopeCellOwnership::Owned` claim became true — passed the replaced-alias fixture below and
+/// leaked three blocks per call here, because a method scope is dropped without
+/// `drain_owned_cells` and nothing ever gave that reference back (2208 blocks against 1608 for
+/// the control, over 200 iterations). Recording `Borrowed` instead costs nothing.
 #[test]
-fn test_eval_aliased_borrowed_cell_adds_no_residue() {
-    /// `$alias` chooses between aliasing the borrowed parameter and touching only an int.
+fn test_eval_aliased_borrowed_cell_that_is_never_replaced_adds_no_residue() {
+    /// `alias` chooses between aliasing the borrowed parameter and touching only an int.
+    fn alias_loop(alias: bool) -> String {
+        let body = if alias {
+            "function gcAlias(GcBag $b): int { $a = $b; return 7; }"
+        } else {
+            "function gcAlias(GcBag $b): int { $a = 1; return 7; }"
+        };
+
+        format!(
+            r#"<?php
+eval('
+class GcBag {{
+    private array $items = [];
+    public function count(): int {{ return count($this->items); }}
+}}
+{body}
+
+$total = 0;
+for ($i = 0; $i < 200; $i++) {{
+    $o = new GcBag();
+    gcAlias($o);
+    $total = $total + $o->count();
+}}
+echo $total;
+');
+"#
+        )
+    }
+
+    let aliased = compile_and_run_with_heap_debug(&alias_loop(true));
+    let plain = compile_and_run_with_heap_debug(&alias_loop(false));
+
+    assert!(aliased.success, "the aliasing program failed: {}", aliased.stderr);
+    assert!(plain.success, "the control program failed: {}", plain.stderr);
+    assert_eq!(aliased.stdout, "0");
+    assert_eq!(plain.stdout, "0");
+    assert!(
+        live_blocks(&aliased.stderr) <= live_blocks(&plain.stderr),
+        "an alias the frame never replaced held storage the control releases: {} vs {}",
+        live_blocks(&aliased.stderr),
+        live_blocks(&plain.stderr)
+    );
+}
+
+/// Verifies the same for the shape that DOES have something to balance it: the alias is
+/// replaced, so whatever the store recorded is acted on before the frame unwinds.
+#[test]
+fn test_eval_aliased_borrowed_cell_that_is_replaced_adds_no_residue() {
+    /// `alias` chooses between aliasing the borrowed parameter and touching only an int.
     fn alias_loop(alias: bool) -> String {
         let body = if alias {
             "function gcAlias(GcBag $b): int { $a = $b; $a = 1; return 7; }"
@@ -221,7 +275,7 @@ echo $total;
     assert_eq!(
         live_blocks(&aliased.stderr),
         live_blocks(&plain.stderr),
-        "aliasing a borrowed parameter into a local held storage the control releases"
+        "replacing an aliased borrowed cell held storage the control releases"
     );
 }
 

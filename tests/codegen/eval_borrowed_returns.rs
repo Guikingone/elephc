@@ -20,7 +20,10 @@
 //!   `ScopeCellOwnership::Owned`, so reassigning or unsetting `$a` released the receiver's
 //!   own reference from inside the method, and a bare `$this;` statement released it outright
 //!   — discarding a statement's value IS a release.
-//! - The retain is decided on two axes at once, and the last two fixtures pin both. The
+//! - A `throw` leaves the frame owned the same way a `return` does, so it needs the same
+//!   reference; its fixture uses the builtin `Exception` because an eval-declared class
+//!   extending `Exception` cannot be constructed at all today and would mask the shape.
+//! - The retain is decided on two axes at once, and two fixtures pin both. The
 //!   syntactic filter keeps it off expressions that already materialize an owner, which is
 //!   why `return $this->me;` may hand back the same handle without double-retaining; the
 //!   handle check keeps it off the conditional branch that did not run.
@@ -218,4 +221,33 @@ echo ($o instanceof EvalDropBag) ? "yes" : "no", "|", $o->k, "|";
     );
 
     assert_eq!(out, "4|9|yes|4|");
+}
+
+/// Verifies `throw $param;` does not destroy the caller's object. A thrown value leaves the
+/// frame owned — the catch site binds it `Owned`, or releases it outright when the `catch`
+/// names no variable — so it needs the same reference a `return` does.
+///
+/// Uses the builtin `Exception` rather than a subclass on purpose: an eval-declared class
+/// extending `Exception` cannot be constructed at all today, which would mask this entirely.
+/// Catching into a variable that is never cleared passes either way, so both shapes that do
+/// release are covered here and that third one is deliberately absent.
+#[test]
+fn test_eval_thrown_borrowed_value_survives_the_catch_site() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+function evalRethrow(Exception $e): void { throw $e; }
+
+$a = new Exception("a");
+try { evalRethrow($a); } catch (Exception) { echo "caught|"; }
+echo ($a instanceof Exception) ? "yes" : "no", "|", $a->getMessage(), "|";
+
+$b = new Exception("b");
+try { evalRethrow($b); } catch (Exception $c) { $c = null; }
+echo ($b instanceof Exception) ? "yes" : "no", "|", $b->getMessage(), "|";
+');
+"#,
+    );
+
+    assert_eq!(out, "caught|yes|a|yes|b|");
 }

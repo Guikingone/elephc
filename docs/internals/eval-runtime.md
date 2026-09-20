@@ -198,9 +198,21 @@ ownership of a reference nobody gave it** (issue #982). Two statements do:
 - `EvalStmt::Expr` discards a statement's value *by releasing it*, which is
   correct for every value the expression owns and fatal for the one it borrowed:
   the single statement `$this;` inside a method destroyed the receiver.
+- `EvalStmt::Throw` hands the value to the catch site, which binds it `Owned` or
+  — for a `catch` naming no variable — releases it outright. `throw $param;`
+  therefore destroyed the caller's exception object.
 
-All three now route the value through the same retain, which is decided on two axes
-at once. Either alone is wrong:
+All four share one predicate and then answer it differently, which is the part
+worth remembering. `Return` and `Throw` transfer the value out of the frame, so
+they **retain**: the borrowed reference has to become real. `Expr` discards the
+value, so it **skips the release**. `StoreVar` keeps it in the frame, so it
+records `Borrowed` and lets both halves of the scope that act on ownership skip
+it. Retaining at the store would work too, but only by making a false label true
+at the cost of a reference nothing gives back — a method scope is dropped
+without `drain_owned_cells`, so `$a = $this;` alone leaked three blocks per call
+that way, measured. The truthful label costs nothing.
+
+The predicate is decided on two axes at once. Either alone is wrong:
 
 - a **syntactic** filter selects only expressions that hand a subexpression's
   value back unchanged — `LoadVar`, both `Ternary` shapes including `?:`,
@@ -220,6 +232,15 @@ followed by an overwrite destroys the caller's object. Both reproduce with none
 of the above applied (issue #1123). Two sites that look like they should share
 the defect do not: an array literal element (`[$param]`) and by-value argument
 binding both already materialize an owner.
+
+A related but distinct hole stays open: the predicate asks for a **borrowed**
+cell, so an Owned-to-Owned alias is untouched. `$y = new Bag(); $x = $y; $y =
+null;` frees the object while `$x` still names it, because `$x = $y;` copies the
+handle under a second `Owned` claim and clearing `$y` releases the one
+reference. That is a different invariant — two cells claiming one reference,
+rather than a cell claiming a reference nobody holds — and fixing it means
+deciding whether an alias retains or the scope tracks aliasing, which the
+missing frame drain also depends on.
 
 The symptom is worth recording because it misreads so easily as a refusal: the
 call itself always succeeded, and only the *next* use of the receiver failed.

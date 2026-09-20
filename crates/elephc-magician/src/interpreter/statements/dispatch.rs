@@ -199,14 +199,17 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::StoreVar { name, value: value_expr } => {
             let value = eval_expr(value_expr, context, scope, values)?;
-            let value = retain_unretained_scope_borrow(value_expr, value, context, scope, values)?;
-            for replaced in set_scope_cell(
-                context,
-                scope,
-                name.clone(),
-                value,
-                ScopeCellOwnership::Owned,
-            )? {
+            // A pass-through read hands back a reference the reader never owned, so the new
+            // cell records that rather than claiming `Owned` over it. Both halves of the scope
+            // that act on ownership — the release of a replaced cell, and `drain_owned_cells`
+            // — then skip it, which is what makes the alias free rather than merely balanced.
+            let ownership = if value_is_an_unretained_scope_borrow(value_expr, value, context, scope)
+            {
+                ScopeCellOwnership::Borrowed
+            } else {
+                ScopeCellOwnership::Owned
+            };
+            for replaced in set_scope_cell(context, scope, name.clone(), value, ownership)? {
                 eval_release_value(context, values, replaced)?;
             }
             Ok(EvalControl::None)
@@ -219,7 +222,12 @@ pub(in crate::interpreter) fn execute_stmt(
             if values.type_tag(thrown)? != EVAL_TAG_OBJECT {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            Ok(EvalControl::Throw(thrown))
+            // A thrown value is handed to the catch site, which binds it `Owned` or releases
+            // it outright for a variable-less `catch`. Either way it leaves this frame owned,
+            // so `throw $param;` needs the same reference `return $param;` does.
+            Ok(EvalControl::Throw(retain_unretained_scope_borrow(
+                expr, thrown, context, scope, values,
+            )?))
         }
         EvalStmt::Try {
             body,
@@ -253,10 +261,12 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::Expr(expr) => {
             let result = eval_expr(expr, context, scope, values)?;
-            // The release below is what the discarded value is FOR, so a bare `$this;` reached
-            // it with a reference the statement never owned and destroyed the receiver.
-            let result = retain_unretained_scope_borrow(expr, result, context, scope, values)?;
-            eval_release_value(context, values, result)?;
+            // Discarding a statement's value IS releasing it, which is correct for every value
+            // the expression owns and fatal for the one it borrowed: a bare `$this;` reached
+            // this release with a reference the statement never owned.
+            if !value_is_an_unretained_scope_borrow(expr, result, context, scope) {
+                eval_release_value(context, values, result)?;
+            }
             Ok(EvalControl::None)
         }
     }
@@ -301,32 +311,33 @@ fn scope_read_passthrough_names<'a>(expr: &'a EvalExpr, names: &mut Vec<&'a str>
     }
 }
 
-/// Retains a value a pass-through read surfaced out of a BORROWED scope cell.
+/// True when a value came out of a BORROWED scope cell without a reference being taken for it.
 ///
 /// `$this` and every by-value parameter are bound into the callee's scope as
 /// `ScopeCellOwnership::Borrowed` — the caller keeps the only reference, and `drain_owned_cells`
 /// deliberately skips them at teardown. `EvalExpr::LoadVar` hands that same handle straight back
-/// with no retain, so any site that then takes ownership of the value is taking ownership of a
-/// reference nobody gave it (#982):
+/// with no retain, so every site that does something ownership-bearing with the value is acting
+/// on a reference nobody gave it (#982). Three statements did, and each answers it differently:
 ///
-/// - `return $this;` handed the CALLER the receiver's own reference. Discarding the result — an
-///   expression statement, which is how the fluent-interface idiom `$o->add("a");` reads — had
-///   `eval_release_value` destroy a live object, so `$o instanceof Bag` answered `bool(false)`
-///   where PHP answers `true`.
-/// - `$a = $this;` stored it as `ScopeCellOwnership::Owned`. Reassigning or unsetting `$a`
-///   releases the cell it replaces, which destroyed the receiver with no `return` involved at
-///   all — measured from inside the method (`$a = $this; $a = 1;`) and across a call boundary
-///   with a by-value parameter.
+/// - `return $this;` transfers the value to the CALLER, so the reference has to become real:
+///   that site retains. Discarding the result — an expression statement, which is how the
+///   fluent-interface idiom `$o->add("a");` reads — had `eval_release_value` destroy a live
+///   object, so `$o instanceof Bag` answered `bool(false)` where PHP answers `true`.
+/// - `$a = $this;` stored it as `ScopeCellOwnership::Owned`, and reassigning or unsetting `$a`
+///   releases the cell it replaces — which destroyed the receiver with no `return` involved at
+///   all. That site records `Borrowed` instead. Retaining there would work too, but only by
+///   making a false label true at the cost of a reference nothing gives back: a method scope is
+///   dropped without `drain_owned_cells`, so `$a = $this;` alone leaked three blocks per call,
+///   measured. The truthful label costs nothing.
 /// - `$this;` as a bare expression statement released it on the spot. A statement's value is
-///   discarded by releasing it, which is correct for every value the expression owns and fatal
-///   for the one it borrowed.
+///   discarded BY releasing it, so that site skips the release.
 ///
 /// The decision is made on BOTH axes, because either alone is wrong. The syntactic filter keeps
 /// out expressions that already materialize an independent owner: `return $this->self;` reads a
 /// property that retains, and it can hand back the very same handle `$this` holds, so a check on
-/// the handle alone would retain twice and leak. The handle check keeps out the pass-through
-/// branch that did not run: in `$c ? $this : new Bag()` only one arm produces the value, and
-/// retaining because the *other* arm names a borrowed cell would leak just as badly.
+/// the handle alone would act twice and leak. The handle check keeps out the pass-through branch
+/// that did not run: in `$c ? $this : new Bag()` only one arm produces the value, and acting
+/// because the *other* arm names a borrowed cell would leak just as badly.
 fn value_is_an_unretained_scope_borrow(
     expr: &EvalExpr,
     value: RuntimeCellHandle,
@@ -344,7 +355,7 @@ fn value_is_an_unretained_scope_borrow(
     })
 }
 
-/// Takes a reference for a caller that is about to own a value it only borrowed.
+/// Takes a reference for a caller that is about to own a value the callee only borrowed.
 fn retain_unretained_scope_borrow(
     expr: &EvalExpr,
     value: RuntimeCellHandle,
