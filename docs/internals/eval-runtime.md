@@ -195,8 +195,11 @@ ownership of a reference nobody gave it** (issue #982). Two statements do:
   $this;` therefore claimed ownership it did not hold, and because
   `set_scope_cell` releases the cell it replaces, reassigning or unsetting `$a`
   destroyed the receiver with no `return` involved at all.
+- `EvalStmt::Expr` discards a statement's value *by releasing it*, which is
+  correct for every value the expression owns and fatal for the one it borrowed:
+  the single statement `$this;` inside a method destroyed the receiver.
 
-Both now route the value through the same retain, which is decided on two axes
+All three now route the value through the same retain, which is decided on two axes
 at once. Either alone is wrong:
 
 - a **syntactic** filter selects only expressions that hand a subexpression's
@@ -210,10 +213,13 @@ at once. Either alone is wrong:
   value, so retaining because the *other* arm names a borrowed cell would leak
   just as badly.
 
-A third site has the same shape and is **not** fixed: a property write stores
-what it is handed without retaining, so `$this->me = $this;` in an eval-declared
-constructor fails `--heap-debug` with `bad refcount`. That reproduces with none
-of the above applied.
+Property writes have the same shape and are **not** fixed: they store what they
+are handed without retaining, so `$this->me = $this;` in an eval-declared
+constructor fails `--heap-debug` with `bad refcount`, and `C::$slot = $param;`
+followed by an overwrite destroys the caller's object. Both reproduce with none
+of the above applied (issue #1123). Two sites that look like they should share
+the defect do not: an array literal element (`[$param]`) and by-value argument
+binding both already materialize an owner.
 
 The symptom is worth recording because it misreads so easily as a refusal: the
 call itself always succeeded, and only the *next* use of the receiver failed.

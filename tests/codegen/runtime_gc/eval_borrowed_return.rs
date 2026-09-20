@@ -224,3 +224,50 @@ echo $total;
         "aliasing a borrowed parameter into a local held storage the control releases"
     );
 }
+
+/// Verifies the bare-statement retain is a no-op on the heap: the release that immediately
+/// follows it is the one the statement always performed.
+#[test]
+fn test_eval_bare_borrowed_expression_statement_adds_no_residue() {
+    /// `mention` chooses between naming the borrowed parameter and naming an int.
+    fn statement_loop(mention: bool) -> String {
+        let body = if mention {
+            "function gcDrop(GcBag $b): int { $b; return 7; }"
+        } else {
+            "function gcDrop(GcBag $b): int { 1; return 7; }"
+        };
+
+        format!(
+            r#"<?php
+eval('
+class GcBag {{
+    private array $items = [];
+    public function count(): int {{ return count($this->items); }}
+}}
+{body}
+
+$total = 0;
+for ($i = 0; $i < 200; $i++) {{
+    $o = new GcBag();
+    gcDrop($o);
+    $total = $total + $o->count();
+}}
+echo $total;
+');
+"#
+        )
+    }
+
+    let mentioned = compile_and_run_with_heap_debug(&statement_loop(true));
+    let plain = compile_and_run_with_heap_debug(&statement_loop(false));
+
+    assert!(mentioned.success, "the mentioning program failed: {}", mentioned.stderr);
+    assert!(plain.success, "the control program failed: {}", plain.stderr);
+    assert_eq!(mentioned.stdout, "0");
+    assert_eq!(plain.stdout, "0");
+    assert_eq!(
+        live_blocks(&mentioned.stderr),
+        live_blocks(&plain.stderr),
+        "naming a borrowed parameter as a statement changed what the heap holds"
+    );
+}

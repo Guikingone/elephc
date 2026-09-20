@@ -18,7 +18,8 @@
 //!   (a callee-created object, a property read) as controls.
 //! - A `return` is not needed to reach it. `$a = $this;` stored the borrowed handle as
 //!   `ScopeCellOwnership::Owned`, so reassigning or unsetting `$a` released the receiver's
-//!   own reference from inside the method.
+//!   own reference from inside the method, and a bare `$this;` statement released it outright
+//!   — discarding a statement's value IS a release.
 //! - The retain is decided on two axes at once, and the last two fixtures pin both. The
 //!   syntactic filter keeps it off expressions that already materialize an owner, which is
 //!   why `return $this->me;` may hand back the same handle without double-retaining; the
@@ -191,4 +192,30 @@ echo ($o instanceof EvalAliasBag) ? "yes" : "no", "|", $o->k, "|";
     );
 
     assert_eq!(out, "3|9|9|yes|3|");
+}
+
+/// Verifies a bare expression statement naming a borrowed cell does not release it. A
+/// statement discards its value BY releasing it, which is correct for every value the
+/// expression owns and fatal for the one it borrowed.
+#[test]
+fn test_eval_bare_borrowed_expression_statement_does_not_release_the_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class EvalDropBag {
+    public int $k = 4;
+    public function drop(): int { $this; return $this->k; }
+}
+
+function evalDropParam(EvalDropBag $b): int { $b; return 9; }
+
+$o = new EvalDropBag();
+echo $o->drop(), "|";
+echo evalDropParam($o), "|";
+echo ($o instanceof EvalDropBag) ? "yes" : "no", "|", $o->k, "|";
+');
+"#,
+    );
+
+    assert_eq!(out, "4|9|yes|4|");
 }

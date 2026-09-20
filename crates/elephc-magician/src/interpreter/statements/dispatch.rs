@@ -253,6 +253,9 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::Expr(expr) => {
             let result = eval_expr(expr, context, scope, values)?;
+            // The release below is what the discarded value is FOR, so a bare `$this;` reached
+            // it with a reference the statement never owned and destroyed the receiver.
+            let result = retain_unretained_scope_borrow(expr, result, context, scope, values)?;
             eval_release_value(context, values, result)?;
             Ok(EvalControl::None)
         }
@@ -314,6 +317,9 @@ fn scope_read_passthrough_names<'a>(expr: &'a EvalExpr, names: &mut Vec<&'a str>
 ///   releases the cell it replaces, which destroyed the receiver with no `return` involved at
 ///   all — measured from inside the method (`$a = $this; $a = 1;`) and across a call boundary
 ///   with a by-value parameter.
+/// - `$this;` as a bare expression statement released it on the spot. A statement's value is
+///   discarded by releasing it, which is correct for every value the expression owns and fatal
+///   for the one it borrowed.
 ///
 /// The decision is made on BOTH axes, because either alone is wrong. The syntactic filter keeps
 /// out expressions that already materialize an independent owner: `return $this->self;` reads a
