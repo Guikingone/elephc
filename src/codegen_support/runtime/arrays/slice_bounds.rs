@@ -4,15 +4,16 @@
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::arrays::array_slice`,
-//!   `array_slice_refcounted`, `array_slice_to_hash`, `array_splice`,
-//!   `array_splice_refcounted`, `array_splice_str` and `hash_slice`.
+//!   `array_slice_refcounted`, `array_slice_str`, `array_slice_to_hash`,
+//!   `array_splice`, `array_splice_refcounted`, `array_splice_str` and
+//!   `hash_slice`.
 //!
 //! Key details:
 //! - There is no out-of-band `i64` a PHP `$length` cannot take, so "no `$length` given" travels in a
 //!   dedicated fourth argument register instead of a magic length value. `-1` used to double as the
 //!   until-the-end sentinel, which collided with PHP's `-1` = "stop one element before the end".
 //! - The emitted sequence is the single source of truth for PHP's slice window arithmetic, so the
-//!   scalar and refcounted slice/splice helpers cannot drift apart.
+//!   scalar, string-slot, refcounted and hash slice/splice helpers cannot drift apart.
 //! - Every clamp is signed and the result window is always inside `[0, length]`, so no caller can
 //!   publish a negative logical length or copy outside the source payload.
 
