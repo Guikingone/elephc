@@ -58,6 +58,21 @@ pub(super) fn lower(
                 ctx, inst,
             )
         }),
+        RuntimeFnId::ElephcOpcacheRtIsCached => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_is_cached",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtDiscard => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_discard",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtCompile => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_compile",
+            )
+        }),
         RuntimeFnId::ElephcOpcacheRtReset => Some({
             crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_reset(ctx, inst)
         }),

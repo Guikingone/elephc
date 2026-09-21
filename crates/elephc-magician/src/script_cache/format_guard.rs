@@ -20,7 +20,6 @@
 #[cfg(test)]
 mod tests {
     use super::super::file_store::FORMAT_VERSION;
-    use std::hash::{Hash, Hasher};
 
     /// The eval IR files whose shape the stored format mirrors.
     const IR_SOURCES: &[(&str, &str)] = &[
@@ -36,19 +35,37 @@ mod tests {
         ("statements", include_str!("../eval_ir/statements.rs")),
         ("traits", include_str!("../eval_ir/traits.rs")),
         ("segments", include_str!("segments.rs")),
+        // `EvalParseError` is a `ScriptSegment` variant's payload, so it is part of the
+        // stored shape whether or not an entry currently carries one. It was missing here,
+        // which meant a change to the error type moved the format without moving the guard.
+        ("errors", include_str!("../errors.rs")),
     ];
 
     /// The fingerprint recorded for `FORMAT_VERSION`. Update BOTH together, never one.
-    const RECORDED_FINGERPRINT: u64 = 15678573635801945442;
+    ///
+    /// RE-RECORDED WITHOUT A VERSION BUMP, once, and the reason is worth writing down so the
+    /// next person does not read it as licence. The serialised shape did not move: no
+    /// `eval_ir` file and no `segments.rs` changed. What moved is this guard's own inputs —
+    /// `errors.rs` was added to `IR_SOURCES`, and the hash became a specified one. A bump
+    /// would have invalidated every cache entry to record a change to the measuring
+    /// instrument. Any fingerprint change that comes from an IR file still needs the bump.
+    const RECORDED_FINGERPRINT: u64 = 9523833432668113794;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
+    ///
+    /// "Stable" has to mean across TOOLCHAINS, not just across runs. `DefaultHasher`'s
+    /// algorithm is explicitly unspecified and may change between Rust releases, so the
+    /// recorded constant below would have started failing on a toolchain bump — a guard that
+    /// cries wolf is a guard people learn to re-record without reading.
     fn fingerprint() -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut bytes = Vec::new();
         for (name, source) in IR_SOURCES {
-            name.hash(&mut hasher);
-            source.hash(&mut hasher);
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.push(0);
+            bytes.extend_from_slice(source.as_bytes());
+            bytes.push(0);
         }
-        hasher.finish()
+        super::super::file_store::stable_hash(&bytes)
     }
 
     /// Verifies the stored format's version still matches the IR it describes.

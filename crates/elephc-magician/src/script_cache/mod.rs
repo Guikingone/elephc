@@ -43,7 +43,7 @@ pub(crate) use accel_log::{set_config as set_accel_log_config, AccelLogConfig};
 pub(crate) use blacklist::load as load_blacklist;
 pub(crate) use blacklist::pattern_at as blacklist_pattern_at;
 pub(crate) use blacklist::patterns as blacklist_patterns;
-pub(crate) use config::{config, set_config, ScriptCacheConfig};
+pub(crate) use config::{clear_directive_overrides, config, set_config, ScriptCacheConfig};
 #[allow(unused_imports)]
 pub use config::{
     swap_directive, DIRECTIVE_FILE_UPDATE_PROTECTION, DIRECTIVE_REVALIDATE_FREQ,

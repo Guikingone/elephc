@@ -408,6 +408,9 @@ pub enum RuntimeFnId {
     ElephcOpcacheRtScriptField,
     ElephcOpcacheRtScriptPath,
     ElephcOpcacheRtReset,
+    ElephcOpcacheRtIsCached,
+    ElephcOpcacheRtDiscard,
+    ElephcOpcacheRtCompile,
     ElephcOpcacheRtStat,
     ElephcOpcacheRtSwap,
     ElephcPtrIsNull,
@@ -1275,6 +1278,19 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtReset => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
+            // The three path-taking runtime-tier operations. `is_cached` only reads, but
+            // `discard` and `compile` MUTATE the process-wide cache, and neither may be
+            // folded away or hoisted: two `opcache_compile_file()` calls on one path are
+            // not one call, and a discard between two `is_cached` reads changes the answer.
+            RuntimeFnId::ElephcOpcacheRtIsCached => {
+                crate::ir::Effects::from_bits_retain(crate::ir::Effects::READS_GLOBAL.bits())
+            }
+            RuntimeFnId::ElephcOpcacheRtDiscard | RuntimeFnId::ElephcOpcacheRtCompile => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_GLOBAL.bits()
+                        | crate::ir::Effects::WRITES_GLOBAL.bits(),
+                )
+            }
             // Same read, plus the owned PHP string copied out of the bridge's buffer.
             RuntimeFnId::ElephcOpcacheRtScriptPath => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
@@ -1877,6 +1893,22 @@ impl RuntimeFnId {
                 | RuntimeFnId::IconvStrpos
                 | RuntimeFnId::IconvStrrpos
                 | RuntimeFnId::IconvSubstr
+        ) {
+            return BuiltinResultOwnership::Fresh;
+        }
+        // The two OPcache runtime-status string helpers hand back a BORROWED `(ptr, len)`
+        // into a thread-local buffer, which the lowering immediately copies with
+        // `__rt_str_persist`. That copy is owned heap storage and somebody has to free it.
+        //
+        // Left in the default `MayAliasArguments` bucket they were classified as scratch
+        // strings by `value_is_scratch_string`, whose whole purpose is to DROP the release —
+        // correct for a pointer into `_concat_buf`, wrong for a persisted copy. MEASURED:
+        // `opcache_get_status(true)` over a six-script runtime cache grew `live_blocks` from
+        // 146 at one call to 1550 at forty, about five blocks per cached script per call. A
+        // `--web` status endpoint leaked on every request.
+        if matches!(
+            self,
+            RuntimeFnId::ElephcOpcacheRtScriptPath | RuntimeFnId::ElephcOpcacheRtBlacklistEntry
         ) {
             return BuiltinResultOwnership::Fresh;
         }
@@ -2529,6 +2561,9 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtScriptPath => "__elephc_opcache_rt_script_path",
             RuntimeFnId::ElephcOpcacheRtBlacklistEntry => "__elephc_opcache_rt_blacklist_entry",
             RuntimeFnId::ElephcOpcacheRtReset => "__elephc_opcache_rt_reset",
+            RuntimeFnId::ElephcOpcacheRtIsCached => "__elephc_opcache_rt_is_cached",
+            RuntimeFnId::ElephcOpcacheRtDiscard => "__elephc_opcache_rt_discard",
+            RuntimeFnId::ElephcOpcacheRtCompile => "__elephc_opcache_rt_compile",
             RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
             RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",

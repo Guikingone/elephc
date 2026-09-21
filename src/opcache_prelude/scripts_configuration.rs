@@ -24,6 +24,16 @@ pub(super) const SCRIPTS_REVALIDATE_MIN_VERSION_ID: u32 = 80300;
 /// — so every entry reports the same instant, exactly as reference PHP does. `timestamp` goes
 /// through `__elephc_opcache_script_timestamp` rather than being the bare mtime so a
 /// FORCE-INVALIDATED entry reports `0`.
+    // Each `asctime` result is bound to a LOCAL before it reaches the array, and that is a
+    // leak fix, not a style preference. A string returned by a PHP function and inserted
+    // straight into an array literal is never released here — MEASURED on a reduced case with
+    // no OPcache in it at all: seven inserts per iteration leak seven blocks per iteration,
+    // while the identical array built from a local string variable ends at `live_blocks=0`.
+    // Through a local, the store persists the value and the array release frees it.
+    //
+    // The underlying defect is general and belongs in its own change; this keeps
+    // `opcache_get_status()` off it. Hoisting also collapses N identical `asctime` calls over
+    // the manifest into one, since every entry formats the same start time.
 pub(super) fn scripts_map_expr(
     manifest: &[ScriptEntry],
     revalidate_freq: i64,
@@ -40,13 +50,7 @@ pub(super) fn scripts_map_expr(
                     e_str("memory_consumption"),
                     build::php_int(entry.memory_consumption),
                 ),
-                (
-                    e_str("last_used"),
-                    e_call(
-                        "__elephc_opcache_asctime",
-                        vec![e_var("__elephc_opcache_start_time")],
-                    ),
-                ),
+                (e_str("last_used"), e_var("__elephc_opcache_start_time_text")),
                 (
                     e_str("last_used_timestamp"),
                     e_var("__elephc_opcache_start_time"),
@@ -106,7 +110,7 @@ fn preload_marker_entry(memory_consumption: i64, version_id: u32) -> (Expr, Expr
         // real entry carries.
         (
             e_str("last_used"),
-            e_call("__elephc_opcache_asctime", vec![e_int(0)]),
+            e_var("__elephc_opcache_zero_time_text"),
         ),
         (e_str("last_used_timestamp"), e_int(0)),
         (e_str("timestamp"), e_int(0)),

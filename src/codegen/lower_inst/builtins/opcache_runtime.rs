@@ -120,6 +120,63 @@ pub(crate) fn lower_opcache_rt_reset(
     store_if_result(ctx, inst)
 }
 
+/// Lowers the three path-taking runtime-tier helpers to their bridge symbols.
+///
+/// `__elephc_opcache_rt_is_cached`, `_rt_discard` and `_rt_compile` differ only in which
+/// symbol they call, so they share one lowering rather than three copies of the same
+/// argument staging. Each takes the path as a PHP string and answers an integer boolean.
+///
+/// THE FIRST STRING ARGUMENT IN THIS FAMILY. Every other `rt_*` helper passes integers, so
+/// the staging is spelled out here: the operand is materialized into the string RESULT pair
+/// and then moved into the first two integer argument registers. The move order matters on
+/// AArch64 and only there — the result pair is `(x1, x2)` and the argument registers are
+/// `x0, x1`, so the pointer has to leave `x1` before the length is written into it. On
+/// x86_64 the pair is `(rax, rdx)` against `rdi, rsi` and nothing overlaps; writing the move
+/// in one order for both arches is what keeps that asymmetry from becoming a latent bug the
+/// next reader has to rediscover.
+///
+/// PAY-FOR-USE, the same rule as every sibling: a binary with no eval bridge has no dynamic
+/// tier to ask about, so the call folds to `0` and the interpreter archive is never
+/// referenced. The prelude's manifest answer still stands there, which is the whole answer
+/// for a binary that cannot have dynamically cached scripts in the first place.
+pub(crate) fn lower_opcache_rt_path_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
+    ctx.emitter.blank();
+    ctx.emitter.comment(&format!("{name}()"));
+    if !links_the_eval_bridge(ctx) {
+        emit_zero_result(ctx);
+        return store_if_result(ctx, inst);
+    }
+    ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let len_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("mov {ptr_arg}, {ptr_reg}"));                // path pointer out of x1 BEFORE the length overwrites it
+            ctx.emitter
+                .instruction(&format!("mov {len_arg}, {len_reg}"));                // path length → second bridge argument
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov {ptr_arg}, {ptr_reg}"));                // path pointer → SysV first argument register
+            ctx.emitter
+                .instruction(&format!("mov {len_arg}, {len_reg}"));                // path length → SysV second argument register
+        }
+    }
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol(&format!("__elephc_eval_opcache_rt_{}", &name["__elephc_opcache_rt_".len()..]));
+    abi::emit_call_label(ctx.emitter, &symbol);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `__elephc_opcache_rt_swap(id, value)` to the bridge's directive setter.
 ///
 /// The one `rt_*` lowering whose bridge call WRITES. It installs a directive on the live

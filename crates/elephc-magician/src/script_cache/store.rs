@@ -246,6 +246,22 @@ fn fill_entry(
     } else {
         cache.hits += 1;
     }
+    // A SCRIPT THAT DID NOT PARSE IS NOT CACHED, in memory or on disk. php-src stores
+    // nothing on a compile error; the next request compiles the file again and sees whatever
+    // is there now. Caching the failure instead makes a FIXED file keep raising the old error
+    // — for up to `opcache.revalidate_freq` seconds (2 by default), and with
+    // `opcache.validate_timestamps=0` until the process restarts. That turns an ordinary
+    // edit-and-reload into a stale syntax error the developer cannot clear, and the on-disk
+    // `opcache.file_cache` copy survives the process entirely.
+    //
+    // The miss has already been counted above, which is also what php-src does: the compile
+    // was attempted and did not come from the cache.
+    if segments
+        .iter()
+        .any(|segment| matches!(segment, ScriptSegment::ParseError(_)))
+    {
+        return Ok(segments);
+    }
     // A file younger than `opcache.file_update_protection` is RUN but not STORED, so a file
     // caught part-written never becomes a cached entry that outlives the write. Unlike the
     // size refusal this one DOES count a miss — VERIFIED: with the guard raised, including a
@@ -321,13 +337,10 @@ impl ScriptCache {
 /// `accelerator_enabled` flag that `opcache_reset()`'s own guard tests — so a second call
 /// in the same request takes the `false` exit.
 ///
-/// DIVERGENCE, deliberate and narrow: php-src defers the actual flush to the start of the
-/// next request, so within one request its cache keeps answering. elephc flushes HERE.
-/// The request boundary that would carry a deferred flush lives in `elephc-web`, which does
-/// not (and should not) depend on the interpreter crate, so deferring would mean the flush
-/// never happening at all — an `opcache_reset()` that cannot reset. Flushing now honours the
-/// call; the only observable difference is `opcache_is_script_cached()` immediately after a
-/// reset in the same request.
+/// THERE IS NO DIVERGENCE HERE ANY MORE. This used to flush immediately, because the request
+/// boundary a deferred flush needs lives in `elephc-web`, which does not depend on the
+/// interpreter crate. `__elephc_eval_opcache_apply_restart` closed that gap: generated code
+/// emits it at the top of the `--web` handler, so the flush now lands where php-src's does.
 ///
 /// The byte budget and the `cache_full` latch are released with the entries: a restart is
 /// exactly what clears them in php-src too.

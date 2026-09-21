@@ -270,10 +270,6 @@ pub(crate) struct StatusFacts {
     /// The whole `interned_strings_usage` value, or `None` when the buffer was never stood up
     /// (php-src omits the KEY, so `None` is absence, not a zeroed sub-array).
     pub interned_strings_usage: Option<Expr>,
-    /// `opcache_statistics.num_cached_scripts` — one per manifest entry.
-    pub num_cached_scripts: i64,
-    /// `opcache_statistics.num_cached_keys` — one key per script in this model.
-    pub num_cached_keys: i64,
     /// `opcache_statistics.max_cached_keys` — OPcache's prime-rounded hash capacity.
     pub max_cached_keys: i64,
     /// The `preload_statistics` value, or `None` when this binary does not preload.
@@ -359,23 +355,18 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
     status_entries.push((
         e_str("opcache_statistics"),
         e_array_assoc(vec![
-            // The compile-time manifest is fixed; the runtime cache's entries are added to it,
-            // so the count grows as dynamically included files are cached.
+            // COUNTED FROM THE MAP, not as manifest + runtime. The two tiers are not
+            // disjoint: the scripts map is keyed by path, so a manifest file that is ALSO
+            // reached by a dynamic include occupies one slot, while the sum counted it twice
+            // and `num_cached_scripts` disagreed with `count($status['scripts'])` in the same
+            // array. Reference PHP reports one number for one cached file.
             (
                 e_str("num_cached_scripts"),
-                e_binop(
-                    php_int(facts.num_cached_scripts),
-                    BinOp::Add,
-                    e_var("__elephc_rt_count"),
-                ),
+                e_call("count", vec![e_var("__elephc_scripts")]),
             ),
             (
                 e_str("num_cached_keys"),
-                e_binop(
-                    php_int(facts.num_cached_keys),
-                    BinOp::Add,
-                    e_var("__elephc_rt_count"),
-                ),
+                e_call("count", vec![e_var("__elephc_scripts")]),
             ),
             (e_str("max_cached_keys"), php_int(facts.max_cached_keys)),
             (e_str("hits"), e_var("__elephc_rt_hits")),
@@ -424,6 +415,28 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
     // AFTER the disabled gate, so a binary whose cache is off never calls the bridge, and
     // BEFORE the status array, which names the locals this leaves behind.
     body.extend(runtime_cache_prologue());
+    // The scripts map is built WHETHER OR NOT the caller asked for it, because
+    // `num_cached_scripts` is now counted from it and reference reports that figure either
+    // way. `$include_scripts` decides only whether the map is ATTACHED to the answer. The
+    // cost falls on `opcache_get_status(false)`, which is the explicit non-default form of a
+    // diagnostic call; reporting two different counts for the same cache would be worse.
+    body.push(
+        // Both manifest clocks, formatted once. Every manifest entry renders the same start
+        // time, and the `$PRELOAD$` marker the epoch.
+        s_assign(
+            "__elephc_opcache_start_time_text",
+            e_call(
+                "__elephc_opcache_asctime",
+                vec![e_var("__elephc_opcache_start_time")],
+            ),
+        ),
+    );
+    body.push(s_assign(
+        "__elephc_opcache_zero_time_text",
+        e_call("__elephc_opcache_asctime", vec![e_int(0)]),
+    ));
+    body.push(s_assign("__elephc_scripts", facts.scripts_map));
+    body.extend(runtime_cache_scripts_loop(facts.revalidate_freq));
     body.push(s_assign("status", e_array_assoc(status_entries)));
     if let Some(preload) = facts.preload_statistics {
         body.push(s_array_assign(
@@ -432,14 +445,16 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
             preload,
         ));
     }
-    let mut scripts_body = vec![s_assign("__elephc_scripts", facts.scripts_map)];
-    scripts_body.extend(runtime_cache_scripts_loop(facts.revalidate_freq));
-    scripts_body.push(s_array_assign(
-        "status",
-        e_str("scripts"),
-        e_var("__elephc_scripts"),
+    body.push(s_if(
+        e_var("include_scripts"),
+        vec![s_array_assign(
+            "status",
+            e_str("scripts"),
+            e_var("__elephc_scripts"),
+        )],
+        vec![],
+        None,
     ));
-    body.push(s_if(e_var("include_scripts"), scripts_body, vec![], None));
     body.push(s_array_assign(
         "status",
         e_str("jit"),
@@ -600,13 +615,7 @@ fn runtime_cache_scripts_loop(revalidate_freq: Option<i64>) -> Vec<Stmt> {
         (e_str("full_path"), e_var("__elephc_rt_path")),
         (e_str("hits"), field(keys::RT_SCRIPT_HITS)),
         (e_str("memory_consumption"), field(keys::RT_SCRIPT_MEMORY)),
-        (
-            e_str("last_used"),
-            e_call(
-                "__elephc_opcache_asctime",
-                vec![e_var("__elephc_rt_last_used")],
-            ),
-        ),
+        (e_str("last_used"), e_var("__elephc_rt_last_used_text")),
         (e_str("last_used_timestamp"), e_var("__elephc_rt_last_used")),
         (e_str("timestamp"), field(keys::RT_SCRIPT_TIMESTAMP)),
     ];
@@ -630,6 +639,15 @@ fn runtime_cache_scripts_loop(revalidate_freq: Option<i64>) -> Vec<Stmt> {
                     ),
                 ),
                 s_assign("__elephc_rt_last_used", field(keys::RT_SCRIPT_LAST_USED)),
+                // Bound to a local rather than called inside the array literal; see the note
+                // on `scripts_map_expr` for the measurement behind it.
+                s_assign(
+                    "__elephc_rt_last_used_text",
+                    e_call(
+                        "__elephc_opcache_asctime",
+                        vec![e_var("__elephc_rt_last_used")],
+                    ),
+                ),
                 s_if(
                     e_binop(e_var("__elephc_rt_path"), BinOp::StrictNotEq, e_str("")),
                     vec![s_array_assign(
@@ -665,6 +683,21 @@ pub(crate) fn is_script_cached_decl(enabled: bool, manifest_paths: Expr) -> Stmt
             vec![e_var("path"), e_int(0)],
         ),
         vec![s_return(e_bool(false))],
+        vec![],
+        None,
+    ));
+    // The runtime tier answers first, through a bridge that does the same hash lookup
+    // php-src does. An earlier attempt walked the `rt_script_path(i)` listing from PHP to
+    // avoid adding a string-argument bridge; once `opcache_compile_file()` turned out to
+    // need one anyway, a linear scan over a list the bridge can index directly was cost with
+    // nothing bought.
+    body.push(s_if(
+        e_binop(
+            e_call("__elephc_opcache_rt_is_cached", vec![e_var("path")]),
+            BinOp::StrictNotEq,
+            e_int(0),
+        ),
+        vec![s_return(e_bool(true))],
         vec![],
         None,
     ));
@@ -732,6 +765,22 @@ pub(crate) fn invalidate_decl(enabled: bool, manifest_paths: Expr, strict: bool)
         vec![],
         None,
     ));
+    // A FORCED call also discards the runtime tier's entry. The manifest branch above only
+    // covers code frozen into the binary; a dynamically included file lives in the runtime
+    // cache, and `opcache_invalidate($dynamic, true)` used to return `true` while leaving it
+    // cached and served — the return value said the work had been done and nothing had.
+    //
+    // Unconditional rather than gated on membership: the bridge answers `0` for a path it
+    // does not hold, and asking it is cheaper than asking whether to ask.
+    body.push(s_if(
+        e_var("force"),
+        vec![s_expr(e_call(
+            "__elephc_opcache_rt_discard",
+            vec![e_var("path")],
+        ))],
+        vec![],
+        None,
+    ));
     body.push(s_return(e_bool(true)));
 
     function("opcache_invalidate")
@@ -776,9 +825,18 @@ pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
         None,
     )];
     body.extend(path_normalization_stmts());
+    // OUTSIDE THE MANIFEST IS NOT A REFUSAL. A file the binary did not compile in can still
+    // be compiled into the runtime tier, which is exactly what `opcache_compile_file()` is
+    // for — reference PHP answers `true` for any file it can read and parse. Refusing every
+    // non-manifest path meant the function could only ever succeed for files that needed no
+    // compiling at all.
     body.push(s_if(
         e_not(in_manifest(manifest_paths)),
-        vec![s_return(e_bool(false))],
+        vec![s_return(e_binop(
+            e_call("__elephc_opcache_rt_compile", vec![e_var("path")]),
+            BinOp::StrictNotEq,
+            e_int(0),
+        ))],
         vec![],
         None,
     ));

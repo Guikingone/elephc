@@ -2268,6 +2268,105 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     },
 
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_opcache_rt_is_cached"),
+        name: "__elephc_opcache_rt_is_cached",
+        area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "path",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Internal: whether the runtime script cache holds a live entry for this path.",
+        examples: &[
+        ],
+        php_manual: None,
+        deprecation: None,
+        extension: false,
+        internal: true,
+        requirements: &[],
+    },
+
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_opcache_rt_discard"),
+        name: "__elephc_opcache_rt_discard",
+        area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "path",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Internal: mark this path's runtime cache entry discarded; true when there was one.",
+        examples: &[
+        ],
+        php_manual: None,
+        deprecation: None,
+        extension: false,
+        internal: true,
+        requirements: &[],
+    },
+
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_opcache_rt_compile"),
+        name: "__elephc_opcache_rt_compile",
+        area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "path",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Internal: read and cache this path without executing it; true when it parsed.",
+        examples: &[
+        ],
+        php_manual: None,
+        deprecation: None,
+        extension: false,
+        internal: true,
+        requirements: &[],
+    },
+
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("__elephc_opcache_rt_stat"),
         name: "__elephc_opcache_rt_stat",
         area: Area::System,

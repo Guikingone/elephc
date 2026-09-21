@@ -240,6 +240,66 @@ pub(super) fn expand_value_include(
     Ok(out)
 }
 
+/// Stops a STATEMENT-position include at its first top-level `return`, discarding the value.
+///
+/// PHP's `return` inside an included file ends THAT FILE and hands control back to the line
+/// after the include; it does not return from whatever function the include sits in, and at
+/// the top level it certainly does not end the program. elephc inlines the include body, so
+/// without this rewrite the inlined `return` is read as a return from the enclosing function —
+/// `main` for a top-level include — and every statement after the include is silently dropped.
+///
+/// `opcache.preload` is what made this urgent rather than theoretical. The directive injects a
+/// `require_once` in statement position, and a preload file ending in `return` is ordinary (it
+/// is how a file says "nothing more to do here"); under reference PHP that is harmless, so a
+/// preload that truncates the whole program is a divergence with no warning attached to it.
+///
+/// The value-capturing form (`$x = require F;`) has always done this through
+/// `rewrite_first_include_return`, which assigns the returned value to a temporary. The only
+/// difference here is that nobody wants the value — but `return foo();` must still CALL
+/// `foo()`, so the statement becomes an `ExprStmt` rather than being dropped.
+///
+/// Declarations are unaffected: `strip_discoverable_declarations` has already hoisted every
+/// compile-time declaration out of this body, including those written after the `return`, which
+/// is what php-src's early binding does too.
+pub(super) fn discard_first_include_return(wrapped: &mut [Stmt]) -> bool {
+    for stmt in wrapped.iter_mut() {
+        match &mut stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } => {
+                if discard_top_level_return(body) {
+                    return true;
+                }
+            }
+            StmtKind::IncludeOnceGuard { body, .. } => {
+                if discard_first_include_return(body) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Replaces the first top-level `return E;` in `body` with `E;` (or drops a bare `return;`) and
+/// truncates the now-unreachable tail. Returns `true` if a top-level `return` was rewritten.
+fn discard_top_level_return(body: &mut Vec<Stmt>) -> bool {
+    for i in 0..body.len() {
+        if matches!(body[i].kind, StmtKind::Return(_)) {
+            let span = body[i].span;
+            let placeholder = Stmt::new(StmtKind::Return(None), span);
+            let original = std::mem::replace(&mut body[i], placeholder);
+            body[i] = match original.kind {
+                // The value is discarded, but evaluating it is observable.
+                StmtKind::Return(Some(value)) => Stmt::new(StmtKind::ExprStmt(value), span),
+                _ => Stmt::new(StmtKind::Synthetic(Vec::new()), span),
+            };
+            body.truncate(i + 1);
+            return true;
+        }
+    }
+    false
+}
+
 /// Builds a `<temp> = <value>;` assignment statement for the hidden include temporary.
 fn assign_temp(temp: &str, value: Expr, span: Span) -> Stmt {
     Stmt::new(

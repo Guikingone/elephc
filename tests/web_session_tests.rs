@@ -2221,12 +2221,15 @@ fn opcache_ini_set_works_under_web() {
 ///
 /// - request 1 misses and fills (`h=0 m=1`), then schedules a restart (`r=0` — php-src
 ///   counts the restart when it happens, not when it is scheduled);
-/// - request 2 starts AFTER the boundary performed it, so the entry is gone: the include
-///   misses again (`h=0 m=2`) instead of hitting, and the restart is finally counted
-///   (`r=1`).
+/// - request 2 starts AFTER the boundary performed it, and the restart did TWO things:
+///   it dropped the entry and it zeroed the counters, the way `zend_reset_cache_vars()`
+///   does. So the include misses against an empty cache and against a fresh accounting
+///   period — `h=0 m=1`, not a cumulative `m=2` — and the restart is counted (`r=1`).
 ///
-/// The contrast is what pins the behaviour — without a reset, request 2 reports `h=1 m=1`,
-/// because the entry survived.
+/// `h` IS THE DISCRIMINATING FIELD, and `m` deliberately is not: without a reset, request 2
+/// hits the surviving entry and reports `h=1 m=1`, which differs from the asserted
+/// `h=0 m=1` in `h` alone. An earlier version of this test asserted the cumulative `m=2`
+/// and so pinned the bug where the restart left the counters running.
 ///
 /// The reset is issued from NATIVE code, which is where ordinary programs call it and the
 /// path that reaches the cache through `__elephc_opcache_rt_reset`.

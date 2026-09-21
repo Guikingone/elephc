@@ -193,7 +193,17 @@ pub fn swap_directive(id: u64, value: u64, as_override: bool) -> u64 {
 ///
 /// Exists for tests, which share one thread and would otherwise leak an override from one
 /// case into the next.
-#[cfg(test)]
+/// Drops every `ini_set()` override, returning each directive to its compiled value.
+///
+/// THE REQUEST BOUNDARY, under `--web`. `ini_set()` in php-src lasts for the request that
+/// called it and no longer; a worker process serves many requests, so an override that is
+/// never dropped silently becomes permanent for that worker. The native reporting side was
+/// already zeroed per request by `__rt_web_reset`, so leaving this table alone also made the
+/// two disagree: request 2 REPORTED `validate_timestamps=1` while the cache it describes went
+/// on behaving as though it were `0` and never re-stat'd a file again.
+///
+/// A CLI program is one request and never reaches this, which is correct — its overrides are
+/// meant to last for the whole run.
 pub(crate) fn clear_directive_overrides() {
     DIRECTIVE_OVERRIDES.with(|cell| *cell.borrow_mut() = [None; DIRECTIVE_COUNT]);
 }

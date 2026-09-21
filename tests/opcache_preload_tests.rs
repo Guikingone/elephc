@@ -539,6 +539,70 @@ fn preload_outside_manifest_is_compiled_in_silently() {
 /// CACHE ENABLED + UNRESOLVABLE PATH: a hard COMPILE ERROR naming the directive and the path.
 /// This is the AOT equivalent of reference PHP's startup fatal `Failed opening required '<path>'`,
 /// and like that fatal it does not depend on the program calling any OPcache function.
+/// Verifies a top-level `return` in the preloaded file ends THAT FILE, not the program.
+///
+/// `return` at the top level of an included file is ordinary PHP — it is how a file says
+/// "nothing further here" — and reference PHP treats it as ending the include, handing control
+/// back to the caller. elephc inlines the preload's `require_once`, so before the rewrite in
+/// `discard_first_include_return` the inlined `return` read as a return from `main`: the entry
+/// script never ran and the process exited 0. A silent truncation with a zero exit status is
+/// the worst shape a divergence can take, and nothing about writing `return` in a preload file
+/// warns you about it.
+///
+/// VERIFIED against reference PHP 8.5: `opcache.preload` on a file that prints `A` then
+/// returns, with an entry that prints `MAIN`, prints `AMAIN`.
+///
+/// The second half pins the value's EVALUATION. `return f();` discards the value here, but it
+/// must still call `f()`; a rewrite that simply dropped the statement would pass the first
+/// assertion and silently skip the call.
+#[test]
+fn a_top_level_return_in_the_preload_file_does_not_truncate_the_program() {
+    let dir = make_test_dir("opcache_preload_return");
+    fs::write(
+        dir.join("lib.php"),
+        "<?php\necho 'A';\nreturn;\necho 'NEVER';\n",
+    )
+    .unwrap();
+    fs::write(dir.join("main.php"), "<?php\necho 'MAIN';\n").unwrap();
+
+    let bin = compile_source(
+        &dir,
+        "main",
+        "<?php\necho 'MAIN';\n",
+        &[
+            "opcache.enable_cli=1".to_string(),
+            format!("opcache.preload={}", dir.join("lib.php").display()),
+        ],
+    );
+    assert_eq!(
+        run_binary(&bin),
+        "AMAIN",
+        "the preload's top-level return swallowed the entry script"
+    );
+
+    // The discarded value is still evaluated.
+    let dir = make_test_dir("opcache_preload_return_value");
+    fs::write(
+        dir.join("lib.php"),
+        "<?php\necho 'X';\nreturn marker();\necho 'NEVER';\n",
+    )
+    .unwrap();
+    let bin = compile_source(
+        &dir,
+        "main",
+        "<?php\nfunction marker() { echo 'CALLED'; return 1; }\necho 'MAIN';\n",
+        &[
+            "opcache.enable_cli=1".to_string(),
+            format!("opcache.preload={}", dir.join("lib.php").display()),
+        ],
+    );
+    assert_eq!(
+        run_binary(&bin),
+        "XCALLEDMAIN",
+        "the returned expression was dropped instead of evaluated"
+    );
+}
+
 #[test]
 fn missing_preload_file_fails_compilation() {
     let dir = make_test_dir("opcache_preload_missing");

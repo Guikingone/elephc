@@ -235,19 +235,89 @@ pub extern "C" fn __elephc_eval_opcache_schedule_restart() -> u64 {
     u64::from(crate::script_cache::schedule_restart())
 }
 
-/// Performs a restart `opcache_reset()` scheduled in an earlier request, if any.
+/// Opens a `--web` request on the cache: drops last request's `ini_set()` overrides, then
+/// performs a restart `opcache_reset()` scheduled in an earlier request, if any.
 ///
 /// THE REQUEST BOUNDARY php-src restarts at. Generated code emits this at the top of the
 /// `--web` handler, beside the other per-request resets, so the flush lands where reference
 /// PHP's does: at the START of the request after the one that called `opcache_reset()`,
 /// never inside it.
 ///
+/// The override drop belongs here for the same reason and not merely for convenience: this is
+/// the one symbol that runs once per request before any of the program's own code. An
+/// `ini_set('opcache.validate_timestamps', '0')` in request 1 used to outlive it and turn a
+/// per-request override into a permanent property of that worker — invisible under CLI, which
+/// has no second request to observe it with.
+///
 /// A CLI program is a single request and never emits this call, which is also right —
 /// reference PHP would restart at a next request that a CLI process does not have, so the
-/// cache correctly keeps answering for that program's whole life.
+/// cache correctly keeps answering for that program's whole life, and its overrides with it.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_opcache_apply_restart() {
+    crate::script_cache::clear_directive_overrides();
     crate::script_cache::apply_pending_restart();
+}
+
+/// Answers whether the runtime script cache holds a live entry for `path`.
+///
+/// THE POINT OF THESE THREE is that the natively compiled `opcache_*` bodies and the ones
+/// reached from inside `eval()` give the same answer. Before them the native declarations
+/// knew only the compile-time manifest, so `opcache_is_script_cached($dynamic)` answered
+/// `false` for a file the cache was actively serving, `opcache_invalidate($dynamic, true)`
+/// returned `true` and discarded nothing, and `opcache_compile_file()` refused every path
+/// outside the manifest. One binary, one cache, and the answer depended on where in the
+/// program the question was written.
+///
+/// A `0` length is the empty path, which is never cached.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_is_cached(ptr: *const u8, len: u64) -> u64 {
+    let path = unsafe { borrow_configured_string(ptr, len) };
+    if path.is_empty() {
+        return 0;
+    }
+    u64::from(crate::script_cache::store::is_cached(std::path::Path::new(
+        &path,
+    )))
+}
+
+/// Marks the runtime cache's entry for `path` discarded, as a FORCED `opcache_invalidate()`
+/// does, and answers whether there was one to discard.
+///
+/// The entry keeps its slot and its accounted footprint, matching php-src holding the
+/// shared-memory block until the next restart — so `num_cached_scripts` does not move.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_discard(ptr: *const u8, len: u64) -> u64 {
+    let path = unsafe { borrow_configured_string(ptr, len) };
+    if path.is_empty() {
+        return 0;
+    }
+    u64::from(crate::script_cache::store::discard(std::path::Path::new(
+        &path,
+    )))
+}
+
+/// Reads and caches `path` WITHOUT executing it, as `opcache_compile_file()` does.
+///
+/// Answers whether the file could be read and parsed. php-src reports the compile, not the
+/// store, so a file that parses but which the budget then refuses still answers `1`.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_compile(ptr: *const u8, len: u64) -> u64 {
+    let path = unsafe { borrow_configured_string(ptr, len) };
+    if path.is_empty() {
+        return 0;
+    }
+    u64::from(crate::script_cache::store::compile_file(
+        std::path::Path::new(&path),
+    ))
 }
 
 /// Copies one generated directive string out of the binary's read-only data.

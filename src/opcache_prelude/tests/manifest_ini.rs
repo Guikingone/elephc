@@ -58,7 +58,12 @@ pub(super) fn renders_scripts_map_literal() {
         assert!(map.contains("'memory_consumption' => 12345"));
         // The two REQUEST-clock fields read `opcache_get_status`'s memoized `static`, not the
         // mtime — see `render_scripts_map_literal` for the verified reference transcript.
-        assert!(map.contains("'last_used' => __elephc_opcache_asctime($__elephc_opcache_start_time)"));
+        // `last_used` names a local rather than calling `asctime` inline: the call is hoisted
+        // so the formatted string is bound before it reaches the array (a string returned by a
+        // function and inserted straight into an array literal is not released), and so the
+        // manifest formats the same start time once instead of once per entry.
+        assert!(map.contains("'last_used' => $__elephc_opcache_start_time_text"));
+        assert!(!map.contains("'last_used' => __elephc_opcache_asctime("));
         assert!(map.contains("'last_used_timestamp' => $__elephc_opcache_start_time"));
         // `timestamp` stays the FILE mtime, routed through the discard-aware reader so a
         // force-invalidated entry reports 0 (php-src `zend_accel_discard_script`).
@@ -82,7 +87,8 @@ pub(super) fn renders_scripts_map_literal() {
         assert!(preloaded.contains("'$PRELOAD$' => ["), "{preloaded}");
         assert!(preloaded.contains("'full_path' => '$PRELOAD$'"), "{preloaded}");
         assert!(preloaded.contains("'memory_consumption' => 999"), "{preloaded}");
-        assert!(preloaded.contains("'last_used' => __elephc_opcache_asctime(0)"), "{preloaded}");
+        // Hoisted like the manifest's own clock; the marker formats the epoch.
+        assert!(preloaded.contains("'last_used' => $__elephc_opcache_zero_time_text"), "{preloaded}");
         assert!(preloaded.contains("'last_used_timestamp' => 0"), "{preloaded}");
         assert!(preloaded.contains("'revalidate' => 0"), "{preloaded}");
         let _ = parse(&format!("<?php $s = {preloaded};"));
@@ -100,9 +106,16 @@ pub(super) fn renders_scripts_map_literal() {
 pub(super) fn get_status_bakes_manifest_counts_and_scripts() {
         let manifest = sample_manifest();
         let body = rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, None));
-        // Two cached scripts / keys.
-        assert!(body.contains("'num_cached_scripts' => 2"));
-        assert!(body.contains("'num_cached_keys' => 2"));
+        // Two cached scripts / keys — COUNTED FROM THE MAP, not baked as a constant plus the
+        // runtime count. The two tiers share a key space, so a manifest file that is also
+        // dynamically included must occupy one slot; summing counted it twice and disagreed
+        // with `count($status['scripts'])` in the same array.
+        assert!(body.contains("'num_cached_scripts' => count($__elephc_scripts)"));
+        assert!(body.contains("'num_cached_keys' => count($__elephc_scripts)"));
+        // Which means the map has to exist BEFORE the status array names it.
+        let map_at = body.find("$__elephc_scripts = [").expect("map assignment");
+        let status_at = body.find("$status = [").expect("status assignment");
+        assert!(map_at < status_at, "the count reads a map built later");
         // The scripts map is spliced (not the empty literal).
         assert!(body.contains("'full_path' => '/srv/app/index.php'"));
         assert!(body.contains("'full_path' => '/srv/app/vendor/autoload_files/helpers.php'"));
@@ -121,14 +134,14 @@ pub(super) fn get_status_bakes_manifest_counts_and_scripts() {
     /// counts, an empty manifest map for the runtime tier to append to, and the untouched
     /// baseline memory figures.
     ///
-    /// The counts and the map are no longer closed constants: each is the manifest's
-    /// contribution plus the runtime script cache's, which is `0` / empty in a binary with no
-    /// dynamic tier. This asserts the manifest HALF, which is what an empty manifest decides.
+    /// The counts and the map are no longer closed constants. The map seeds from the manifest
+    /// and the runtime tier appends to it, and the counts are read back off the finished map,
+    /// so an empty manifest decides the SEED — `[]` — rather than the reported figure.
     #[test]
 pub(super) fn get_status_empty_manifest_is_valid() {
         let body = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &[], false, None));
-        assert!(body.contains("'num_cached_scripts' => 0 + $__elephc_rt_count"));
-        assert!(body.contains("'num_cached_keys' => 0 + $__elephc_rt_count"));
+        assert!(body.contains("'num_cached_scripts' => count($__elephc_scripts)"));
+        assert!(body.contains("'num_cached_keys' => count($__elephc_scripts)"));
         // The manifest map seeds the local the runtime entries are appended to, and the
         // finished local is what lands on the status array.
         assert!(body.contains("$__elephc_scripts = [];"));

@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_script_path() — internals"
 description: "Compiler internals for __elephc_opcache_rt_script_path(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1038
+  order: 1041
 ---
 
 ## `__elephc_opcache_rt_script_path()` — internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (2 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

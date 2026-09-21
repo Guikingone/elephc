@@ -56,6 +56,11 @@ impl Blacklist {
         }
     }
 
+    /// Returns whether the directive blocks nothing, so callers can skip the match entirely.
+    ///
+    /// True both for a binary compiled without `opcache.blacklist_filename` and for one whose
+    /// listed files existed but held no usable line — a blacklist of only comments and blanks
+    /// is indistinguishable from no blacklist, which is also php-src's answer.
     pub(crate) fn is_empty(&self) -> bool {
         self.patterns.is_empty()
     }
@@ -214,7 +219,14 @@ fn expand_and_read(value: &str) -> Vec<(PathBuf, String)> {
     };
     let read_lossy = |file: &Path| -> Option<(PathBuf, String)> {
         let bytes = std::fs::read(file).ok()?;
-        let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
+        // The file's REAL directory. A relative entry resolves against it, and the paths it
+        // will be matched against are canonical, so a symlinked list location would otherwise
+        // produce entries that can never match.
+        let dir = std::fs::canonicalize(file)
+            .ok()
+            .and_then(|real| real.parent().map(Path::to_path_buf))
+            .or_else(|| file.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("."));
         Some((dir, String::from_utf8_lossy(&bytes).into_owned()))
     };
     if !is_glob(file_pattern) {
@@ -409,7 +421,45 @@ fn expand_entry(entry: &str, base_dir: &Path) -> Option<String> {
         return Some("/".to_string());
     }
     let tail = if joined.ends_with('/') { "/" } else { "" };
-    Some(format!("/{}{}", out.join("/"), tail))
+    Some(canonicalize_existing_prefix(&format!(
+        "/{}{}",
+        out.join("/"),
+        tail
+    )))
+}
+
+/// Resolves symlinks in the longest leading part of `path` that exists on disk.
+///
+/// php-src runs each blacklist entry through `expand_filepath_ex` in `CWD_FILEPATH` mode,
+/// which realpaths it, and then matches the result against the script's `opened_path` — also
+/// realpathed. elephc matches against the canonical cache key, so an entry that keeps its
+/// symlinks can never match one.
+///
+/// This is not an edge case: `current -> releases/42` is how nearly every PHP deployment is
+/// laid out, and a blacklist written against `/srv/app/current/...` was SILENTLY INERT there
+/// — it blocked nothing, with no diagnostic, which for a directive whose whole job is to keep
+/// files out is the worst possible failure.
+///
+/// Two limits are deliberate. Resolution stops at the first wildcard, because `/srv/*/tmp`
+/// names no single directory to resolve; and it backs off one component at a time until a
+/// prefix exists, because an entry may legitimately name a file that is not there yet. What
+/// does not exist cannot be a symlink, so leaving that part textual loses nothing.
+fn canonicalize_existing_prefix(path: &str) -> String {
+    let wildcard_at = path.find(['*', '?']).unwrap_or(path.len());
+    let mut boundary = match path[..wildcard_at].rfind('/') {
+        Some(0) | None => return path.to_string(),
+        Some(index) => index,
+    };
+    loop {
+        if let Ok(real) = std::fs::canonicalize(&path[..boundary]) {
+            let real = real.to_string_lossy().into_owned();
+            return format!("{}{}", real.trim_end_matches('/'), &path[boundary..]);
+        }
+        boundary = match path[..boundary].rfind('/') {
+            Some(0) | None => return path.to_string(),
+            Some(index) => index,
+        };
+    }
 }
 
 thread_local! {

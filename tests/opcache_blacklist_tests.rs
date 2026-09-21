@@ -452,6 +452,74 @@ echo 'refused=', opcache_get_status()['opcache_statistics']['blacklist_misses'],
     assert_eq!(line(&out, "refused"), "1", "{out}");
 }
 
+/// Verifies an entry written against a SYMLINKED path still blocks.
+///
+/// `current -> releases/42` is how nearly every PHP deployment is laid out, so a blacklist
+/// that only matches real paths is inert on the machines that most need it — and inert
+/// silently: nothing is logged, `blacklist_misses` simply stays at zero and every file the
+/// list names is cached anyway. For a directive whose only job is keeping files out, failing
+/// open with no diagnostic is the worst available outcome.
+///
+/// php-src runs each entry through `expand_filepath_ex` in `CWD_FILEPATH` mode, which
+/// realpaths it, and matches the result against the script's realpathed `opened_path`.
+/// VERIFIED against reference PHP 8.5 on this exact layout: `cached=false`,
+/// `blacklist_misses=1`. elephc keys its cache by canonical path, so the entry has to be
+/// canonicalized to meet it.
+///
+/// `refused` IS THE DISCRIMINATING FIELD, and the docblock says so rather than implying both
+/// halves carry weight: MEASURED by disabling the canonicalization, this test then reports
+/// `cached=false refused=0` — the `cached` assertion passes either way, because a lookup by
+/// the symlinked path misses the canonically keyed cache whether or not the entry matched.
+/// `refused` is what separates "the directive blocked it" from "the directive did nothing",
+/// which is the whole difference this test exists to catch.
+#[test]
+fn an_entry_through_a_deployment_symlink_still_blocks() {
+    let dir = make_test_dir("opcache_blacklist_symlink");
+    let release = dir.join("releases").join("42").join("lib");
+    fs::create_dir_all(&release).unwrap();
+    fs::write(release.join("secret.php"), "<?php $blocked = 1;\n").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(dir.join("releases").join("42"), dir.join("current")).unwrap();
+
+    // The entry names the path THROUGH the symlink, which is what a deploy script writes.
+    fs::write(
+        dir.join("deny.list"),
+        format!("{}\n", dir.join("current/lib/secret.php").display()),
+    )
+    .unwrap();
+
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$p = __DIR__ . '/current/lib/secret.php';
+eval('include $p;');
+echo 'cached=', var_export(opcache_is_script_cached($p), true), "\n";
+echo 'refused=', opcache_get_status()['opcache_statistics']['blacklist_misses'], "\n";
+"#,
+    )
+    .unwrap();
+
+    let binary = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            &format!(
+                "opcache.blacklist_filename={}",
+                dir.join("deny.list").display()
+            ),
+        ],
+    );
+    let out = run_binary(&binary);
+
+    assert_eq!(
+        line(&out, "cached"),
+        "false",
+        "a blacklisted file reached through a deployment symlink was cached anyway:\n{out}"
+    );
+    assert_eq!(line(&out, "refused"), "1", "{out}");
+}
+
 /// THE HONESTY PROPERTY for this directive: its `ELEPHC_INI_*` runtime override is IGNORED,
 /// and ignored on both surfaces at once.
 ///

@@ -122,6 +122,121 @@ foreach ($s['scripts'] as $key => $entry) {
 echo 'found=', $found, "\n";
 "#;
 
+/// Verifies a FORCED `opcache_invalidate()` and `opcache_compile_file()` reach the runtime
+/// tier, not just the manifest.
+///
+/// Both used to answer as though the work had happened while doing none of it. Forced
+/// invalidation returned `true` and left the entry cached and served, and
+/// `opcache_compile_file()` refused every path outside the manifest — which meant it could
+/// only ever succeed for files that needed no compiling, the one case where it does nothing.
+///
+/// Each step is asserted through a SEPARATE observation rather than the call's own return
+/// value, because the return value is exactly what was already correct while the effect was
+/// missing: `2_inval` was `true` before this change too. `3_after` is what makes it real.
+///
+/// VERIFIED against reference PHP 8.5, which prints this sequence exactly.
+#[test]
+fn a_forced_invalidate_and_a_compile_reach_the_runtime_tier() {
+    let dir = make_test_dir("opcache_rt_invalidate_compile");
+    fs::write(dir.join("dyn.php"), "<?php $dyn = 1;\n").unwrap();
+    fs::write(dir.join("compileme.php"), "<?php $cf = 1;\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$p = __DIR__ . '/dyn.php';
+eval('include $p;');
+echo 'cached=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
+echo 'inval=', (opcache_invalidate($p, true) ? '1' : '0'), "\n";
+echo 'after_inval=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
+$c = __DIR__ . '/compileme.php';
+echo 'before_compile=', (opcache_is_script_cached($c) ? '1' : '0'), "\n";
+echo 'compile=', (opcache_compile_file($c) ? '1' : '0'), "\n";
+echo 'after_compile=', (opcache_is_script_cached($c) ? '1' : '0'), "\n";
+"#,
+    )
+    .unwrap();
+
+    let bin = compile(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+    );
+    let out = run_binary(&bin);
+
+    assert_eq!(field(&out, "cached"), "1", "{out}");
+    assert_eq!(field(&out, "inval"), "1", "{out}");
+    assert_eq!(
+        field(&out, "after_inval"),
+        "0",
+        "a forced invalidate returned true and discarded nothing:\n{out}"
+    );
+    assert_eq!(field(&out, "before_compile"), "0", "{out}");
+    assert_eq!(
+        field(&out, "compile"),
+        "1",
+        "compile_file refused a file outside the manifest:\n{out}"
+    );
+    assert_eq!(
+        field(&out, "after_compile"),
+        "1",
+        "compile_file answered true without caching anything:\n{out}"
+    );
+}
+
+/// Verifies `opcache_is_script_cached()` sees a DYNAMICALLY included file, natively and in
+/// `eval()`, and that the two agree.
+///
+/// The manifest is only half the cache, and the native declaration used to be the only half
+/// it knew: a natively written call answered `false` for a file the runtime tier was actively
+/// serving, while the same call inside `eval()` answered `true`. One binary, one cache, two
+/// answers decided by where the question was written.
+///
+/// VERIFIED against reference PHP 8.5, which reports `true` on both surfaces for an included
+/// file and `false` for one that was never included.
+///
+/// THE NEGATIVE CASE IS NOT DECORATION. A lookup that answered `true` unconditionally would
+/// satisfy the first two assertions, so "always true" and "correct" differ only on a path
+/// that was never included.
+///
+/// This gap survived because `STATUS_PROBE` has emitted a `cached=` line all along and no test
+/// ever asserted it: the evidence was on screen and unread.
+#[test]
+fn a_dynamically_included_file_is_reported_cached_on_both_surfaces() {
+    let dir = make_test_dir("opcache_rt_is_cached");
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$p = __DIR__ . '/lib.php';
+eval('include $p;');
+echo 'native=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
+echo 'eval=', (eval('return opcache_is_script_cached($p);') ? '1' : '0'), "\n";
+$q = __DIR__ . '/never-included.php';
+echo 'absent_native=', (opcache_is_script_cached($q) ? '1' : '0'), "\n";
+echo 'absent_eval=', (eval('return opcache_is_script_cached($q);') ? '1' : '0'), "\n";
+"#,
+    )
+    .unwrap();
+
+    let bin = compile(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+    );
+    let out = run_binary(&bin);
+
+    assert_eq!(
+        field(&out, "native"),
+        "1",
+        "the native surface did not see the runtime tier:\n{out}"
+    );
+    assert_eq!(field(&out, "eval"), "1", "{out}");
+    assert_eq!(
+        field(&out, "absent_native"),
+        "0",
+        "a file that was never included must not be reported cached:\n{out}"
+    );
+    assert_eq!(field(&out, "absent_eval"), "0", "{out}");
+}
+
 /// Verifies a dynamically included file appears in `opcache_get_status()` with live counters.
 ///
 /// This is the whole point of the change: before it, the status array described only the
