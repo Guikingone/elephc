@@ -225,13 +225,22 @@ The predicate is decided on two axes at once. Either alone is wrong:
   value, so retaining because the *other* arm names a borrowed cell would leak
   just as badly.
 
-Property writes have the same shape and are **not** fixed: they store what they
-are handed without retaining, so `$this->me = $this;` in an eval-declared
-constructor fails `--heap-debug` with `bad refcount`, and `C::$slot = $param;`
-followed by an overwrite destroys the caller's object. Both reproduce with none
-of the above applied (issue #1123). Two sites that look like they should share
-the defect do not: an array literal element (`[$param]`) and by-value argument
-binding both already materialize an owner.
+A property store is the fourth site, and it needs the third answer again. Unlike
+a scope cell it has no ownership label to record and unlike a discarded
+statement it keeps the value, so it must genuinely **acquire**: the slot owns
+what it holds. `EvalStmt::PropertySet` and its static and dynamic-name siblings
+therefore route the stored value through the same retain (issue #1123). The
+symptom depended on what happened next — overwriting the slot releases what it
+replaces, which destroyed the lent object outright, while a self-reference
+(`$this->me = $this;`) instead failed `--heap-debug` with `bad refcount` and
+printed the right answer without it.
+
+Only the plain stores need it. A compound assignment's right operand is consumed
+by the operator, which yields a fresh value the slot then owns, and the property
+ARRAY paths (`$h->slots[] = $param;`, `$h->slots["x"] = $param;`) already retain
+before storing — a second retain there would leak. Two more sites that look like
+they should share the defect do not, for the same reason: an array literal
+element (`[$param]`) and by-value argument binding both materialize an owner.
 
 A related but distinct hole stays open: the predicate asks for a **borrowed**
 cell, so an Owned-to-Owned alias is untouched. `$y = new Bag(); $x = $y; $y =

@@ -338,7 +338,7 @@ fn scope_read_passthrough_names<'a>(expr: &'a EvalExpr, names: &mut Vec<&'a str>
 /// the handle alone would act twice and leak. The handle check keeps out the pass-through branch
 /// that did not run: in `$c ? $this : new Bag()` only one arm produces the value, and acting
 /// because the *other* arm names a borrowed cell would leak just as badly.
-fn value_is_an_unretained_scope_borrow(
+pub(in crate::interpreter) fn value_is_an_unretained_scope_borrow(
     expr: &EvalExpr,
     value: RuntimeCellHandle,
     context: &ElephcEvalContext,
@@ -356,7 +356,7 @@ fn value_is_an_unretained_scope_borrow(
 }
 
 /// Takes a reference for a caller that is about to own a value the callee only borrowed.
-fn retain_unretained_scope_borrow(
+pub(in crate::interpreter) fn retain_unretained_scope_borrow(
     expr: &EvalExpr,
     value: RuntimeCellHandle,
     context: &ElephcEvalContext,

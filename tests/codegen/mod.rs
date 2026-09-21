@@ -26,6 +26,7 @@ mod eval_callable_ref_errors;
 mod eval_callables;
 mod eval_closures;
 mod eval_borrowed_returns;
+mod eval_property_borrow;
 mod eval_constructors;
 mod eval_reflection_invocation;
 mod operators;
