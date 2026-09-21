@@ -60,6 +60,14 @@ pub(super) fn lower_expr_call_from_value(
 /// and spreads build a key-normalized boxed hash, and plain positional arguments build an
 /// indexed array. Callers rely on that totality, because the callback is already published in
 /// the unwind chain by the time the container is built and there is no shape to fall back to.
+///
+/// A SPREAD always takes the hash container, whatever its static type says. Its keys bind by
+/// name exactly as written-out named arguments do -- `new $c(...$named)` is `new $c(b: 8)` --
+/// and the runtime walk (`lower_descriptor_unpack_source`) applies PHP's key rules to every
+/// source, so a string-keyed array, a leading integer key, or a boxed operand whose storage is
+/// only known at run time all bind correctly. Choosing the indexed container from the spelling
+/// of the call alone is what raised `OperandTypeMismatch { expected: "Heap(Array)", actual:
+/// Heap(Hash) }` for a variable hash operand (issue #685).
 pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],

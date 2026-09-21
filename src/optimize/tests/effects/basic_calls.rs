@@ -37,18 +37,18 @@ fn test_effect_analysis_keeps_dynamic_array_spread_observable() {
 
 /// A key an associative spread can supply is never reported as a statically missing offset.
 ///
-/// The spread is carried as a pair whose key IS the spread, so a plain scan over literal keys
-/// skips it and would answer "definitely absent" for a key the source merges in.
+/// A literal that mixes keys with a spread is `ExprKind::ArrayLiteralMixed`, which the static
+/// read analysis must leave dynamic: the spread source can merge in any key.
 #[test]
 fn test_effect_analysis_keeps_assoc_spread_array_read_unknown() {
-    let spread = crate::parser::ast::assoc_spread_entry(Expr::new(
+    let spread = Expr::new(
         ExprKind::Spread(Box::new(Expr::var("extra"))),
         Span::dummy(),
-    ));
+    );
     let with_spread = Expr::new(
-        ExprKind::ArrayLiteralAssoc(vec![
-            (Expr::string_lit("a"), Expr::int_lit(1)),
-            spread,
+        ExprKind::ArrayLiteralMixed(vec![
+            crate::parser::ast::ArrayEntry::Keyed(Expr::string_lit("a"), Expr::int_lit(1)),
+            crate::parser::ast::ArrayEntry::Spread(spread),
         ]),
         Span::dummy(),
     );

@@ -141,7 +141,11 @@ pub(super) fn lower_foreach(
     // Promote a by-reference indexed source BEFORE it is loaded, so the loop iterates the hash
     // the rest of the program will see in that local.
     let by_ref_origin = promote_by_ref_foreach_source(ctx, array, value_by_ref);
-    let (mut source, source_is_borrowed_fetch) = lower_foreach_source(ctx, array, value_by_ref);
+    let ForeachSource {
+        value: mut source,
+        is_borrowed_fetch: source_is_borrowed_fetch,
+        receiver: source_receiver,
+    } = lower_foreach_source(ctx, array, value_by_ref);
     if value_by_ref
         && by_ref_origin.is_none()
         && matches!(
@@ -208,6 +212,14 @@ pub(super) fn lower_foreach(
     let source_pin = source_is_borrowed_fetch
         .then(|| pin_by_ref_foreach_borrowed_source(ctx, source, array.span))
         .flatten();
+    // The container is BORROWED from a property slot the loop reached through a temporary --
+    // `$arr[0]->x`, `$o->get()->x`, `$o->$n` on a temporary. The pin above keeps the container
+    // alive, but the OBJECT that owns the slot is what the writes have to reach, so it is held
+    // for the loop too and released on every way out (issue #690).
+    let receiver_pin = source_receiver.map(|receiver| LoopCleanup {
+        value: receiver,
+        span: array.span,
+    });
     if let Some(key_var) = key_var {
         initialize_foreach_mixed_local_if_needed(ctx, key_var, key_needs_null_init, array.span);
     }
@@ -320,6 +332,7 @@ pub(super) fn lower_foreach(
         source_pin,
         iterator_owner: iterator_owner.map(|slot| (slot, array.span)),
         iterator_cleanup: by_ref_origin.map(|_| (iterator_state, array.span)),
+        receiver_pin,
     });
     if let Some(key_var) = key_var {
         let key = ctx.emit_value(
@@ -387,6 +400,9 @@ pub(super) fn lower_foreach(
     // out — `break`, `break N`, `return`, `throw` — skips this block and is covered by
     // `emit_innermost_loop_cleanups` through the loop frame instead.
     if let Some(pin) = source_pin {
+        crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
+    }
+    if let Some(pin) = receiver_pin {
         crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
     }
 }
@@ -575,7 +591,7 @@ fn lower_foreach_source(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     value_by_ref: bool,
-) -> (LoweredValue, bool) {
+) -> ForeachSource {
     if value_by_ref {
         if let ExprKind::ArrayAccess {
             array: receiver,
@@ -585,16 +601,54 @@ fn lower_foreach_source(
             let source = lower_by_ref_foreach_element_source(ctx, receiver, index, array);
             let is_borrowed_element =
                 ctx.builder.value_ownership(source.value) == Ownership::Borrowed;
-            return (source, is_borrowed_element);
+            return ForeachSource {
+                value: source,
+                is_borrowed_fetch: is_borrowed_element,
+                receiver: None,
+            };
         }
-        if let ExprKind::PropertyAccess { object, property } = &array.kind {
-            let source = lower_by_ref_foreach_property_source(ctx, object, property, array);
+        if let Some((object, property)) = by_ref_property_source_parts(array) {
+            let source = lower_by_ref_foreach_property_source(ctx, object, &property, array);
             let is_borrowed_property =
-                ctx.builder.value_ownership(source.value) == Ownership::Borrowed;
-            return (source, is_borrowed_property);
+                ctx.builder.value_ownership(source.value.value) == Ownership::Borrowed;
+            return ForeachSource {
+                value: source.value,
+                is_borrowed_fetch: is_borrowed_property,
+                receiver: source.receiver,
+            };
         }
     }
-    (lower_expr(ctx, array), false)
+    ForeachSource {
+        value: lower_expr(ctx, array),
+        is_borrowed_fetch: false,
+        receiver: None,
+    }
+}
+
+/// What `lower_foreach_source` hands back: the container, whether it came back borrowed from a
+/// fetch-for-write read, and the receiver that read borrowed through.
+struct ForeachSource {
+    value: LoweredValue,
+    is_borrowed_fetch: bool,
+    receiver: Option<LoweredValue>,
+}
+
+/// Splits a by-reference `foreach` source into `(receiver, property)` when it reads a property.
+///
+/// A RUNTIME-named property is included when the name has already folded to a literal, which is
+/// the ordinary case for `$o->$n` with a constant `$n`: the slot the backend resolves is the
+/// same one the static spelling reaches, so there is no reason for the two spellings to differ
+/// (issue #690). A name that is still an expression at this point keeps the ordinary read --
+/// the backend's slot resolution needs the name.
+fn by_ref_property_source_parts(array: &Expr) -> Option<(&Expr, String)> {
+    match &array.kind {
+        ExprKind::PropertyAccess { object, property } => Some((object, property.clone())),
+        ExprKind::DynamicPropertyAccess { object, property } => match &property.kind {
+            ExprKind::StringLiteral(name) => Some((object, name.clone())),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Takes the by-reference loop's own lifetime reference on a borrowed fetch-for-write source.

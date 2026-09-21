@@ -120,7 +120,7 @@ fn descriptor_spread_sources(args: &[Expr]) -> Vec<bool> {
 fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
     match &expr.kind {
         ExprKind::Variable(name) => matches!(env.get(name), Some(PhpType::AssocArray { .. })),
-        ExprKind::ArrayLiteralAssoc(_) => true,
+        ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => true,
         _ => matches!(
             crate::types::checker::infer_expr_type_syntactic(expr),
             PhpType::AssocArray { .. }

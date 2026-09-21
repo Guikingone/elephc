@@ -5,10 +5,12 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), and the reference a `foreach` loop holds on an object source.
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, the containers an array literal allocates when it defaults a property, boxed or nested, and read-modify-write stores into a typed static property or a property array element.
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
+#[path = "runtime_gc/mixed_string_cast_return.rs"]
+mod mixed_string_cast_return;
 #[path = "runtime_gc/object_cast.rs"]
 mod object_cast;
 #[path = "runtime_gc/nullable_string_return.rs"]
@@ -29,8 +31,12 @@ mod regressions;
 mod assoc_rebind_release;
 #[path = "runtime_gc/by_ref_foreach_reference_cells.rs"]
 mod by_ref_foreach_reference_cells;
+#[path = "runtime_gc/compound_assign_stores.rs"]
+mod compound_assign_stores;
 #[path = "runtime_gc/object_supertype_rebind.rs"]
 mod object_supertype_rebind;
+#[path = "runtime_gc/boxed_property_defaults.rs"]
+mod boxed_property_defaults;
 #[path = "runtime_gc/by_ref_place_args.rs"]
 mod by_ref_place_args;
 #[path = "runtime_gc/omitted_by_ref_default_args.rs"]
@@ -42,6 +48,10 @@ mod callable_property_owners;
 mod foreach_object_source;
 #[path = "runtime_gc/foreach_iterator_aggregate_owner.rs"]
 mod foreach_iterator_aggregate_owner;
+#[path = "runtime_gc/nested_property_defaults.rs"]
+mod nested_property_defaults;
+#[path = "runtime_gc/spread_promotion.rs"]
+mod spread_promotion;
 #[path = "runtime_gc/stack_args.rs"]
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]
@@ -103,7 +113,6 @@ mod eval_operand_owners;
 mod eval_scope_writeback;
 mod unserialize_hydration_data;
 mod serialize_magic_results;
-mod nested_property_defaults;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
 #[path = "runtime_gc/heap.rs"]

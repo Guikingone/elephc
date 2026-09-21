@@ -20,34 +20,11 @@ pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs
         Some(expr.span),
     );
     for (key, value) in pairs {
-        // A spread entry carries no key of its own: it merges its source into the hash at this
-        // exact position, so php's overwrite order and integer-key renumbering both come out of
-        // the ordinary sequential build rather than a separate merge.
-        if let Some(inner) = crate::parser::ast::assoc_spread_source(key, value) {
-            lower_assoc_spread_entry(ctx, hash, inner, key.span);
-            continue;
-        }
         let key = lower_expr(ctx, key);
         let value = lower_expr(ctx, value);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
     }
     hash
-}
-
-/// Merges one `...$source` entry of an associative array literal into the destination hash.
-fn lower_assoc_spread_entry(
-    ctx: &mut LoweringContext<'_, '_>,
-    hash: LoweredValue,
-    inner: &Expr,
-    span: Span,
-) {
-    let source = lower_expr(ctx, inner);
-    let source = if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {
-        super::indexed_array_literals::lower_boxed_array_spread_source(ctx, source, span)
-    } else {
-        source
-    };
-    super::indexed_array_literals::lower_hash_spread_into_hash_from_value(ctx, hash, source, span);
 }
 
 /// Returns the associative-array type for a literal that contains at least one associative
@@ -94,16 +71,8 @@ pub(super) fn assoc_array_literal_type_for_ir(
     let mut key_ty: Option<PhpType> = None;
     let mut value_ty: Option<PhpType> = None;
     for (key, value) in pairs {
-        // A spread entry contributes its SOURCE's key and value types, not the placeholder
-        // pair that carries it.
-        let (next_key, next_value) =
-            match crate::parser::ast::assoc_spread_source(key, value) {
-                Some(inner) => assoc_spread_entry_types(ctx, inner),
-                None => (
-                    normalized_array_key_type(key, infer_expr_type_syntactic(key)),
-                    assoc_array_literal_value_type_for_ir(ctx, value),
-                ),
-            };
+        let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key));
+        let next_value = assoc_array_literal_value_type_for_ir(ctx, value);
         key_ty = Some(match key_ty {
             Some(current) => merge_array_key_types(current, next_key),
             None => next_key,
@@ -119,15 +88,6 @@ pub(super) fn assoc_array_literal_type_for_ir(
     PhpType::AssocArray {
         key: Box::new(key_ty),
         value: Box::new(value_ty),
-    }
-}
-
-/// Returns the `(key, value)` storage types one spread entry contributes to the literal.
-fn assoc_spread_entry_types(ctx: &LoweringContext<'_, '_>, inner: &Expr) -> (PhpType, PhpType) {
-    match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
-        PhpType::Array(elem) => (PhpType::Int, elem.codegen_repr()),
-        PhpType::AssocArray { key, value } => (key.codegen_repr(), value.codegen_repr()),
-        _ => (PhpType::Mixed, PhpType::Mixed),
     }
 }
 
@@ -150,6 +110,20 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         // value-type stamp would diverge from the lowered value and corrupt reads.
         ExprKind::ScopedConstantAccess { receiver, name } => {
             scoped_constant_value_type_for_ir(ctx, receiver, name, value)
+        }
+        // A nested literal must be typed by the same context-aware function that will lower
+        // it, not by the syntactic fallback: `infer_expr_type_syntactic` cannot see a local's
+        // type, so it types every `$v` element `Int`. The outer hash then stamped its value
+        // type `array<string, int>` over an inner hash really holding `array<string>`, and a
+        // read through both levels returned the inner array pointer as an integer (issue
+        // #984). These are the two arms `array_literal_element_type_for_ir` already carries
+        // for an INDEXED outer literal, which is why `[["k" => $v]]` was always correct and
+        // only `["j" => ["k" => $v]]` was wrong.
+        ExprKind::ArrayLiteral(items) => {
+            array_literal_type_for_ir(ctx, items, value).codegen_repr()
+        }
+        ExprKind::ArrayLiteralAssoc(inner_pairs) => {
+            assoc_array_literal_type_for_ir(ctx, inner_pairs, value)
         }
         ExprKind::Variable(name) => ir_array_storage_type(
             ctx.local_types

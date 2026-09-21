@@ -366,6 +366,12 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 .iter()
                 .map(|(key, value)| expr_effect(key).combine(expr_effect(value))),
         ),
+        ExprKind::ArrayLiteralMixed(entries) => combine_effects(
+            entries
+                .iter()
+                .flat_map(|entry| entry.exprs())
+                .map(expr_effect),
+        ),
         ExprKind::Match {
             subject,
             arms,
@@ -460,18 +466,14 @@ pub(super) fn statically_known_array_read(array: &Expr, index: &Expr) -> Option<
             let len = i64::try_from(items.len()).ok()?;
             Some(*index >= 0 && *index < len)
         }
-        (ExprKind::ArrayLiteralAssoc(items), ExprKind::IntLiteral(index))
-            if !assoc_literal_has_spread(items) =>
-        {
+        (ExprKind::ArrayLiteralAssoc(items), ExprKind::IntLiteral(index)) => {
             Some(
                 items
                     .iter()
                     .any(|(key, _)| matches!(key.kind, ExprKind::IntLiteral(key) if key == *index)),
             )
         }
-        (ExprKind::ArrayLiteralAssoc(items), ExprKind::StringLiteral(index))
-            if !assoc_literal_has_spread(items) =>
-        {
+        (ExprKind::ArrayLiteralAssoc(items), ExprKind::StringLiteral(index)) => {
             Some(
                 items.iter().any(
                     |(key, _)| matches!(&key.kind, ExprKind::StringLiteral(key) if key == index),
@@ -484,17 +486,6 @@ pub(super) fn statically_known_array_read(array: &Expr, index: &Expr) -> Option<
         }
         _ => None,
     }
-}
-
-/// Returns whether an associative array literal carries a spread entry.
-///
-/// A spread is carried as a pair whose key IS the spread, so scanning keys for a literal match
-/// silently skips it. Any key the spread source supplies is therefore unknowable here, and a
-/// literal that has one can never answer "this offset is definitely missing".
-pub(super) fn assoc_literal_has_spread(items: &[(Expr, Expr)]) -> bool {
-    items
-        .iter()
-        .any(|(key, value)| crate::parser::ast::assoc_spread_source(key, value).is_some())
 }
 
 /// Returns the effect for the target of an `InstanceOf` expression.

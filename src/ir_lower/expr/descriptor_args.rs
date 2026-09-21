@@ -35,6 +35,11 @@ pub(super) fn descriptor_callback_php_type_supported(php_type: &PhpType) -> bool
 /// array. Callers depend on that totality, because the callback is already published in the
 /// unwind chain by the time the container is built and abandoning the lowering here would either
 /// leave an owner record behind or re-evaluate the callback expression on a fallback path.
+///
+/// A spread of a string-keyed array therefore lands in the hash container just as written-out
+/// named arguments do, which is what `$obj->$method(...$named)` and `$class::method(...$named)`
+/// need, since each desugars into a `call_user_func` through here (issue #685); the runtime
+/// walk binds the source's actual keys rather than trusting its static type.
 pub(super) fn lower_descriptor_invoker_arg_container_for_call_user_func(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],

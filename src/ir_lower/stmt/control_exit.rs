@@ -455,7 +455,7 @@ pub(super) fn acquire_borrowed_return_value(
 /// Terminates with a return after running active finally bodies from inner to outer.
 pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
     let saved_finally_stack = ctx.finally_stack.clone();
-    let saved_handler_loop_depths = ctx.handler_loop_depths.clone();
+    let saved_try_loop_depths = ctx.try_loop_depths.clone();
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_return(ctx, value);
@@ -463,7 +463,7 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
         // Finalizer frames are consumed only on the emitted control-flow path.
         // Restore the lexical lowering state for sibling and fallthrough blocks.
         ctx.finally_stack = saved_finally_stack;
-        ctx.handler_loop_depths = saved_handler_loop_depths;
+        ctx.try_loop_depths = saved_try_loop_depths;
         return;
     }
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
@@ -474,13 +474,13 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
 /// Terminates with a branch after running active finally bodies from inner to outer.
 pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
     let saved_finally_stack = ctx.finally_stack.clone();
-    let saved_handler_loop_depths = ctx.handler_loop_depths.clone();
+    let saved_try_loop_depths = ctx.try_loop_depths.clone();
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_branch(ctx, target, loop_cleanup_count);
         }
         ctx.finally_stack = saved_finally_stack;
-        ctx.handler_loop_depths = saved_handler_loop_depths;
+        ctx.try_loop_depths = saved_try_loop_depths;
         return;
     }
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
@@ -493,18 +493,18 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
 /// Terminates with a throw after running finally bodies that apply to uncaught throws.
 pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
     let saved_finally_stack = ctx.finally_stack.clone();
-    let saved_handler_loop_depths = ctx.handler_loop_depths.clone();
+    let saved_try_loop_depths = ctx.try_loop_depths.clone();
     if run_innermost_finally(ctx, true) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_throw(ctx, value);
         }
         ctx.finally_stack = saved_finally_stack;
-        ctx.handler_loop_depths = saved_handler_loop_depths;
+        ctx.try_loop_depths = saved_try_loop_depths;
         return;
     }
-    let handler_loop_depth = ctx.handler_loop_depths.last().copied().unwrap_or(0);
-    let crossed_loops = ctx.loop_stack.len().saturating_sub(handler_loop_depth);
-    emit_innermost_loop_cleanups(ctx, crossed_loops);
+    // NOT every active loop: a `try` inside one catches without leaving it. See
+    // `loops_a_throw_would_leave` (issue #690).
+    emit_innermost_loop_cleanups(ctx, ctx.loops_a_throw_would_leave());
     ctx.builder.terminate(Terminator::Throw { value });
 }
 
@@ -619,6 +619,12 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
         if let Some(pin) = frame.source_pin {
             crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
         }
+        // Same reasoning for the receiver the borrowed property source was read through: the
+        // loop holds the object so its slot keeps owning the container being written, and an
+        // exit that skips the loop's own exit block has to drop it here (issue #690).
+        if let Some(pin) = frame.receiver_pin {
+            crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
+        }
     }
 }
 
@@ -636,7 +642,7 @@ pub(super) fn run_innermost_finally(ctx: &mut LoweringContext<'_, '_>, is_throw:
         .expect("finally frame disappeared after last() check");
     if let Some((handler_token, span)) = frame.handler_cleanup {
         emit_try_pop_handler(ctx, handler_token, span);
-        ctx.handler_loop_depths.pop();
+        ctx.pop_try_loop_depth();
     }
     lower_block(ctx, &frame.body);
     true

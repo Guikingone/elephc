@@ -336,7 +336,9 @@ pub(super) fn lower_closure_with_context(
     };
     let data = ctx.intern_string(&name);
     let return_alias = crate::types::summarize_callable_return_alias(
-        params.iter().map(|(name, _, _, _)| name.as_str()),
+        params
+            .iter()
+            .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
         variadic,
         by_ref_return,
         body,
@@ -575,6 +577,10 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         ExprKind::ArrayLiteralAssoc(entries) => entries
             .iter()
             .any(|(key, value)| expr_writes_local(key, name) || expr_writes_local(value, name)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(|expr| expr_writes_local(expr, name)),
         ExprKind::Match { subject, arms, default } => {
             expr_writes_local(subject, name)
                 || arms.iter().any(|(patterns, value)| {
@@ -830,6 +836,10 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(entries) => entries
             .iter()
             .any(|(key, value)| expr_contains_eval_call(key) || expr_contains_eval_call(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_contains_eval_call),
         ExprKind::Match { subject, arms, default } => {
             expr_contains_eval_call(subject)
                 || arms.iter().any(|(patterns, value)| {

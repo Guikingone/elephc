@@ -124,6 +124,7 @@ pub(super) fn lower_boxed_array_key_sort(
     array: ValueId,
     name: &str,
     order: KeySortOrder,
+    flags: super::HashSortFlags,
 ) -> Result<()> {
     prepare_boxed_array_receiver(ctx, array, name)?;
     let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -133,6 +134,19 @@ pub(super) fn lower_boxed_array_key_sort(
     // Promotion installs a unique hash in the cell. The sorter only relinks
     // entries, so the borrowed payload must not be split or released again.
     abi::emit_reg_move(ctx.emitter, arg, abi::int_result_reg(ctx.emitter));
+    // The key-sort entry stubs fold PHP's `$flags` word from the second argument register
+    // into their mode (issue #699); an omitted argument is `SORT_REGULAR`. The flags value
+    // lives in a callee-saved register or a stack slot, so loading it cannot disturb the
+    // receiver just placed in the first argument register.
+    let flags_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    match flags {
+        super::HashSortFlags::None | super::HashSortFlags::Regular => {
+            abi::emit_load_int_immediate(ctx.emitter, flags_arg_reg, 0);
+        }
+        super::HashSortFlags::Value(flags) => {
+            ctx.load_value_to_reg(flags, flags_arg_reg)?;
+        }
+    }
     let helper = match order {
         KeySortOrder::Ascending => "__rt_hash_ksort",
         KeySortOrder::Descending => "__rt_hash_krsort",

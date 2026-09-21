@@ -1407,6 +1407,7 @@ pub(crate) fn lower_closure_function(
     lower_closure_function_with_signature(
         parent,
         name,
+        params,
         signature,
         body,
         captures,
@@ -1468,6 +1469,7 @@ pub(crate) fn lower_closure_function_with_context(
     lower_closure_function_with_signature(
         parent,
         name,
+        params,
         signature,
         body,
         captures,
@@ -1480,6 +1482,7 @@ pub(crate) fn lower_closure_function_with_context(
 fn lower_closure_function_with_signature(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
+    params: &AstParams,
     signature: FunctionSig,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -1515,8 +1518,12 @@ fn lower_closure_function_with_signature(
             .iter()
             .map(|(capture_name, _, by_ref)| (capture_name.clone(), *by_ref))
             .collect(),
+        // The DECLARED parameters, with their hints: the alias summary needs to know which
+        // are spelled `string`, the one slot shape a `(string)` cast passes through (#700).
         return_alias: crate::types::summarize_callable_return_alias(
-            signature.params.iter().map(|(name, _)| name.as_str()),
+            params
+                .iter()
+                .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
             None,
             signature.by_ref_return,
             body,
@@ -2262,6 +2269,15 @@ fn direct_closure_return_expr_type(
             );
         }
     }
+    if let ExprKind::ArrayLiteralMixed(entries) = &expr.kind {
+        return direct_closure_return_mixed_literal_type(
+            entries,
+            captures,
+            params,
+            classes,
+            builtin_call_types,
+        );
+    }
     if let ExprKind::ScopedConstantAccess {
         receiver: crate::parser::ast::StaticReceiver::Named(class_name),
         name,
@@ -2440,31 +2456,17 @@ fn direct_closure_return_assoc_literal_type(
     let mut key_ty = PhpType::Never;
     let mut value_ty = PhpType::Never;
     for (key, value) in pairs {
-        // A spread entry carries no key of its own: the pair's key IS the spread and its value is
-        // an inert null placeholder. Typing that pair as an ordinary entry stamped the literal
-        // from the placeholder instead of from the source the lowering actually merges in.
-        let (next_key, next_value) = match crate::parser::ast::assoc_spread_source(key, value) {
-            Some(inner) => direct_closure_return_assoc_spread_entry_types(
-                inner,
-                captures,
-                params,
-                classes,
-                builtin_call_types,
-            ),
-            None => (
-                crate::types::normalized_array_key_type(
-                    key,
-                    crate::types::checker::infer_expr_type_syntactic(key),
-                ),
-                direct_closure_return_array_item_type(
-                    value,
-                    captures,
-                    params,
-                    classes,
-                    builtin_call_types,
-                ),
-            ),
-        };
+        let next_key = crate::types::normalized_array_key_type(
+            key,
+            crate::types::checker::infer_expr_type_syntactic(key),
+        );
+        let next_value = direct_closure_return_array_item_type(
+            value,
+            captures,
+            params,
+            classes,
+            builtin_call_types,
+        );
         key_ty = if matches!(key_ty, PhpType::Never) {
             next_key
         } else {
@@ -2478,12 +2480,53 @@ fn direct_closure_return_assoc_literal_type(
     }
 }
 
-/// Returns the `(key, value)` storage types one spread entry of a directly returned associative
-/// literal contributes, resolved against the closure's captures and parameters.
+/// Returns the EIR storage type for a directly returned literal that mixes keys with spreads.
 ///
-/// Mirrors `crate::ir_lower::expr::assoc_array_literals`'s spread typing: an indexed source
-/// contributes integer keys, a hash source contributes its own key type, and a source this pass
-/// cannot name stays `Mixed` on both slots.
+/// The lowering (`lower_mixed_array_literal`) always builds a hash, and a spread renumbers the
+/// integer keys it contributes, so the KEY slot is `Mixed` regardless of the written keys; the
+/// value slot merges every entry's storage type, with a spread contributing its source's.
+fn direct_closure_return_mixed_literal_type(
+    entries: &[crate::parser::ast::ArrayEntry],
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+) -> PhpType {
+    let mut value_ty = PhpType::Never;
+    for entry in entries {
+        let next_value = match entry {
+            crate::parser::ast::ArrayEntry::Spread(source) => {
+                direct_closure_return_assoc_spread_entry_types(
+                    source,
+                    captures,
+                    params,
+                    classes,
+                    builtin_call_types,
+                )
+                .1
+            }
+            crate::parser::ast::ArrayEntry::Keyed(_, value)
+            | crate::parser::ast::ArrayEntry::Value(value) => direct_closure_return_array_item_type(
+                value,
+                captures,
+                params,
+                classes,
+                builtin_call_types,
+            ),
+        };
+        value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(value_ty, next_value);
+    }
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(value_ty),
+    }
+}
+
+/// Returns the `(key, value)` storage types one `...$source` entry of a directly returned literal
+/// contributes, resolved against the closure's captures and parameters.
+///
+/// An indexed source contributes integer keys, a hash source contributes its own key type, and a
+/// source this pass cannot name stays `Mixed` on both slots.
 fn direct_closure_return_assoc_spread_entry_types(
     inner: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],

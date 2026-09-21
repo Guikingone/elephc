@@ -8,7 +8,7 @@
 //! Key details:
 //! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
 
-use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{ArrayEntry, BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType};
 
 /// Infer a function's return type by scanning its body for Return statements.
@@ -406,18 +406,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             let mut key_ty: Option<PhpType> = None;
             let mut value_ty: Option<PhpType> = None;
             for (key, value) in entries {
-                // A spread entry has no key of its own: it is carried as a pair whose key IS the
-                // spread and whose value is an inert null placeholder. Typing that placeholder as
-                // an ordinary entry would claim an `int` key (the `_ => PhpType::Int` fallback
-                // this function ends with) and a `null` value for whatever the source merges in.
-                let (next_key, next_value) = match crate::parser::ast::assoc_spread_source(key, value)
-                {
-                    Some(inner) => assoc_spread_entry_types_syntactic(inner),
-                    None => (
-                        normalized_array_key_type(key, infer_expr_type_syntactic(key)),
-                        infer_expr_type_syntactic(value),
-                    ),
-                };
+                let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key));
+                let next_value = infer_expr_type_syntactic(value);
                 key_ty = Some(match key_ty {
                     Some(current) => merge_array_key_types(current, next_key),
                     None => next_key,
@@ -431,6 +421,38 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             }
             PhpType::AssocArray {
                 key: Box::new(key_ty.unwrap_or(PhpType::Mixed)),
+                value: Box::new(value_ty.unwrap_or(PhpType::Mixed)),
+            }
+        }
+        // A literal mixing keys with a spread is always a hash, and the spread renumbers the
+        // integer keys it contributes, so only the value slot is worth naming: a spread entry
+        // contributes its SOURCE's value type, exactly as the lowering merges it in.
+        ExprKind::ArrayLiteralMixed(entries) => {
+            let mut value_ty: Option<PhpType> = None;
+            for entry in entries {
+                let next_value = match entry {
+                    // The entry holds the `...$source` node itself; the helper types the
+                    // operand under it.
+                    ArrayEntry::Spread(source) => {
+                        let inner = match &source.kind {
+                            ExprKind::Spread(inner) => inner.as_ref(),
+                            _ => source,
+                        };
+                        assoc_spread_entry_types_syntactic(inner).1
+                    }
+                    ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
+                        infer_expr_type_syntactic(value)
+                    }
+                };
+                value_ty = Some(match value_ty {
+                    Some(current) => {
+                        merge_array_literal_element_type_syntactic(current, next_value)
+                    }
+                    None => next_value,
+                });
+            }
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
                 value: Box::new(value_ty.unwrap_or(PhpType::Mixed)),
             }
         }
@@ -751,42 +773,41 @@ mod tests {
         );
     }
 
-    /// Verifies a spread entry contributes its SOURCE's key and value types rather than the
-    /// placeholder pair that carries it.
-    ///
-    /// The pair's key is the spread node, which this pass types through its `_ => PhpType::Int`
-    /// fallback, and its value is an inert `null`. Reading them as an ordinary entry claimed an
-    /// `int` key and a `null` slot for everything the source merges in.
+    /// Verifies a spread entry of a mixed literal contributes its SOURCE's value type, while the
+    /// key slot stays `Mixed` because the spread renumbers the integer keys it contributes.
     #[test]
-    fn test_syntactic_assoc_literal_spread_entry_types_come_from_the_source() {
+    fn test_syntactic_mixed_literal_spread_entry_value_type_comes_from_the_source() {
         let source = assoc_literal(vec![(Expr::string_lit("b"), Expr::string_lit("y"))]);
-        let ty = infer_expr_type_syntactic(&assoc_literal(vec![
-            (Expr::string_lit("a"), Expr::string_lit("x")),
-            crate::parser::ast::assoc_spread_entry(Expr::new(
-                ExprKind::Spread(Box::new(source)),
-                Span::dummy(),
-            )),
-        ]));
+        let ty = infer_expr_type_syntactic(&Expr::new(
+            ExprKind::ArrayLiteralMixed(vec![
+                ArrayEntry::Keyed(Expr::string_lit("a"), Expr::string_lit("x")),
+                ArrayEntry::Spread(Expr::new(ExprKind::Spread(Box::new(source)), Span::dummy())),
+            ]),
+            Span::dummy(),
+        ));
 
         assert_eq!(
             ty,
             PhpType::AssocArray {
-                key: Box::new(PhpType::Str),
+                key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Str),
             }
         );
     }
 
-    /// Verifies a spread whose source this pass cannot name keeps both slots `Mixed`.
+    /// Verifies a spread whose source this pass cannot name keeps the value slot `Mixed`.
     #[test]
-    fn test_syntactic_assoc_literal_unknown_spread_source_widens_to_mixed() {
-        let ty = infer_expr_type_syntactic(&assoc_literal(vec![
-            (Expr::string_lit("a"), Expr::string_lit("x")),
-            crate::parser::ast::assoc_spread_entry(Expr::new(
-                ExprKind::Spread(Box::new(Expr::var("extra"))),
-                Span::dummy(),
-            )),
-        ]));
+    fn test_syntactic_mixed_literal_unknown_spread_source_widens_to_mixed() {
+        let ty = infer_expr_type_syntactic(&Expr::new(
+            ExprKind::ArrayLiteralMixed(vec![
+                ArrayEntry::Keyed(Expr::string_lit("a"), Expr::string_lit("x")),
+                ArrayEntry::Spread(Expr::new(
+                    ExprKind::Spread(Box::new(Expr::var("extra"))),
+                    Span::dummy(),
+                )),
+            ]),
+            Span::dummy(),
+        ));
 
         assert_eq!(
             ty,

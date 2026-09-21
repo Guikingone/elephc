@@ -730,20 +730,20 @@ fn test_identical_float_ternary_arms_still_merge() {
 /// Verifies an associative literal access does not fold through a spread entry.
 ///
 /// PHP merges the spread source in source order, so `['a' => 1, ...$extra]['a']` is whatever
-/// `$extra` last wrote for key `a`, not the literal `1` the pair carries. The spread is stored as
-/// a pair whose key IS the spread, so the fold has to recognize that shape and decline.
+/// `$extra` last wrote for key `a`, not the literal `1` the entry carries. The literal is an
+/// `ExprKind::ArrayLiteralMixed`, which the fold must not answer from.
 #[test]
 fn test_fold_declines_assoc_array_access_through_spread() {
-    let spread = crate::parser::ast::assoc_spread_entry(Expr::new(
+    let spread = Expr::new(
         ExprKind::Spread(Box::new(Expr::var("extra"))),
         Span::dummy(),
-    ));
+    );
     let program = vec![Stmt::echo(Expr::new(
         ExprKind::ArrayAccess {
             array: Box::new(Expr::new(
-                ExprKind::ArrayLiteralAssoc(vec![
-                    (Expr::string_lit("a"), Expr::int_lit(1)),
-                    spread,
+                ExprKind::ArrayLiteralMixed(vec![
+                    crate::parser::ast::ArrayEntry::Keyed(Expr::string_lit("a"), Expr::int_lit(1)),
+                    crate::parser::ast::ArrayEntry::Spread(spread),
                 ]),
                 Span::dummy(),
             )),

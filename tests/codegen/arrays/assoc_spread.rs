@@ -7,12 +7,11 @@
 //!
 //! Key details:
 //! - Every expected value is verbatim `LC_ALL=C php` output from PHP 8.4.20.
-//! - A spread has no pair of its own in `ExprKind::ArrayLiteralAssoc`: it is carried as a pair
-//!   whose KEY is the `ExprKind::Spread` and whose value is an inert null placeholder, detected
-//!   through `parser::ast::assoc_spread_source`. A consumer that walks pairs generically reads
-//!   that placeholder as an ordinary entry and concludes the key set is complete, which made the
-//!   effect analysis call a spread-supplied key a statically missing offset and let the folder
-//!   answer an access from the literal entry the spread overwrites.
+//! - A literal that mixes explicit keys with a spread is `ExprKind::ArrayLiteralMixed`, an
+//!   ordered entry list; neither single-shape node can hold it. A pass that only special-cases
+//!   `ArrayLiteralAssoc` must therefore leave the mixed node dynamic, which is what stops the
+//!   effect analysis from calling a spread-supplied key a statically missing offset and the
+//!   folder from answering an access from the literal entry the spread overwrites.
 
 use crate::support::*;
 

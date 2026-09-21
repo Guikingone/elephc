@@ -341,6 +341,13 @@ fn collect_in_expr(expr: &Expr, names: &mut HashSet<String>) {
                 collect_in_expr(value, names);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for operand in entry.exprs() {
+                    collect_in_expr(operand, names);
+                }
+            }
+        }
         ExprKind::ExprCall { callee, args } => {
             collect_in_expr(callee, names);
             for arg in args {

@@ -101,19 +101,15 @@ pub(super) fn lower_boxed_spread_args(
     Some(coerce_operands_to_params(ctx, sig, operands))
 }
 
-/// Returns true for an unpack source that is an associative literal carrying a nested `...$source`.
+/// Returns true for an unpack source that is a keyed literal carrying a nested `...$source`.
 ///
-/// The nested source contributes keys that are unknown until the literal is built, so the static
-/// named-argument expansion declines the whole unpack and the signature-ordered lowerings below it
-/// only ever see one opaque argument. The runtime walk is therefore the only lowering that can bind
-/// this shape, and it does so after evaluating the literal exactly once.
+/// The parser files that shape as `ExprKind::ArrayLiteralMixed`. The nested source contributes
+/// keys that are unknown until the literal is built, so the static named-argument expansion
+/// declines the whole unpack and the signature-ordered lowerings below it only ever see one
+/// opaque argument. The runtime walk is therefore the only lowering that can bind this shape,
+/// and it does so after evaluating the literal exactly once.
 fn nested_spread_assoc_literal(source: &Expr) -> bool {
-    let ExprKind::ArrayLiteralAssoc(pairs) = &source.kind else {
-        return false;
-    };
-    pairs
-        .iter()
-        .any(|(key, value)| crate::parser::ast::assoc_spread_source(key, value).is_some())
+    matches!(source.kind, ExprKind::ArrayLiteralMixed(_))
 }
 
 /// Stores an expression in a rooted slot whose boxed layout does not depend on its current value.

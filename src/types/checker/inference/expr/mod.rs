@@ -49,6 +49,7 @@ impl Checker {
             | ExprKind::PostIncrement(_)
             | ExprKind::PostDecrement(_)
             | ExprKind::ArrayLiteralAssoc(_)
+            | ExprKind::ArrayLiteralMixed(_)
             | ExprKind::Match { .. }
             | ExprKind::ArrayLiteral(_)
             | ExprKind::ArrayAccess { .. }
@@ -132,24 +133,6 @@ impl Checker {
         } else {
             value_ty
         }
-    }
-
-    /// Returns the `(key, value)` types one associative-literal spread entry contributes.
-    ///
-    /// The spread merges its SOURCE's own entries into the literal, so an indexed source
-    /// contributes integer keys and a hash source contributes the source's key type. The source is
-    /// inferred exactly once here so its narrowing and diagnostics still happen; a source this
-    /// checker cannot name keeps both slots `Mixed`.
-    fn assoc_spread_entry_types(
-        &mut self,
-        inner: &Expr,
-        env: &TypeEnv,
-    ) -> Result<(PhpType, PhpType), CompileError> {
-        Ok(match self.infer_type(inner, env)?.codegen_repr() {
-            PhpType::Array(elem) => (PhpType::Int, elem.codegen_repr()),
-            PhpType::AssocArray { key, value } => (key.codegen_repr(), value.codegen_repr()),
-            _ => (PhpType::Mixed, PhpType::Mixed),
-        })
     }
 
     /// Returns the return type of the `offsetGet` method for `class_name`,

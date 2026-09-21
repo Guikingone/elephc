@@ -225,8 +225,53 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
 
 /// Runs the codegen-fixture pipeline and hands back the backend's `Result` instead of
 /// unwrapping it, so callers can assert on either outcome.
+///
+/// The run happens inside `with_compiler_stack` because this function IS the embedder: it
+/// drives the crate's phases by hand the way an external consumer would, off a libtest worker
+/// thread whose stack is whatever `RUST_MIN_STACK` says.
+///
+/// Each PHASE carries its own budget, so this wrapper is not what makes the phases survive
+/// `MAX_COMPILER_NESTING`; `tests/embedder_stack_tests.rs` proves that separately by calling
+/// them one at a time on a 256 KiB thread. What it covers is everything a driver does BETWEEN
+/// the phases with an AST that deep -- moving it, cloning it, dropping it -- which recurses
+/// through derived `Clone` and `Drop` code no guard can be put inside. Removing this wrapper
+/// aborts the 1024-level fixture in `ExprKind::clone` (issue #686).
 #[allow(clippy::too_many_arguments)]
 fn try_compile_source_to_asm_with_defines_repr(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    counters: bool,
+    heap_debug: bool,
+    null_repr: elephc::codegen::NullRepr,
+    with_regex: bool,
+    php_version: elephc::php_version::PhpVersion,
+) -> (
+    std::result::Result<String, elephc::codegen::CodegenIrError>,
+    String,
+    TestLinkRequirements,
+) {
+    elephc::compiler_stack::with_compiler_stack(|| {
+        try_compile_source_to_asm_with_defines_repr_inner(
+            source,
+            dir,
+            defines,
+            heap_size,
+            gc_stats,
+            counters,
+            heap_debug,
+            null_repr,
+            with_regex,
+            php_version,
+        )
+    })
+}
+
+/// The pipeline behind the stack budget of `try_compile_source_to_asm_with_defines_repr`.
+#[allow(clippy::too_many_arguments)]
+fn try_compile_source_to_asm_with_defines_repr_inner(
     source: &str,
     dir: &Path,
     defines: &HashSet<String>,
@@ -433,9 +478,42 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     module
 }
 
-/// Returns whether the codegen fixture should run EIR optimization passes,
-/// matching the CLI's `ELEPHC_IR_OPT=off|on` default-on behavior.
+thread_local! {
+    /// Per-test override of the EIR optimizer, installed by [`without_ir_opt`].
+    static IR_OPT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Compiles every fixture inside `body` with the EIR optimizer forced off.
+///
+/// `ELEPHC_IR_OPT` selects the mode for a whole test PROCESS, and the harness runs tests in
+/// parallel, so setting it from one test would change how every other in-flight fixture
+/// compiles. The override is a thread-local instead -- the isolation the compiler itself uses
+/// for per-compilation state, see `src/codegen_support/compilation_context.rs` -- and fixture
+/// compilation runs on the calling thread, so it reaches this test's fixtures and no other
+/// test's. It is restored on the way out, panics included.
+pub(crate) fn without_ir_opt<T>(body: impl FnOnce() -> T) -> T {
+    /// Carries the override this block displaced, so the block cannot leak its own setting
+    /// into whatever the harness schedules on this thread next.
+    struct Restore(Option<bool>);
+    impl Drop for Restore {
+        /// Puts the displaced override back, on the panicking path as much as the normal one.
+        fn drop(&mut self) {
+            IR_OPT_OVERRIDE.with(|cell| cell.set(self.0));
+        }
+    }
+
+    let _restore = Restore(IR_OPT_OVERRIDE.with(|cell| cell.replace(Some(false))));
+    body()
+}
+
+/// Returns whether the codegen fixture should run EIR optimization passes.
+///
+/// A [`without_ir_opt`] block wins for its own thread; otherwise this matches the CLI's
+/// `ELEPHC_IR_OPT=off|on` default-on behavior.
 fn ir_opt_enabled_for_codegen_fixture() -> bool {
+    if let Some(forced) = IR_OPT_OVERRIDE.with(|cell| cell.get()) {
+        return forced;
+    }
     match std::env::var("ELEPHC_IR_OPT").as_deref() {
         Ok("off") => false,
         Ok("on") => true,

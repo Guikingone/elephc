@@ -59,3 +59,56 @@ $a->inc();
 $a->inc();
 $b->inc();
 echo "a=" . $a->get() . " b=" . $b->get() . "\n";
+
+// A property default may be an array literal whose elements are array literals,
+// to any depth and in either spelling. Each nested container belongs to the
+// object holding it, so two instances never share one.
+class Grid {
+    public array $rows = [[1, 2], [3, 4]];
+    public array $conf = ['db' => ['host' => 'localhost', 'port' => 5432]];
+
+    public function cell(int $row, int $col): int {
+        return $this->rows[$row][$col];
+    }
+}
+
+$g = new Grid();
+echo "cell(1,0)=" . $g->cell(1, 0) . "\n";
+echo "host=" . $g->conf['db']['host'] . ":" . $g->conf['db']['port'] . "\n";
+
+$g->rows[0][] = 9;
+$fresh = new Grid();
+echo "written=" . count($g->rows[0]) . " fresh=" . count($fresh->rows[0]) . "\n";
+
+// One declaration can introduce several properties or constants, separated by commas. The type
+// and every modifier belong to the whole list; each name carries its own initializer.
+class Viewport
+{
+    const int MIN_WIDTH = 40, MIN_HEIGHT = 22;
+
+    public int $width = 80, $height = 24;
+    private static int $instances = 0, $resizes = 0;
+
+    public function __construct()
+    {
+        self::$instances++;
+    }
+
+    public function shrink_to_minimum(): void
+    {
+        $this->width = self::MIN_WIDTH;
+        $this->height = self::MIN_HEIGHT;
+        self::$resizes++;
+    }
+
+    public static function tally(): string
+    {
+        return self::$instances . " built, " . self::$resizes . " resized";
+    }
+}
+
+$viewport = new Viewport();
+echo "Viewport: " . $viewport->width . "x" . $viewport->height . "\n";
+$viewport->shrink_to_minimum();
+echo "Shrunk to: " . $viewport->width . "x" . $viewport->height . "\n";
+echo "Tally: " . Viewport::tally() . "\n";

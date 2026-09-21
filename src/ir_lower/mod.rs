@@ -33,7 +33,7 @@ mod stmt;
 mod throwable_constructors;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) use expr::body_contains_eval_call;
 

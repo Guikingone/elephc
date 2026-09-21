@@ -35,22 +35,6 @@ pub(super) fn lower_array_splice_call(
     Ok(())
 }
 
-/// Materializes the shared `(array, offset, length)` argument triple for `array_slice` and
-/// `array_splice` into the runtime argument registers.
-/// Materializes the shared `(array, offset, length, length_present)` argument tuple for
-/// `array_slice` and `array_splice` into the runtime argument registers.
-///
-/// The offset and length are resolved to plain integers first — unboxing a `Mixed` cell read from a
-/// heterogeneous array via `__rt_mixed_cast_int` — and spilled to the stack, because that unbox call
-/// clobbers caller-saved registers. The array pointer (a plain stack load that clobbers nothing) is
-/// then placed, and the staged integers are restored into the offset/length argument registers, so
-/// the runtime helper sees the array pointer plus two genuine integers rather than a boxed pointer.
-/// The offset, the length and the length-present flag are resolved to plain integers first —
-/// unboxing a `Mixed` cell read from a heterogeneous array via `__rt_mixed_cast_int` — and spilled to
-/// the stack, because those unbox calls clobber caller-saved registers. The array pointer (a plain
-/// stack load that clobbers nothing) is then placed, and the staged integers are restored into the
-/// offset/length/flag argument registers, so the runtime helper sees the array pointer plus three
-/// genuine integers rather than a boxed pointer.
 /// Materializes the shared `(array, offset, length, length_present)` argument tuple for
 /// `array_slice` and `array_splice` into the runtime argument registers.
 ///
@@ -443,7 +427,13 @@ pub(super) fn array_pad_runtime_helper(source_elem_ty: &PhpType) -> &'static str
 
 /// Returns the helper that matches the source element ownership representation.
 pub(super) fn array_slice_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
-    if source_elem_ty.is_refcounted() {
+    if source_elem_ty.codegen_repr() == PhpType::Str {
+        // An indexed string array stores 16-byte `{pointer, length}` slots. The shared helpers
+        // copy 8 bytes per element, so neither can carry a string pair — `array_slice()` on one
+        // was refused at compile time rather than run (issue #675). Same split, and the same
+        // ownership rule, as `array_splice_runtime_helper` below.
+        "__rt_array_slice_str"
+    } else if source_elem_ty.is_refcounted() {
         "__rt_array_slice_refcounted"
     } else {
         "__rt_array_slice"

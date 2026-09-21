@@ -131,6 +131,7 @@ fn expr_uses_backing_slot(value: &Expr, property: &str) -> bool {
             expr(object) || expr(method) || args(values)
         }
         ExprKind::ArrayLiteralAssoc(entries) => entries.iter().any(|(key, value)| expr(key) || expr(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries.iter().flat_map(|entry| entry.exprs()).any(expr),
         ExprKind::Match { subject, arms, default } => {
             expr(subject) || arms.iter().any(|(conditions, value)| args(conditions) || expr(value))
                 || default.as_deref().is_some_and(expr)

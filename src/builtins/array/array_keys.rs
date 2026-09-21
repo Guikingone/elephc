@@ -6,7 +6,11 @@
 //!
 //! Key details:
 //! - `check` reproduces the legacy return-type rule: an indexed array yields
-//!   `Array<Int>` (positional keys) while an associative array yields `Array<key>`.
+//!   `Array<Int>` (positional keys) while an associative array yields `Array<key>` -- with two
+//!   exceptions, both because the declared type does not describe the runtime key form: a
+//!   STRING-keyed hash yields `Array<Mixed>` because a reindexing sort can leave it holding
+//!   integer keys, and an `array<mixed>` receiver yields `Array<Mixed>` because it can be
+//!   hash-backed at run time and hold string keys (issue #1072).
 //!   A check hook is required because the return type depends on the inferred
 //!   argument type, which the `builtin!` `returns:` field cannot express.
 //! - A `Mixed` argument (an array read out of a `mixed`-typed value: a builtin/prelude return,
@@ -43,7 +47,14 @@ const fn array_keys_semantics() -> BuiltinSemantics {
 fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
     let key = match input.arg_types.first().map(PhpType::codegen_repr) {
         Some(PhpType::Array(elem)) if elem.codegen_repr() != PhpType::Mixed => PhpType::Int,
-        Some(PhpType::AssocArray { key, .. }) => *key,
+        // A hash key is int-or-string at RUN TIME whatever the declared key type says: a
+        // reindexing sort leaves a string-keyed hash holding integers while the receiver keeps
+        // its type (issue #1072), so only an int-like declared key stays concrete.
+        Some(PhpType::AssocArray { key, .. })
+            if !matches!(key.codegen_repr(), PhpType::Str | PhpType::Mixed) =>
+        {
+            *key
+        }
         _ => PhpType::Mixed,
     };
     PhpType::Array(Box::new(key))
@@ -64,7 +75,24 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
     }
     match ty {
+        // An `array<mixed>` value can be HASH-backed at run time -- `lower_dynamic_mixed_array_keys`
+        // exists precisely to branch on that at run time -- so its keys can be strings, and
+        // `Array<Int>` has nowhere to put them. The backend refused the pair outright, which made
+        // `array_keys([1, "b", 2.5])` a compile error on an ordinary heterogeneous literal.
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+        }
         PhpType::Array(_) => Ok(PhpType::Array(Box::new(PhpType::Int))),
+        // A STRING-keyed hash answers `Array<Mixed>`, not `Array<Str>`. `sort()`/`rsort()`
+        // reindex a hash to `0..n-1`, and the receiver keeps its declared key type across the
+        // by-reference call -- the checker pins a reference alias root there rather than
+        // retyping it -- so the keys can be integers while the static type still says string.
+        // `Array<Str>` has nowhere to put an integer key, and the materializer persisted the
+        // int-key sentinel as a string length instead (issue #1072). An `Array<Int>` hash needs
+        // no widening: reindexing an int-keyed hash still yields int keys.
+        PhpType::AssocArray { key, .. } if matches!(*key, PhpType::Str) => {
+            Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+        }
         PhpType::AssocArray { key, .. } => Ok(PhpType::Array(key)),
         PhpType::Mixed => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
         _ => Err(CompileError::new(

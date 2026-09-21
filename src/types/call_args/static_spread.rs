@@ -142,19 +142,19 @@ pub(crate) fn coalesce_planned_indexed_spreads(
 
 /// Returns `true` if `expr` is an `ArrayLiteralAssoc` and any of its keys
 /// resolve to a named (string) key in PHP array-unpack semantics.
+///
+/// A literal that mixes keys with a nested spread (`ExprKind::ArrayLiteralMixed`) contributes
+/// its nested source's keys, which are unknowable here. Answering "yes, this may carry named
+/// arguments" is the safe direction: every caller treats `true` as "decline the static shortcut
+/// and keep the call dynamic".
 fn static_assoc_spread_has_named_args(expr: &Expr) -> bool {
-    let ExprKind::ArrayLiteralAssoc(pairs) = &expr.kind else {
-        return false;
-    };
-    pairs.iter().any(|(key, value)| {
-        // A nested spread contributes its source's keys, which are unknowable here. Answering
-        // "yes, this may carry named arguments" is the safe direction: every caller treats `true`
-        // as "decline the static shortcut and keep the call dynamic".
-        if crate::parser::ast::assoc_spread_source(key, value).is_some() {
-            return true;
-        }
-        matches!(static_assoc_spread_key(key), Some(StaticAssocSpreadKey::Named(_)))
-    })
+    match &expr.kind {
+        ExprKind::ArrayLiteralMixed(_) => true,
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs.iter().any(|(key, _)| {
+            matches!(static_assoc_spread_key(key), Some(StaticAssocSpreadKey::Named(_)))
+        }),
+        _ => false,
+    }
 }
 
 /// If `expr` is a static associative array literal, returns its key/value pairs
@@ -180,12 +180,6 @@ fn expand_static_assoc_spread(
     let mut positional_args = Vec::new();
     let mut named_args: Vec<(String, Expr)> = Vec::new();
     for (key, value) in pairs {
-        // A nested spread is carried as a pair whose key IS the spread and whose value is an inert
-        // null placeholder. Flattening it would push that placeholder as an argument and drop the
-        // source entirely, so the whole unpack stays dynamic and keeps its single evaluation.
-        if crate::parser::ast::assoc_spread_source(key, value).is_some() {
-            return None;
-        }
         match static_assoc_spread_key(key)? {
             StaticAssocSpreadKey::Positional => positional_args.push((
                 Expr::new(value.kind.clone(), spread_span),
@@ -335,16 +329,16 @@ mod tests {
 
     /// An unpacked literal that itself contains a spread stays one dynamic argument.
     ///
-    /// The nested spread is a pair whose key IS the spread and whose value is an inert `null`.
-    /// Flattening it would push that placeholder as an argument and drop the source entirely, so
-    /// the whole unpack keeps its original node and its single evaluation.
+    /// The parser files such a literal as `ExprKind::ArrayLiteralMixed`, which has no static
+    /// expansion: the nested source decides which keys exist, so the whole unpack keeps its
+    /// original node and its single evaluation.
     #[test]
     fn nested_assoc_spread_keeps_the_whole_unpack_dynamic() {
         let arg = Expr::new(
             ExprKind::Spread(Box::new(Expr::new(
-                ExprKind::ArrayLiteralAssoc(vec![
-                    (Expr::string_lit("a"), Expr::int_lit(10)),
-                    crate::parser::ast::assoc_spread_entry(Expr::new(
+                ExprKind::ArrayLiteralMixed(vec![
+                    crate::parser::ast::ArrayEntry::Keyed(Expr::string_lit("a"), Expr::int_lit(10)),
+                    crate::parser::ast::ArrayEntry::Spread(Expr::new(
                         ExprKind::Spread(Box::new(Expr::var("extra"))),
                         Span::dummy(),
                     )),

@@ -11,6 +11,9 @@
 //!   the mutation; attached write-fetched cells retain their parent-owned storage contract.
 //! - Non-local heterogeneous parents are stabilized into a retained temporary, sorted through
 //!   the local path, and written back to their property or containing element.
+//! - PHP's `$flags` argument (issue #699) rides along as the sort call's second operand: the
+//!   receiver is bound by `plan_key_sort_args` so named and reordered spellings resolve, and
+//!   the flag expression is lowered once, right before the sort call.
 
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::ir::{ArrayKeySort, Immediate, Op};
@@ -18,10 +21,20 @@ use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_m
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
+use super::super::array_builtin_args::plan_key_sort_args;
+use super::super::call_arg_coercion::lower_arg_with_signature;
 use super::super::lower_expr;
 use super::{place_object_class_name, ref_param_place, static_place_type};
 
 /// Attempts the specialized property or nested-cell lowering for a PHP key sort.
+///
+/// The written arguments are bound to their parameter slots first, so `ksort(flags: $f,
+/// array: $o->items)` finds its receiver whichever way it is spelled. The `$flags` expression
+/// is not evaluated here: every path below checks its receiver shape before lowering anything
+/// and may still decline, and an eager flag lowering would then be evaluated a second time by
+/// the generic call path. It is lowered once, by `emit_key_sort_call`, right before the sort
+/// runs. For the receiver shapes handled here that only reorders the flag expression against
+/// the receiver's own index expressions, never against a user call.
 pub(super) fn lower_key_sort_ref_place_call(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -34,13 +47,48 @@ pub(super) fn lower_key_sort_ref_place_call(
         "krsort" => ArrayKeySort::Descending,
         _ => return None,
     };
-    if let Some(result) = lower_direct_property_key_sort(ctx, name, sig, args, expr, sort) {
+    let plan = plan_key_sort_args(sig, args)?;
+    let mut receiver = None;
+    let mut flags = None;
+    for (slot, arg) in &plan {
+        match slot {
+            0 => receiver = Some(arg),
+            1 => flags = Some(arg),
+            _ => return None,
+        }
+    }
+    let receiver = receiver?;
+    if let Some(result) =
+        lower_direct_property_key_sort(ctx, name, sig, receiver, flags, expr, sort)
+    {
         return Some(result);
     }
-    if let Some(result) = lower_exact_php_array_place_key_sort(ctx, name, sig, args, expr, sort) {
+    if let Some(result) =
+        lower_exact_php_array_place_key_sort(ctx, name, sig, receiver, flags, expr, sort)
+    {
         return Some(result);
     }
-    lower_mixed_array_element_key_sort(ctx, name, sig, args, expr, sort)
+    lower_mixed_array_element_key_sort(ctx, name, sig, receiver, flags, expr, sort)
+}
+
+/// Emits the key-sort builtin call over a prepared hash, appending the `$flags` operand.
+///
+/// The flag expression is lowered here, exactly once, through the same signature coercion the
+/// generic argument path applies; an omitted `$flags` leaves the call unary and the backend
+/// supplies `SORT_REGULAR`.
+fn emit_key_sort_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    sig: &FunctionSig,
+    hash: LoweredValue,
+    flags: Option<&Expr>,
+    expr: &Expr,
+) -> LoweredValue {
+    let mut operands = vec![hash.value];
+    if let Some(flags) = flags {
+        operands.push(lower_arg_with_signature(ctx, sig, 1, flags));
+    }
+    super::super::emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span, None)
 }
 
 /// Sorts a direct property through its concrete container or declared-array boxed cell.
@@ -48,14 +96,12 @@ fn lower_direct_property_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     sig: &FunctionSig,
-    args: &[Expr],
+    receiver: &Expr,
+    flags: Option<&Expr>,
     expr: &Expr,
     sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
-    let [arg] = args else {
-        return None;
-    };
-    let place = ref_param_place(sig, 0, arg)?;
+    let place = ref_param_place(sig, 0, receiver)?;
     let ExprKind::PropertyAccess { object, property } = &place.kind else {
         return None;
     };
@@ -66,10 +112,15 @@ fn lower_direct_property_key_sort(
     }
     let property_ty = static_place_type(ctx, place)?;
     if property_ty.is_php_array() {
-        let cell = super::super::lower_by_ref_foreach_property_source(
+        let source = super::super::lower_by_ref_foreach_property_source(
             ctx, object, property, place,
         );
-        return Some(sort_attached_mixed_cell(ctx, name, cell, expr, sort));
+        // The receiver is a variable or `$this` (checked above), so it names stable backing
+        // storage and the fetch never hands back a temporary for the caller to release.
+        debug_assert!(source.receiver.is_none());
+        return Some(sort_attached_mixed_cell(
+            ctx, name, sig, source.value, flags, expr, sort,
+        ));
     }
     if sort != ArrayKeySort::Descending {
         return None;
@@ -107,14 +158,7 @@ fn lower_direct_property_key_sort(
         PhpType::AssocArray { .. } => property_value,
         _ => return None,
     };
-    Some(super::super::emit_builtin_call_value(
-        ctx,
-        name,
-        vec![hash.value],
-        PhpType::Bool,
-        expr.span,
-        None,
-    ))
+    Some(emit_key_sort_call(ctx, name, sig, hash, flags, expr))
 }
 
 /// Sorts an exact PHP `array` local or general writable place through its boxed Mixed cell.
@@ -125,20 +169,18 @@ fn lower_exact_php_array_place_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     sig: &FunctionSig,
-    args: &[Expr],
+    receiver: &Expr,
+    flags: Option<&Expr>,
     expr: &Expr,
     sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
-    let [arg] = args else {
-        return None;
-    };
-    let place = ref_param_place(sig, 0, arg)?;
+    let place = ref_param_place(sig, 0, receiver)?;
     if !static_place_type(ctx, place)?.is_php_array() {
         return None;
     }
     if let ExprKind::Variable(local) = &place.kind {
         let cell = ctx.load_local(local, Some(place.span));
-        return Some(sort_attached_mixed_cell(ctx, name, cell, expr, sort));
+        return Some(sort_attached_mixed_cell(ctx, name, sig, cell, flags, expr, sort));
     }
     if !super::is_candidate_place_shape(place) {
         return None;
@@ -155,7 +197,7 @@ fn lower_exact_php_array_place_key_sort(
     ctx.store_local(&temp, work_cell, PhpType::Mixed, Some(place.span));
 
     let cell = ctx.load_local(&temp, Some(place.span));
-    let result = sort_attached_mixed_cell(ctx, name, cell, expr, sort);
+    let result = sort_attached_mixed_cell(ctx, name, sig, cell, flags, expr, sort);
     let temp_value = Expr::new(ExprKind::Variable(temp.clone()), place.span);
     super::lower_non_local_assignment_write(ctx, &place, &temp_value, place.span);
 
@@ -199,25 +241,23 @@ fn lower_mixed_array_element_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     sig: &FunctionSig,
-    args: &[Expr],
+    receiver: &Expr,
+    flags: Option<&Expr>,
     expr: &Expr,
     sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
-    let [arg] = args else {
-        return None;
-    };
-    let place = ref_param_place(sig, 0, arg)?;
+    let place = ref_param_place(sig, 0, receiver)?;
     let ExprKind::ArrayAccess { array, index } = &place.kind else {
         return None;
     };
     if static_place_type(ctx, array).is_some_and(|ty| ty.is_php_array()) {
         return Some(lower_boxed_parent_element_key_sort(
-            ctx, name, place, expr, sort,
+            ctx, name, sig, place, flags, expr, sort,
         ));
     }
     let ExprKind::Variable(parent_name) = &array.kind else {
         return lower_non_local_mixed_array_element_key_sort(
-            ctx, name, sig, arg, place, array, index, expr, sort,
+            ctx, name, sig, place, array, index, flags, expr, sort,
         );
     };
     if let PhpType::Array(element_ty) = ctx.local_type(parent_name).codegen_repr() {
@@ -227,9 +267,11 @@ fn lower_mixed_array_element_key_sort(
         return lower_mixed_packed_array_element_key_sort(
             ctx,
             name,
+            sig,
             parent_name,
             array,
             index,
+            flags,
             expr,
             *element_ty,
             sort,
@@ -294,17 +336,19 @@ fn lower_mixed_array_element_key_sort(
     );
     if value_repr == PhpType::Mixed {
         return lower_shared_mixed_hash_element_key_sort(
-            ctx, name, parent, key, cell, expr, sort,
+            ctx, name, sig, parent, key, cell, flags, expr, sort,
         );
     }
-    lower_attached_mixed_cell_key_sort(ctx, name, cell, expr, sort)
+    lower_attached_mixed_cell_key_sort(ctx, name, sig, cell, flags, expr, sort)
 }
 
 /// Sorts one child of an exact PHP `array` place through an owned Mixed work cell.
 fn lower_boxed_parent_element_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
+    sig: &FunctionSig,
     place: &Expr,
+    flags: Option<&Expr>,
     expr: &Expr,
     sort: ArrayKeySort,
 ) -> LoweredValue {
@@ -316,7 +360,7 @@ fn lower_boxed_parent_element_key_sort(
     ctx.store_local(&temp, child, PhpType::Mixed, Some(place.span));
 
     let cell = ctx.load_local(&temp, Some(place.span));
-    let result = sort_attached_mixed_cell(ctx, name, cell, expr, sort);
+    let result = sort_attached_mixed_cell(ctx, name, sig, cell, flags, expr, sort);
     let temp_value = Expr::new(ExprKind::Variable(temp.clone()), place.span);
     super::lower_non_local_assignment_write(ctx, &place, &temp_value, place.span);
 
@@ -341,10 +385,10 @@ fn lower_non_local_mixed_array_element_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     sig: &FunctionSig,
-    original_arg: &Expr,
     place: &Expr,
     array: &Expr,
     index: &Expr,
+    flags: Option<&Expr>,
     expr: &Expr,
     sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
@@ -394,21 +438,14 @@ fn lower_non_local_mixed_array_element_key_sort(
         },
         place.span,
     );
-    let nested_arg = match &original_arg.kind {
-        ExprKind::NamedArg { name, .. } => Expr::new(
-            ExprKind::NamedArg {
-                name: name.clone(),
-                value: Box::new(nested_place),
-            },
-            original_arg.span,
-        ),
-        _ => nested_place,
-    };
+    // The receiver is already bound to slot 0, so the nested place goes back in positional
+    // form whatever spelling the caller used.
     let result = lower_mixed_array_element_key_sort(
         ctx,
         name,
         sig,
-        std::slice::from_ref(&nested_arg),
+        &nested_place,
+        flags,
         expr,
         sort,
     )?;
@@ -427,12 +464,15 @@ fn lower_non_local_mixed_array_element_key_sort(
 /// parent for copy-on-write. Later sibling sorts reuse the resulting `array<mixed>` directly so
 /// `ArrayToMixed` never receives an already-Mixed input and the guarded cell promotion remains the
 /// sole authority for accepting a packed child, borrowing a promoted hash, or raising `TypeError`.
+#[allow(clippy::too_many_arguments)]
 fn lower_mixed_packed_array_element_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
+    sig: &FunctionSig,
     parent_name: &str,
     array: &Expr,
     index: &Expr,
+    flags: Option<&Expr>,
     expr: &Expr,
     element_ty: PhpType,
     sort: ArrayKeySort,
@@ -486,10 +526,10 @@ fn lower_mixed_packed_array_element_key_sort(
     );
     if element_repr == PhpType::Mixed {
         return lower_shared_mixed_array_element_key_sort(
-            ctx, name, parent, key, cell, expr, sort,
+            ctx, name, sig, parent, key, cell, flags, expr, sort,
         );
     }
-    lower_attached_mixed_cell_key_sort(ctx, name, cell, expr, sort)
+    lower_attached_mixed_cell_key_sort(ctx, name, sig, cell, flags, expr, sort)
 }
 
 /// Detaches one shared associative-parent cell before publishing and sorting its promoted hash.
@@ -497,12 +537,15 @@ fn lower_mixed_packed_array_element_key_sort(
 /// Parent COW is performed by `HashSet`; cloning first prevents a shallow parent split from
 /// exposing an in-place cell promotion through aliases. Failed promotion occurs before insertion,
 /// so missing or scalar elements keep the guarded `TypeError` path without autovivification.
+#[allow(clippy::too_many_arguments)]
 fn lower_shared_mixed_hash_element_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
+    sig: &FunctionSig,
     parent: LoweredValue,
     key: LoweredValue,
     cell: LoweredValue,
+    flags: Option<&Expr>,
     expr: &Expr,
     sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
@@ -515,14 +558,7 @@ fn lower_shared_mixed_hash_element_key_sort(
         Op::HashSet.default_effects(),
         Some(expr.span),
     );
-    let result = super::super::emit_builtin_call_value(
-        ctx,
-        name,
-        vec![hash.value],
-        PhpType::Bool,
-        expr.span,
-        None,
-    );
+    let result = emit_key_sort_call(ctx, name, sig, hash, flags, expr);
     crate::ir_lower::ownership::release_if_owned(ctx, cloned, Some(expr.span));
     Some(result)
 }
@@ -531,12 +567,15 @@ fn lower_shared_mixed_hash_element_key_sort(
 ///
 /// `ArraySet` performs the parent COW split only after guarded promotion succeeds, preserving the
 /// absent/scalar failure behavior while installing an independently owned cell for mutation.
+#[allow(clippy::too_many_arguments)]
 fn lower_shared_mixed_array_element_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
+    sig: &FunctionSig,
     parent: LoweredValue,
     key: LoweredValue,
     cell: LoweredValue,
+    flags: Option<&Expr>,
     expr: &Expr,
     sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
@@ -549,14 +588,7 @@ fn lower_shared_mixed_array_element_key_sort(
         Op::ArraySet.default_effects(),
         Some(expr.span),
     );
-    let result = super::super::emit_builtin_call_value(
-        ctx,
-        name,
-        vec![hash.value],
-        PhpType::Bool,
-        expr.span,
-        None,
-    );
+    let result = emit_key_sort_call(ctx, name, sig, hash, flags, expr);
     crate::ir_lower::ownership::release_if_owned(ctx, cloned, Some(expr.span));
     Some(result)
 }
@@ -645,11 +677,13 @@ fn promote_attached_mixed_cell_to_hash(
 fn lower_attached_mixed_cell_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
+    sig: &FunctionSig,
     cell: LoweredValue,
+    flags: Option<&Expr>,
     expr: &Expr,
     sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
-    let result = sort_attached_mixed_cell(ctx, name, cell, expr, sort);
+    let result = sort_attached_mixed_cell(ctx, name, sig, cell, flags, expr, sort);
     crate::ir_lower::ownership::release_if_owned(ctx, cell, Some(expr.span));
     Some(result)
 }
@@ -658,17 +692,12 @@ fn lower_attached_mixed_cell_key_sort(
 fn sort_attached_mixed_cell(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
+    sig: &FunctionSig,
     cell: LoweredValue,
+    flags: Option<&Expr>,
     expr: &Expr,
     sort: ArrayKeySort,
 ) -> LoweredValue {
     let hash = promote_attached_mixed_cell_to_hash(ctx, cell, expr, sort);
-    super::super::emit_builtin_call_value(
-        ctx,
-        name,
-        vec![hash.value],
-        PhpType::Bool,
-        expr.span,
-        None,
-    )
+    emit_key_sort_call(ctx, name, sig, hash, flags, expr)
 }

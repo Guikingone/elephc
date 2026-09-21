@@ -52,6 +52,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
         abi::int_arg_reg_name(ctx.emitter.target, 0)
     };
     ctx.load_value_to_reg(object, base_reg)?;
+    emit_null_receiver_error(ctx, base_reg, &property);
     if slot_supports_untyped_unset_marker(&slot) {
         emit_recreate_removed_untyped_property_for_write(ctx, object, &slot, base_reg)?;
     } else if slot.is_declared {
@@ -132,6 +133,36 @@ fn emit_recreate_removed_untyped_property_for_write(
     );
     ctx.emitter.label(&initialized_label);
     Ok(())
+}
+
+/// Raises PHP's `Error` when the receiver of a fetch-for-write property read is null.
+///
+/// The receiver can be one at run time even where its static type says otherwise: an element
+/// read that MISSES its container answers the null sentinel with the element's declared type
+/// (`$arr[5]->x` on a one-element array). A plain read would go on to warn and produce null,
+/// but this read is the source of a by-reference `foreach`, which PHP evaluates in a WRITE
+/// context -- there a null receiver is a fatal `Error`, not a warning, and it is that Error
+/// this raises rather than dereferencing the sentinel (issue #690).
+///
+/// It is also what lets the caller ask for the property's SLOT type instead of a nullable read
+/// type: this path never answers null, so nothing downstream has to represent one.
+fn emit_null_receiver_error(ctx: &mut FunctionContext<'_>, base_reg: &str, property: &str) {
+    let null_label = ctx.next_label("prop_get_for_write_null_receiver");
+    let ok_label = ctx.next_label("prop_get_for_write_receiver_ok");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        base_reg,
+        scratch_reg,
+        &null_label,
+    );
+    abi::emit_jump(ctx.emitter, &ok_label);
+    ctx.emitter.label(&null_label);
+    super::super::exceptions::emit_error(
+        ctx,
+        &format!("Attempt to modify property \"{}\" on null", property),
+    );
+    ctx.emitter.label(&ok_label);
 }
 
 /// Describes how `PropGetForWrite` reaches and republishes one property's container.

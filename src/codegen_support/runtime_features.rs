@@ -495,6 +495,10 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items
             .iter()
             .any(|(key, value)| expr_has_regex_call(key) || expr_has_regex_call(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_has_regex_call),
         ExprKind::Match {
             subject,
             arms,
@@ -830,6 +834,10 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
             expr_needs_descriptor_invoker(key) || expr_needs_descriptor_invoker(value)
         }),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_needs_descriptor_invoker),
         ExprKind::Match {
             subject,
             arms,
@@ -1006,6 +1014,7 @@ fn callback_arg_may_be_runtime_dispatch(arg: &Expr) -> bool {
         | ExprKind::FirstClassCallable(_)
         | ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayLiteralMixed(_)
         | ExprKind::StringLiteral(_) => false,
         _ => true,
     }

@@ -364,7 +364,7 @@ pub(super) fn assoc_spread_sources(ctx: &LoweringContext<'_, '_>, args: &[Expr])
 pub(super) fn is_assoc_spread_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(name) => matches!(ctx.local_types.get(name), Some(PhpType::AssocArray { .. })),
-        ExprKind::ArrayLiteralAssoc(_) => true,
+        ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => true,
         _ => matches!(infer_expr_type_syntactic(expr), PhpType::AssocArray { .. }),
     }
 }

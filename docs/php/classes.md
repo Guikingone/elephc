@@ -241,6 +241,7 @@ final class InvoiceNumber {
 - `final` properties, which can be read normally but cannot be redeclared by subclasses
 - Static properties with `public static`, `protected static`, or `private static`, including typed static properties
 - `readonly class` makes all instance properties readonly; static properties stay mutable
+- Several properties in one declaration, separated by commas: `public int $w = 40, $h = 22;`. The type and every modifier are shared by the whole list, and each name carries its own optional default. A property with a **hook block** needs a declaration of its own, as in PHP.
 
 Statically-known access violations — calling a `private`/`protected` method from an inaccessible scope, or writing a `readonly` property outside its declaring constructor — raise a catchable `Error` exception at runtime, matching PHP. Without a `try`/`catch` handler the exception is a fatal uncaught exit.
 
@@ -264,6 +265,10 @@ An untyped property with no explicit default (`public $x;`, instance or static) 
 Property default values are applied both for the normal `new ClassName()` form and for dynamic `new $variable()` instantiation (and therefore for runtime-instantiated stream wrappers and stream filters). When the class name resolves to a known class, dynamic instantiation follows the same allocation path as direct construction, so constructor arguments are evaluated and `__construct` runs normally.
 
 An `array`-typed (or untyped) property may take an associative literal default such as `['a' => 1]`. The property is then stored as an associative array, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run like any other associative array. A positional literal default (`[1, 2, 3]`) keeps integer-keyed list storage.
+
+The elements may themselves be array literals, to any depth and in either spelling: `public array $grid = [[1, 2], [3, 4]];`, `public array $conf = ['db' => ['host' => 'localhost']];`, and mixtures such as `[[1], 2]` all initialize without running any code. Each nested container is allocated as part of the object's initialization and owned by the one enclosing it, so the whole tree is released exactly once with the object, and two instances never share storage — writing through `$a->grid[0][] = 9` leaves a second instance's default untouched, as in PHP.
+
+A **nullable or union** array property takes either literal too — `public ?array $x = [1, 2];` and `public ?array $x = ['k' => 1];` both initialize, as do the `mixed` and `array|string` spellings. The value is boxed the way any other `mixed` payload is, so the slot can later hold `null` or a non-array without changing representation.
 
 ```php
 <?php
@@ -1557,6 +1562,8 @@ class Bound implements Limits {
     public function get(): int { return Limits::MAX; }
 }
 ```
+
+A single `const` may declare several constants, separated by commas — `const A = 1, B = 2;` — with the optional declared type and the visibility shared by the whole list and each name carrying its own required value.
 
 Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`, PHP 8.3+ declared types) live on classes, interfaces, traits, and enums. Names are case-sensitive and may use PHP keywords other than the reserved `class` name; exact declaration and access spelling is preserved. Declared types are enforced on initializer values, and an overriding constant must preserve or narrow an inherited class/interface type. PHP-forbidden constant types (`void`, `never`, and `callable`) are rejected. Typed constants expose their declared named, nullable, union, or intersection metadata through `ReflectionClassConstant::hasType()` and `getType()`; untyped constants and enum cases continue to report `false` and `null`.
 

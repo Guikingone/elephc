@@ -43,6 +43,7 @@ pub(super) fn lower_while(
         source_pin: None,
         iterator_owner: None,
         iterator_cleanup: None,
+        receiver_pin: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -73,6 +74,7 @@ pub(super) fn lower_do_while(
         source_pin: None,
         iterator_owner: None,
         iterator_cleanup: None,
+        receiver_pin: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -165,6 +167,7 @@ fn lower_for_once(
         source_pin: None,
         iterator_owner: None,
         iterator_cleanup: None,
+        receiver_pin: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
